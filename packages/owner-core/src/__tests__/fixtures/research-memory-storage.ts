@@ -46,8 +46,8 @@ export class MemoryResearchStorage implements ResearchStorage {
   header(id: string): ResearchRunHeader | undefined {
     const run = this.get(id);
     if (!run) return undefined;
-    const { unreviewed: _unreviewed, accepted: _accepted, ...header } = summarizeResearchRun(run);
-    return header;
+    const { unreviewed: _unreviewed, accepted: _accepted, harness: _harness, ...header } = summarizeResearchRun(run);
+    return { ...header, ...(run.harness ? { harness: run.harness } : {}) };
   }
   activeRuns(thread?: ResearchThread) {
     return this.all().filter((run) => ["running", "stopping"].includes(run.status) && (!thread || this.isMember(run.id, thread))).map((run) => this.header(run.id)!);
@@ -94,6 +94,7 @@ export class MemoryResearchStorage implements ResearchStorage {
   }
   search(id: string, query: ResearchSearchQuery) { const run = this.get(id)!; return searchResearchItems(id, run.items, run.revision, query); }
   findCommand(id: string, commandId: string) { return this.records.get(id)?.find((event) => event.commandId === commandId); }
+  harnessRecord(id: string, seq: number) { return this.records.get(id)?.find((event) => event.data.type === "harness_observation" && event.provenance?.seq === seq); }
   create(id: string, key: string, event: ResearchEvent) {
     if (this.keys.has(key)) throw new Error("duplicate start");
     this.keys.set(key, id);
@@ -114,5 +115,8 @@ export class MemoryResearchStorage implements ResearchStorage {
       if (!known.some((entry) => sameResearchThread(entry, worker))) this.workers.set(id, [...known, worker]);
     }
     return true;
+  }
+  appendBatch(id: string, revision: number, events: ResearchEvent[]): void {
+    for (const event of events) this.append(id, revision++, event);
   }
 }

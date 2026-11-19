@@ -3941,18 +3941,18 @@ export function useThreadNavigation(
         suppressedArchivedThreadKeysRef.current.add(key);
         deferredArchiveRemovalsRef.current.delete(key);
       }
-      // Directories this pass may rebuild: those in a page that landed now,
-      // from a read that began after the directory's last patch. An earlier
-      // read can still land between an unpin and the owner's event.
-      const changedDirectoryKeys = new Set(changedPages.flatMap(([id, page]) => {
+      // Keep the eligible descriptor itself: a fresh index and an older
+      // selection page can land together. Eligibility of the index must not
+      // admit the selection page's pre-command pin or disclosure fields.
+      const changedDirectoryFields = new Map(changedPages.flatMap(([id, page]) => {
         const state = boundedNavigation.resources.get(id)?.state;
-        if (!state || state.stale) return [];
+        if (!state || state.stale || !federationTargetsEqual(state.request.federationTarget, rendererFederationTarget)) return [];
         return [...page.directories ?? [], ...page.selectionDirectory ? [page.selectionDirectory] : []]
           .filter((directory) => {
             const patched = directoryPatchReadsRef.current.get(directory.key)?.get(id);
             return !patched || patched.request !== state.request || state.pendingSequence > patched.sequence;
           })
-          .map((directory) => directory.key);
+          .map((directory) => [directory.key, directory] as const);
       }));
       const pendingDirectoryPins = new Set(pendingDirectoryPinsRef.current.keys());
       const retainedKeys = new Set([...pages.values(), ...boundedNavigation.selectionAncestry ? [boundedNavigation.selectionAncestry] : []]
@@ -4055,12 +4055,11 @@ export function useThreadNavigation(
           for (const [key, directory] of nextDirectoryRows) {
             const previous = current.rows?.directoryRows.get(key);
             if (!previous) continue;
-            const retainFields = !changedDirectoryKeys.has(key);
-            if (!retainFields && !pendingDirectoryPins.has(key)) continue;
+            const observed = changedDirectoryFields.get(key);
             nextDirectoryRows.set(key, { ...directory,
-              pinnedRank: previous.pinnedRank,
-              ...(retainFields ? { directoryThreadsCollapsed: previous.directoryThreadsCollapsed,
-                forgeAutomation: previous.forgeAutomation } : {}) });
+              pinnedRank: !observed || pendingDirectoryPins.has(key) ? previous.pinnedRank : observed.pinnedRank,
+              directoryThreadsCollapsed: observed ? observed.directoryThreadsCollapsed : previous.directoryThreadsCollapsed,
+              forgeAutomation: observed ? observed.forgeAutomation : previous.forgeAutomation });
           }
         }
         const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,

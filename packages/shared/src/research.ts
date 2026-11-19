@@ -1,4 +1,5 @@
 import type { AppServerBackendKind } from "./contracts/normalized-app-server";
+import type { ResearchHarnessState, ResearchProvenance } from "./research-harness";
 
 export type ResearchThread = { backend: AppServerBackendKind; threadId: string };
 export type ResearchActor = ResearchThread & { kind: "agent" | "operator"; turnId?: string; callId?: string };
@@ -54,6 +55,7 @@ export const RESEARCH_WORK_TRANSITIONS: Record<ResearchWorkState, readonly strin
 };
 export type ResearchItemWork = { state: ResearchWorkState; assignee?: ResearchThread; assignmentId?: string; note?: string };
 export type ResearchItem = {
+  provenance?: ResearchProvenance;
   id: string; approachId: string; version: number; createdSeq: number; updatedAt: number; work: ResearchItemWork;
 } & (
   | { type: "approach"; record: ResearchApproach }
@@ -73,7 +75,7 @@ export type ResearchSearchHit = Pick<ResearchItem, "id" | "type" | "approachId" 
 };
 export type ResearchSearchPage = { runId: string; revision: number; total: number; items: ResearchSearchHit[]; nextCursor?: NonNullable<ResearchSearchQuery["cursor"]> };
 export type ResearchAssignRequest = { runId: string; itemId: string; expectedVersion: number; task: string };
-export type ResearchRunHeader = Pick<ResearchRun, "id" | "revision" | "objective" | "coordinator" | "ownerId" | "ownerPid" | "ownerStartedAt" | "createdAt" | "deadlineAt" | "workspaceMode" | "status" | "reason" | "workerLimit" | "activeWorkers">;
+export type ResearchRunHeader = Pick<ResearchRun, "id" | "revision" | "objective" | "coordinator" | "ownerId" | "ownerPid" | "ownerStartedAt" | "createdAt" | "deadlineAt" | "workspaceMode" | "status" | "reason" | "workerLimit" | "activeWorkers" | "harness">;
 export type ResearchItemContext = { run: Pick<ResearchRunHeader, "id" | "revision" | "objective" | "coordinator" | "deadlineAt" | "workspaceMode" | "status" | "workerLimit" | "activeWorkers">; item: ResearchItem; approach?: ResearchApproach; assignment?: ResearchApproach };
 export type ResearchCommand =
   | ({ action: "finding" } & Omit<ResearchFinding, "id" | "author">)
@@ -87,7 +89,9 @@ export type ResearchCommand =
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
 export type ResearchEventData =
-  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[] }
+  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
+  | { type: "harness"; state: ResearchHarnessState }
+  | { type: "harness_observation"; event: string; text: string }
   | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string }
   | { type: "finding"; finding: ResearchFinding }
   | { type: "submission"; submission: ResearchSubmission }
@@ -107,8 +111,10 @@ export type ResearchEvent = {
   at: number;
   actor: ResearchActor;
   data: ResearchEventData;
+  provenance?: ResearchProvenance;
 };
 export type ResearchRun = {
+  harness?: ResearchHarnessState;
   id: string;
   revision: number;
   objective: string;
@@ -134,7 +140,12 @@ export type ResearchRun = {
 /** The operator's bound request, waiting for this thread to call research_start. Owner memory only. */
 export type ResearchPendingRequest = Omit<PrepareResearchRequest, "backend" | "threadId"> & { preparedAt: number; expiresAt: number };
 /** A run header with the review counts the run list needs to name its phase. */
-export type ResearchRunSummary = ResearchRunHeader & { unreviewed: number; accepted: number };
+export type ResearchRunSummary = Omit<ResearchRunHeader, "harness"> & { unreviewed: number; accepted: number; harness?: ResearchHarnessPhase };
+/** Just enough of a Harness run's state to name its phase in a run list; notes, IDs and snapshots stay with the run. */
+export type ResearchHarnessPhase = Pick<ResearchHarnessState, "state" | "mode" | "source">;
+export function researchHarnessPhase(harness: ResearchHarnessState): ResearchHarnessPhase {
+  return { state: harness.state, mode: harness.mode, ...(harness.source ? { source: harness.source } : {}) };
+}
 /** The thread's run summaries. Each run's items are read separately, by delta (`ResearchChangesRequest`). */
 export type ResearchSnapshot = { runs: ResearchRunSummary[]; writableRunIds: string[]; pending?: ResearchPendingRequest };
 /** With `runId`, `runs` holds only that run's summary, or nothing when the thread cannot see it. */
@@ -145,7 +156,7 @@ export type ResearchSnapshotRequest = ResearchThread & { runId?: string };
  */
 export type ResearchChange = ResearchThread & { runId?: string; revision?: number };
 /** The parts of a run that change after it starts, with the counts its card shows. */
-export type ResearchRunState = Pick<ResearchRun, "revision" | "status" | "reason" | "activeWorkers"> & { unreviewed: number; accepted: number; findings: number; candidates: number };
+export type ResearchRunState = Pick<ResearchRun, "revision" | "status" | "reason" | "activeWorkers" | "harness"> & { unreviewed: number; accepted: number; findings: number; candidates: number };
 /** One approach on the Map: how many contributions it has, and the IDs of its newest few, newest first. */
 export type ResearchApproachLeaves = { approachId: string; findings: number; candidates: number; leafIds: string[] };
 /** The last item a page of changes returned. Versions repeat when one event changes several items. */
@@ -212,14 +223,15 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
     ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, deadlineAt: initial.deadlineAt,
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
-    findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [],
+    findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [], harness: initial.harness,
   };
   const items = new Map<string, ResearchItem>();
   for (const item of applyResearchItemEvent((key) => items.get(key), first)) items.set(item.id, item);
   for (const event of events.slice(1)) {
     for (const item of applyResearchItemEvent((key) => items.get(key), event)) items.set(item.id, item);
     const data = event.data;
-    if (data.type === "worker") {
+    if (data.type === "harness") run.harness = data.state;
+    else if (data.type === "worker") {
       const approach = run.approaches.find((a) => a.id === data.approachId);
       if (!approach) throw new Error("Unknown research approach");
       Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
@@ -263,6 +275,7 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
   const data = event.data;
   const create = (item: Pick<ResearchItem, "id" | "approachId"> & Pick<ResearchItem, "type" | "record">): ResearchItem => ({
     ...item, version: event.seq, createdSeq: event.seq, updatedAt: event.at, work: { state: "open" },
+    ...(event.provenance ? { provenance: event.provenance } : {}),
   } as ResearchItem);
   const require = (id: string) => { const item = read(id); if (!item) throw new Error("Unknown research item"); return item; };
   const touch = (item: ResearchItem): ResearchItem => ({ ...item, version: event.seq, updatedAt: event.at });
@@ -397,6 +410,7 @@ export function normalizeResearchChangesCursor(sinceRevision: number | undefined
 /** The in-memory oracle for a stored run state. */
 export function researchRunState(run: ResearchRun): ResearchRunState {
   return { revision: run.revision, status: run.status, ...(run.reason !== undefined ? { reason: run.reason } : {}), activeWorkers: run.activeWorkers,
+    ...(run.harness ? { harness: run.harness } : {}),
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     findings: run.findings.length, candidates: run.submissions.length };
 }
@@ -519,7 +533,8 @@ export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
     ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, deadlineAt: run.deadlineAt, workspaceMode: run.workspaceMode, status: run.status,
     ...(run.reason !== undefined ? { reason: run.reason } : {}), workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
-    unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length };
+    unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
+    ...(run.harness ? { harness: researchHarnessPhase(run.harness) } : {}) };
 }
 
 export function sameResearchThread(a: ResearchThread, b: ResearchThread): boolean {

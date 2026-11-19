@@ -559,6 +559,67 @@ it("restores the owner pin when an unpin fails after an intervening read", async
   }
 });
 
+async function exerciseDirectoryDescriptorRace(order: "together" | "index-first" | "selection-first", initialRank: string) {
+  const { f, key, owner, setDirectoryPin } = pinnedDirectoryOwner();
+  owner.rank = initialRank;
+  const read = f.read.getMockImplementation()!;
+  const held = new Map<string, () => void>();
+  let hold = false;
+  f.read.mockImplementation(async (request) => {
+    const pinnedRank = owner.rank;
+    const page = await read(request);
+    const kind = request.query.kind;
+    if (hold && (kind === "exact" || kind === "directory-index")) {
+      await new Promise<void>((resolve) => { held.set(kind, resolve); });
+    }
+    return kind === "exact" ? { ...page, selectionDirectory: { key, kind: "directory", label: "Project", path: "/project",
+      counts, pinnedRootCount: 1, unpinnedRootCount: 999, launchpadPresent: false, pinnedRank } } : page;
+  });
+  const api = { ...f.api, setDirectoryPin };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+    await waitFor(() => expect(rank()).toBe(initialRank));
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("selected-context")?.loading).toBe(false));
+    hold = true;
+    let selection!: Promise<void>;
+    act(() => { selection = result.current.pagedNavigation.restart("selected-context"); });
+    await waitFor(() => expect(held.has("exact")).toBe(true));
+    await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
+    expect(rank()).toBeUndefined();
+    let index!: Promise<void>;
+    act(() => { index = result.current.pagedNavigation.restart("directory-index"); });
+    await waitFor(() => expect(held.has("directory-index")).toBe(true));
+    if (order === "together") {
+      await act(async () => { held.get("exact")!(); held.get("directory-index")!(); await Promise.all([selection, index]); });
+    } else {
+      const first = order === "index-first" ? "directory-index" : "exact";
+      await act(async () => { held.get(first)!(); await (first === "exact" ? selection : index); });
+      expect(rank()).toBeUndefined();
+      await act(async () => { held.get(first === "exact" ? "directory-index" : "exact")!(); await Promise.all([selection, index]); });
+    }
+    // Oracle: the owner's acknowledged unpin wins over a descriptor read
+    // before that command, even when a fresh index page lands beside it.
+    expect(rank()).toBe(owner.rank);
+    expect(rank()).toBeUndefined();
+  } finally {
+    for (const release of held.values()) release();
+    unmount();
+  }
+}
+
+it("keeps an acknowledged unpin when fresh index and older selection descriptors land together", async () => {
+  await exerciseDirectoryDescriptorRace("together", "1");
+});
+
+it("preserves the owner's acknowledged pin across index and selection delivery orders", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("together" as const, "index-first" as const, "selection-first" as const),
+    fc.integer({ min: 1, max: 10_000 }), async (order, rank) => {
+      await exerciseDirectoryDescriptorRace(order, String(rank));
+    }), { numRuns: 9, examples: [["together", 1], ["index-first", 1], ["selection-first", 1]] });
+});
+
 it("preserves an optimistic unpin across any sequence of reads before owner acknowledgement", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }), async (reads) => {
     const { f, key, owner } = pinnedDirectoryOwner();
