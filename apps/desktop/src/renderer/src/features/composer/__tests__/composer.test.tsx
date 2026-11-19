@@ -8458,7 +8458,7 @@ describe("Composer", () => {
    * order they were checked in, and never auto-fixes: the fixes would land in
    * one checkout that is on at most one of their branches.
    */
-  it("queues one review per checked PR in list order without Auto-fix", async () => {
+  const batchReviewFixture = () => {
     const scheduledApi = createScheduledActionApi();
     const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
     const backend = backendSummary("codex");
@@ -8479,18 +8479,27 @@ describe("Composer", () => {
       batchPr(10, { createdAt: now - 2 * 3_600_000 }),
       batchPr(11, { createdAt: now - 3_600_000 }),
     ];
-    render(<Composer
-      backends={[backend]}
-      desktopApi={{ onAgentEvent: () => () => undefined, startReview, ...scheduledApi }}
-      disabled={false} skills={[]}
-      thread={{
-        id: "thread-1", title: "Batch review", titleSource: "explicit",
-        source: "codex", executionMode: "default", inbox: { inInbox: false },
-        projectKey: "/repo/project",
-        linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
-        prs,
-      }}
-    />);
+    const thread = (threadPrs: PrSummary[]): NavigationThreadSummary => ({
+      id: "thread-1", title: "Batch review", titleSource: "explicit",
+      source: "codex", executionMode: "default", inbox: { inInbox: false },
+      projectKey: "/repo/project",
+      linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
+      prs: threadPrs,
+    });
+    const element = (threadPrs: PrSummary[]) => (
+      <Composer
+        backends={[backend]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startReview, ...scheduledApi }}
+        disabled={false} skills={[]}
+        thread={thread(threadPrs)}
+      />
+    );
+    return { element, prs, scheduledApi, startReview };
+  };
+
+  it("queues one review per checked PR in list order without Auto-fix", async () => {
+    const { element, prs, scheduledApi, startReview } = batchReviewFixture();
+    render(element(prs));
     await openReviewComposer();
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     expect(pullRequestChoices()).toEqual(["#11 Change 11", "#10 Change 10", "#9 Change 9"]);
@@ -8511,6 +8520,50 @@ describe("Composer", () => {
       { target: { type: "pullRequest", url: prs[2].url }, afterReview: "wait", cwd: "/repo/project" },
       { target: { type: "pullRequest", url: prs[0].url }, afterReview: "wait", cwd: "/repo/project" },
     ]);
+  });
+
+  /**
+   * Rule: when a review in a batch cannot be queued, the error names every
+   * PR that did not queue. The panel has already closed by then, so a bare
+   * error would read as if the rest had queued.
+   */
+  it("names the PRs a failed batch did not queue", async () => {
+    const { element, prs, scheduledApi } = batchReviewFixture();
+    const create = scheduledApi.createScheduledThreadAction.getMockImplementation()!;
+    scheduledApi.createScheduledThreadAction
+      .mockImplementationOnce(create)
+      .mockImplementationOnce(async () => { throw new Error("Owner refused the review."); });
+    render(element(prs));
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    choosePullRequest(prs[2].url);
+    choosePullRequest(prs[1].url);
+    choosePullRequest(prs[0].url);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start 3 reviews" })); });
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Owner refused the review. Not queued: #10, #9.")).toBeInTheDocument();
+  });
+
+  /**
+   * Rule: a checked PR that leaves the list while the panel is open (it was
+   * detached) is dropped from the submission instead of failing it, since
+   * the list no longer offers a way to uncheck it.
+   */
+  it("drops a checked PR that was detached and reviews the rest", async () => {
+    const { element, prs, scheduledApi, startReview } = batchReviewFixture();
+    const view = render(element(prs));
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    choosePullRequest(prs[2].url);
+    choosePullRequest(prs[1].url);
+    view.rerender(element([prs[0], prs[2]]));
+    expect(checkedPullRequestUrls()).toEqual([prs[2].url]);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(screen.queryByText("Choose an attached pull request.")).not.toBeInTheDocument();
+    expect(scheduledApi.createScheduledThreadAction).not.toHaveBeenCalled();
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      target: { type: "pullRequest", url: prs[2].url },
+    }));
   });
 
   it.each(["click", "keyboard"])("routes a sole secondary PR with its required review mode via %s", async (input) => {

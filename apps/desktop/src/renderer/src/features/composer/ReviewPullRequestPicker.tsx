@@ -1,5 +1,6 @@
 import { useId, type ReactNode, type Ref } from "react";
 import type { PrSummary } from "@pwragent/shared";
+import { openExternalUrl } from "../../lib/open-external-url";
 import { PrChip } from "../pr-status/PrChip";
 import { prStatusLabel, resolveLifecycleState } from "../pr-status/pr-chip-state";
 import { prStackTimeLabel, resolvePrRollup } from "../pr-status/pr-rollup";
@@ -140,7 +141,7 @@ function ReviewPullRequestRow(props: {
       <PrChip
         pr={pr}
         showRepoPrefix={props.repositoryLabel !== ""}
-        onOpen={openPullRequest}
+        onOpen={openExternalUrl}
       />
       <label htmlFor={inputId} className="review-pr-picker__text">
         <span className="review-pr-picker__title">{title}</span>
@@ -161,8 +162,4 @@ function ReviewPullRequestRow(props: {
       ) : null}
     </div>
   );
-}
-
-function openPullRequest(url: string): void {
-  window.open(url, "_blank", "noopener,noreferrer");
 }

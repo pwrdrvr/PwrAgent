@@ -6227,7 +6227,7 @@ function useComposerController(props: ComposerProps) {
       : reviewPullRequestRepositoryNamesAmbiguous
         ? `${pr.org}/${pr.repo}`
         : pr.repo;
-  const selectedReviewPullRequests = orderReviewPullRequests(reviewPullRequests)
+  const selectedReviewPullRequests = reviewPullRequests
     .filter((pr) => reviewConfig?.pullRequestUrls?.includes(pr.url));
   // The branch, sync and workspace lines below describe one PR.
   const selectedReviewPullRequest = selectedReviewPullRequests.length === 1
@@ -7769,17 +7769,22 @@ function useComposerController(props: ComposerProps) {
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
+    // A checked PR this project can no longer review (detached while the
+    // panel was open) is dropped rather than failing the rest: the list no
+    // longer draws it, so the operator could not uncheck it.
     const pullRequestUrls = config?.target === "pullRequest"
-      ? config.pullRequestUrls ?? [] : [];
-    if (config?.target === "pullRequest" && (pullRequestUrls.length === 0
-      || !pullRequestUrls.every((url) => reviewPullRequestOptions.some((option) =>
+      ? (config.pullRequestUrls ?? []).filter((url) => reviewPullRequestOptions.some((option) =>
         option.pr.url === url && option.workspaces.includes(config.workspaceCwd ?? "")
-      )))) {
+      ))
+      : [];
+    if (config?.target === "pullRequest" && pullRequestUrls.length === 0) {
       setSendError("Choose an attached pull request.");
       return;
     }
     const pullRequestBatch = pullRequestUrls.length > 1;
-    const configuredReviewCommand = buildConfiguredReviewCommand(config);
+    const configuredReviewCommand = buildConfiguredReviewCommand(
+      config?.target === "pullRequest" ? { ...config, pullRequestUrls } : config,
+    );
     if (!configuredReviewCommand) {
       return;
     }
@@ -7826,7 +7831,7 @@ function useComposerController(props: ComposerProps) {
       )
         .map((pr) => pr.url)
         .filter((url) => batchUrls.has(url));
-      for (const url of orderedUrls) {
+      for (const [index, url] of orderedUrls.entries()) {
         const queued = await queueReviewCommand(
           {
             ...routedReviewCommand,
@@ -7837,7 +7842,14 @@ function useComposerController(props: ComposerProps) {
             ? { scheduledSendAt: futureScheduledDraftSendAt }
             : undefined,
         );
-        if (!queued) {
+        if (typeof queued === "string") {
+          // The panel closed when the first review queued, so name the
+          // reviews that did not, or the batch reads as all queued.
+          const unqueued = orderedUrls.slice(index).map((unqueuedUrl) => {
+            const pr = reviewPullRequestOptions.find((option) => option.pr.url === unqueuedUrl)?.pr;
+            return pr ? `#${pr.number}` : unqueuedUrl;
+          });
+          setSendError(`${queued} Not queued: ${unqueued.join(", ")}.`);
           return;
         }
       }
@@ -8737,7 +8749,7 @@ function useComposerController(props: ComposerProps) {
       reviewer?: ModelSettingsRecent;
     },
     options?: { scheduledSendAt?: number },
-  ): Promise<boolean> | undefined => {
+  ): Promise<true | string> | undefined => {
     // Setup has no thread id yet. Keep the review in the starting composer's
     // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
     if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
@@ -8852,11 +8864,12 @@ function useComposerController(props: ComposerProps) {
         setScheduleArmed(true);
         setReviewConfig(undefined);
         setSendError(undefined);
-        return true;
+        return true as const;
       },
-      (error) => {
-        setSendError(error instanceof Error ? error.message : String(error));
-        return false;
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setSendError(message);
+        return message;
       },
     );
     return queued;

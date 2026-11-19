@@ -26,6 +26,7 @@ import { placeRollupPopover } from "./pr-rollup-popover-placement";
 import {
   prChipModifierClasses,
   prStatusLabel,
+  resolveLifecycleState,
   resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { prBranchBehindLabel, type PrBranchDrift } from "./pr-branch-drift";
@@ -561,13 +562,16 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   ? `${prStatusLabel(pr)} · ${behind}`
                   : prStatusLabel(pr);
                 // The time each stack sorts by, so the order reads as one.
-                // It leads, so a long open status never cuts it off, and it
-                // replaces a finished PR's plain "merged" or "closed without
-                // merge", which it already says.
+                // It leads, so a long open status never cuts it off. A
+                // finished PR's status says only that it merged or closed,
+                // which the time already says; a merge queue's account of
+                // the merge stays.
                 const stackTime = prStackTimeLabel(pr);
+                const lifecycle = resolveLifecycleState(pr);
                 const statusLine = !stackTime
                   ? status
-                  : status === "merged" || status === "closed without merge"
+                  : lifecycle === "closed"
+                    || (lifecycle === "merged" && pr.mergeQueue?.state !== "merged_by_queue")
                     ? stackTime
                     : `${stackTime} · ${status}`;
                 const rowPresentation = resolvePrChipPresentation(pr);
