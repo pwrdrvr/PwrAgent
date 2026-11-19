@@ -62,3 +62,44 @@ export function decideCodexInstallationChange(
 export type CodexAppServerRetirementOutcome =
   | { kind: "retired" }
   | { kind: "busy"; blocker: string };
+
+/**
+ * What a request to move new work onto a newly selected Codex found. A
+ * selection change (a Settings path, a managed runtime switched on, off or
+ * updated) asks every runtime for this; `selection` numbers the requests so
+ * a runtime that already moved does not move again on a retry.
+ *
+ * - `promoted`: a new generation passed its handshake and takes new work; the
+ *   old one drains.
+ * - `restarted-lazily`: nothing was running; the next request starts the
+ *   selected Codex.
+ * - `current`: this runtime already serves that selection.
+ * - `failed`: the new generation did not start; the old one keeps serving.
+ * - `deferred`: a start for this selection failed recently; not retried yet.
+ */
+export type CodexAppServerRolloverOutcome =
+  | { kind: "promoted"; generation: number }
+  | { kind: "restarted-lazily" }
+  | { kind: "current" }
+  | { kind: "failed"; error: string }
+  | { kind: "deferred"; retryAt: number };
+
+/**
+ * One outcome for several runtimes: the selection is applied only when every
+ * runtime applied it. A failure outranks a deferral, which outranks success.
+ */
+export function combineCodexAppServerRolloverOutcomes(
+  outcomes: readonly CodexAppServerRolloverOutcome[],
+): CodexAppServerRolloverOutcome {
+  const failed = outcomes.find((outcome) => outcome.kind === "failed");
+  if (failed) return failed;
+  const deferred = outcomes.filter(
+    (outcome): outcome is Extract<CodexAppServerRolloverOutcome, { kind: "deferred" }> => outcome.kind === "deferred",
+  );
+  if (deferred.length > 0) {
+    return { kind: "deferred", retryAt: Math.max(...deferred.map((outcome) => outcome.retryAt)) };
+  }
+  return outcomes.find((outcome) => outcome.kind === "promoted")
+    ?? outcomes.find((outcome) => outcome.kind === "restarted-lazily")
+    ?? { kind: "current" };
+}

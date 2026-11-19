@@ -2024,6 +2024,7 @@ export class DesktopBackendRegistry {
       get managedCodexRuntimeSwitchPending() { return current().codexRuntimeSupervisor.managedRuntimeSwitchPending; },
       set managedCodexRuntimeSwitchPending(value) { current().codexRuntimeSupervisor.setManagedRuntimeSwitchPending(value); },
       maybeRestartCodexForManagedRuntimeChange: (...args: Parameters<typeof this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange>) => this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange(...args),
+      requestCodexRuntimeSwitch: () => current().codexRuntimeSupervisor.requestCodexRuntimeSwitch(),
       get mcpConnectionService() { return current().mcpConnectionService; },
       get mcpGatewayTools() { return current().mcpGatewayTools; },
       get messagingHandler() { return current().messagingHandler; },
@@ -3680,9 +3681,11 @@ export class DesktopBackendRegistry {
     }
     if (!params.codex) return;
     // A settings write is authority to stop using the obsolete executable,
-    // not to discover or launch its replacement. The reconnectable client
-    // resolves the new command only when the next permitted discovery or
-    // ordinary provider operation initializes it.
+    // not to discover its replacement. With nothing running, the
+    // reconnectable client resolves the new command only when the next
+    // permitted discovery or ordinary provider operation initializes it. A
+    // running app server is replaced by a new generation from the selected
+    // command, and drains what it is still running.
     this.codexBackendGeneration += 1;
     this.codexBackendSummary = undefined;
     this.planLimits.forget("codex");
@@ -3696,7 +3699,7 @@ export class DesktopBackendRegistry {
     }
     this.modelCatalog.invalidate("codex");
     this.codexRuntimeSupervisor.setRuntimeRestartPending(true);
-    await this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
+    await this.codexRuntimeSupervisor.requestCodexRuntimeSwitch();
   }
 
   async synchronizeProviderRuntimeSelections(): Promise<void> {

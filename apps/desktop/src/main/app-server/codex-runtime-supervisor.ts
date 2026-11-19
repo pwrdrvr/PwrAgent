@@ -193,7 +193,12 @@ export class CodexRuntimeSupervisor {
   }
 
   get runtimeRestartPending(): boolean { return this.codexRuntimeRestartPending; }
-  setRuntimeRestartPending(value: boolean): void { this.codexRuntimeRestartPending = value; }
+  setRuntimeRestartPending(value: boolean): void {
+    // Each request names a newer selection, so a runtime that already moved
+    // to it is not moved again when another runtime's start is retried.
+    if (value) this.codexRuntimeSelection += 1;
+    this.codexRuntimeRestartPending = value;
+  }
   get managedRuntimeSwitchPending(): boolean { return this.managedCodexRuntimeSwitchPending; }
   setManagedRuntimeSwitchPending(value: boolean): void { this.managedCodexRuntimeSwitchPending = value; }
   get runtimeRestartPromise(): Promise<boolean> | undefined { return this.codexRuntimeRestartPromise; }
@@ -268,6 +273,7 @@ export class CodexRuntimeSupervisor {
   private codexIdleThreadSweep?: Promise<void>;
   private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
   private codexRuntimeRestartPending = false;
+  private codexRuntimeSelection = 0;
   private managedCodexRuntimeSwitchPending = false;
   private codexRuntimeRestartPromise?: Promise<boolean>;
 
@@ -1109,33 +1115,69 @@ export class CodexRuntimeSupervisor {
   }
 
   /**
-   * Switch binaries only at an idle Codex boundary. Enabling, disabling, and
-   * installing an update all close the reconnectable client; its next request
-   * resolves the currently selected command from Settings. Active turns keep
-   * their original process until their terminal notification has settled.
+   * Move Codex onto a changed selection: a Settings path, or a managed
+   * runtime switched on, off or updated. With app server generations
+   * (`app-server-generation-pool.ts`) this happens at once: a new generation
+   * from the selected command takes new work after its handshake, and the old
+   * process drains its turns, approvals and terminals before it retires. A
+   * start that fails leaves the old one serving and the change requested; it
+   * is retried on later Codex activity, after the pool's backoff.
+   *
+   * A client without generations still switches only at an idle Codex
+   * boundary: closing it would end turns that are running.
+   *
+   * The rest follows the switch, not the old process's retirement. The
+   * breaker reset applies to the clients that serve the new selection. Token
+   * Miser state describes the server that takes new turns, so it is re-read
+   * from the new generation. Completing a managed switch only updates
+   * Settings: the old managed build stays on disk while this process's
+   * in-use marker names it.
    */
   async maybeRestartCodexForManagedRuntimeChange(): Promise<boolean> {
-    if (
-      this.context.lifecycle.closed
-      || !this.codexRuntimeRestartPending
-      || this.hasActiveCodexRuntimeWork()
-    ) {
-      return false;
-    }
+    if (this.context.lifecycle.closed || !this.codexRuntimeRestartPending) return false;
+    const codex = this.context.providers.codex;
+    const rollover = codex.rolloverAppServer?.bind(codex);
+    if (!rollover && this.hasActiveCodexRuntimeWork()) return false;
     if (this.codexRuntimeRestartPromise) {
-      return await this.codexRuntimeRestartPromise;
+      const applied = await this.codexRuntimeRestartPromise;
+      // A newer selection requested while that one ran is still pending;
+      // with generations it runs now rather than at the next Codex activity.
+      if (!rollover || !this.codexRuntimeRestartPending || this.context.lifecycle.closed) return applied;
+      return await this.maybeRestartCodexForManagedRuntimeChange();
     }
 
     const completesManagedSwitch = this.managedCodexRuntimeSwitchPending;
+    const selection = this.codexRuntimeSelection;
     const restart = (async () => {
-      if (this.hasActiveCodexRuntimeWork()) return false;
-      this.codexRuntimeRestartPending = false;
-      this.managedCodexRuntimeSwitchPending = false;
-      await this.context.providers.codex.close();
+      if (rollover) {
+        this.codexRuntimeRestartPending = false;
+        this.managedCodexRuntimeSwitchPending = false;
+        const outcome = await rollover({ selection });
+        // Shut down meanwhile: preparing Token Miser below would start Codex
+        // again, and a rollover the shutdown abandoned is not a failure.
+        if (this.context.lifecycle.closed) return false;
+        if (outcome.kind === "failed" || outcome.kind === "deferred") {
+          // The running generation keeps serving; ask again later. A newer
+          // selection that arrived meanwhile is already requested.
+          this.codexRuntimeRestartPending = true;
+          if (completesManagedSwitch) this.managedCodexRuntimeSwitchPending = true;
+          if (outcome.kind === "failed") {
+            backendRegistryLog.warn("Codex selection change could not start a new app server", {
+              error: outcome.error,
+            });
+          }
+          return false;
+        }
+      } else {
+        if (this.hasActiveCodexRuntimeWork()) return false;
+        this.codexRuntimeRestartPending = false;
+        this.managedCodexRuntimeSwitchPending = false;
+        await codex.close();
+      }
       // Exits counted against the old binary say nothing about the new one.
       // Clear the breaker; the next request starts the selected Codex.
-      this.context.providers.codex.resetAppServerRestarts?.("Codex runtime changed");
-      this.host().tokenMiserServerCapabilities.delete(this.context.providers.codex);
+      codex.resetAppServerRestarts?.("Codex runtime changed");
+      this.host().tokenMiserServerCapabilities.delete(codex);
       this.host().tokenMiserReducerCapabilityState = undefined;
       this.host().tokenMiserCodeModeGroupingVersion = undefined;
       this.host().tokenMiserPostToolUseExactOutputVersion = undefined;
@@ -1145,7 +1187,10 @@ export class CodexRuntimeSupervisor {
         await this.host().prepareTokenMiserRuntime();
       }
       if (completesManagedSwitch) {
-        this.markManagedCodexRuntimeSwitchCompleteFn();
+        // A newer selection asked for meanwhile has not been applied yet:
+        // its own run completes the switch, so Settings keeps saying pending.
+        if (selection === this.codexRuntimeSelection) this.markManagedCodexRuntimeSwitchCompleteFn();
+        else this.managedCodexRuntimeSwitchPending = true;
       }
       return true;
     })();
@@ -1166,6 +1211,25 @@ export class CodexRuntimeSupervisor {
         this.codexRuntimeRestartPromise = undefined;
       }
     }
+  }
+
+  /**
+   * The selected Codex changed. With app server generations this starts the
+   * switch and returns without waiting for the new generation's handshake: a
+   * Settings write or managed discovery must not stall for seconds on it, and
+   * the pool already holds new work until the switch settles. A client
+   * without generations is closed at an idle boundary, as callers expect.
+   */
+  async requestCodexRuntimeSwitch(): Promise<void> {
+    if (!this.context.providers.codex?.rolloverAppServer) {
+      await this.maybeRestartCodexForManagedRuntimeChange();
+      return;
+    }
+    void this.maybeRestartCodexForManagedRuntimeChange().catch((error) => {
+      backendRegistryLog.warn("Codex selection change failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /** A successful turn may leave commands, but cannot leave an MCP/search call running. */

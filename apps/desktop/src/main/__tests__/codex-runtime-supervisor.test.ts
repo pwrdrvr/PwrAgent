@@ -16,6 +16,7 @@ import type { StateDb } from "../state/state-db";
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
 import { RegistryTurnState } from "../app-server/registry-turn-state";
+import { poolFixture, settle } from "./helpers/codex-generation-pool-fixture";
 
 const databases: StateDb[] = [];
 afterEach(() => {
@@ -160,6 +161,331 @@ describe("managed runtime restart admission", () => {
     expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(true);
     expect(close).toHaveBeenCalledTimes(2);
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Codex selection changes with app server generations", () => {
+  type Command =
+    | { kind: "start" }
+    | { kind: "turn"; thread: number }
+    | { kind: "complete"; thread: number }
+    | { kind: "select" }
+    | { kind: "tick" };
+  const command: fc.Arbitrary<Command> = fc.oneof(
+    fc.constant({ kind: "start" as const }),
+    fc.record({ kind: fc.constant("turn" as const), thread: fc.nat(5) }),
+    fc.record({ kind: fc.constant("complete" as const), thread: fc.nat(5) }),
+    fc.constant({ kind: "select" as const }),
+    fc.constant({ kind: "tick" as const }),
+  );
+
+  // Model: a turn runs to its end on the process it started on; once the
+  // registry asked for a new selection, every thread started or idle thread
+  // resumed runs the newly selected command.
+  it("routes new work to the selected command and never stops a running turn (model)", async () => {
+    vi.useFakeTimers();
+    try {
+      await fc.assert(fc.asyncProperty(fc.array(command, { minLength: 1, maxLength: 30 }), async (commands) => {
+        const turnState = new RegistryTurnState();
+        const prepare = vi.fn(async () => {});
+        const complete = vi.fn();
+        let service!: CodexRuntimeSupervisor;
+        const fixture = poolFixture({
+          isThreadBusy: (threadId) => service.codexThreadNeedsLiveEvents(threadId),
+          isThreadPinned: (threadId) => service.codexThreadBoundToAppServer(threadId),
+        });
+        service = supervisor({
+          turnState,
+          codex: fixture.pool,
+          host: {
+            nativeVoiceLeases: 0,
+            tokenMiserServerCapabilities: new WeakMap(),
+            resolveTokenMiserEnabledFn: () => true,
+            prepareTokenMiserRuntime: prepare,
+            threadHasActiveTurn: (threadId: string) => turnState.hasActiveTurn(threadId),
+            liveSubAgentMonitorIds: () => [],
+            threadStarts: { hasPending: () => false },
+            threadTurnQueue: { getQueuedEntries: () => [] },
+          },
+          dependencies: { markManagedCodexRuntimeSwitchCompleteFn: complete },
+        });
+        const threads: string[] = [];
+        const runningOn = new Map<string, { generation: number; turnId: string }>();
+        let selected = fixture.installed.command;
+        let selections = 0;
+        // As `withCodexThreadClient` does before every thread operation.
+        const admit = async () => {
+          if (service.runtimeRestartPending) await service.maybeRestartCodexForManagedRuntimeChange();
+        };
+        const generationOf = (id: string) => fixture.gen(Number(id.slice(1, id.indexOf("-"))));
+        for (const step of commands) {
+          const threadId = "thread" in step && threads.length ? threads[step.thread % threads.length] : undefined;
+          switch (step.kind) {
+            case "start": {
+              await admit();
+              const { threadId: created } = await fixture.pool.startThread({});
+              threads.push(created);
+              expect(generationOf(created).launchedFrom.command, "a new thread runs the selected Codex").toBe(selected);
+              break;
+            }
+            case "turn": {
+              if (!threadId || runningOn.has(threadId)) break;
+              await admit();
+              const { turnId } = await fixture.pool.startTurn({ threadId, input: [] });
+              const generation = generationOf(turnId);
+              expect(generation.launchedFrom.command, "an idle thread resumes on the selected Codex").toBe(selected);
+              turnState.registerTurn({ backend: "codex", threadId, turnId });
+              runningOn.set(threadId, { generation: generation.id, turnId });
+              break;
+            }
+            case "complete": {
+              const running = threadId ? runningOn.get(threadId) : undefined;
+              if (!threadId || !running) break;
+              fixture.gen(running.generation).completeTurn(threadId);
+              turnState.unregisterTurn({ backend: "codex", threadId, turnId: running.turnId });
+              runningOn.delete(threadId);
+              break;
+            }
+            case "select":
+              selections += 1;
+              selected = `/opt/codex-selection-${selections}`;
+              fixture.select(selected);
+              // As invalidateProviderRuntimeSelections and the managed watcher do.
+              service.setRuntimeRestartPending(true);
+              service.setManagedRuntimeSwitchPending(true);
+              await service.maybeRestartCodexForManagedRuntimeChange();
+              break;
+            case "tick":
+              await settle(2_000);
+              break;
+          }
+          for (const [running, { generation }] of runningOn) {
+            const process = fixture.gen(generation);
+            expect(process.running.has(running), `${running} was stopped mid-turn`).toBe(true);
+            expect(process.state.retired).toBe(false);
+          }
+        }
+        // Every requested selection was applied, and nothing is left asking.
+        expect(service.runtimeRestartPending).toBe(false);
+        expect(complete).toHaveBeenCalledTimes(selections);
+        for (const [threadId, { generation, turnId }] of runningOn) {
+          fixture.gen(generation).completeTurn(threadId);
+          turnState.unregisterTurn({ backend: "codex", threadId, turnId });
+        }
+        await settle(5_000);
+        expect(fixture.pool.readAppServerGenerationStatus().draining).toEqual([]);
+      }), { numRuns: 120 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns from a selection change before the new app server's handshake, while new work waits for it", async () => {
+    vi.useFakeTimers();
+    try {
+      const turnState = new RegistryTurnState();
+      const complete = vi.fn();
+      let service!: CodexRuntimeSupervisor;
+      const fixture = poolFixture({
+        isThreadBusy: (threadId) => service.codexThreadNeedsLiveEvents(threadId),
+        isThreadPinned: (threadId) => service.codexThreadBoundToAppServer(threadId),
+      });
+      service = supervisor({
+        turnState,
+        codex: fixture.pool,
+        host: {
+          nativeVoiceLeases: 0,
+          tokenMiserServerCapabilities: new WeakMap(),
+          resolveTokenMiserEnabledFn: () => false,
+          threadHasActiveTurn: (threadId: string) => turnState.hasActiveTurn(threadId),
+          liveSubAgentMonitorIds: () => [],
+          threadStarts: { hasPending: () => false },
+          threadTurnQueue: { getQueuedEntries: () => [] },
+        },
+        dependencies: { markManagedCodexRuntimeSwitchCompleteFn: complete },
+      });
+      const running = (await fixture.pool.startThread({})).threadId;
+      const { turnId } = await fixture.pool.startTurn({ threadId: running, input: [] });
+      turnState.registerTurn({ backend: "codex", threadId: running, turnId });
+
+      // The selected build takes its time to answer `initialize`.
+      let answer!: () => void;
+      fixture.handshakes.push(new Promise<void>((resolve) => { answer = resolve; }));
+      fixture.select("/opt/codex-managed-next");
+      service.setRuntimeRestartPending(true);
+      service.setManagedRuntimeSwitchPending(true);
+      let returned = false;
+      // As a Settings write or managed discovery calls it.
+      const request = service.requestCodexRuntimeSwitch().then(() => { returned = true; });
+      await settle(10);
+      expect(returned).toBe(true);
+      await request;
+
+      // New work started meanwhile waits for the new selection.
+      let started: string | undefined;
+      const starting = fixture.pool.startThread({}).then((result) => { started = result.threadId; });
+      await settle(10);
+      expect(started).toBeUndefined();
+      expect(complete).not.toHaveBeenCalled();
+      answer();
+      await starting;
+      expect(fixture.gen(Number(started!.slice(1, started!.indexOf("-")))).launchedFrom.command)
+        .toBe("/opt/codex-managed-next");
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+      // The turn on the old process kept running throughout.
+      expect(fixture.gen(1).running.has(running)).toBe(true);
+      expect(fixture.gen(1).state.retired).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not prepare Token Miser or report a failure when shutdown lands during a switch", async () => {
+    for (const outcome of [
+      { kind: "promoted" as const, generation: 2 },
+      { kind: "failed" as const, error: "the Codex app server pool closed during the rollover" },
+    ]) {
+      let finish!: (value: typeof outcome) => void;
+      const rolloverAppServer = vi.fn(() => new Promise<typeof outcome>((resolve) => { finish = resolve; }));
+      const lifecycle = { closed: false };
+      const prepare = vi.fn(async () => {});
+      const ledger = vi.fn(async () => {});
+      const complete = vi.fn();
+      const service = supervisor({
+        lifecycle,
+        codex: { close: vi.fn(), resetAppServerRestarts: vi.fn(), rolloverAppServer },
+        host: {
+          nativeVoiceLeases: 0,
+          tokenMiserServerCapabilities: new WeakMap(),
+          tokenMiserStore: {},
+          resolveTokenMiserEnabledFn: () => true,
+          prepareTokenMiserRuntime: prepare,
+        },
+        dependencies: {
+          markManagedCodexRuntimeSwitchCompleteFn: complete,
+          threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
+        },
+      });
+      service.setRuntimeRestartPending(true);
+      service.setManagedRuntimeSwitchPending(true);
+      const switching = service.maybeRestartCodexForManagedRuntimeChange();
+      lifecycle.closed = true;
+      finish(outcome);
+      expect(await switching).toBe(false);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(ledger).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      // Nothing is left requested for a registry that is gone.
+      expect(service.runtimeRestartPending).toBe(false);
+    }
+  });
+
+  it("runs a selection requested during a switch as soon as that switch settles", async () => {
+    let finishFirst!: (outcome: { kind: "promoted"; generation: number }) => void;
+    const rolloverAppServer = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue({ kind: "promoted", generation: 3 });
+    const service = supervisor({
+      codex: { close: vi.fn(), resetAppServerRestarts: vi.fn(), rolloverAppServer },
+      host: { nativeVoiceLeases: 0, tokenMiserServerCapabilities: new WeakMap(), resolveTokenMiserEnabledFn: () => false },
+    });
+    service.setRuntimeRestartPending(true);
+    await service.requestCodexRuntimeSwitch();
+    service.setRuntimeRestartPending(true);
+    const second = service.maybeRestartCodexForManagedRuntimeChange();
+    finishFirst({ kind: "promoted", generation: 2 });
+    expect(await second).toBe(true);
+    expect(rolloverAppServer.mock.calls).toEqual([[{ selection: 1 }], [{ selection: 2 }]]);
+    expect(service.runtimeRestartPending).toBe(false);
+  });
+
+  it("leaves a managed switch pending while a newer selection is still waiting", async () => {
+    let finishFirst!: (outcome: { kind: "promoted"; generation: number }) => void;
+    const rolloverAppServer = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue({ kind: "promoted", generation: 3 });
+    const complete = vi.fn();
+    const service = supervisor({
+      codex: { close: vi.fn(), resetAppServerRestarts: vi.fn(), rolloverAppServer },
+      host: { nativeVoiceLeases: 0, tokenMiserServerCapabilities: new WeakMap(), resolveTokenMiserEnabledFn: () => false },
+      dependencies: { markManagedCodexRuntimeSwitchCompleteFn: complete },
+    });
+    // A managed update starts rolling over.
+    service.setRuntimeRestartPending(true);
+    service.setManagedRuntimeSwitchPending(true);
+    const first = service.maybeRestartCodexForManagedRuntimeChange();
+    await vi.waitFor(() => expect(rolloverAppServer).toHaveBeenCalledOnce());
+    // A provider key change arrives before its handshake finishes.
+    service.setRuntimeRestartPending(true);
+    finishFirst({ kind: "promoted", generation: 2 });
+    expect(await first).toBe(true);
+    // The newer selection has not run, so the switch is not done yet.
+    expect(complete).not.toHaveBeenCalled();
+    expect(service.managedRuntimeSwitchPending).toBe(true);
+    expect(service.runtimeRestartPending).toBe(true);
+
+    expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(true);
+    expect(rolloverAppServer.mock.calls).toEqual([[{ selection: 1 }], [{ selection: 2 }]]);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(service.managedRuntimeSwitchPending).toBe(false);
+  });
+
+  it("applies the switch's follow-up work at promotion and retries a failed start", async () => {
+    const turnState = new RegistryTurnState();
+    turnState.registerTurn({ backend: "codex", threadId: "busy", turnId: "turn" });
+    const outcomes = [
+      { kind: "failed" as const, error: "spawn ENOENT" },
+      { kind: "deferred" as const, retryAt: 1 },
+      { kind: "promoted" as const, generation: 2 },
+    ];
+    const rolloverAppServer = vi.fn(async () => outcomes.shift()!);
+    const close = vi.fn(async () => {});
+    const reset = vi.fn();
+    const complete = vi.fn();
+    const ledger = vi.fn(async () => {});
+    const prepare = vi.fn(async () => {});
+    const client = { close, resetAppServerRestarts: reset, rolloverAppServer };
+    const host = {
+      nativeVoiceLeases: 0,
+      tokenMiserServerCapabilities: new WeakMap([[client, Promise.resolve(undefined)]]),
+      tokenMiserReducerCapabilityState: "supported",
+      tokenMiserStore: {},
+      resolveTokenMiserEnabledFn: () => true,
+      prepareTokenMiserRuntime: prepare,
+    };
+    const service = supervisor({ host, turnState, codex: client, dependencies: {
+      markManagedCodexRuntimeSwitchCompleteFn: complete,
+      threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
+    } });
+    service.setRuntimeRestartPending(true);
+    service.setManagedRuntimeSwitchPending(true);
+
+    // A running turn does not hold the switch back, but a failed start does.
+    expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(false);
+    expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(false);
+    expect(service.runtimeRestartPending).toBe(true);
+    expect(service.managedRuntimeSwitchPending).toBe(true);
+    expect(complete).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(true);
+
+    // Every attempt names the one selection that was requested.
+    expect(rolloverAppServer.mock.calls).toEqual([[{ selection: 1 }], [{ selection: 1 }], [{ selection: 1 }]]);
+    expect(close).not.toHaveBeenCalled();
+    expect(reset).toHaveBeenCalledOnce();
+    expect(ledger).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(host.tokenMiserServerCapabilities.has(client)).toBe(false);
+    expect(host.tokenMiserReducerCapabilityState).toBeUndefined();
+    expect(service.runtimeRestartPending).toBe(false);
+    expect(service.managedRuntimeSwitchPending).toBe(false);
+
+    // A newer selection is a new request.
+    service.setRuntimeRestartPending(true);
+    outcomes.push({ kind: "promoted", generation: 3 });
+    expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(true);
+    expect(rolloverAppServer).toHaveBeenLastCalledWith({ selection: 2 });
   });
 });
 

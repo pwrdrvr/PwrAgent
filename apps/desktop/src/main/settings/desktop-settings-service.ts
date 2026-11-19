@@ -723,6 +723,8 @@ export class DesktopSettingsService {
   private sessionCodexCommand?: ResolvedCodexCommandCandidate;
   private sessionCodexSelectionGeneration = 0;
   private sessionCodexRetention: Promise<void> = Promise.resolve();
+  /** A Settings write changing the Codex executable, until its discovery ends. */
+  private codexSelectionWrite?: Promise<void>;
   private rejectedStartupCachedCommand = false;
   private readonly managedCodexSelectionListeners = new Set<(
     change: ManagedCodexSelectionChange,
@@ -2519,6 +2521,34 @@ export class DesktopSettingsService {
     patch: DesktopSettingsConfigPatch,
     discoveryPermit?: ProviderDiscoveryPermit,
   ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
+    const codex = patch.models?.codex;
+    // A managed switch drops the retained selection itself before it notifies
+    // runtimes, and its write awaits their listeners: holding launches there
+    // could deadlock a client that drains a launch as it closes.
+    if (!discoveryPermit || codex?.path === undefined
+      || codex.managedBuilds !== undefined
+      || patch.experimental?.tokenMiserEnabled !== undefined) {
+      return await this.writeConfigPatchUnheld(patch, discoveryPermit);
+    }
+    // The write publishes the providers domain, which starts a new Codex app
+    // server at once; the retained selection is dropped only by the discovery
+    // at the end of the write. Hold launches until then, so the new server
+    // runs the executable this write selects rather than the one it replaces.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    this.codexSelectionWrite = gate;
+    try {
+      return await this.writeConfigPatchUnheld(patch, discoveryPermit);
+    } finally {
+      if (this.codexSelectionWrite === gate) this.codexSelectionWrite = undefined;
+      release();
+    }
+  }
+
+  private async writeConfigPatchUnheld(
+    patch: DesktopSettingsConfigPatch,
+    discoveryPermit?: ProviderDiscoveryPermit,
+  ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
     const fileStatus = this.configStore.fileStatus();
     if (fileStatus.kind === "invalid") {
       throw new Error(
@@ -3181,6 +3211,9 @@ export class DesktopSettingsService {
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
     await this.sessionCodexRetention;
+    // Nothing a write's own discovery awaits resolves a command, so this
+    // cannot wait on itself.
+    while (this.codexSelectionWrite) await this.codexSelectionWrite;
     const resolved = this.readSelectedCodexCommand();
     if (resolved) {
       this.sessionCodexCommand ??= resolved;
