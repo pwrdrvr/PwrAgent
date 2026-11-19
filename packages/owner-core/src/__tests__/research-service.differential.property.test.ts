@@ -46,7 +46,7 @@ describe("research service, validated against projections", () => {
     const scenario = fc.integer({ min: 1, max: 3 }).chain((workers) => fc.record({
       restarts: fc.array(fc.integer({ min: 0, max: 100 }), { minLength: workers, maxLength: workers }),
       quitAt: fc.integer({ min: 101, max: 200 }), closed: fc.integer({ min: 0, max: 200 }), limit: fc.integer({ min: 1, max: 500 }),
-      inFlight: fc.boolean(), startedOnCancel: fc.boolean(),
+      inFlight: fc.boolean(), cancel: fc.constantFrom("plain" as const, "started" as const, "error" as const),
     }));
     let withdrawals = 0;
     await fc.assert(fc.asyncProperty(scenario, async (input) => {
@@ -68,7 +68,7 @@ type Driven = Pick<ResearchService, "initialize" | "close" | "observeStart" | "o
 
 /** One run: workers whose turns began at their own times, a quit, a takeover, a resume, then a new per-worker limit. */
 async function driveResumeLimit(make: (ports: ResearchPorts) => Driven, records: () => Map<string, ResearchEvent[]>,
-  input: { restarts: number[]; quitAt: number; closed: number; limit: number; inFlight: boolean; startedOnCancel: boolean }): Promise<{ journals: ResearchEvent[][]; calls: string[] }> {
+  input: { restarts: number[]; quitAt: number; closed: number; limit: number; inFlight: boolean; cancel: "plain" | "started" | "error" }): Promise<{ journals: ResearchEvent[][]; calls: string[] }> {
   let ids = 0;
   uuid.next = () => `00000000-0000-4000-8000-${String(++ids).padStart(12, "0")}`;
   const coordinator: ResearchThread = { backend: "codex", threadId: "coordinator" };
@@ -87,7 +87,11 @@ async function driveResumeLimit(make: (ports: ResearchPorts) => Driven, records:
     spawn: async (_context, _task, _title, _mode, created) => { const worker = { backend: "codex" as const, threadId: `worker-${++spawned}` }; created(worker); return { ...worker, turnId: `turn-${spawned}-0` }; },
     stop: async (worker) => { calls.push(`stop ${worker.threadId} ${worker.turnId}`); },
     notify: async (_actor, target) => { calls.push(`notify ${target.threadId}`); if (resuming && input.inFlight) await gate; return { queueEntryId: `queue-${target.threadId}` }; },
-    cancelQueued: async (entry) => { calls.push(`cancel ${entry}`); return input.startedOnCancel ? { turnId: `late-${entry}` } : {}; },
+    cancelQueued: async (entry) => {
+      calls.push(`cancel ${entry}`);
+      if (input.cancel === "error") throw new Error("The queue did not answer");
+      return input.cancel === "started" ? { turnId: `late-${entry}` } : {};
+    },
   });
   let service = make(ports("owner-1", false));
   const { id } = await service.start({ objective: "Invented objective", workspaceMode: "none", turnMinutes: 10_000,

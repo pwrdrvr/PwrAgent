@@ -131,12 +131,12 @@ export class ResearchService {
    */
   private stopCutOffPastTurnLimit(id: string): boolean {
     let run = this.requireHeader(id);
-    const minutes = run.turnMinutes;
-    if (minutes === undefined || run.status !== "running") return false;
+    if (run.turnMinutes === undefined || run.status !== "running") return false;
     let stopped = false;
     for (const approach of this.storage.approaches(id, { interrupted: true })) {
-      if (researchTurnElapsed(approach, this.now()) < minutes * MINUTE) continue;
-      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped", note: researchTurnLimitNote(minutes) });
+      const note = this.turnLimitReachedNote(run, approach);
+      if (!note) continue;
+      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped", note });
       run = this.requireHeader(id);
       stopped = true;
     }
@@ -962,8 +962,9 @@ export class ResearchService {
         }
         // A stop or a closed item can win while the message is in flight, as it can for a start.
         // The per-worker limit may have been lowered past this worker's turn while the message was sent.
-        const limitNote = this.turnLimitReachedNote(this.requireHeader(id), this.requireApproach(id, approach.id));
-        if (limitNote || !this.canAdmitApproach(this.requireHeader(id), approach)) await this.withdrawResume(id, approach.id, actor, limitNote);
+        const header = this.requireHeader(id);
+        const limitNote = header.turnMinutes === undefined ? undefined : this.turnLimitReachedNote(header, this.requireApproach(id, approach.id));
+        if (limitNote || !this.canAdmitApproach(header, approach)) await this.withdrawResume(id, approach.id, actor, limitNote);
       } catch (error) {
         const current = this.requireApproach(id, approach.id);
         // Nothing was seen to start, so the worker is cut off as before and can be resumed again.
@@ -1105,8 +1106,9 @@ export class ResearchService {
     const run = this.storage.header(id);
     if (!run || run.status !== "running" || run.ownerId !== this.ports.ownerId || run.turnMinutes === undefined) return;
     const approach = this.approach(id, approachId);
-    if (!approach || approach.state !== "running" || researchTurnElapsed(approach, this.now()) < run.turnMinutes * MINUTE) return;
-    void this.stopWorker(id, approachId, this.operator(run), researchTurnLimitNote(run.turnMinutes)).then(() => {
+    const note = approach?.state === "running" ? this.turnLimitReachedNote(run, approach) : undefined;
+    if (!note) return;
+    void this.stopWorker(id, approachId, this.operator(run), note).then(() => {
       if (this.closed) return;
       const current = this.requireHeader(id);
       if (current.status === "running") this.finishExploration(current);

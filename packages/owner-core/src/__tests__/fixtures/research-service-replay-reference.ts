@@ -157,7 +157,6 @@ export class ReplayResearchService {
     return this.requireRun(run.id);
   }
 
-  /** A worker waiting to be resumed whose turn already ran the per-worker limit is stopped for that reason. */
   /** The per-worker limit note when the worker's turn, counting time before a restart, has reached the run's limit. */
   private turnLimitReachedNote(run: ResearchRun, approachId: string): string | undefined {
     const minutes = run.turnMinutes;
@@ -167,15 +166,15 @@ export class ReplayResearchService {
     return elapsed >= minutes * MINUTE ? `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.` : undefined;
   }
 
+  /** A worker waiting to be resumed whose turn already ran the per-worker limit is stopped for that reason. */
   private stopCutOffPastTurnLimit(id: string): boolean {
     let run = this.requireRun(id);
-    const minutes = run.turnMinutes;
-    if (minutes === undefined || run.status !== "running") return false;
+    if (run.turnMinutes === undefined || run.status !== "running") return false;
     let stopped = false;
     for (const approach of run.approaches.filter((candidate) => candidate.interrupted)) {
-      if ((approach.turnMs ?? 0) + (approach.turnSince === undefined ? 0 : Math.max(0, this.now() - approach.turnSince)) < minutes * MINUTE) continue;
-      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped",
-        note: `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.` });
+      const note = this.turnLimitReachedNote(run, approach.id);
+      if (!note) continue;
+      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped", note });
       run = this.requireRun(id);
       stopped = true;
     }
@@ -970,10 +969,9 @@ export class ReplayResearchService {
     if (this.closed) return;
     const run = this.storage.get(id);
     if (!run || run.status !== "running" || run.ownerId !== this.ports.ownerId || run.turnMinutes === undefined) return;
-    const minutes = run.turnMinutes;
-    const approach = run.approaches.find((candidate) => candidate.id === approachId);
-    if (!approach || approach.state !== "running" || (approach.turnMs ?? 0) + (approach.turnSince === undefined ? 0 : Math.max(0, this.now() - approach.turnSince)) < minutes * MINUTE) return;
-    void this.stopWorker(id, approachId, this.operator(run), `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.`).then(() => {
+    const note = run.approaches.find((candidate) => candidate.id === approachId)?.state === "running" ? this.turnLimitReachedNote(run, approachId) : undefined;
+    if (!note) return;
+    void this.stopWorker(id, approachId, this.operator(run), note).then(() => {
       if (this.closed) return;
       const current = this.requireRun(id);
       if (current.status === "running") this.finishExploration(current);
