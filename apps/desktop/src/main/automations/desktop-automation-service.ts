@@ -191,6 +191,12 @@ export class DesktopAutomationService {
   private runOwnerRecheckTimer: NodeJS.Timeout | undefined;
   /** Runs already handed to a report pass in this process. */
   private readonly reportingInterruptedRunIds = new Set<string>();
+  /**
+   * The `automation/run/updated` events this process published for runs a
+   * restart interrupted. They are published from `start()`, before messaging
+   * channels connect, so each channel replays them once when it starts.
+   */
+  private readonly interruptedRunUpdates = new Map<string, AgentEvent>();
   private pendingRunUsageTimer: NodeJS.Timeout | undefined;
   private readonly pendingRunTranscriptEvents = new Map<
     string,
@@ -1276,7 +1282,7 @@ export class DesktopAutomationService {
     } else {
       automationServiceLog.debug("publishing automation run update", logFields);
     }
-    await this.options.registry.publishLocalEvent({
+    const event = {
       backend: params.backend,
       notification: {
         method: "automation/run/updated",
@@ -1284,6 +1290,8 @@ export class DesktopAutomationService {
           threadId: automation?.threadId ?? params.threadId,
           automationId: run.automationId,
           automationName: automation?.name,
+          errorMessage: artifact?.errorMessage ?? run.errorMessage,
+          failureReason: run.failureReason,
           finalText: artifact?.finalText,
           outputDecision: artifact?.outputDecision,
           runId: params.runId,
@@ -1293,7 +1301,13 @@ export class DesktopAutomationService {
             : false,
         },
       },
-    });
+    } satisfies AgentEvent;
+    if (run.failureReason === "interrupted") {
+      // Recorded before publishing: a messaging channel that starts after
+      // this event replays it (see `listInterruptedRunUpdates`).
+      this.interruptedRunUpdates.set(run.id, event);
+    }
+    await this.options.registry.publishLocalEvent(event);
     if (automation) {
       await this.notifyThreadAutomationsUpdated(automation);
     }
@@ -1542,6 +1556,11 @@ export class DesktopAutomationService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /** Interrupted-run updates this process has published, oldest first. */
+  listInterruptedRunUpdates(): AgentEvent[] {
+    return [...this.interruptedRunUpdates.values()];
   }
 
   /**

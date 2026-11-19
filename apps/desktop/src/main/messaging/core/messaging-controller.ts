@@ -25,7 +25,7 @@ import type { MessagingBackendEventHost } from "./messaging-backend-event-contex
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
 import { asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import { automatedWorkStartedLabel, incomingWorkText } from "./messaging-thread-notifications";
+import { automatedWorkStartedLabel, automationRunFailureNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
@@ -4438,8 +4438,11 @@ export class MessagingController {
   }
 
   private async handleAutomationRunUpdated(params: {
+    automationName?: string;
     bindings: MessagingBindingRecord[];
+    errorMessage?: string;
     event: AgentEvent;
+    failureReason?: string;
     finalText?: string;
     outputDecision?: AutomationRunOutputDecision;
     runId: string;
@@ -4460,10 +4463,17 @@ export class MessagingController {
     ) {
       return;
     }
+    // A failed or interrupted run that produced no output of its own still
+    // tells the conversation, in one line, so an operator watching only chat
+    // learns the run ended.
+    const failureNotice = params.status === "failed"
+      ? automationRunFailureNotice(params)
+      : undefined;
     for (const binding of params.bindings) {
       await this.deliverAutomationFinalMessageOnce({
         binding,
         event: params.event,
+        failureNotice,
         finalText: params.finalText,
         keyParts: [binding.id, params.runId, "automation-run"],
         outputDecision: params.outputDecision,
@@ -4474,6 +4484,8 @@ export class MessagingController {
   private async deliverAutomationFinalMessageOnce(params: {
     binding: MessagingBindingRecord;
     event: AgentEvent;
+    /** Sent when the run produced no message; never alongside its output. */
+    failureNotice?: string;
     finalText?: string;
     keyParts: string[];
     outputDecision?: AutomationRunOutputDecision;
@@ -4481,14 +4493,20 @@ export class MessagingController {
     if (params.outputDecision?.kind === "quiet") {
       return;
     }
-    const messageText =
+    const outputText =
       params.outputDecision?.kind === "post_card"
         ? renderAutomationDecisionForMessaging(params.outputDecision)
         : renderAutomationOutputForMessaging(params.finalText);
+    const messageText = outputText || params.failureNotice;
     if (!messageText) {
       return;
     }
-    const key = [...params.keyParts, messageText].join("\0");
+    // A run's failure notice is keyed by the run, not its wording: a later
+    // update may carry a different error message for the same failure.
+    const key = [
+      ...params.keyParts,
+      outputText ? outputText : "failure-notice",
+    ].join("\0");
     if (this.deliveredAutomationFinalKeys.has(key)) {
       return;
     }

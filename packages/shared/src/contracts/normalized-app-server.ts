@@ -3,7 +3,10 @@ import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
-import type { AutomationRunOutputDecision } from "./automations";
+import type {
+  AutomationRunFailureReason,
+  AutomationRunOutputDecision,
+} from "./automations";
 import type { ScheduledThreadAction } from "./scheduled-thread-actions";
 import type {
   MessagingChannelKind,
@@ -2811,6 +2814,9 @@ export type AppServerNotification =
         threadId: string;
         automationId: string;
         automationName?: string;
+        /** The run's error, for a bound conversation's failure notice. */
+        errorMessage?: string;
+        failureReason?: AutomationRunFailureReason;
         finalText?: string;
         outputDecision?: AutomationRunOutputDecision;
         runId: string;

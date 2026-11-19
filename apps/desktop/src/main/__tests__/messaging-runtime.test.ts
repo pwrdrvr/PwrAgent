@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -140,6 +141,117 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
+  // Rule: a run a restart interrupted reaches each bound conversation once,
+  // whether the automation service published it before the channel started
+  // (startup reports it from `automations.start()`, before messaging) or while
+  // the channel was listening. A channel restart does not post it again.
+  it("delivers each interrupted automation run to a bound conversation exactly once", async () => {
+    type Step = "publish" | "start" | "stop";
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.constantFrom<Step>("publish", "start", "stop"), {
+          minLength: 1,
+          maxLength: 12,
+        }),
+        async (steps) => {
+          await prepareRuntimeStore();
+          const { getDesktopMessagingStore } = await import(
+            "../messaging/desktop-messaging-store"
+          );
+          await getDesktopMessagingStore().upsertBinding({
+            id: "binding-1",
+            backend: "codex",
+            threadId: "thread-1",
+            targetKind: "thread",
+            channel: { channel: "telegram", conversation: { id: "chat-1", kind: "dm" } },
+            authorizedActorIds: ["user-1"],
+            createdAt: 1000,
+            updatedAt: 1000,
+          });
+          const adapter = createAdapter("telegram");
+          const bridge = createBackendBridge();
+          const published: AgentEvent[] = [];
+          const { DesktopMessagingRuntime: Runtime } = await import(
+            "../messaging/messaging-runtime"
+          );
+          const runtime = new Runtime({
+            adapterFactory: () => [adapter],
+            backendBridge: bridge,
+            config: {
+              inputDebounceMs: 0,
+              telegram: {
+                channel: "telegram",
+                botToken: "telegram-token",
+                authorizedActorIds: [{ id: "user-1", displayName: "" }],
+              },
+            },
+            interruptedAutomationRunUpdates: () => published,
+          });
+          // Model: which runs must arrive, and which may be lost because
+          // the operator had messaging stopped when they were published.
+          const mustArrive = new Set<string>();
+          let running = false;
+          let everStarted = false;
+          try {
+            for (const step of [...steps, "start" as const]) {
+              if (step === "start" && !running) {
+                await runtime.start();
+                running = true;
+                everStarted = true;
+              } else if (step === "stop" && running) {
+                await runtime.stop();
+                running = false;
+              } else if (step === "publish") {
+                const runId = `run-${published.length + 1}`;
+                const event: AgentEvent = {
+                  backend: "codex",
+                  notification: {
+                    method: "automation/run/updated",
+                    params: {
+                      threadId: "thread-1",
+                      automationId: "automation-1",
+                      automationName: "Check weather",
+                      errorMessage: `PwrAgent stopped before ${runId} finished.`,
+                      failureReason: "interrupted",
+                      runId,
+                      status: "failed",
+                    },
+                  },
+                };
+                // The service records the update before publishing it.
+                published.push(event);
+                if (running || !everStarted) mustArrive.add(runId);
+                await bridge.emitBackendEvent(event);
+              }
+            }
+            for (let index = 0; index < 5; index += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+            const notices = adapter.delivered.flatMap((intent) =>
+              intent.kind === "message"
+                ? intent.parts.map((part) => ("text" in part ? part.text : ""))
+                : []);
+            for (let index = 1; index <= published.length; index += 1) {
+              const runId = `run-${index}`;
+              const count = notices.filter((text) => text === (
+                `Automation interrupted: Check weather · PwrAgent stopped before ${runId} finished.`
+              )).length;
+              // Never twice; exactly once unless messaging was stopped.
+              expect({ runId, count }).toEqual({
+                runId,
+                count: mustArrive.has(runId) ? 1 : Math.min(count, 1),
+              });
+            }
+          } finally {
+            await runtime.stop().catch(() => {});
+            await flushMicrotasks();
+          }
+        },
+      ),
+      { numRuns: 25 },
+    );
+  });
+
   it.each([false, true])("the authenticated execution owner can list only its admitted originals after restart (Slack first: %s)", async (slackFirst) => {
     const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");

@@ -484,8 +484,11 @@ export class MessagingBackendEventRouter {
     const automationRunUpdate = automationRunUpdateForBackendEvent(event);
     if (automationRunUpdate) {
       await this.context.host().handleAutomationRunUpdated({
+        automationName: automationRunUpdate.automationName,
         bindings,
+        errorMessage: automationRunUpdate.errorMessage,
         event,
+        failureReason: automationRunUpdate.failureReason,
         runId: automationRunUpdate.runId,
         finalText: automationRunUpdate.finalText,
         outputDecision: automationRunUpdate.outputDecision,

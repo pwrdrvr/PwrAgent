@@ -459,6 +459,9 @@ export function turnQueueUpdateForBackendEvent(event: AgentEvent): {
 }
 
 export function automationRunUpdateForBackendEvent(event: AgentEvent): {
+  automationName?: string;
+  errorMessage?: string;
+  failureReason?: string;
   finalText?: string;
   outputDecision?: AutomationRunOutputDecision;
   runId: string;
@@ -469,6 +472,9 @@ export function automationRunUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   const params = event.notification.params as {
+    automationName?: unknown;
+    errorMessage?: unknown;
+    failureReason?: unknown;
     finalText?: unknown;
     outputDecision?: unknown;
     runId?: unknown;
@@ -479,6 +485,13 @@ export function automationRunUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   return {
+    automationName: typeof params.automationName === "string"
+      ? params.automationName
+      : undefined,
+    errorMessage: typeof params.errorMessage === "string" ? params.errorMessage : undefined,
+    failureReason: typeof params.failureReason === "string"
+      ? params.failureReason
+      : undefined,
     finalText: typeof params.finalText === "string" ? params.finalText : undefined,
     outputDecision: isAutomationRunOutputDecision(params.outputDecision)
       ? params.outputDecision
