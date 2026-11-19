@@ -57,6 +57,8 @@ const ROW_CHANGE_METHODS = new Set([
 
 /** Streamed text, token accounting and tool deltas do not refresh collection queries. */
 export function navigationQueryEventRequiresRefresh(method: string, params?: unknown): boolean {
+  if (method === "federation/eventStream/changed" && params && typeof params === "object"
+    && "navigationContinuous" in params && params.navigationContinuous === true) return false;
   if (method === "thread/subAgents/updated" && params && typeof params === "object"
     && "navigationChanged" in params && params.navigationChanged === false) return false;
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");

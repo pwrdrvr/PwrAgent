@@ -36,7 +36,8 @@ it("adds zero SQLite commits for real overlay-backed query, model inventory, fac
     await mocks.store.addRemoteThreadPin({ ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }),
       instanceLabel: "Peer", summary: { ...mocks.threads[0]!, id: "remote", summary: "Selected-only data".repeat(10_000) } });
     await mocks.store.markThreadSeen({ backend: "codex", threadId: "thread-0", seenUpdatedAt: 1 });
-    mocks.threads[0] = { ...mocks.threads[0]!, updatedAt: 2000 };
+    mocks.threads[0] = { ...mocks.threads[0]!, updatedAt: 2000,
+      linkedDirectories: [{ id: "isolated", kind: "local", label: "Isolated", path: "/fixture/isolated" }] };
     const queries = new NavigationQueryStore();
     const { writes } = await measureSqliteWrites(async () => {
       const pins = await mocks.store.readRemoteThreadPinNavigationRows();
@@ -50,9 +51,10 @@ it("adds zero SQLite commits for real overlay-backed query, model inventory, fac
       } }, "native-budget");
       expect(native).toMatchObject({ protocol: 2, counts: { active: 1000 } });
       const updated = await queries.readPage({ loadIndex, scopeKey: "exact", request: {
-        protocol: 2, consumer: "main-sidebar", query: { kind: "exact", identities: [{ backend: "codex", threadId: "thread-0" }] },
+        protocol: 2, consumer: "main-sidebar", inventory: "owner", query: { kind: "exact", identities: [{ backend: "codex", threadId: "thread-0" }] },
       } });
       expect(updated.entries[0]?.row.inbox).toMatchObject({ inInbox: true, reason: "updated-since-seen" });
+      expect(updated.metadataDependencies?.threadKeys).toContain(JSON.stringify([null, "codex", "thread-0"]));
       const request = { protocol: 2 as const, consumer: "star-map" as const,
         query: { kind: "star-map" as const, filters: {} }, pageSize: 10,
         attentionView: { id: "window", promoteOnTurnEnd: true } };

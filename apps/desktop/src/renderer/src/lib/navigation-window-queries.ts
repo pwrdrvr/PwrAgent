@@ -1,6 +1,6 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationIdentity, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -502,16 +502,36 @@ export class NavigationWindowQueries {
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
-    // The stream acknowledgement repairs direct owner reads. Viewer membership
-    // is published separately by the summary cache after its fenced owner read;
-    // reading the viewer here observes the old cache, then reads it all again
-    // when that publication arrives. The publication still discovers new rows.
+    // A navigation gap needs a new direct owner baseline. Viewer membership
+    // arrives separately when the summary cache publishes its fenced read.
     if (method === "federation/eventStream/changed" && event.federationTarget?.scope === "remote"
-      && request.inventory === "viewer" && request.federationTarget?.scope !== "remote") return false;
+      && (!navigationQueryEventRequiresRefresh(method, params)
+        || (request.inventory === "viewer" && request.federationTarget?.scope !== "remote"))) return false;
+    if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
+      const workingState = method === "navigation/threadGitWorkingState/updated";
+      // The index holds directory Git status and counts. Working-state probes
+      // only change thread rows, even when the inventory is incomplete.
+      if (workingState && request.query.kind === "directory-index") return false;
+      if (!resource.membershipUncertain && page?.coverage.state === "complete"
+        && (workingState || method === "navigation/thread/seen")) {
+        const dependencies = this.metadataDependencies(page);
+        if (workingState && typeof params?.worktreePath === "string" && dependencies?.workingStatePaths) {
+          return dependencies.workingStatePaths.includes(params.worktreePath);
+        }
+        if (method === "navigation/thread/seen" && typeof params?.threadId === "string" && dependencies) {
+          // The page proof was built on the serving owner, where native refs
+          // are local. Row expansion adds a federation identity only to rows.
+          return dependencies.threadKeys.includes(navigationIdentityKey({ backend: event.backend, threadId: params.threadId }));
+        }
+      }
+      // A descriptor's unread count includes siblings outside the exact
+      // selection or tray. An older or partial page cannot exclude them.
+      if (method === "navigation/thread/seen" && page?.selectionDirectory
+        && (request.query.kind === "exact" || request.query.kind === "children")) return true;
+    }
     if (request.inventory === "viewer" && request.federationTarget?.scope !== "remote" && !resource.membershipUncertain
       && page?.coverage.state === "complete") {
-      if (!this.pageDependencies.has(page)) this.pageDependencies.set(page, readNavigationMetadataDependencies(page.metadataDependencies));
-      const dependencies = this.pageDependencies.get(page);
+      const dependencies = this.metadataDependencies(page);
       if (dependencies && event.federationTarget?.scope !== "remote"
         && method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId) {
         return params.rowChanges.some((ref) => dependencies.threadKeys.includes(navigationIdentityKey(ref)));
@@ -597,6 +617,11 @@ export class NavigationWindowQueries {
         && navigationWorkingStatePath(row) === params.worktreePath);
     }
     return true;
+  }
+
+  private metadataDependencies(page: NavigationQueryPage): NavigationMetadataDependencies | undefined {
+    if (!this.pageDependencies.has(page)) this.pageDependencies.set(page, readNavigationMetadataDependencies(page.metadataDependencies));
+    return this.pageDependencies.get(page);
   }
 
   setVisibleAnchor(id: string, anchor: NavigationQueryAnchor | undefined): void {

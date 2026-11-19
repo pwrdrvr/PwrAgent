@@ -33,6 +33,7 @@ import {
   rankThreadJumpMatches,
   textMatchesJumpQuery,
   buildPullRequestStatusKey,
+  navigationWorkingStatePath,
   readNavigationMetadataDependencies,
 } from "@pwragent/shared";
 import {
@@ -1178,6 +1179,44 @@ export function explainMissingNavigationAnchor(params: {
   return "ref-mismatch";
 }
 
+function projectionMetadataDependencies(params: {
+  index: NavigationQueryIndex;
+  request: NavigationQueryRequest;
+  selectedThreads: readonly NavigationThreadSummary[];
+  countsThreads: readonly NavigationThreadSummary[];
+  descriptor: NavigationDirectorySummary | undefined;
+  threadsByLegacyKey: ReadonlyMap<string, NavigationThreadSummary>;
+}): NavigationMetadataDependencies | undefined {
+  const { index, request, selectedThreads, countsThreads, descriptor, threadsByLegacyKey } = params;
+  const { kind } = request.query;
+  if (index.coverage?.state !== "complete") return undefined;
+  const viewer = request.inventory === "viewer";
+  const ownerSidebar = request.inventory === "owner" && request.consumer === "main-sidebar";
+  if (kind !== "directory" && kind !== "exact"
+    && !(viewer && kind === "directory-index") && !(ownerSidebar && kind === "children")) return undefined;
+  if (!viewer && !ownerSidebar) return undefined;
+
+  // Count dependencies include off-page members and selection descriptors.
+  // Working-state chips only depend on rows this query can actually return.
+  const descriptorDirectories = kind === "directory-index" ? index.directories : descriptor ? [descriptor] : [];
+  const dependencies = new Set([...selectedThreads, ...countsThreads,
+    ...descriptorDirectories.flatMap((directory) => directoryMemberThreads(directory, threadsByLegacyKey))]);
+  const threadKeys = new Set<string>();
+  const prKeys = new Set<string>();
+  const workingStatePaths = new Set<string>();
+  for (const thread of dependencies) {
+    const ref = navigationIdentity(thread);
+    threadKeys.add(JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]));
+    if (viewer) for (const pr of thread.prs ?? []) prKeys.add(buildPullRequestStatusKey(pr));
+  }
+  if (ownerSidebar) for (const thread of selectedThreads) {
+    const path = navigationWorkingStatePath(thread);
+    if (path) workingStatePaths.add(path);
+  }
+  return readNavigationMetadataDependencies({ version: 1, threadKeys: [...threadKeys].sort(), prKeys: [...prKeys].sort(),
+    ...(ownerSidebar ? { workingStatePaths: [...workingStatePaths].sort() } : {}) });
+}
+
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
@@ -1327,25 +1366,11 @@ export function projectNavigationQuery(params: {
       || (query.kind === "lens" && query.roots !== undefined)
       ? selectedThreads
       : params.index.threads;
-  // These pages also carry directory-wide counts. Derive their dependencies
-  // from the same complete, viewer-regrouped inventory as their descriptors,
-  // never loaded roots, linked paths, or a remote owner's directory scope.
-  let metadataDependencies: NavigationMetadataDependencies | undefined;
-  if (params.request.inventory === "viewer" && params.index.coverage?.state === "complete"
-    && (query.kind === "directory" || query.kind === "directory-index" || query.kind === "exact")) {
-    const descriptorDirectories = query.kind === "directory-index" ? params.index.directories
-      : query.kind === "directory" ? params.index.directories.filter((directory) => directory.key === query.directoryKey)
-      : params.index.directories.filter((directory) => directory.threadKeys.some((key) => selectedThreads[0] === threadsByLegacyKey.get(key))).slice(0, 1);
-    const dependencies = new Set([...selectedThreads, ...countsThreads,
-      ...descriptorDirectories.flatMap((directory) => directoryMemberThreads(directory, threadsByLegacyKey))]);
-    metadataDependencies = readNavigationMetadataDependencies({ version: 1,
-      threadKeys: [...new Set([...dependencies].map((thread) => {
-        const ref = navigationIdentity(thread);
-        return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
-      }))].sort(),
-      prKeys: [...new Set([...dependencies].flatMap((thread) => thread.prs?.map(buildPullRequestStatusKey) ?? []))].sort(),
-    });
-  }
+  const exactDescriptor = query.kind === "exact" && selectedThreads.length
+    ? params.index.directories.find((directory) => directory.threadKeys.some((key) => selectedThreads[0] === threadsByLegacyKey.get(key))) : undefined;
+  const descriptor = query.kind === "exact" ? exactDescriptor : scopedDirectory;
+  const metadataDependencies = projectionMetadataDependencies({ index: params.index, request: params.request,
+    selectedThreads, countsThreads, descriptor, threadsByLegacyKey });
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     ...(metadataDependencies ? { metadataDependencies } : {}),
@@ -1355,18 +1380,8 @@ export function projectNavigationQuery(params: {
       backends: query.kind === "directory-index"
         || (query.kind === "star-map" && query.projectKey === undefined),
     }),
-    ...(query.kind === "directory" || (query.kind === "children" && query.directoryKey !== undefined) ? {
-      selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
-        directories: params.index.directories.filter((directory) => directory.key === query.directoryKey),
-      }, threadsByLegacyKey, parentCandidates })[0],
-    } : {}),
-    ...(query.kind === "exact" && selectedThreads.length ? {
-      // Resolve the canonical home from the complete compact index. A linked
-      // worktree path is not necessarily the directory key shown by the viewer.
-      selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
-        directories: params.index.directories.filter((directory) => directory.threadKeys.some((key) =>
-          selectedThreads[0] === threadsByLegacyKey.get(key))) }, threadsByLegacyKey, parentCandidates })[0],
-    } : {}),
+    ...(descriptor ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: [descriptor] },
+      threadsByLegacyKey, parentCandidates })[0] } : {}),
     // The split's acknowledgment as well as its size: an owner that predates
     // `roots` sets no collection size on a lens page, so the viewer knows to
     // filter that page itself.

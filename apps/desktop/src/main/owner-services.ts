@@ -118,6 +118,7 @@ const navigationQueryPool = getDesktopNavigationQueryPool();
 function invalidateNavigationEvent(event: AgentEvent): void {
   appServerService.invalidateThreadPendingWakes(event);
   getDesktopNavigationQueryStore().observeAttentionEvent(event);
+  if (event.notification.method === "federation/eventStream/changed" && event.notification.params.navigationContinuous) return;
   if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
   const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
   const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
