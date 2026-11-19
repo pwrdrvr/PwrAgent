@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -11,7 +11,7 @@ const spec = "apps/desktop/e2e/example.spec.ts";
 const changes = (...files) => files.map((file) => ({ status: "M", file }));
 
 function temporaryTree(callback) {
-  const root = mkdtempSync(path.join(os.tmpdir(), "pr-test-impact-"));
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pr-test-impact-")));
   const write = (file, content) => {
     const absolute = path.join(root, file);
     mkdirSync(path.dirname(absolute), { recursive: true });
@@ -99,6 +99,7 @@ it("checks native Node failures against the Vitest graph and widens for disk-onl
       owner: `${source}related.test.mjs`,
       diskOwner: `${source}disk.test.mjs`,
       computedOwner: `${source}computed.test.mjs`,
+      mixedOwner: `${source}mixed.test.mjs`,
       unrelated: `${source}unrelated.test.mjs`,
     };
     write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
@@ -110,9 +111,10 @@ it("checks native Node failures against the Vitest graph and widens for disk-onl
     write(files.owner, `${assertion} const value = (await import("./barrel.mjs")).default; assert.equal(value, 1);`);
     write(files.diskOwner, `${assertion} import { readFileSync } from "node:fs"; assert.equal(readFileSync(new URL("./fixtures/value.txt", import.meta.url), "utf8"), "1");`);
     write(files.computedOwner, `${assertion} const modulePath = "./computed.mjs"; const {default: value} = await import(modulePath); assert.equal(value, 1);`);
+    write(files.mixedOwner, `${assertion} const modulePath = "./dependency.mjs"; const {default: value} = await import(modulePath); assert.equal(value, 1);`);
     write(files.unrelated, `${assertion} assert.equal(1, 1);`);
 
-    const specs = [files.owner, files.diskOwner, files.computedOwner, files.unrelated];
+    const specs = [files.owner, files.diskOwner, files.computedOwner, files.mixedOwner, files.unrelated];
     const failures = () => specs.filter((file) => {
       const result = spawnSync(process.execPath, [file], { cwd: root, encoding: "utf8" });
       if (result.status !== 0) expect(result.stderr).toContain("AssertionError");
@@ -120,18 +122,27 @@ it("checks native Node failures against the Vitest graph and widens for disk-onl
     });
     expect(failures()).toEqual([]);
     write(files.changed, "export default 2;");
-    expect(failures()).toEqual([files.owner]);
+    const observed = failures();
+    expect(observed).toEqual([files.owner, files.mixedOwner]);
 
     await withVitestImpact(root, async (unit) => {
       const options = { unit, e2eFiles: [spec] };
       const staticPlan = await planImpact(changes(files.changed), options);
-      expect(staticPlan.unit.selected?.map(({ file }) => file)).toEqual(failures());
-      expect(staticPlan.unit.total).toBe(4);
+      expect(staticPlan.unit.selected?.map(({ file }) => file)).toEqual([files.owner]);
+      expect(staticPlan.unit.total).toBe(5);
       expect(staticPlan.e2e.mode).toBe("full");
+      // A static owner can mask a second, opaque consumer of the same file.
+      // This known miss must be visible in shadow before considering a gate.
+      const scored = compareFailures(staticPlan, { missingSlices: [], slices: [{
+        kind: "unit", platform: "linux", key: "unit-fixture", first: { complete: true, errors: 0 },
+        failures: observed.map((file) => ({ project: staticPlan.unit.selected[0].project, file })),
+      }] });
+      expect(scored.cases.map(({ file, outcome }) => [file, outcome]))
+        .toEqual([[files.owner, "covered"], [files.mixedOwner, "missed"]]);
 
       write(files.disk, "2");
       write(files.dynamic, "export default 2;");
-      expect(failures()).toEqual([files.owner, files.diskOwner, files.computedOwner]);
+      expect(failures()).toEqual([files.owner, files.diskOwner, files.computedOwner, files.mixedOwner]);
       expect((await planImpact(changes(files.disk), options)).unit.mode).toBe("full");
       expect((await planImpact(changes(files.dynamic, files.changed), options)).unit.reason).toBe("no Vitest graph owner for changed source");
       expect((await planImpact(changes(files.computedOwner), options)).unit.reason).toBe("computed import in changed source");
