@@ -77,6 +77,15 @@ type CallToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 const LOOPBACK_HOST = "127.0.0.1";
 const MCP_PATH = "/mcp";
 const MCP_SESSION_HEADER = "Mcp-Session-Id";
+// These tools key mutation admission or receipts by the internal call ID.
+const MCP_TOOLS_REQUIRING_SESSION = new Set([
+  "handoff_task",
+  "move_thread_workspace",
+  "research_assign",
+  "research_start",
+  "research_update",
+  "start_review",
+]);
 
 /**
  * How often a running tool call reports progress.
@@ -390,7 +399,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const messages = Array.isArray(body) ? body : [body];
     const streamed = messages.some((message) =>
       !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
-    const initializing = isInitializeRequest(body);
+    const initializing = messages.some(isInitializeRequest);
     if (initializing && sessionNonce) {
       return Response.json({ jsonrpc: "2.0", error: { code: -32600, message: "Session already initialized" }, id: null }, { status: 400 });
     }
@@ -593,6 +602,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           message:
             `The messaging user who started this turn lacks permission for this tool (${deniedPermission}).`,
         }),
+      );
+    }
+    if (!sessionNonce && MCP_TOOLS_REQUIRING_SESSION.has(request.params.name)) {
+      return forbiddenMcpResponse(
+        "This tool requires an MCP session to prevent duplicate mutations. Initialize the connection and send the returned Mcp-Session-Id header.",
       );
     }
     const result = await catalog.router.handleMcpToolCall({
