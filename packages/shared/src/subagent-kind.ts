@@ -104,8 +104,8 @@ export function isSystemQueuedMessageTitleHelperSubAgent(
 
 /**
  * A card an earlier version wrote for a decisions_invoke batch. Batches now
- * live only in the Decisions tab; these rows stay in thread history and
- * every sub-agent surface hides them.
+ * show in the Decisions tab and their own strip above the composer; these
+ * rows stay in thread history and every sub-agent surface hides them.
  */
 export const DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX = "system:decision-batch:";
 

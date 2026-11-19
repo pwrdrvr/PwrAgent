@@ -426,6 +426,9 @@ describe("thread sub-agent table", () => {
         native(9, { completedAt: old }),
         native(10, { completedAt: visibleSince, status: "success" }),
         card(11, { monitorId: "review:turn-11", status: "success", updatedAt: old }),
+        // Cards an earlier build wrote for decision batches: hidden whatever their status.
+        card(12, { monitorId: "system:decision-batch:batch_a", status: "running", updatedAt: recent }),
+        card(13, { monitorId: "system:decision-batch:batch_b", status: "success", updatedAt: recent }),
         ...Array.from({ length: 4 }, (_, index) => card(20 + index)),
       ];
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: cards });

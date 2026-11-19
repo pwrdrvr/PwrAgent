@@ -679,7 +679,7 @@ export class OpenAIDecisionsService {
     await this.usage.close();
   }
 
-  /** The caller's batch from memory, else from its result file. */
+  /** A stored decision version as the Decisions tab and Settings show it. */
   private railDecision(record: OpenAIDecisionVersionRecord): DecisionsRailDecision {
     return {
       decisionId: record.decisionId,
@@ -694,6 +694,7 @@ export class OpenAIDecisionsService {
     };
   }
 
+  /** The caller's batch from memory, else from its result file. */
   private async ownBatch(caller: OpenAIDecisionCaller, batchId: unknown) {
     if (typeof batchId !== "string" || batchId.length === 0) {
       throw new OpenAIDecisionsError("invalid_input", "batchId must be a string.");

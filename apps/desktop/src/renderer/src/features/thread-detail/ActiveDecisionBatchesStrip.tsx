@@ -100,86 +100,90 @@ export function ActiveDecisionBatchesStrip(props: {
   const headingCount = running.length > 0 ? running.length : failed.length;
   const failedNote = running.length > 0 && failed.length > 0 ? `${failed.length} stopped by an error` : undefined;
 
+  // The dialog outlives the batch's row, so it sits beside the strip: once
+  // nothing is listed, no empty region stays behind it.
   return (
-    <section className="live-strip" aria-label={heading}>
+    <>
       {visible.length > 0 ? (
-        <div className="live-strip__header">
-          <button
-            aria-expanded={expanded}
-            aria-label={`${heading}, ${headingCount}${failedNote ? `, ${failedNote}` : ""}`}
-            className="live-strip__row"
-            type="button"
-            onClick={() => setExpanded((current) => !current)}
-          >
-            <span className="live-strip__chevron" aria-hidden="true" />
-            <span className="live-strip__label">{heading}</span>{" "}
-            <SignalCount
-              className="live-strip__count"
-              count={headingCount}
-              indicator={running.length > 0 ? <ThinkingScanner compact /> : <span className="signal-count__dormant-scanner" />}
-              tone={running.length > 0 ? "active" : "idle"}
-            />
-            {" "}<span className="live-strip__row-spacer" />
-            {failedNote ? <span className="live-strip__note">{failedNote}</span> : null}
-          </button>
-        </div>
-      ) : null}
-      {expanded && visible.length > 0 ? (
-        <ul className="live-strip__list">
-          {visible.map((batch) => {
-            const failedRow = !isDecisionBatchRunning(batch);
-            const label = `${batch.name} v${batch.version}`;
-            const progress = `${batch.finished}/${batch.count}`;
-            const elapsed = formatRunningDurationMs(Math.max(0, now - (batch.startedAt ?? batch.createdAt)));
-            return (
-              <li
-                className={`live-strip__item${failedRow ? " live-strip__item--failed" : ""}`}
-                key={batch.batchId}
-              >
-                <span
-                  aria-hidden="true"
-                  className={failedRow ? "status-dot status-dot--error" : "status-dot status-dot--active status-dot--blink"}
-                  ref={failedRow ? undefined : statusPulseRef}
-                />
-                <span className="live-strip__item-text" title={label}>
-                  {label} · {progress}
-                  {failedRow ? ` · ${batch.stoppedBy?.code ?? "stopped"}` : ` · ${elapsed}`}
-                </span>
-                <span className="live-strip__item-time">{failedRow ? "Failed" : batch.stopping ? "Stopping" : "Running"}</span>
-                <button
-                  aria-label={`Details for decision batch: ${label}`}
-                  className="live-strip__item-action"
-                  type="button"
-                  onClick={() => setDetails({ threadKey, batch })}
-                >
-                  Details
-                </button>
-                <span className="live-strip__item-slot">
-                  {failedRow ? (
+        <section className="live-strip" aria-label={heading}>
+          <div className="live-strip__header">
+            <button
+              aria-expanded={expanded}
+              aria-label={`${heading}, ${headingCount}${failedNote ? `, ${failedNote}` : ""}`}
+              className="live-strip__row"
+              type="button"
+              onClick={() => setExpanded((current) => !current)}
+            >
+              <span className="live-strip__chevron" aria-hidden="true" />
+              <span className="live-strip__label">{heading}</span>{" "}
+              <SignalCount
+                className="live-strip__count"
+                count={headingCount}
+                indicator={running.length > 0 ? <ThinkingScanner compact /> : <span className="signal-count__dormant-scanner" />}
+                tone={running.length > 0 ? "active" : "idle"}
+              />
+              {" "}<span className="live-strip__row-spacer" />
+              {failedNote ? <span className="live-strip__note">{failedNote}</span> : null}
+            </button>
+          </div>
+          {expanded ? (
+            <ul className="live-strip__list">
+              {visible.map((batch) => {
+                const failedRow = !isDecisionBatchRunning(batch);
+                const label = `${batch.name} v${batch.version}`;
+                const progress = `${batch.finished}/${batch.count}`;
+                const elapsed = formatRunningDurationMs(Math.max(0, now - (batch.startedAt ?? batch.createdAt)));
+                return (
+                  <li
+                    className={`live-strip__item${failedRow ? " live-strip__item--failed" : ""}`}
+                    key={batch.batchId}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={failedRow ? "status-dot status-dot--error" : "status-dot status-dot--active status-dot--blink"}
+                      ref={failedRow ? undefined : statusPulseRef}
+                    />
+                    <span className="live-strip__item-text" title={label}>
+                      {label} · {progress}
+                      {failedRow ? ` · ${batch.stoppedBy?.code ?? "stopped"}` : ` · ${elapsed}`}
+                    </span>
+                    <span className="live-strip__item-time">{failedRow ? "Failed" : batch.stopping ? "Stopping" : "Running"}</span>
                     <button
-                      aria-label={`Dismiss decision batch: ${label}`}
+                      aria-label={`Details for decision batch: ${label}`}
                       className="live-strip__item-action"
                       type="button"
-                      onClick={() => setDismissed((current) => new Set(current).add(batch.batchId))}
+                      onClick={() => setDetails({ threadKey, batch })}
                     >
-                      Dismiss
+                      Details
                     </button>
-                  ) : props.desktopApi?.actOnDecisionsRailBatch ? (
-                    <button
-                      aria-label={`Stop decision batch: ${label}`}
-                      className="live-strip__item-action live-strip__item-action--danger"
-                      disabled={stopping.has(batch.batchId) || batch.stopping}
-                      type="button"
-                      onClick={() => void stop(batch)}
-                    >
-                      {stopping.has(batch.batchId) || batch.stopping ? "Stopping…" : "Stop"}
-                    </button>
-                  ) : null}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+                    <span className="live-strip__item-slot">
+                      {failedRow ? (
+                        <button
+                          aria-label={`Dismiss decision batch: ${label}`}
+                          className="live-strip__item-action"
+                          type="button"
+                          onClick={() => setDismissed((current) => new Set(current).add(batch.batchId))}
+                        >
+                          Dismiss
+                        </button>
+                      ) : props.desktopApi?.actOnDecisionsRailBatch ? (
+                        <button
+                          aria-label={`Stop decision batch: ${label}`}
+                          className="live-strip__item-action live-strip__item-action--danger"
+                          disabled={stopping.has(batch.batchId) || batch.stopping}
+                          type="button"
+                          onClick={() => void stop(batch)}
+                        >
+                          {stopping.has(batch.batchId) || batch.stopping ? "Stopping…" : "Stop"}
+                        </button>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </section>
       ) : null}
       {detailsBatch ? (
         <DecisionBatchDetailsModal
@@ -191,6 +195,6 @@ export function ActiveDecisionBatchesStrip(props: {
           onClose={() => setDetails(undefined)}
         />
       ) : null}
-    </section>
+    </>
   );
 }

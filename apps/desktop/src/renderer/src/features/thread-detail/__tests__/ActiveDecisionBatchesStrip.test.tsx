@@ -51,9 +51,10 @@ const errorStopped: DecisionsRailBatch = {
   stoppedBy: { code: "credential_rejected", message: "The key was rejected." },
 };
 
-function decisionEvent(threadId: string, backend = "codex"): AgentEvent {
+function decisionEvent(threadId: string, backend = "codex", peer?: string): AgentEvent {
   return {
     backend,
+    ...(peer ? { federationTarget: { scope: "remote", instanceId: peer } } : {}),
     notification: { method: "thread/decisionBatches/updated", params: { threadId, batchId: "batch_run-1", status: "running" } },
   } as AgentEvent;
 }
@@ -109,6 +110,8 @@ describe("ActiveDecisionBatchesStrip", () => {
     await screen.findByText(/640\/1000/);
     api.emit(decisionEvent("thread-2"));
     api.emit(decisionEvent("thread-1", "claude"));
+    // A peer's thread with the same id is the peer's batch, not this one's.
+    api.emit(decisionEvent("thread-1", "codex", "peer"));
     expect(api.readActiveDecisionBatches).toHaveBeenCalledTimes(1);
 
     api.emit(decisionEvent("thread-1"));
@@ -124,6 +127,8 @@ describe("ActiveDecisionBatchesStrip", () => {
     api.emit(decisionEvent("thread-1"));
     await waitFor(() => expect(api.readActiveDecisionBatches).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // No empty strip stays behind the dialog.
+    await waitFor(() => expect(screen.queryByRole("region")).not.toBeInTheDocument());
   });
 
   it("never reads for a thread another instance owns", () => {
