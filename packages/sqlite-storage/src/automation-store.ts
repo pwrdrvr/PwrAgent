@@ -450,14 +450,29 @@ export class AutomationStore implements AutomationStorage {
       queueEntryId: input.queueEntryId,
       owner: this.options.runOwner,
     };
+    const terminal = (TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status);
+    if (terminal) {
+      run.completedAt = input.completedAt ?? now;
+      run.errorMessage = input.errorMessage;
+      run.skipReason = input.skipReason;
+    }
 
-    this.upsertRun(run, {
-      backend: automation.backend,
-      threadId: automation.threadId,
-      queueEntryId: input.queueEntryId,
-      createdAt: now,
-      updatedAt: now,
-    });
+    this.stateDb.raw.transaction(() => {
+      this.upsertRun(run, {
+        backend: automation.backend,
+        threadId: automation.threadId,
+        queueEntryId: input.queueEntryId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (terminal) {
+        this.updateAutomationLastRun(automation.id, {
+          lastRunAt: run.completedAt!,
+          lastRunStatus: run.status,
+          now,
+        });
+      }
+    })();
     this.pruneRuns(automation.id);
     return run;
   }

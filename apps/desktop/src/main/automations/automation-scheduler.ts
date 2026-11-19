@@ -33,6 +33,12 @@ export type AutomationSchedulerOptions = {
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+  /**
+   * Ends runs whose owning process is proved dead and returns the
+   * automations whose running run that freed. Only the process that ended a
+   * run starts the next one in its lane, as with a turn that finishes.
+   */
+  releaseDeadOwnerRuns?: () => string[];
 };
 
 type InboundCoalesceWindow = {
@@ -126,11 +132,28 @@ export class AutomationScheduler {
 
   async evaluateDueAutomations(): Promise<void> {
     const now = this.now();
-    const dueAutomations = this.options.store.listEnabledDueAutomations(now);
-    for (const automation of dueAutomations) {
-      await this.evaluateAutomation(automation, now);
+    try {
+      // A run whose instance died would otherwise hold its lane until a
+      // restart: nothing else reports that its turn ended.
+      for (const automationId of this.options.releaseDeadOwnerRuns?.() ?? []) {
+        await this.startNextPendingRun(automationId, now);
+      }
+      const dueAutomations = this.options.store.listEnabledDueAutomations(now);
+      for (const automation of dueAutomations) {
+        // The timer calls this without awaiting it: one automation's failure
+        // must neither escape nor stop the others or the next timer.
+        try {
+          await this.evaluateAutomation(automation, now);
+        } catch (error) {
+          automationSchedulerLog.warn("automation schedule evaluation failed", {
+            automationId: automation.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } finally {
+      this.scheduleNextTimer();
     }
-    this.scheduleNextTimer();
   }
 
   async runNow(
@@ -511,25 +534,19 @@ export class AutomationScheduler {
 
     if (automation.backlogPolicy === "drop_missed") {
       if (this.options.store.findActiveRunForAutomation(automation.id)) {
-        const skipped = this.options.store.createRun({
+        this.options.store.createRun({
           automationId: automation.id,
           trigger: "scheduled",
+          status: "skipped",
           scheduledFor: windows[0]?.scheduledFor,
           scheduledWindows: windows.slice(0, 1),
+          completedAt: now,
+          errorMessage:
+            windows.length === 1
+              ? "The automation execution lane was busy when this schedule fired."
+              : `Dropped ${windows.length} missed schedule windows because the automation execution lane was busy.`,
           now,
         });
-        if (skipped) {
-          this.options.store.markRunTerminal({
-            runId: skipped.id,
-            status: "skipped",
-            completedAt: now,
-            errorMessage:
-              windows.length === 1
-                ? "The automation execution lane was busy when this schedule fired."
-                : `Dropped ${windows.length} missed schedule windows because the automation execution lane was busy.`,
-            now,
-          });
-        }
         this.options.store.updateAutomation(automation.id, {
           nextRunAt: computeNextAutomationRunAt(automation.schedule, now),
           now,
@@ -788,6 +805,11 @@ export class AutomationScheduler {
       now: params.now,
     });
     return gateResult;
+  }
+
+  /** Starts a lane's next run after this process ended its running run. */
+  async startNextQueuedRun(automationId: string): Promise<void> {
+    await this.startNextPendingRun(automationId, this.now());
   }
 
   private async startNextPendingRun(

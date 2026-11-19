@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import type { AutomationBacklogPolicy, AutomationRunOwner } from "@pwragent/shared";
+import type {
+  AutomationBacklogPolicy,
+  AutomationRunOwner,
+  AutomationRunSummary,
+} from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
@@ -32,6 +36,14 @@ import {
  * `drop_missed` automation whose run was still pending made the second
  * instance's "lane busy" marker hit the one-pending-scheduled-run index,
  * which threw out of its timer callback and stopped its scheduler.
+ *
+ * A second rule follows from the first: a run owned by an instance that
+ * died must not hold its automation's lane. Only the process that sees a
+ * turn end starts the lane's next run, so before the holder ended dead
+ * owners' runs, a run left `running` by a stopped instance blocked every
+ * later window until a restart. A live instance's turn needs nothing more:
+ * whichever process sees it end starts the next queued run from the shared
+ * database, whoever queued it.
  */
 
 const INSTANCE_COUNT = 2;
@@ -93,12 +105,101 @@ function stubRegistry(): DesktopBackendRegistry {
 
 type ArmedTimer = { callback: () => void; dueAt: number };
 
+type Instance = {
+  service: DesktopAutomationService;
+  store: AutomationStore;
+  timers: Set<ArmedTimer>;
+};
+
+/** One PwrAgent process on the shared profile database. */
+function openInstance(params: {
+  index: number;
+  clock: () => number;
+  dead: ReadonlySet<string>;
+  /** Whether the next submitted turn finishes on its own. */
+  finishes: () => boolean;
+  s: fc.Scheduler;
+}): Instance {
+  const { index, clock, dead, s } = params;
+  const db = openFreshStateDb(dbPath);
+  connections.push(db);
+  const store = new AutomationStore(db, { runOwner: ownerOf(index) });
+  const timers = new Set<ArmedTimer>();
+  const service = new DesktopAutomationService({
+    registry: stubRegistry(),
+    store,
+    now: clock,
+    runOwnerLiveness: (owner) => dead.has(owner.instanceId) ? "dead" : "alive",
+    leaseManager: new RuntimeLeaseManager({
+      cwd: `/tmp/instance-${index}`,
+      instanceId: ownerOf(index).instanceId,
+      now: clock,
+      processId: ownerOf(index).processId,
+      profileName: "default",
+      runtimeIdentityIsAlive: (owner) => !dead.has(owner.instanceId),
+      startedAt: ownerOf(index).startedAt,
+      store: new AppRuntimeInstanceStore(db),
+      systemBootedAt: 0,
+    }),
+    scheduler: {
+      setTimer: ((callback: () => void, delayMs: number) => {
+        const timer = { callback, dueAt: clock() + delayMs };
+        timers.add(timer);
+        return timer;
+      }) as unknown as typeof setTimeout,
+      clearTimer: (timer) => {
+        timers.delete(timer as unknown as ArmedTimer);
+      },
+      runner: {
+        async submitRun({ run }) {
+          // The turn may finish before or after the submission result.
+          if (params.finishes()) {
+            void s.schedule(Promise.resolve()).then(() => {
+              store.markRunTerminal({ runId: run.id, status: "completed", now: clock() });
+            });
+          }
+          return await s.schedule(Promise.resolve({
+            status: "started" as const,
+            queueEntryId: `queue-${run.id}`,
+            turnId: `turn-${run.id}`,
+          }));
+        },
+      },
+    },
+  });
+  service.start();
+  return { service, store, timers };
+}
+
+/** Fire every due timer an instance armed, then drain the work it starts. */
+async function fireDueTimers(instances: Instance[], now: number, s: fc.Scheduler): Promise<void> {
+  for (const { timers } of instances) {
+    for (const timer of [...timers]) {
+      if (timer.dueAt > now) continue;
+      timers.delete(timer);
+      void s.schedule(Promise.resolve()).then(() => timer.callback());
+    }
+  }
+  await drain(s);
+}
+
+async function drain(s: fc.Scheduler): Promise<void> {
+  // Timer callbacks start work the scheduler then awaits, which schedules
+  // further tasks.
+  for (let round = 0; round < 10; round += 1) {
+    await s.waitAll();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+const policiesArbitrary = fc.array(
+  fc.constantFrom<AutomationBacklogPolicy>("coalesce", "drop_missed"),
+  { minLength: 1, maxLength: 3 },
+);
+
 it("one trigger window produces at most one run across instances on one profile", async () => {
   await fc.assert(fc.asyncProperty(
-    fc.array(fc.constantFrom<AutomationBacklogPolicy>("coalesce", "drop_missed"), {
-      minLength: 1,
-      maxLength: 3,
-    }),
+    policiesArbitrary,
     // Schedule windows that come due while both instances run.
     fc.integer({ min: 1, max: 3 }),
     // Whether each submitted turn finishes before the next window.
@@ -108,73 +209,20 @@ it("one trigger window produces at most one run across instances on one profile"
       resetProfile(policies);
       let now = 0;
       let submitted = 0;
-      const instances = Array.from({ length: INSTANCE_COUNT }, (_, index) => {
-        const db = openFreshStateDb(dbPath);
-        connections.push(db);
-        const store = new AutomationStore(db, { runOwner: ownerOf(index) });
-        const timers = new Set<ArmedTimer>();
-        const service = new DesktopAutomationService({
-          registry: stubRegistry(),
-          store,
-          now: () => now,
-          leaseManager: new RuntimeLeaseManager({
-            cwd: `/tmp/instance-${index}`,
-            instanceId: ownerOf(index).instanceId,
-            now: () => now,
-            processId: ownerOf(index).processId,
-            profileName: "default",
-            // Every instance stays alive: no lease is ever reclaimed.
-            runtimeIdentityIsAlive: () => true,
-            startedAt: ownerOf(index).startedAt,
-            store: new AppRuntimeInstanceStore(db),
-            systemBootedAt: 0,
-          }),
-          scheduler: {
-            setTimer: ((callback: () => void, delayMs: number) => {
-              const timer = { callback, dueAt: now + delayMs };
-              timers.add(timer);
-              return timer;
-            }) as unknown as typeof setTimeout,
-            clearTimer: (timer) => {
-              timers.delete(timer as unknown as ArmedTimer);
-            },
-            runner: {
-              async submitRun({ run }) {
-                // The turn may finish before or after the submission result.
-                if (finishes[submitted++ % finishes.length]) {
-                  void s.schedule(Promise.resolve()).then(() => {
-                    store.markRunTerminal({ runId: run.id, status: "completed", now });
-                  });
-                }
-                return await s.schedule(Promise.resolve({
-                  status: "started" as const,
-                  queueEntryId: `queue-${run.id}`,
-                  turnId: `turn-${run.id}`,
-                }));
-              },
-            },
-          },
-        });
-        service.start();
-        return { service, timers };
-      });
+      // Every instance stays alive: no lease or run is ever reclaimed.
+      const dead = new Set<string>();
+      const instances = Array.from({ length: INSTANCE_COUNT }, (_, index) => openInstance({
+        index,
+        clock: () => now,
+        dead,
+        finishes: () => finishes[submitted++ % finishes.length]!,
+        s,
+      }));
 
       try {
         for (let window = 0; window < windowCount; window += 1) {
           now = FIRST_DUE_AT + window * INTERVAL_MS;
-          for (const { timers } of instances) {
-            for (const timer of [...timers]) {
-              if (timer.dueAt > now) continue;
-              timers.delete(timer);
-              void s.schedule(Promise.resolve()).then(() => timer.callback());
-            }
-          }
-          // Drain this window: timer callbacks start work the scheduler
-          // then awaits, which schedules further tasks.
-          for (let round = 0; round < 10; round += 1) {
-            await s.waitAll();
-            await new Promise((resolve) => setImmediate(resolve));
-          }
+          await fireDueTimers(instances, now, s);
         }
       } finally {
         for (const { service } of instances) service.dispose();
@@ -202,4 +250,90 @@ it("one trigger window produces at most one run across instances on one profile"
       }
     },
   ), { numRuns: 40 });
+});
+
+function describeRuns(runs: AutomationRunSummary[]): string[] {
+  return runs.map((run) => `${run.trigger} ${run.status} owner=${run.owner?.instanceId}`);
+}
+
+it("a run owned by an instance that stopped does not hold its automation's lane", async () => {
+  await fc.assert(fc.asyncProperty(
+    policiesArbitrary,
+    fc.integer({ min: 1, max: 3 }),
+    // The window before which the second instance stops.
+    fc.nat({ max: 2 }),
+    fc.scheduler(),
+    async (policies, windowCount, stopBefore, s) => {
+      fc.pre(stopBefore < windowCount);
+      resetProfile(policies);
+      let now = 0;
+      const dead = new Set<string>();
+      // No turn finishes on its own: a lane frees only when a run is ended.
+      const [holder, other] = Array.from({ length: INSTANCE_COUNT }, (_, index) => openInstance({
+        index,
+        clock: () => now,
+        dead,
+        finishes: () => false,
+        s,
+      })) as [Instance, Instance];
+
+      try {
+        // The instance without the scheduling lease runs each automation now.
+        for (let index = 0; index < policies.length; index += 1) {
+          void s.schedule(Promise.resolve()).then(() =>
+            other.service.runNow({ automationId: `automation-${index}` }));
+        }
+        await drain(s);
+
+        for (let window = 0; window < windowCount; window += 1) {
+          if (window === stopBefore) {
+            // It quits or crashes with its runs still in progress.
+            other.service.dispose();
+            dead.add(ownerOf(1).instanceId);
+          }
+          now = FIRST_DUE_AT + window * INTERVAL_MS;
+          await fireDueTimers([holder], now, s);
+          if (window < stopBefore) continue;
+
+          for (let index = 0; index < policies.length; index += 1) {
+            const runs = holder.store.listRunsForAutomation(`automation-${index}`, 500);
+            const label = `automation-${index} after window ${window}: ${describeRuns(runs).join("; ")}`;
+            const open = runs.filter((run) =>
+              run.status === "pending" || run.status === "queued" || run.status === "running");
+            // Nothing the stopped instance owned is still in progress.
+            expect(open.filter((run) => dead.has(run.owner?.instanceId ?? "")), label).toEqual([]);
+            // A run is in progress, so this window was not dropped behind a
+            // lane nothing will free.
+            expect(open.some((run) => run.status === "running"), label).toBe(true);
+          }
+        }
+      } finally {
+        holder.service.dispose();
+        if (!dead.has(ownerOf(1).instanceId)) other.service.dispose();
+      }
+    },
+  ), { numRuns: 40 });
+});
+
+it("an instance without the scheduling lease still ends runs its crashed predecessor left", async () => {
+  resetProfile(["coalesce"]);
+  const now = 0;
+  // Instance 2 crashed with a run in progress; instance 1 replaces it.
+  const dead = new Set<string>();
+  const crashed = new AutomationStore(template, { runOwner: ownerOf(2) });
+  const orphan = crashed.createRun({ automationId: "automation-0", trigger: "manual", now });
+  crashed.markRunStarted({ runId: orphan!.id, backendTurnId: "turn-orphan", now });
+  // No run is submitted here, so tasks pass straight through.
+  const s = { schedule: <T>(task: Promise<T>) => task } as unknown as fc.Scheduler;
+  const open = (index: number) => openInstance({ index, clock: () => now, dead, finishes: () => false, s });
+  // The lease holder started while instance 2 still looked alive.
+  const instances = [open(0)];
+  dead.add(ownerOf(2).instanceId);
+  instances.push(open(1));
+  try {
+    const reader = new AutomationStore(template);
+    expect(reader.getRun(orphan!.id)).toMatchObject({ status: "failed", failureReason: "interrupted" });
+  } finally {
+    for (const { service } of instances) service.dispose();
+  }
 });

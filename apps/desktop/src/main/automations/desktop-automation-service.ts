@@ -237,6 +237,7 @@ export class DesktopAutomationService {
       now: options.now,
       setTimer: options.scheduler?.setTimer,
       clearTimer: options.scheduler?.clearTimer,
+      releaseDeadOwnerRuns: () => this.releaseDeadOwnerRuns({ reschedule: false }),
     });
     this.inspectionBus = new AutomationInspectionBus(options.store, {
       readRunArtifact: (runId) => this.readRunArtifactSnapshot(runId),
@@ -311,6 +312,9 @@ export class DesktopAutomationService {
           this.schedulingLeaseRetry.schedule(leaseManager, "automations", generation, async () => {
             this.startSchedulingIfLeaseAcquired();
           });
+          // Any instance may end a dead owner's runs; only the holder
+          // reschedules missed windows, which its own timer then runs.
+          this.reconcileStartupRuns({ reschedule: false });
           return;
         }
         automationServiceLog.info("automation scheduling lease acquired", {
@@ -319,7 +323,7 @@ export class DesktopAutomationService {
       }
       this.schedulingLeaseHeld = true;
     }
-    this.reconcileStartupRuns();
+    this.reconcileStartupRuns({ reschedule: true });
     this.scheduler.start();
   }
 
@@ -1532,21 +1536,41 @@ export class DesktopAutomationService {
     }
   }
 
-  private reconcileStartupRuns(): void {
+  private reconcileStartupRuns(options: { reschedule: boolean }): void {
+    const freedAutomationIds = this.releaseDeadOwnerRuns({ ...options, startup: true });
+    for (const automationId of freedAutomationIds) {
+      void this.scheduler.startNextQueuedRun(automationId).catch((error: unknown) => {
+        automationServiceLog.warn("automation lane resume after reconcile failed", {
+          automationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
+  /**
+   * Ends every run whose owner is proved dead and returns the automations
+   * whose running run that ended. `reschedule` also moves missed schedule
+   * windows forward, which only the scheduling lease holder may do: a
+   * window another instance has not evaluated yet is not missed.
+   */
+  private releaseDeadOwnerRuns(options: { reschedule: boolean; startup?: boolean }): string[] {
     const now = this.options.now?.() ?? Date.now();
-    const nextRunAtByAutomationId = Object.fromEntries(
-      this.options.store
-        .listAutomations()
-        // `listAutomations` already skips rows whose schedule this build can't
-        // load; the explicit `schedule` guard is belt-and-suspenders so a
-        // schedule-less record can never reach computeNextAutomationRunAt and
-        // abort the whole startup reconcile.
-        .filter((automation) => automation.status === "enabled" && automation.schedule)
-        .map((automation) => [
-          automation.id,
-          computeNextAutomationRunAt(automation.schedule!, now),
-        ]),
-    );
+    const nextRunAtByAutomationId = options.reschedule
+      ? Object.fromEntries(
+        this.options.store
+          .listAutomations()
+          // `listAutomations` already skips rows whose schedule this build can't
+          // load; the explicit `schedule` guard is belt-and-suspenders so a
+          // schedule-less record can never reach computeNextAutomationRunAt and
+          // abort the whole startup reconcile.
+          .filter((automation) => automation.status === "enabled" && automation.schedule)
+          .map((automation) => [
+            automation.id,
+            computeNextAutomationRunAt(automation.schedule!, now),
+          ]),
+      )
+      : undefined;
     const liveness = this.options.runOwnerLiveness ?? readAutomationRunOwnerLiveness;
     let unconfirmedOwner = false;
     const result = this.options.store.reconcileStartup({
@@ -1559,13 +1583,20 @@ export class DesktopAutomationService {
         return state !== "dead";
       },
     });
-    automationServiceLog.info("automation startup reconcile finished", {
-      interruptedRunCount: result.interruptedRuns.length,
-      liveOwnerRunCount: result.liveOwnerRunCount,
-      rescheduledAutomationCount: result.rescheduledAutomationCount,
-      unconfirmedOwner,
-    });
-    this.reportUnreportedInterruptedRuns();
+    if (options.startup || result.interruptedRuns.length > 0) {
+      automationServiceLog.info(
+        options.startup ? "automation startup reconcile finished" : "automation runs of a stopped instance interrupted",
+        {
+          interruptedRunCount: result.interruptedRuns.length,
+          liveOwnerRunCount: result.liveOwnerRunCount,
+          rescheduledAutomationCount: result.rescheduledAutomationCount,
+          unconfirmedOwner,
+        },
+      );
+    }
+    if (result.interruptedRuns.length > 0 || options.startup) {
+      this.reportUnreportedInterruptedRuns();
+    }
     if (unconfirmedOwner && !this.runOwnerRecheckTimer) {
       this.runOwnerRecheckTimer = setTimeout(
         () => this.recheckUnconfirmedRunOwners(),
@@ -1573,6 +1604,7 @@ export class DesktopAutomationService {
       );
       this.runOwnerRecheckTimer.unref?.();
     }
+    return freedLanes(result.interruptedRuns);
   }
 
   /**
@@ -1594,6 +1626,14 @@ export class DesktopAutomationService {
         });
       }
       this.reportUnreportedInterruptedRuns();
+      for (const automationId of freedLanes(result.interruptedRuns)) {
+        void this.scheduler.startNextQueuedRun(automationId).catch((error: unknown) => {
+          automationServiceLog.warn("automation lane resume after recheck failed", {
+            automationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
     } catch (error) {
       automationServiceLog.warn("automation run owner recheck failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -2077,4 +2117,17 @@ function automationRunUsageEquals(
 export function getDesktopAutomationService(): DesktopAutomationService {
   if (!service) throw new Error("getDesktopAutomationService is unavailable before startOwnerServices().");
   return service;
+}
+
+/**
+ * Automations whose running run was interrupted. A lane runs one run at a
+ * time, so ending its running run leaves nothing else running there; an
+ * interrupted pending or queued run frees nothing.
+ */
+function freedLanes(interruptedRuns: AutomationRunSummary[]): string[] {
+  return [...new Set(
+    interruptedRuns
+      .filter((run) => run.startedAt !== undefined)
+      .map((run) => run.automationId),
+  )];
 }
