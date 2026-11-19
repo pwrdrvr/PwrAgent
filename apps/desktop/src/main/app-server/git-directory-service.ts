@@ -383,14 +383,15 @@ type WorktreeEntry = {
   branch?: string;
 };
 
-function parseGitWorktreeEntries(output: string): WorktreeEntry[] {
+function parseGitWorktreeEntries(output: string, separator = "\n"): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
   let current: WorktreeEntry | undefined;
 
-  for (const line of output.split("\n")) {
+  for (const line of output.split(separator)) {
     if (line.startsWith("worktree ")) {
+      const worktreePath = line.slice("worktree ".length);
       current = {
-        path: line.slice("worktree ".length).trim(),
+        path: separator === "\0" ? worktreePath : worktreePath.trim(),
       };
       if (current.path) {
         entries.push(current);
@@ -408,6 +409,79 @@ function parseGitWorktreeEntries(output: string): WorktreeEntry[] {
   }
 
   return entries;
+}
+
+async function readWorktreeEntries(params: {
+  repoRoot: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit: GitCommandRunner;
+}): Promise<WorktreeEntry[]> {
+  const output = await params.runGit(
+    params.repoRoot, ["worktree", "list", "--porcelain", "-z"], params.gitEnv,
+  );
+  return parseGitWorktreeEntries(output, "\0");
+}
+
+function findOtherBranchCheckout(
+  entries: WorktreeEntry[], branch: string, worktreePath: string,
+): WorktreeEntry | undefined {
+  return entries.find((entry) => entry.branch === branch && path.relative(worktreePath, entry.path) !== "");
+}
+
+async function addExclusiveAttachedWorktree(params: {
+  branch: string;
+  repoRoot: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  const { branch, repoRoot, runGit, worktreePath } = params;
+  let addSucceeded = false;
+  let entries: WorktreeEntry[] | undefined;
+  try {
+    await runGit(repoRoot, ["worktree", "add", "--", worktreePath, branch], {
+      ...(params.gitEnv ?? process.env),
+      LC_ALL: "C",
+      LANGUAGE: "C",
+    });
+    addSucceeded = true;
+    entries = await readWorktreeEntries(params);
+    const checkoutPath = await normalizeFilesystemPath(worktreePath);
+    const occupied = findOtherBranchCheckout(entries, branch, checkoutPath);
+    if (occupied) {
+      throw new WorktreeBranchAlreadyCheckedOutError(branch, occupied.path);
+    }
+  } catch (error) {
+    entries ??= await readWorktreeEntries(params).catch(() => undefined);
+    const checkoutPath = await normalizeFilesystemPath(worktreePath);
+    const registered = addSucceeded || entries?.some((entry) => path.relative(checkoutPath, entry.path) === "");
+    if (registered) {
+      // Git may register the checkout before a failing post-checkout hook.
+      // Only roll back the path allocated by this operation.
+      try {
+        await removeWorktreeAndPrune(params);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `${errorText(error)}\nCould not remove ${worktreePath}: ${errorText(rollbackError)}`,
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
+
+    await pruneEmptyWorktreeParents(worktreePath);
+    const occupied = findOtherBranchCheckout(entries ?? [], branch, checkoutPath);
+    // Git reserves branches for operations such as rebase even when the
+    // worktree inventory shows that checkout as detached.
+    const refusal = /^fatal: '(.+)' is already (?:used by worktree|checked out) at '(.+)'\r?$/m.exec(errorText(error));
+    const refusedPath = refusal?.[1] === branch ? refusal[2] : undefined;
+    const occupiedPath = occupied?.path ?? refusedPath;
+    if (occupiedPath) {
+      throw new WorktreeBranchAlreadyCheckedOutError(branch, occupiedPath);
+    }
+    throw error;
+  }
 }
 
 async function readPrimaryWorktreePath(
@@ -648,18 +722,20 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
     const requested = params.requestedBranch?.trim();
     if (params.requireLocalBranch) {
       const branch = requested?.replace(/^refs\/heads\//, "");
-      if (branch && await runGit(
+      const ref = `refs/heads/${branch ?? ""}`;
+      const refs = branch ? await runGit(
         params.repoRoot,
-        ["show-ref", "--verify", "--hash", `refs/heads/${branch}`],
+        ["for-each-ref", "--format=%(refname)", "--", ref],
         params.gitEnv,
-      ).catch(() => "")) {
+      ) : "";
+      if (branch && refs.split(/\r?\n/).includes(ref)) {
         return branch;
       }
       throw new Error(`Branch ${JSON.stringify(requested ?? "")} must name an existing local branch for an attached worktree.`);
     }
     if (requested) {
       return await runGit(
-        params.repoRoot,
+        params.sourceRoot ?? params.repoRoot,
         ["rev-parse", "--verify", "--end-of-options", `${requested}^{commit}`],
         params.gitEnv,
       ).catch(() => "");
@@ -1415,15 +1491,14 @@ export class GitDirectoryService {
             .map((entry) => normalizeFilesystemPath(entry)),
         ),
       );
-      const findBranchCheckout = async () => {
-        const worktreeList = await this.runGitCommand(
+      const worktrees = strictBranchCheckout
+        ? await readWorktreeEntries({ repoRoot, gitEnv: this.gitEnv, runGit: this.runGitCommand })
+        : parseGitWorktreeEntries(await this.runGitCommand(
           repoRoot,
           ["worktree", "list", "--porcelain"],
           this.gitEnv,
-        ).catch(() => "");
-        return parseGitWorktreeEntries(worktreeList).find((entry) => entry.branch === baseBranch);
-      };
-      const existing = await findBranchCheckout();
+        ).catch(() => ""));
+      const existing = worktrees.find((entry) => entry.branch === baseBranch);
       if (existing && strictBranchCheckout) {
         throw new WorktreeBranchAlreadyCheckedOutError(baseBranch, existing.path);
       }
@@ -1464,24 +1539,22 @@ export class GitDirectoryService {
           storage,
           homeDir: this.homeDir,
         });
-        try {
-          await mkdir(path.dirname(worktreePath), { recursive: true });
-          await this.runGitCommand(
-            repoRoot,
-            ["worktree", "add", "--", worktreePath, baseBranch],
-            this.gitEnv,
-          );
-        } catch (error) {
-          await pruneEmptyWorktreeParents(worktreePath);
-          // Git still enforces branch exclusivity if another process checked
-          // out the branch after the inventory read.
-          if (strictBranchCheckout) {
-            const occupied = await findBranchCheckout();
-            if (occupied && path.resolve(occupied.path) !== path.resolve(worktreePath)) {
-              throw new WorktreeBranchAlreadyCheckedOutError(baseBranch, occupied.path);
-            }
+        if (strictBranchCheckout) {
+          await addExclusiveAttachedWorktree({
+            branch: baseBranch, repoRoot, worktreePath, gitEnv: this.gitEnv, runGit: this.runGitCommand,
+          });
+        } else {
+          try {
+            await mkdir(path.dirname(worktreePath), { recursive: true });
+            await this.runGitCommand(
+              repoRoot,
+              ["worktree", "add", "--", worktreePath, baseBranch],
+              this.gitEnv,
+            );
+          } catch (error) {
+            await pruneEmptyWorktreeParents(worktreePath);
+            throw error;
           }
-          throw error;
         }
 
         return {

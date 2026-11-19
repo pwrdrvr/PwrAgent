@@ -120,6 +120,7 @@ describe("pwragent thread orchestration agent tools", () => {
                 }),
                 worktreeBranchMode: expect.objectContaining({
                   enum: ["attached", "detached"],
+                  description: expect.stringMatching(/omit.*legacy.*detached.*exact ref/i),
                 }),
               }),
             }),

@@ -359,7 +359,7 @@ function inputSchemaForOperation(
           worktreeBranchMode: {
             type: "string",
             enum: [...ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES],
-            description: "For new_worktree. Defaults to detached. Set attached with branchName to check out an existing local branch in the new worktree.",
+            description: "For new_worktree. Omit for a detached HEAD with legacy branch-name parsing. Set detached to resolve branchName as an exact ref or revision in the source checkout. Set attached with the exact name of an existing local branch.",
           },
           environment: {
             type: "string",
