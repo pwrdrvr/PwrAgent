@@ -623,7 +623,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use one when the next step is the operator's.",
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
-        "Use start_thread to propose a follow-up thread with its full prompt.",
+        "Use start_thread for follow-up work. For Git work, set action.workMode=worktree unless the instructions require sharing a checkout. Give the child its task in the assigned checkout.",
         "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
@@ -749,7 +749,7 @@ function inputSchemaForOperation(
               prompt: {
                 type: "string",
                 description:
-                  "start_thread or send_message: the complete proposed message. Include all context the destination needs.",
+                  "The complete task and context. For start_thread, use the assigned checkout. Do not ask the child to create another worktree.",
               },
               target: {
                 type: "object",
@@ -789,7 +789,7 @@ function inputSchemaForOperation(
                 type: "string",
                 enum: ["local", "worktree"],
                 description:
-                  "start_thread only: worktree starts the thread in a new git worktree of this thread's repository, based on the default branch. Local, the default, shares the directory.",
+                  "start_thread only: use worktree for Git work unless the instructions require a shared checkout. PwrAgent creates it from the default branch. local shares the source directory and is used when omitted.",
               },
             },
           },
@@ -859,7 +859,7 @@ function inputSchemaForOperation(
           workMode: {
             type: "string",
             enum: [...WORK_MODES, ""],
-            description: "Handoff cards: local or worktree. Empty returns to local.",
+            description: "Handoff cards: use worktree for Git work unless the instructions require a shared checkout. local shares the source directory. Empty clears the proposal.",
           },
           pullRequest: {
             type: "string",

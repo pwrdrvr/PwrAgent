@@ -294,7 +294,7 @@ function inputSchemaForOperation(
           task: {
             type: "string",
             description:
-              "Give the new thread a concrete task. Include the user's requested work, not the parent transcript. Select the workspace with cwd and workspaceMode.",
+              "Give the child a concrete task in its assigned checkout. Select the workspace with cwd and workspaceMode. Do not ask the child to create a worktree.",
           },
           title: {
             type: "string",
@@ -354,7 +354,12 @@ function inputSchemaForOperation(
           branchName: {
             type: "string",
             description:
-              "Existing base ref for workspaceMode=new_worktree, such as `origin/main`. PwrAgent resolves this ref in cwd when you provide cwd. This is not a new branch name. Put branch creation in task.",
+              "For new_worktree. An existing local branch for attached mode, or an existing base ref such as origin/main for detached mode.",
+          },
+          worktreeBranchMode: {
+            type: "string",
+            enum: [...ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES],
+            description: "For new_worktree. Omit for a detached HEAD with legacy branch-name parsing. Set detached to resolve branchName as an exact ref or revision in the source checkout. Set attached with the exact name of an existing local branch.",
           },
           environment: {
             type: "string",
@@ -570,7 +575,7 @@ function invalidArgumentsMessageForOperation(
     case "detach_thread_directory":
       return "detach_thread_directory requires at least one of directoryId, path, or worktreePath, and all provided string fields must be non-empty.";
     case "handoff_task":
-      return "handoff_task requires a non-empty task string.";
+      return "handoff_task requires a non-empty task and accepts worktreeBranchMode=attached or detached.";
     case "move_thread_workspace":
       return "move_thread_workspace accepts known direction/strategy values and non-empty strings. direction=to-project requires targetPath and cannot include source/repository fields, branch strategies, or baseRef; other directions cannot include targetPath. baseRef cannot be combined with worktree-to-local, strategy=move-branch, or leaveLocalBranch.";
     case "send_message_to_thread":
@@ -673,7 +678,8 @@ function normalizeHandoffTaskArgs(
   args: Record<string, unknown>,
 ): HandoffTaskToolArgs | undefined {
   const task = readTrimmedString(args.task);
-  if (!task) {
+  const worktreeBranchMode = readChoice(args.worktreeBranchMode, ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES);
+  if (!task || (args.worktreeBranchMode !== undefined && !worktreeBranchMode)) {
     return undefined;
   }
   return {
@@ -752,6 +758,7 @@ function normalizeHandoffTaskArgs(
     ...(readTrimmedString(args.branchName)
       ? { branchName: readTrimmedString(args.branchName) }
       : {}),
+    ...(worktreeBranchMode ? { worktreeBranchMode } : {}),
   };
 }
 

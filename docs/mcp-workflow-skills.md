@@ -20,6 +20,11 @@ descriptions and schemas. `tool-guide` owns the short tool selection guide.
 `read_tool_guide` retains its name, schema, and response envelope and returns
 the same authored skill bodies for clients that can only consume tools.
 
+Desktop Codex gets PwrAgent's tools as dynamic tools. It can read the workflow
+guidance through `read_tool_guide`. PwrAgent materializes native Codex skills
+under `~/.pwragent/skills/bundled` and registers the root with the App Server.
+That native catalog currently contains `outpost-security-research`.
+
 ## Client evidence (2026-10-30)
 
 MCP resources, prompts, native filesystem skills, and MCP-served skills are

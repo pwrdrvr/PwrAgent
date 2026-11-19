@@ -19,6 +19,7 @@ import {
   computeWorktreePath,
   inspectGitWorkspace,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+  WorktreeBranchAlreadyCheckedOutError,
 } from "../app-server/git-directory-service";
 
 // The service forward-slashes the directory/worktree identifiers it returns
@@ -971,6 +972,124 @@ describe("GitDirectoryService", () => {
       repositoryPath: workspace.repositoryPath,
       workMode: workspace.workMode,
     });
+  });
+
+  it("preserves a competing checkout created after the branch inventory read", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const competingPath = path.join(repoDir, "competing worktree");
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: async (cwd, args) => {
+        if (args[0] === "worktree" && args[1] === "add") {
+          runGit(repoDir, ["worktree", "add", competingPath, "release"]);
+        }
+        return runGit(cwd, args);
+      },
+    });
+
+    await expect(service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "release",
+      worktreeBranchMode: "attached",
+      rejectOccupiedBranch: true,
+    })).rejects.toBeInstanceOf(WorktreeBranchAlreadyCheckedOutError);
+    expect(runGit(competingPath, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(".worktrees");
+  });
+
+  const exclusiveWorktree = (directoryPath: string, branchName = "release") => ({
+    directoryKind: "directory",
+    directoryLabel: "FixtureRepo",
+    directoryPath,
+    workMode: "worktree",
+    branchName,
+    worktreeBranchMode: "attached",
+    rejectOccupiedBranch: true,
+  } as const);
+
+  it("rejects an attached branch spelling absent from Git's local ref inventory", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({ resolveWorktreeStorage: () => "in-repo" });
+    const before = runGit(repoDir, ["worktree", "list", "--porcelain"]);
+    await expect(service.prepareLaunchpadWorkspace(exclusiveWorktree(repoDir, "Main")))
+      .rejects.toThrow("must name an existing local branch");
+    expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).toBe(before);
+  });
+
+  it("resolves an explicit detached HEAD in the selected source worktree", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const source = path.join(repoDir, "source");
+    runGit(repoDir, ["worktree", "add", source, "release"]);
+    runGit(source, ["commit", "--allow-empty", "-m", "Different source HEAD"]);
+    const service = new GitDirectoryService({ resolveWorktreeStorage: () => "in-repo" });
+    const workspace = await service.prepareLaunchpadWorkspace({
+      ...exclusiveWorktree(source, "HEAD"),
+      worktreeBranchMode: "detached",
+    });
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(runGit(source, ["rev-parse", "HEAD"]));
+  });
+
+  it("rolls back only the new worktree when two adds both register the branch", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const competingPath = path.join(await realpath(repoDir), "competing checkout");
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: async (cwd, args) => {
+        const result = runGit(cwd, args);
+        if (args[0] === "worktree" && args[1] === "add") {
+          // Git admits this state when independent adds both pass their admission check.
+          runGit(repoDir, ["worktree", "add", "--force", competingPath, "release"]);
+        }
+        return result;
+      },
+    });
+    await expect(service.prepareLaunchpadWorkspace(exclusiveWorktree(repoDir)))
+      .rejects.toMatchObject({ branch: "release", worktreePath: toForwardSlashes(competingPath) });
+    expect(runGit(competingPath, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(".worktrees");
+  });
+
+  it("rolls back an attached worktree registered before a post-checkout hook failed", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const hooksPath = path.join(repoDir, "hooks");
+    await mkdir(hooksPath);
+    await writeFile(path.join(hooksPath, "post-checkout"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    runGit(repoDir, ["config", "core.hooksPath", hooksPath]);
+    const before = runGit(repoDir, ["worktree", "list", "--porcelain"]);
+    const service = new GitDirectoryService({ resolveWorktreeStorage: () => "in-repo" });
+    await expect(service.prepareLaunchpadWorkspace(exclusiveWorktree(repoDir)))
+      .rejects.toThrow("worktree add");
+    expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).toBe(before);
+    runGit(repoDir, ["config", "--unset", "core.hooksPath"]);
+    const retried = await service.prepareLaunchpadWorkspace(exclusiveWorktree(repoDir));
+    expect(runGit(retried.cwd!, ["branch", "--show-current"])).toBe("release");
+  });
+
+  it("reports a branch reserved by a rebase conflict in another worktree", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const source = path.join(await realpath(repoDir), "rebase source");
+    runGit(repoDir, ["worktree", "add", source, "release"]);
+    for (const [checkout, content] of [[repoDir, "primary"], [source, "release"]] as const) {
+      await writeFile(path.join(checkout, "conflict.txt"), content);
+      runGit(checkout, ["add", "conflict.txt"]);
+      runGit(checkout, ["commit", "-m", "Add conflict file"]);
+    }
+    expect(() => runGit(source, ["rebase", "main"])).toThrow();
+    expect(runGit(source, ["branch", "--show-current"])).toBe("");
+    const before = runGit(repoDir, ["worktree", "list", "--porcelain"]);
+    const service = new GitDirectoryService({ resolveWorktreeStorage: () => "in-repo" });
+    await expect(service.prepareLaunchpadWorkspace(exclusiveWorktree(repoDir)))
+      .rejects.toMatchObject({ branch: "release", worktreePath: toForwardSlashes(source) });
+    expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).toBe(before);
   });
 
   it("does not reuse an excluded source worktree when creating an attached branch worktree", async () => {

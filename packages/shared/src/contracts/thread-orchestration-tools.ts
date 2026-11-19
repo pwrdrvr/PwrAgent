@@ -44,6 +44,7 @@ export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
   "unsupported_backend",
   "unsupported_capability",
   "unsupported_workspace",
+  "branch_already_checked_out",
   "unsupported_operation",
   "ambiguous_workspace",
   "requires_confirmation",
@@ -120,10 +121,12 @@ export type HandoffTaskToolArgs = {
   approvalPolicy?: string;
   sandbox?: string;
   /**
-   * Existing base branch/ref used when workspaceMode is "new_worktree".
-   * This is not the delegated thread's new feature branch name.
+   * Existing ref for a detached worktree, or existing local branch for an
+   * attached worktree.
    */
   branchName?: string;
+  /** For new_worktree. Defaults to detached. Attached requires branchName. */
+  worktreeBranchMode?: "attached" | "detached";
   /**
    * Environment id or name from the project's `.codex/environments/`, or
    * `none`. Omitted: a same-project child inherits the parent's environment.
