@@ -1487,7 +1487,9 @@ function DesktopAppShell(props: {
               backend: event.backend as AppServerBackendKind,
               threadId: params.threadId,
               ...params.restoredDetached,
-              threadTitle: labelForThread(event.backend, params.threadId),
+              // Only a real title: labelForThread's fallback is a thread id.
+              threadTitle: backendErrorThreadsRef.current.find((thread) =>
+                thread.source === event.backend && thread.id === params.threadId)?.title?.trim() || undefined,
             }) });
           }
           return;
@@ -4087,6 +4089,9 @@ function DesktopAppShell(props: {
       { rethrow: true },
     );
     for (const notice of detachedRestoreNotices(responses, thread.title)) showAppNotice(notice);
+    // The card waits for the owner to report the thread unarchived; read the
+    // detail again so it never waits on a revision that was already current.
+    await navigation.refreshSelectedThreadConfiguration().catch(() => undefined);
   });
   const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
     const thread = navigation.selectedThread;

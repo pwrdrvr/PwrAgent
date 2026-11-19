@@ -600,7 +600,11 @@ export class WorktreeArchiveService {
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
     let sourceBranch: string | undefined;
-    const sourceHead = params.restoreSourceCheckout ? params.snapshot?.sourceHead : undefined;
+    // The source checkout comes back only from its own snapshot. A fallback
+    // commit is checked out detached as it is: it is not the saved edits, so
+    // laying its tree over the source HEAD would invent changes.
+    const sourceHead = params.restoreSourceCheckout && restoreCommit === params.snapshotCommit
+      ? params.snapshot?.sourceHead : undefined;
     let branchReason: string | undefined;
     let detachedFrom: WorktreeSnapshotSummary["detachedFrom"];
     if (sourceHead && params.snapshot?.sourceBranch) {
