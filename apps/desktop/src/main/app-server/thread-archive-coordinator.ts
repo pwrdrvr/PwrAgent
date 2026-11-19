@@ -4334,6 +4334,7 @@ export class ThreadArchiveCoordinator {
             scope.reserve(this.archiveWorkspaceMutations());
             return check;
         };
+        const usesRemovalAdmission = Boolean(params.context && this.context.providers.codex.listArchiveCleanupThreadsPage);
         let snapshot: WorktreeSnapshotSummary;
         let admission: ArchiveWorktreeRemovalAdmission;
         for (;;) {
@@ -4352,12 +4353,12 @@ export class ThreadArchiveCoordinator {
               threadId: params.thread.id,
               worktreePath: candidate.worktreePath,
               repositoryPath: candidate.repositoryPath,
-              onStage: (stage) => {
+              onStage: usesRemovalAdmission ? (stage) => {
                 if (stage === "removing") removalStarted = true;
                 params.onStage?.(stage);
-              },
+              } : params.onStage,
               maxSnapshotBytes: params.snapshotLimitBytes ?? this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
-              beforeRemove: params.context && this.context.providers.codex.listArchiveCleanupThreadsPage ? () => admitRemoval(admission) : undefined,
+              beforeRemove: usesRemovalAdmission ? () => admitRemoval(admission) : undefined,
             });
             break;
           } catch (error) {
