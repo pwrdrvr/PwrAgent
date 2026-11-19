@@ -115,17 +115,17 @@ export function ThreadInfoCard(props: {
   const missing = info.factsState === "missing";
   const phase = missing ? "not found"
     : !facts ? undefined
-    : facts.archivedAt ? "archived"
+    : facts.archived ? "archived"
     : facts.ownerOffline ? "offline"
     : facts.running ? "running" : "idle";
   const dot = missing || facts?.ownerOffline ? "offline"
-    : facts?.archivedAt ? "archived"
+    : facts?.archived ? "archived"
     : facts?.running ? "running" : "idle";
   const status = missing
-    ? "No connected machine reports this thread. It may be archived, or its machine may be offline."
+    ? `Thread not found on ${machine === "This machine" ? "this machine" : machine ?? "its owning machine"}.`
     : !facts ? undefined
     : facts.ownerOffline ? `${machine ?? "Its machine"} is offline · last known`
-    : facts.archivedAt ? "Archived"
+    : facts.archived ? "Archived"
     : facts.running ? (facts.subAgentWorking ? "Running · sub-agent working" : "Running")
     : "Idle";
   const model = facts?.model;

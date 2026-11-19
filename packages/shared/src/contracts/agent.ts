@@ -6,6 +6,7 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerThreadImagePart,
   LinkedDirectorySummary,
+  MessagingCausalSourceRef,
   ThreadExecutionMode,
   AppServerReviewDelivery,
   AppServerReviewTarget,
@@ -436,8 +437,12 @@ export type ReleaseQueuedTurnResponse = {
   errorMessage?: string;
 };
 
-/** Product execution modes; independent of native protocol delivery. */
-export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent";
+/**
+ * Product execution modes; independent of native protocol delivery.
+ * `claude-code-review` sends Claude Code's `/code-review` as a turn of the
+ * Claude thread itself; its effort level travels as `reasoningEffort`.
+ */
+export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent" | "claude-code-review";
 
 /**
  * What the thread does once the review lands. `auto-fix` sends the review's
@@ -447,6 +452,8 @@ export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent";
 export type ReviewAfterAction = "auto-fix" | "wait";
 
 export type StartReviewRequest = {
+  /** Owner-generated messaging provenance for a Claude Code review turn. */
+  messagingSource?: MessagingCausalSourceRef;
   /**
    * Omitted means `wait`, so an owner never starts fixing for a viewer that
    * did not ask. Viewers send it only to an owner whose backend advertises

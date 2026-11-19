@@ -1,15 +1,8 @@
 import type { ThreadSubAgentSummary, ThreadUsageLineRecord } from "@pwragent/shared";
-import type { RegistryContext } from "../../app-server/registry-context";
 import { ThreadUsageLedger } from "../../app-server/thread-usage-ledger";
+import { registryContextStandIn } from "./registry-context-stand-in";
 
-/**
- * A real usage ledger for a registry stand-in built from the registry's
- * prototype. The registry reads live gates and pricing through its ledger,
- * so a stand-in without one reaches no live state. The ledger reads the
- * stand-in's own store and the stand-in as its host, as the composition
- * root's ports are the registry, and holds the given live gate cards and
- * usage lines.
- */
+/** A real ledger seeded with live usage for consumers of the registry's read ports. */
 export function usageLedgerStandIn(params: {
   registry?: () => object;
   overlayStore?: object;
@@ -17,14 +10,8 @@ export function usageLedgerStandIn(params: {
   usageLines?: Map<string, Map<string, ThreadUsageLineRecord>>;
   subAgents?: Map<string, Map<string, ThreadSubAgentSummary>>;
 }): ThreadUsageLedger {
-  const store = params.overlayStore ?? {};
-  const context = {
-    stores: { threads: store, usage: store, subAgents: store, toolAccounting: store },
-    providers: {},
-    lifecycle: { closed: false },
-    emit: async () => {},
-  };
-  const ledger = new ThreadUsageLedger(context as unknown as RegistryContext, {
+  const context = registryContextStandIn({ overlayStore: params.overlayStore });
+  const ledger = new ThreadUsageLedger(context, {
     managedReviewService: {} as never,
     subAgentMonitorService: params.subAgentMonitorService as never,
   }, () => (params.registry?.() ?? {}) as never);

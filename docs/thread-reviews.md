@@ -112,7 +112,8 @@ tracked because the completion event establishes that they are new.
 Records distinguish automatic imports from explicit `record_review` calls.
 An automatic PR review appears in the active queue only while that exact PR
 (host, organization, repository, and number) is attached to its owning thread.
-Detachment does not change its outcome or erase the artifact. Reattaching
+A review of several PRs (`context.pullRequests`) stays while any of them is
+attached. Detachment does not change its outcome or erase the artifact. Reattaching
 restores eligible open work. Explicit records do not depend on attachments.
 
 The To-dos list also checks the complete local owner navigation index for
@@ -289,7 +290,9 @@ id: a review runs as a turn of its own thread, and its artifact lands in that
 turn, inline or from a sub-agent. A review that lands before its start
 returns matches the thread's pending start. A refused start removes only
 itself, so a running review keeps its own choice. A review PwrAgent did not
-start, such as a typed `/code-review`, never fixes. An app restart ends the
+start, such as a typed `/code-review`, never fixes; one started from the
+review panel's Claude Code mode does, because the owner arms it on the turn
+that sends the command. An app restart ends the
 review's turn, so nothing needs to outlive it.
 `review-auto-fix.property.test.ts` holds these rules against a model of the
 reviews.

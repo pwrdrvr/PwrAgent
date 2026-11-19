@@ -6,6 +6,8 @@ import type {
   AppServerTurnInputItem,
   FederationCapability,
   FederationProtocolEnvelope,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   NavigationThreadSummary,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
@@ -29,12 +31,34 @@ import {
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
+import { registerNavigationBackendHandlers } from "../federation/federation-navigation-handlers";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("keeps a hover lookup off the legacy selected-detail route", async () => {
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { protocol: 2, lookup: "thread-link", ref: { backend: "codex", threadId: "archive" } } as const;
+    const legacyRead = vi.fn();
+    router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail, legacyRead);
+    await expect(client.getNavigationSelectedDetail(request)).rejects.toMatchObject({ code: "method_not_found" });
+    expect(legacyRead).not.toHaveBeenCalled();
+
+    const getNavigationSelectedDetail = vi.fn(async (input: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> => ({
+      protocol: 2, ref: input.ref, lookup: input.lookup, identity: "unresolved", readiness: "failed", revision: "unknown",
+    }));
+    registerNavigationBackendHandlers({ router, backend: { getNavigationSelectedDetail } });
+    await expect(client.getNavigationSelectedDetail(request)).resolves.toMatchObject({ lookup: "thread-link", readiness: "failed" });
+    expect(getNavigationSelectedDetail).toHaveBeenCalledExactlyOnceWith(request, expect.any(Object));
+  });
+
   it("requires grouping and versioned promotion capabilities on the receiving owner", async () => {
     const request = { backend: "codex" as const, parentThreadId: "root", archivePromotion: {
       archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
@@ -590,6 +614,45 @@ describe("federation backend bridge", () => {
     const review = { backend: "codex" as const, threadId: "parent", target: { type: "uncommittedChanges" as const }, runMode: "codex-sub-agent" as const };
     await client.startReview(review);
     expect(request).toHaveBeenLastCalledWith({ method: FEDERATION_BACKEND_METHODS.startReview, params: review });
+  });
+
+  it("requires both Federation grants and binds retained Claude review provenance to the authenticated sender", async () => {
+    const review = { backend: "claude" as const, threadId: "parent", target: { type: "uncommittedChanges" as const },
+      runMode: "claude-code-review" as const, messagingSource: { ownerId: "contact-owner", requestId: "request" } };
+    const startReview = vi.fn(async () => ({ backend: "claude", threadId: "parent", turnId: "review", reviewThreadId: "parent" }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: envelope => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const connect = (capabilities: FederationCapability[]) => router.registerConnection({ peerId: "viewer", capabilities,
+      sendEnvelope: envelope => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { startReview } as unknown as FederationBackendOperations });
+    const request = (params = review, method = FEDERATION_BACKEND_METHODS.startMessagingClaudeReview as string) => rpc.request({ method, params });
+    for (const grants of [["turn_control"], ["messaging_route"]] as FederationCapability[][]) {
+      connect(grants);
+      await expect(request()).rejects.toThrow();
+    }
+    connect(["turn_control", "messaging_route"]);
+    await expect(request(review, FEDERATION_BACKEND_METHODS.startExtendedReview)).rejects.toThrow("messaging Claude review route");
+    await expect(request({ ...review, messagingSource: { ...review.messagingSource, instanceId: "third-party" } } as typeof review))
+      .rejects.toThrow("permissions could not be preserved");
+    expect(startReview).not.toHaveBeenCalled();
+    await request();
+    expect(startReview).toHaveBeenCalledExactlyOnceWith({ ...review, messagingSource: { ...review.messagingSource, instanceId: "viewer" } });
+  });
+
+  it("refuses an older owner without falling back to a Claude review that drops the contact", async () => {
+    const request = vi.fn(async ({ method }: { method: string }) => {
+      if (method === FEDERATION_BACKEND_METHODS.listBackends) return { backends: [{ kind: "claude", capabilities: { reviewRunMode: true } }] };
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await expect(client.startReview({ backend: "claude", threadId: "parent", target: { type: "uncommittedChanges" },
+      runMode: "claude-code-review", messagingSource: { ownerId: "contact-owner", requestId: "request" } }))
+      .rejects.toThrow("Update PwrAgent on the owning instance to preserve");
+    expect(request.mock.calls.map(([call]) => call.method)).toEqual([
+      FEDERATION_BACKEND_METHODS.listBackends, FEDERATION_BACKEND_METHODS.startMessagingClaudeReview,
+    ]);
   });
 
   it.each(["codex", "acp:legacy", undefined])("checks the scheduled review target backend %s rather than unrelated backend capabilities", async (backend) => {

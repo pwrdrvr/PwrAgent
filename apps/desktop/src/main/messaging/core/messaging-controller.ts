@@ -957,6 +957,7 @@ export class MessagingController {
 
   private reviewHost(): MessagingReviewHost {
     return this.reviewHostPorts ??= {
+      rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
       readBoundWorkspaceContext: (...args) => this.readBoundWorkspaceContext(...args),
       storePendingIntent: (...args) => this.storePendingIntent(...args),
       deliver: (...args) => this.deliver(...args),

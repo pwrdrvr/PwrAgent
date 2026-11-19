@@ -11,7 +11,6 @@ import type {
   AppServerThreadMessageOrigin,
   StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
-  ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
@@ -1932,12 +1931,9 @@ describe("sqlite write metrics", () => {
     });
     const internal = registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
-      mergeLiveTokenMiserSubAgents(
-        threadId: string,
-        persisted: readonly ThreadSubAgentSummary[] | undefined,
-      ): ThreadSubAgentSummary[];
     };
-    registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
+    const { subAgentMonitorService, threadUsageLedger } = registryModules(registry);
+    subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
     const usage = (total: number): AgentEvent => ({
       backend: "codex",
       notification: {
@@ -1968,13 +1964,13 @@ describe("sqlite write metrics", () => {
         expect((await storedCard())?.monitorUsage).toBeUndefined();
         expect((await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" }))
           .lines.filter((line) => line.threadId === "worker-review")).toEqual([]);
-        expect((await registryModules(registry).threadUsageLedger.readThreadPricingWithLiveTokenMiser({
+        expect((await threadUsageLedger.readThreadPricingWithLiveTokenMiser({
           backend: "codex", threadId: "thread-parent",
         })).lines.find((line) => line.threadId === "worker-review")).toMatchObject({
           model: "gpt-5.5", priceStatus: "priced", inputTokens: 20_000,
         });
         expect(
-          internal.mergeLiveTokenMiserSubAgents("thread-parent", [(await storedCard())!])[0],
+          threadUsageLedger.mergeLiveTokenMiserSubAgents("thread-parent", [(await storedCard())!])[0],
         ).toMatchObject({
           preferredModel: "gpt-5.5",
           monitorUsage: { tokenUsage: expect.objectContaining({ inputTokens: 20_000 }) },

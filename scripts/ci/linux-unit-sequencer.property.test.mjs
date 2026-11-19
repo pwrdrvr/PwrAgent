@@ -28,6 +28,26 @@ it("balances the measured Linux main-process outliers within one file's cost", a
   expect(Math.abs(load(lanes[0]) - load(lanes[1]))).toBeLessThanOrEqual(Math.max(...specs.map(weight)));
 });
 
+it("balances measured registry split outliers across the four Linux lanes", async () => {
+  // Passing file measurements from Linux runs 44546599956 and 44594264644.
+  const measured = {
+    "backend-registry.test.ts": 6940,
+    "backend-registry-turn-queue.test.ts": 5136,
+    "thread-archive-coordinator-integration.test.ts": 6970,
+    "thread-directory-service-integration.test.ts": 6701,
+    "thread-workspace-service-integration.test.ts": 9088,
+  };
+  const specs = Object.keys(measured).map((file) => specification(`apps/desktop/src/main/__tests__/${file}`));
+  const lanes = await Promise.all([1, 2, 3, 4].map((index) => new LinuxUnitSequencer(context(index, 4)).shard(specs)));
+  const actualWork = lanes.map((lane) =>
+    lane.reduce((sum, spec) => sum + measured[path.posix.basename(spec.moduleId)], 0));
+  // Five files on four lanes require a pair. Pairing the two smallest
+  // measured files attains the minimum possible peak.
+  const durations = Object.values(measured).sort((a, b) => a - b);
+  const minimumPeak = Math.max(durations.at(-1), durations[0] + durations[1]);
+  expect(Math.max(...actualWork)).toBe(minimumPeak);
+});
+
 it("balances the measured renderer outliers within one file's cost", async () => {
   const specs = Object.keys(rendererCosts.files).map((file) => specification(file, "desktop-renderer"));
   const weight = (spec) => rendererCosts.files[path.posix.relative(root, spec.moduleId)] ?? rendererCosts.fallbackMs;

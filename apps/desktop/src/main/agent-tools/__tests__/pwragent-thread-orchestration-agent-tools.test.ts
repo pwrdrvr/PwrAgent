@@ -198,6 +198,9 @@ describe("pwragent thread orchestration agent tools", () => {
             inputSchema: expect.objectContaining({
               required: ["target"],
               properties: expect.objectContaining({
+                runMode: expect.objectContaining({
+                  enum: ["codex-sub-agent", "pwragent-sub-agent", "claude-code-review"],
+                }),
                 target: expect.objectContaining({
                   required: ["type"],
                   properties: expect.objectContaining({
@@ -206,9 +209,20 @@ describe("pwragent thread orchestration agent tools", () => {
                         "uncommittedChanges",
                         "baseBranch",
                         "pullRequest",
+                        "pullRequests",
                         "commit",
                         "custom",
                       ],
+                    }),
+                    pullRequests: expect.objectContaining({
+                      type: "array",
+                      minItems: 2,
+                      maxItems: 8,
+                      items: expect.objectContaining({
+                        type: "object",
+                        required: ["url"],
+                        properties: { url: { type: "string" } },
+                      }),
                     }),
                   }),
                 }),

@@ -169,6 +169,8 @@ retains the public dynamic-tool authorization facade:
   `approval.respond.escalation` by the pending request's kind (fail-closed:
   an approval that cannot be classified requires the escalation permission),
 - the `message.reply` floor for plain turns,
+- `/review` and the review picker's Start action require `message.reply`.
+  A PR review on a peer also requires `federation.remote_control`,
 - Claude's deleted-session recovery button and `/continue`, also gated on
   `message.reply`. The backend refuses while Claude still has the session or
   the thread is busy or locked; recovery preserves messages and execution
@@ -180,7 +182,7 @@ retains the public dynamic-tool authorization facade:
   and `send_messaging_file` gated on `message.reply`.
 
 A turn PwrAgent starts later on the agent's behalf (a follow-up, a Continue
-After wait, a PR watch, or a Job Monitor) keeps the contact whose turn
+After wait, a PR watch, a Claude Code review, or a Job Monitor) keeps the contact whose turn
 registered it, so its tool calls are checked against that contact's role.
 The contact comes from the registering turn's stored origin, never from tool
 arguments. When one wake answers several requests (an identical Continue
@@ -190,7 +192,10 @@ contact and the local operator, leave the wake ambiguous, and an ambiguous
 wake is granted no contact's authority. A Continue After wait registered on a
 peer carries the contact there, and the peer sends the contact's tool calls
 back to this machine for authorization. A peer that cannot keep the contact
-is refused the registration instead of running it unattributed.
+is refused the registration instead of running it unattributed. A Claude Code
+review from messaging keeps the contact through its queue and uses a dedicated
+Federation route. The review is refused when the connection or peer cannot
+preserve the contact.
 
 Render-time filtering shares the same command/action → permission lookup
 tables from the shared contract, so what a user *sees* and what the

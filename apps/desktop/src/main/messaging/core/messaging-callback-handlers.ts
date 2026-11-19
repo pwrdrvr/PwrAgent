@@ -400,6 +400,8 @@ export class MessagingCallbackHandlers {
         return;
       }
       if (action && pendingIntent.intent.kind === "review") {
+        const permission = permissionForActionId(action.id);
+        if (permission && !await this.context.host().requirePermission(event, permission, action.id)) return;
         await this.context.host().handleReviewAction(pendingIntent, event, action);
         return;
       }

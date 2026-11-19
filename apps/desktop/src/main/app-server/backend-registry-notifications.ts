@@ -9,6 +9,7 @@ import {
   finalTurnOutputText,
 } from "@pwragent/shared";
 import type { CodexBackgroundTerminal } from "@pwragent/shared";
+import { pullRequestSetLabel } from "@pwragent/shared/pull-request-review";
 import path from "node:path";
 import type {
   MessagingApprovalDecision,
@@ -220,6 +221,12 @@ export function reviewTaskLabel(target: StartReviewRequest["target"]): string {
   switch (target.type) {
     case "pullRequest":
       return `Review ${target.url}${target.snapshot ? ` at ${target.snapshot.headCommit.slice(0, 10)}` : ""}`;
+    case "pullRequests":
+      return `Review ${pullRequestSetLabel(target.pullRequests)}`;
+    case "branch":
+      return `Review branch ${target.branch}`;
+    case "path":
+      return `Review ${target.path}`;
     case "baseBranch":
       return `Review changes against ${target.branch}`;
     case "commit":

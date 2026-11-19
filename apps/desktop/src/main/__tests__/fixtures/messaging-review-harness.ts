@@ -5,16 +5,16 @@ import { messagingInboundHarness } from "./messaging-inbound-harness";
 
 // Only the provider and transport are contrived. Routing, pending records,
 // callback selection and delivery run through the actual controller and store.
-export async function messagingReviewHarness(channel: "telegram" | "discord" = "telegram", workspaceCount = 1, maxActions?: number) {
-  const real = await messagingInboundHarness({ channel, maxActions });
+export async function messagingReviewHarness(channel: "telegram" | "discord" = "telegram", workspaceCount = 1, maxActions?: number, backendKind: "codex" | "claude" = "codex") {
+  const real = await messagingInboundHarness({ channel, maxActions, backend: backendKind });
   const trace: string[] = [];
   const receipts = new Map<string, MessagingSurfaceRef>();
   const requests: Array<Parameters<NonNullable<MessagingBackendBridge["submitReview"]>>[0]> = [];
-  const controls = { modes: true, autoFix: true, runner: true, available: true, startReview: true,
+  const controls = { modes: true, autoFix: true, runner: true, available: true, startReview: true, combined: true,
     refuse: false, outcome: "started" as "started" | "scheduled" };
   const hooks: { submit?: () => Promise<void> } = {};
   const thread: NavigationThreadSummary = {
-    id: "fixture-thread", source: "codex", title: "Fixture review target", titleSource: "explicit", inbox: { inInbox: false },
+    id: "fixture-thread", source: backendKind, title: "Fixture review target", titleSource: "explicit", inbox: { inInbox: false },
     model: "inherited-model", reasoningEffort: "high", serviceTier: "priority", fastMode: true,
     linkedDirectories: Array.from({ length: workspaceCount }, (_, index) => ({
       id: `fixture-project-${index}`, kind: "local" as const, label: `Fixture project ${index}`, path: `/fixture/project-${index}`,
@@ -25,7 +25,8 @@ export async function messagingReviewHarness(channel: "telegram" | "discord" = "
     capabilities: { listThreads: true, createThread: true, resumeThread: true, renameThread: true, readThread: true,
       startTurn: true, startReview: controls.startReview, interruptTurn: true, steerTurn: true, transcriptPagination: false,
       toolUse: true, approvalRequests: true, multiDirectoryThreads: true, reviewRunner: controls.runner,
-      reviewRunMode: controls.modes, reviewAutoFix: controls.autoFix, reviewCodexSubAgent: true },
+      reviewRunMode: controls.modes, reviewAutoFix: controls.autoFix, reviewCodexSubAgent: true,
+      reviewPullRequestSet: controls.combined, reviewClaudeCodeReview: kind === "claude" },
     launchpadOptions: { models: [{ id: `${kind}-model`, label: `Fixture ${kind} model`, reasoningEfforts: ["low", "high"] }] },
   });
   const backend: MessagingBackendBridge = {

@@ -53,7 +53,7 @@ export type MessagingCommandHelpSpec = {
  */
 export const MESSAGING_REVIEW_HELP_SPEC: MessagingCommandHelpSpec = {
   verb: "review",
-  description: "start a code review for the bound thread",
+  description: "start a code review for the bound thread (use /review --pr 12 13 to review attached PRs together)",
 };
 
 /**

@@ -137,6 +137,9 @@ export interface RegistryHostPorts {
   ): Promise<
     Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
   >;
+  readTurnCausalMessagingOrigin(
+    context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
+  ): Promise<AppServerThreadMessageOrigin | undefined>;
   readCodexDefaultModelsOnce(callerReason: BackendModelCatalogCallerReason): Promise<BackendModelOption[]>;
   readDelegatedTurnAncestry(params: {
     backend: AppServerBackendKind;

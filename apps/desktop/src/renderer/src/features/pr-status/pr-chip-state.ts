@@ -1,4 +1,8 @@
-import { describeMergeQueueState, isMergeQueueActive, type PrSummary } from "@pwragent/shared";
+import {
+  describeMergeQueueState, isMergeQueueActive, isPrStatusUnknown, resolveCheckState, resolveLifecycleState, type PrSummary,
+} from "@pwragent/shared";
+
+export { isPrStatusUnknown, resolveCheckState, resolveLifecycleState };
 
 /**
  * Shared reading of a `PrSummary`'s display state.
@@ -20,38 +24,6 @@ export function resolveChipState(pr: PrSummary): PrChipDotState {
     return lifecycleState;
   }
   return resolveCheckState(pr);
-}
-
-export function resolveLifecycleState(
-  pr: PrSummary,
-): NonNullable<PrSummary["lifecycleState"]> {
-  if (pr.lifecycleState) {
-    return pr.lifecycleState;
-  }
-  if (pr.state === "merged" || pr.state === "closed") {
-    return pr.state;
-  }
-  return "open";
-}
-
-export function resolveCheckState(
-  pr: PrSummary,
-): NonNullable<PrSummary["checkState"]> {
-  return pr.checkState ?? normalizeLegacyCheckState(pr.state);
-}
-
-function normalizeLegacyCheckState(
-  state: PrSummary["state"],
-): NonNullable<PrSummary["checkState"]> {
-  if (
-    state === "passing"
-    || state === "failing"
-    || state === "pending"
-    || state === "unknown"
-  ) {
-    return state;
-  }
-  return "unknown";
 }
 
 /**
@@ -118,17 +90,6 @@ export function readPrChipModifierClasses(className: string): string[] {
   return className
     .split(/\s+/)
     .filter((entry) => entry.startsWith("pr-chip--"));
-}
-
-/** Whether the PR carries no status signal at all — a fresh attachment. */
-export function isPrStatusUnknown(pr: PrSummary): boolean {
-  return (
-    pr.state === "unknown"
-    && !pr.checkState
-    && !pr.lifecycleState
-    && !pr.reviewState
-    && !pr.mergeState
-  );
 }
 
 /**

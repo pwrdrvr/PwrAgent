@@ -2083,7 +2083,7 @@ function applyThreadPullRequestsUpdate(
       return thread;
     }
 
-    if (prSummariesEqual(thread.prs, params.prs)) {
+    if (!thread.prsTruncated && prSummariesEqual(thread.prs, params.prs)) {
       return thread;
     }
 
@@ -2091,6 +2091,8 @@ function applyThreadPullRequestsUpdate(
     return {
       ...thread,
       prs: params.prs,
+      prsTruncated: undefined,
+      prCount: undefined,
     };
   });
 

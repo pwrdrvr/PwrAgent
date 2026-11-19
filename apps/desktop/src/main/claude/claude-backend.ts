@@ -697,10 +697,12 @@ export class ClaudeBackend {
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: true,
-        // Claude runs no reviews itself, but this owner accepts a run mode
-        // for a Claude thread whose review runs on another provider.
+        // A Claude thread's review runs either on another provider or as
+        // Claude Code's own /code-review in the thread.
         reviewRunMode: true,
         reviewAutoFix: true,
+        reviewPullRequestSet: true,
+        reviewClaudeCodeReview: true,
         // File checkpoints restore what Edit, Write, and NotebookEdit changed.
         threadRewind: { files: true, undo: true },
       },
@@ -859,10 +861,11 @@ export class ClaudeBackend {
 
   /** One stored thread, as listThreads reports it, or undefined when its
    * metadata is gone or unreadable. */
-  async readThreadSummary(threadId: string): Promise<AppServerThreadSummary | undefined> {
+  async readThreadSummary(threadId: string, options?: { requireComplete?: boolean }): Promise<AppServerThreadSummary | undefined> {
     try {
       return this.threadSummary(await this.store.read(threadId));
-    } catch {
+    } catch (error) {
+      if (options?.requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return undefined;
     }
   }

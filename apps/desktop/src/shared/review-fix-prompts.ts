@@ -1,7 +1,8 @@
-import type { ThreadReviewItem } from "@pwragent/shared";
+import type { AppServerReviewContext, ThreadReviewItem } from "@pwragent/shared";
+import { reviewFindingPullRequests } from "./pull-request-review";
 import { reviewFindingTag } from "./review-output";
 
-type ReviewFinding = Pick<ThreadReviewItem, "title" | "priority" | "category">;
+type ReviewFinding = Pick<ThreadReviewItem, "title" | "priority" | "category" | "codeLocation">;
 
 /**
  * Open findings first, then by priority; ties keep the reviewer's order. The
@@ -18,10 +19,21 @@ export function orderReviewItems<T extends Pick<ThreadReviewItem, "status" | "pr
     .map(({ item }) => item);
 }
 
-function findingLines(items: readonly ReviewFinding[]): string[] {
+/**
+ * One line per finding. A combined review's finding also names the reviewed
+ * pull requests that changed its file, so the agent can tell which branch a
+ * fix belongs on.
+ */
+function findingLines(items: readonly ReviewFinding[], context?: AppServerReviewContext): string[] {
   return items.map((item, index) => {
     const tag = reviewFindingTag(item);
-    return `${index + 1}. ${tag ? `[${tag}] ` : ""}${item.title}`;
+    const pullRequests = item.codeLocation
+      ? reviewFindingPullRequests(item.codeLocation.absolute_file_path, context)
+      : undefined;
+    const where = pullRequests?.length
+      ? ` (in ${pullRequests.map((pr) => `#${pr.number}`).join(", ")})`
+      : "";
+    return `${index + 1}. ${tag ? `[${tag}] ` : ""}${item.title}${where}`;
   });
 }
 
@@ -30,13 +42,17 @@ function findingLines(items: readonly ReviewFinding[]): string[] {
  * the findings the operator picked, by title. `list_reviews` returns their
  * details and ids, and with them how to settle each one.
  */
-export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly ReviewFinding[]): string {
+export function fixReviewFindingsPrompt(
+  reviewTitle: string,
+  items: readonly ReviewFinding[],
+  context?: AppServerReviewContext,
+): string {
   return [
     items.length === 1
       ? `Fix this finding from ${reviewTitle}:`
       : `Fix these ${items.length} findings from ${reviewTitle}:`,
     "",
-    ...findingLines(items),
+    ...findingLines(items, context),
     "",
     "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
   ].join("\n");
@@ -49,13 +65,17 @@ export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly Rev
  * decline it. Settling every finding without a push is a good outcome when
  * nothing merits one, because each push starts a CI run.
  */
-export function autoFixReviewFindingsPrompt(reviewTitle: string, items: readonly ReviewFinding[]): string {
+export function autoFixReviewFindingsPrompt(
+  reviewTitle: string,
+  items: readonly ReviewFinding[],
+  context?: AppServerReviewContext,
+): string {
   return [
     items.length === 1
       ? `Auto-fix the finding from ${reviewTitle}. Decide whether to fix it.`
       : `Auto-fix the ${items.length} findings from ${reviewTitle}. Decide which ones to fix.`,
     "",
-    ...findingLines(items),
+    ...findingLines(items, context),
     "",
     "Use PwrAgent's `list_reviews` tool for each finding's details. Settle every finding with `update_review_item`:",
     "",

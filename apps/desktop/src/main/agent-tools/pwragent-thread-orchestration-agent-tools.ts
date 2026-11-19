@@ -42,6 +42,7 @@ import {
   agentToolSuccess,
 } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
+import { normalizePullRequestUrl, PULL_REQUEST_SET_MAX, PULL_REQUEST_SET_MIN, pullRequestSetProblem } from "../../shared/pull-request-review";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_UNAVAILABLE_MESSAGE =
   "PwrAgent thread handoff tools are not available.";
@@ -207,7 +208,7 @@ function descriptionForOperation(
     case "stop_thread":
       return "Stop the active turn on another PwrAgent thread immediately. Use this only for an urgent interruption. This tool interrupts the backend and does not queue text. The owner rejects a stale expectedTurnId. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same stop. This thread cannot stop itself.";
     case "start_review":
-      return "Schedule a review of this PwrAgent thread after the current turn ends successfully. Use this only after an explicit operator request. Select one target type. After success, stop work and end the turn. Do not poll or call this tool again.";
+      return "Schedule a review of this PwrAgent thread after the current turn ends successfully. Use this only after an explicit operator request. Select one target type. Use pullRequests with a list of attached PR URLs to review them together. After success, stop work and end the turn. Do not poll or call this tool again.";
   }
 }
 
@@ -483,8 +484,8 @@ function inputSchemaForOperation(
         properties: {
           runMode: {
             type: "string",
-            enum: ["codex-sub-agent", "pwragent-sub-agent"],
-            description: "Codex Sub Agent (default) uses the native reviewer. PwrAgent Sub Agent uses an ephemeral managed reviewer. ACP and secondary workspaces require PwrAgent Sub Agent.",
+            enum: ["codex-sub-agent", "pwragent-sub-agent", "claude-code-review"],
+            description: "Combined reviews default to PwrAgent Sub Agent, or Claude Code's /code-review in its own Claude thread and workspace. For other targets, Codex Sub Agent is the default where supported. ACP and secondary workspaces require PwrAgent Sub Agent.",
           },
           cwd: {
             type: "string",
@@ -502,11 +503,24 @@ function inputSchemaForOperation(
                   "uncommittedChanges",
                   "baseBranch",
                   "pullRequest",
+                  "pullRequests",
                   "commit",
                   "custom",
                 ],
               },
               url: { type: "string", description: "Attached pull request URL. Base and head commits are pinned at submission." },
+              pullRequests: {
+                type: "array",
+                minItems: PULL_REQUEST_SET_MIN,
+                maxItems: PULL_REQUEST_SET_MAX,
+                description: "Distinct GitHub.com PRs from one repository, all attached to this thread. Required for the pullRequests target.",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["url"],
+                  properties: { url: { type: "string" } },
+                },
+              },
               branch: { type: "string" },
               sha: { type: "string" },
               title: {
@@ -943,7 +957,7 @@ function normalizeStartReviewArgs(
 ): StartReviewToolArgs | undefined {
   const runMode = args.runMode;
   if (runMode !== undefined
-    && runMode !== "codex-sub-agent" && runMode !== "pwragent-sub-agent") {
+    && runMode !== "codex-sub-agent" && runMode !== "pwragent-sub-agent" && runMode !== "claude-code-review") {
     return undefined;
   }
   const targetRecord =
@@ -960,6 +974,20 @@ function normalizeStartReviewArgs(
   } else if (targetRecord.type === "pullRequest") {
     const url = readTrimmedString(targetRecord.url);
     if (url) target = { type: "pullRequest", url };
+  } else if (targetRecord.type === "pullRequests") {
+    const members: unknown = targetRecord.pullRequests;
+    if (!Array.isArray(members) || members.length < PULL_REQUEST_SET_MIN
+      || members.length > PULL_REQUEST_SET_MAX) return undefined;
+    const urls: string[] = [];
+    for (const member of members as unknown[]) {
+      const url = member && typeof member === "object" && "url" in member
+        ? readTrimmedString(member.url) : undefined;
+      if (!url) return undefined;
+      urls.push(normalizePullRequestUrl(url));
+    }
+    if (!pullRequestSetProblem(urls)) {
+      target = { type: "pullRequests", pullRequests: urls.map(url => ({ url })) };
+    }
   } else if (targetRecord.type === "baseBranch") {
     const branch = readTrimmedString(targetRecord.branch);
     if (branch) {

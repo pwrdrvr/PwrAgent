@@ -81,10 +81,13 @@ export class ThreadReviewService {
         && reviewEntryFailure({ review: review.summary ?? "" })) continue;
       // Queue reads follow the current attachment list. Full status reads
       // also serve the transcript, whose resolutions survive PR detachment.
-      const pr = review.context?.pullRequest;
+      // A review of several pull requests stays while any of them is attached.
+      const reviewed = review.context?.pullRequests?.length
+        ? review.context.pullRequests
+        : review.context?.pullRequest ? [review.context.pullRequest] : [];
       const automatic = review.origin === "automatic"
         || (review.origin === undefined && review.sourceKey.startsWith("managed-review:"));
-      if (review.status === "open" && automatic && pr && request.status !== "all" && !options.includeDetached) {
+      if (review.status === "open" && automatic && reviewed.length > 0 && request.status !== "all" && !options.includeDetached) {
         const key = buildLegacyEncodedThreadIdentityKey(review.backend, review.threadId);
         let prs = attachments.get(key);
         if (!prs) {
@@ -92,8 +95,9 @@ export class ThreadReviewService {
           attachments.set(key, storedPrs);
           prs = storedPrs;
         }
-        if (!prs.some((attached) => attached.provider === pr.provider && attached.org === pr.org
-          && attached.repo === pr.repo && attached.number === pr.number)) continue;
+        const attached = prs;
+        if (!reviewed.some((pr) => attached.some((candidate) => candidate.provider === pr.provider
+          && candidate.org === pr.org && candidate.repo === pr.repo && candidate.number === pr.number))) continue;
       }
       reviews.push(review);
       if (reviews.length === THREAD_REVIEW_LIST_LIMIT) break;

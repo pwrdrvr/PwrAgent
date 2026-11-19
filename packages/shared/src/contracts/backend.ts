@@ -177,6 +177,19 @@ export type BackendCapabilities = {
   reviewAutoFix?: boolean;
   /** Native review/start with inline delivery (Codex's internal reviewer). */
   reviewCodexSubAgent?: boolean;
+  /**
+   * This thread owner takes a `pullRequests` target: several attached pull
+   * requests in one review. An owner that predates it omits the capability,
+   * so viewers hide the choice; one asked anyway refuses on the separate
+   * extended-review Federation routes rather than reviewing one of them.
+   */
+  reviewPullRequestSet?: boolean;
+  /**
+   * This backend runs a review as Claude Code's `/code-review` in the thread
+   * itself (`runMode: "claude-code-review"`), with the `branch` and `path`
+   * targets that only it takes.
+   */
+  reviewClaudeCodeReview?: boolean;
   interruptTurn: boolean;
   steerTurn: boolean;
   /**

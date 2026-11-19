@@ -1,11 +1,6 @@
-import type { PrSummary } from "@pwragent/shared";
+import { comparePullRequestStack, pullRequestRollupPriority, resolveLifecycleState, type PrSummary } from "@pwragent/shared";
 import { formatRelativeTime } from "../navigation/thread-time";
-import {
-  isPrStatusUnknown,
-  prStatusLabel,
-  resolveCheckState,
-  resolveLifecycleState,
-} from "./pr-chip-state";
+import { prStatusLabel } from "./pr-chip-state";
 
 /**
  * One status for every pull request on a thread: the Minimal density's PR
@@ -49,91 +44,23 @@ export type PrRollup = {
   summary: string;
 };
 
-const DRAFT_TIEBREAK = 0.5;
-
-function openReadinessRank(pr: PrSummary): number {
-  if (isPrStatusUnknown(pr)) {
-    return 5;
-  }
-  if (pr.mergeState === "conflicting") {
-    return 0;
-  }
-  switch (resolveCheckState(pr)) {
-    case "failing":
-      return pr.checksStillRunning ? 2 : 1;
-    case "pending":
-      return 3;
-    case "passing":
-      return 4;
-    case "unknown":
-      return 5;
-  }
-}
-
-/** Ranks draft before ready only among otherwise equal PRs. */
-function openSortKey(pr: PrSummary): number {
-  const rank = openReadinessRank(pr);
-  return rank + (pr.reviewState === "draft" ? 0 : DRAFT_TIEBREAK);
-}
-
-function finishedSortKey(pr: PrSummary): number {
-  return resolveLifecycleState(pr) === "merged" ? 0 : 1;
-}
-
-type Stacked = { pr: PrSummary; index: number; at: number | undefined };
-
-/**
- * Newest first. An entry without a time goes to the top when `missing` is
- * "top" and to the bottom when it is "bottom". Ties and entries without a
- * time fall back to attachment order, later attachments first.
- */
-function newestFirst(
-  entries: Stacked[],
-  missing: "top" | "bottom",
-): PrSummary[] {
-  const unknown = missing === "top" ? Infinity : -Infinity;
-  return [...entries]
-    .sort((a, b) => (b.at ?? unknown) - (a.at ?? unknown) || b.index - a.index)
-    .map((entry) => entry.pr);
-}
-
 export function resolvePrRollup(prs: readonly PrSummary[]): PrRollup | undefined {
   if (prs.length === 0) {
     return undefined;
   }
-  const open: Stacked[] = [];
-  const finished: Stacked[] = [];
-  prs.forEach((pr, index) => {
-    if (resolveLifecycleState(pr) === "open") {
-      open.push({ pr, index, at: pr.createdAt });
-    } else {
-      finished.push({ pr, index, at: pr.mergedAt ?? pr.closedAt });
-    }
-  });
-  // An open PR without `createdAt` has not been polled yet, so it is a fresh
-  // attachment: the newest. A finished PR without a time finished before the
-  // timestamps existed and is never polled again: the oldest.
-  const ordered = [
-    ...newestFirst(open, "top"),
-    ...newestFirst(finished, "bottom"),
-  ];
-  // The chip wears the least ready open PR, else merged before closed.
-  const representative = open.length > 0
-    ? lowestKey(open, openSortKey)
-    : lowestKey(finished, finishedSortKey);
-  const mergedCount = finished.filter((entry) => finishedSortKey(entry.pr) === 0).length;
+  const open = prs.filter((pr) => resolveLifecycleState(pr) === "open");
+  const mergedCount = prs.filter((pr) => resolveLifecycleState(pr) === "merged").length;
+  // Later attachments win age ties. Earliest attachments win readiness ties.
+  const ordered = prs.toReversed().sort(comparePullRequestStack);
+  const representative = prs.reduce((best, pr) =>
+    pullRequestRollupPriority(pr) < pullRequestRollupPriority(best) ? pr : best);
   return {
     representative,
     ordered,
     openCount: open.length,
-    lead: open.length === 1 ? open[0]!.pr : undefined,
+    lead: open.length === 1 ? open[0] : undefined,
     summary: rollupSummary(representative, open.length, prs.length, mergedCount),
   };
-}
-
-/** The entry with the lowest key; the earliest attached wins a tie. */
-function lowestKey(entries: Stacked[], key: (pr: PrSummary) => number): PrSummary {
-  return entries.reduce((best, entry) => (key(entry.pr) < key(best.pr) ? entry : best)).pr;
 }
 
 function rollupSummary(

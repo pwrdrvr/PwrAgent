@@ -1,5 +1,14 @@
-import { nativeReviewTarget, pullRequestReviewPromptUrl } from "./pull-request-review";
-import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
+import {
+  EXPLICIT_REVIEW_PULL_REQUEST_URL,
+  nativeReviewTarget,
+  normalizePullRequestUrl,
+  PULL_REQUEST_SET_MAX,
+  pullRequestRepositoryKey,
+  pullRequestReviewPromptUrl,
+  pullRequestSetProblem,
+  pullRequestSetReviewInstructions,
+} from "./pull-request-review";
+import type { AppServerBackendKind, AppServerReviewOutput, AppServerReviewTarget, BackendSummary, ReviewRunMode } from "@pwragent/shared";
 import { normalizeReviewConfidenceScore } from "./review-output";
 
 export type ParsedReviewCommand = {
@@ -35,6 +44,15 @@ export function shortReviewSha(sha: string): string {
 export function formatReviewCommand(target: AppServerReviewTarget): string {
   if (target.type === "pullRequest") {
     return `/review --pr ${target.url}`;
+  }
+  if (target.type === "pullRequests") {
+    return `/review --pr ${target.pullRequests.map((member) => member.url).join(" ")}`;
+  }
+  if (target.type === "branch") {
+    return `/code-review ${target.branch}`;
+  }
+  if (target.type === "path") {
+    return `/code-review ${target.path}`;
   }
   if (target.type === "uncommittedChanges") {
     return "/review";
@@ -188,6 +206,40 @@ export function parseReviewCommand(input: string): ParsedReviewCommand | undefin
   };
 }
 
+/** Parse the explicit messaging `--pr` arguments using the bound thread's attachments. */
+export function parseReviewPullRequestArguments(
+  input: string,
+  attached: readonly { url: string }[],
+): Extract<AppServerReviewTarget, { type: "pullRequest" | "pullRequests" }> {
+  const references = input.trim().split(/\s*,\s*|\s+/, PULL_REQUEST_SET_MAX + 1);
+  if (references.some(reference => !reference)) {
+    throw new Error("Use /review --pr followed by PR numbers or GitHub.com PR URLs, separated by spaces or commas.");
+  }
+  if (references.length > PULL_REQUEST_SET_MAX) {
+    throw new Error(`A combined review takes at most ${PULL_REQUEST_SET_MAX} pull requests.`);
+  }
+  const attachedUrls = new Set(attached.map(pr => normalizePullRequestUrl(pr.url)));
+  const urls = references.map(reference => {
+    if (EXPLICIT_REVIEW_PULL_REQUEST_URL.test(normalizePullRequestUrl(reference))) return reference;
+    const number = /^#?([1-9][0-9]*)$/.exec(reference)?.[1];
+    if (!number) throw new Error("Use an attached GitHub.com PR URL or PR number.");
+    const matches = [...attachedUrls].filter(url => EXPLICIT_REVIEW_PULL_REQUEST_URL.exec(url)?.[4] === number);
+    if (matches.length !== 1) {
+      throw new Error(`PR #${number} must identify one attached GitHub.com pull request. Use the full URL if the number is ambiguous.`);
+    }
+    return matches[0]!;
+  });
+  if (urls.length === 1) return { type: "pullRequest", url: urls[0]! };
+
+  const problem = pullRequestSetProblem(urls);
+  if (problem) throw new Error(problem);
+  const normalized = urls.map(normalizePullRequestUrl);
+  if (normalized.some(url => !attachedUrls.has(url))) {
+    throw new Error("Select pull requests attached to this thread.");
+  }
+  return { type: "pullRequests", pullRequests: normalized.map(url => ({ url })) };
+}
+
 function stripWrappingQuotes(value: string): string {
   const trimmed = value.trim();
   return trimmed.replace(/^(['"])(.*)\1$/, "$2").trim();
@@ -292,6 +344,12 @@ export function reviewTargetInstructions(target: AppServerReviewTarget): string 
   switch (target.type) {
     case "pullRequest":
       return reviewTargetInstructions(nativeReviewTarget(target));
+    case "pullRequests":
+      return pullRequestSetReviewInstructions(target);
+    case "branch":
+      return `Review the changes on branch '${target.branch}'.`;
+    case "path":
+      return `Review the file or folder '${target.path}'.`;
     case "baseBranch":
       return `Review the current checkout against base branch '${target.branch}'. Find the merge base and inspect the resulting diff.`;
     case "commit":
@@ -301,4 +359,122 @@ export function reviewTargetInstructions(target: AppServerReviewTarget): string 
     case "uncommittedChanges":
       return "Review all staged, unstaged, and untracked changes in the current checkout.";
   }
+}
+
+/**
+ * The effort levels the review panel offers for Claude Code's `/code-review`.
+ * `ultra` is left out: it launches a billed, multi-agent review in the cloud
+ * whose findings do not come back to the thread. It can still be typed.
+ */
+export const CLAUDE_CODE_REVIEW_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ClaudeCodeReviewLevel = (typeof CLAUDE_CODE_REVIEW_LEVELS)[number];
+export const DEFAULT_CLAUDE_CODE_REVIEW_LEVEL: ClaudeCodeReviewLevel = "high";
+
+/** Claude Code is the default reviewer on a compatible Claude thread. */
+export function prefersClaudeCodeReview(params: {
+  ownerSummary?: BackendSummary;
+  requestedRunMode?: ReviewRunMode;
+  reviewerChosen?: boolean;
+  thread?: { source: AppServerBackendKind };
+}): boolean {
+  return params.thread?.source === "claude"
+    && params.ownerSummary?.capabilities.reviewClaudeCodeReview === true
+    && (params.requestedRunMode === "claude-code-review"
+      || (params.requestedRunMode === undefined && !params.reviewerChosen));
+}
+
+export function isClaudeCodeReviewLevel(value: unknown): value is ClaudeCodeReviewLevel {
+  return typeof value === "string"
+    && (CLAUDE_CODE_REVIEW_LEVELS as readonly string[]).includes(value);
+}
+
+/** Whether Claude Code's `/code-review` has a form for this target. */
+export function claudeCodeReviewTakesTarget(target: AppServerReviewTarget): boolean {
+  return target.type === "uncommittedChanges"
+    || target.type === "pullRequest"
+    || target.type === "pullRequests"
+    || target.type === "branch"
+    || target.type === "path";
+}
+
+function claudeCodeReviewPullRequest(url: string, repository: string | undefined): string {
+  const normalized = normalizePullRequestUrl(url);
+  const match = /\/pull\/([1-9][0-9]*)$/.exec(normalized);
+  if (!match || !pullRequestRepositoryKey({ url: normalized })) {
+    throw new Error("Claude Code reviews GitHub pull requests by number or URL.");
+  }
+  // A bare number is the checkout's own repository's; any other is named in full.
+  return repository && pullRequestRepositoryKey({ url: normalized }) === repository.trim().toLowerCase()
+    ? match[1]!
+    : normalized;
+}
+
+/**
+ * The `/code-review` command that reviews a panel target in a Claude thread:
+ * the effort level, then the target. Several pull requests are one
+ * comma-separated argument, which Claude Code reviews as one combined report.
+ * A pull request of `repository` (the checkout's `host/owner/repo`) is its
+ * bare number; any other is its URL. Throws for a target `/code-review` has
+ * no form for, and for an argument it would read as something else.
+ */
+export function claudeCodeReviewCommand(params: {
+  target: AppServerReviewTarget;
+  level?: string;
+  repository?: string;
+}): string {
+  const { target } = params;
+  if (params.level !== undefined && !isClaudeCodeReviewLevel(params.level)) {
+    throw new Error(`Unknown Claude Code review effort: ${params.level}`);
+  }
+  let argument: string | undefined;
+  switch (target.type) {
+    case "uncommittedChanges":
+      argument = undefined;
+      break;
+    case "pullRequest":
+      argument = claudeCodeReviewPullRequest(target.url, params.repository);
+      break;
+    case "pullRequests":
+      if (target.pullRequests.length === 0) {
+        throw new Error("Choose at least one pull request to review.");
+      }
+      argument = target.pullRequests
+        .map((member) => claudeCodeReviewPullRequest(member.url, params.repository))
+        .join(",");
+      break;
+    case "branch": {
+      const branch = target.branch.trim();
+      // No whitespace, and no leading dash, which would read as a flag.
+      if (!branch || /\s/.test(branch) || branch.startsWith("-")) {
+        throw new Error("Enter a branch name without spaces.");
+      }
+      // `/code-review 12` and `/code-review #12` review pull request 12.
+      if (/^#?[0-9]+$/.test(branch)) {
+        throw new Error("This branch name reads as a pull request number.");
+      }
+      // A comma separates several targets.
+      if (branch.includes(",")) {
+        throw new Error("This branch name reads as several review targets.");
+      }
+      argument = branch;
+      break;
+    }
+    case "path": {
+      const path = target.path.trim();
+      if (!path || /[\r\n"]/.test(path) || path.startsWith("-")) {
+        throw new Error("Enter a path on one line, without quotes or a leading dash.");
+      }
+      // A comma separates several targets.
+      if (path.includes(",")) {
+        throw new Error("This path reads as several review targets.");
+      }
+      // "./" keeps a relative path from reading as a pull request or branch.
+      const explicit = /^(?:\/|\.{1,2}\/|[a-zA-Z]:[\\/])/.test(path) ? path : `./${path}`;
+      argument = /\s/.test(explicit) ? `"${explicit}"` : explicit;
+      break;
+    }
+    default:
+      throw new Error("Claude Code's /code-review has no form for this review target.");
+  }
+  return ["/code-review", params.level, argument].filter(Boolean).join(" ");
 }

@@ -76,6 +76,7 @@ export * from "./directory-mention-match";
 export * from "./directory-navigation";
 export * from "./inbox";
 export * from "./navigation-state";
+export * from "./pull-request-rollup";
 export * from "./navigation-resume-state";
 export * from "./navigation-snapshot-transport";
 export * from "./helper-models";

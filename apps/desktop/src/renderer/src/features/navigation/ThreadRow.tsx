@@ -24,6 +24,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useEventCallback } from "../../lib/useEventCallback";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
@@ -110,7 +111,7 @@ type ThreadRowProps = {
   agentCommandThreadKeys?: Record<string, boolean>;
   threadPinState?: "pinned" | "unpinned";
   retainedForSelection?: boolean;
-  thread: NavigationThreadSummary;
+  thread: NavigationPresentedThread;
   /**
    * This row's actions menu is open. The menu renders outside the row, so
    * the ⋮ button's `aria-expanded` is the only thing tying the two together.
@@ -267,11 +268,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // machine's messaging runtime, which does not hold that binding.
   const canUnbind = Boolean(props.onUnbindMessagingBinding)
     && props.thread.federation?.ref.target.scope !== "remote";
-  // Pull straight from the navigation snapshot — main persists PR state
-  // to the overlay store and surfaces it through the snapshot, so the
-  // chips render instantly on app launch and stay in sync without any
-  // renderer-side cache.
+  // Compact rows serve the chips immediately. The disclosure reads the
+  // owner's full collection when the row only carries a preview.
   const prs = props.thread.prs ?? [];
+  const attachmentThread = props.thread.prsTruncated ? props.thread : undefined;
   // The chips line's one PR chip; the rest sit behind a `+N PRs` chip.
   const leadPr = prs.length > 1 ? resolvePrOverflow(prs)!.lead : prs[0];
   // PR watches reach the chips through ThreadRowPrChips, which read their
@@ -297,6 +297,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // a callback identity moved.
   const openPrStable = useEventCallback((url: string) =>
     (props.onOpenPullRequest ?? defaultOpenPullRequest)(url));
+  const needsPrRepoPrefix = useEventCallback((pr: PrSummary, list: PrSummary[]) =>
+    needsRepoPrefix(props.thread, pr, list));
   const openPrContextMenu = useEventCallback(
     (
       targetPr: PrSummary,
@@ -732,6 +734,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 prs={prs}
                 threadTitle={props.thread.title}
                 repoPrefixedUrls={repoPrefixedPrUrls}
+                attachmentThread={attachmentThread}
+                needsRepoPrefix={attachmentThread ? needsPrRepoPrefix : undefined}
                 branchDrift={branchDrift}
                 onHoverStart={armRollupHoverPrefetch}
                 onHoverEnd={cancelRollupHoverPrefetch}
@@ -841,6 +845,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                     prs={prs}
                     threadTitle={props.thread.title}
                     repoPrefixedUrls={repoPrefixedPrUrls}
+                    attachmentThread={attachmentThread}
+                    needsRepoPrefix={attachmentThread ? needsPrRepoPrefix : undefined}
                     branchDrift={branchDrift}
                     onOpen={openPrStable}
                     onOpenContextMenu={

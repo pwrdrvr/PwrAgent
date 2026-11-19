@@ -7,6 +7,7 @@ native Codex protocol's `delivery` field.
 | --- | --- | --- |
 | Codex Sub Agent | `codex-sub-agent` | Native `review/start`, with `delivery: inline`; default selection. |
 | PwrAgent Sub Agent | `pwragent-sub-agent` | Existing ephemeral managed reviewer, with results retained on the parent. |
+| Claude Code | `claude-code-review` | Claude Code's `/code-review`, sent as the Claude thread's own turn; its effort level is `reasoningEffort`. |
 
 Codex's native reviewer already runs on the parent thread, so there is no
 separate prompted inline mode. Transcript projection still hides the
@@ -38,6 +39,14 @@ review instructions.
   configurator and the `start_review` tool carry the same optional field.
   Launchpad exposes no mode selector because its materialization contract does
   not carry reviewer choices.
+- A `pullRequests` target (several PRs together) requires the PwrAgent Sub
+  Agent or Claude Code; `branch` and `path` targets require Claude Code. Each is
+  refused on any other engine before anything is fetched.
+- `claude-code-review` runs only on a Claude thread whose owner advertises
+  `reviewClaudeCodeReview`, as its own reviewer, in its own workspace. It
+  carries no reviewer override, and the start returns the turn that sent the
+  command, which is where `ReportFindings` lands, so Auto-fix arms and matches
+  as it does for a managed review. An older owner rejects the unknown mode.
 - The former Experimental managed-review switch is removed. Its configuration
   field remains readable and round-trippable for older installations, but no
   longer chooses the engine. No new timer or persistence operation is added;
