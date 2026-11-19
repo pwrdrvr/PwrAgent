@@ -2411,18 +2411,32 @@ export function desktopSettingsPatchToEdits(
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
   }
-  if (patch.worktrees?.baseDirectory !== undefined) {
-    const baseDirectory = patch.worktrees.baseDirectory?.trim();
+  if (patch.worktrees) edits.push(...worktreeFolderEdits(patch.worktrees, currentTables));
+
+  return edits;
+}
+
+/** `[worktrees]` folder keys, kept out of the patch function's bytecode budget. */
+function worktreeFolderEdits(
+  worktrees: NonNullable<DesktopSettingsConfigPatch["worktrees"]>,
+  currentTables: TomlTables,
+): TomlEdit[] {
+  const edits: TomlEdit[] = [];
+  if (worktrees.baseDirectory !== undefined) {
+    const baseDirectory = worktrees.baseDirectory?.trim();
     if (baseDirectory) {
-      set(["worktrees", "base_directory"], baseDirectory);
+      edits.push({ op: "set", path: ["worktrees", "base_directory"], value: baseDirectory });
     } else if (currentTables["worktrees"]?.base_directory !== undefined) {
       edits.push({ op: "delete", path: ["worktrees", "base_directory"] });
     }
   }
-  if (patch.worktrees?.baseDirectoryIncludesCodex !== undefined) {
-    set(["worktrees", "base_directory_includes_codex"], patch.worktrees.baseDirectoryIncludesCodex);
+  if (worktrees.baseDirectoryIncludesCodex !== undefined) {
+    edits.push({
+      op: "set",
+      path: ["worktrees", "base_directory_includes_codex"],
+      value: worktrees.baseDirectoryIncludesCodex,
+    });
   }
-
   return edits;
 }
 
