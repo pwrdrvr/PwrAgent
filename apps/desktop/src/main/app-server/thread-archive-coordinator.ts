@@ -82,7 +82,7 @@ import {
 import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotLimitExceededError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
-import { inspectRegisterableWorktree, sameRegisteredWorktree } from "./worktree-maintenance-registration";
+import { inspectRegisterableWorktree, sameRegisteredWorktree, type CheckoutIdentity } from "./worktree-maintenance-registration";
 import { protectiveMaintenanceWatches, type MaintenancePrObservation } from "./maintenance-pr-watches";
 import { runMaintenanceItems } from "./maintenance-runner";
 import { describeHibernatedThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
@@ -4279,9 +4279,16 @@ export class ThreadArchiveCoordinator {
           };
         }
 
-        for (const owner of this.archivedAcpWorktreeOwners(candidate.worktreePath, params)) {
-          if (isAcpBackendId(owner.source)) await this.context.providers.acp.prepareWorktreeArchive(owner.source, owner.id);
-        }
+        const preparedAcpOwners = new Set<string>();
+        const prepareAcpOwners = async (owners: AppServerThreadSummary[]) => {
+          for (const { source, id } of owners) {
+            const identity = buildThreadIdentityKey(source, id);
+            if (!isAcpBackendId(source) || preparedAcpOwners.has(identity)) continue;
+            await this.context.providers.acp.prepareWorktreeArchive(source, id);
+            preparedAcpOwners.add(identity);
+          }
+        };
+        await prepareAcpOwners(this.archivedAcpWorktreeOwners(candidate.worktreePath, params));
         let removalMetadata: ArchiveCleanupMetadata | undefined;
         let removalSiblings: AppServerThreadSummary[] | undefined;
         const managedContainerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
@@ -4315,12 +4322,9 @@ export class ThreadArchiveCoordinator {
                 .map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
           }
           await scope.prepare(this.archiveWorkspaceMutationsFor(scope));
-          const check = () => {
+          const checkOwnership = () => {
             params.context!.assertCurrent();
             scope.assertCurrent(this.archiveWorkspaceMutations());
-            for (const owner of this.archivedAcpWorktreeOwners(key, current)) {
-              if (isAcpBackendId(owner.source)) this.context.providers.acp.assertWorktreeArchiveReleased(owner.source, owner.id);
-            }
             if (!current.thread.linkedDirectories.some((directory) => {
               const worktreePath = linkedDirectoryWorktreePath(directory);
               return worktreePath && normalizeWorktreePathForComparison(worktreePath) === key;
@@ -4330,11 +4334,21 @@ export class ThreadArchiveCoordinator {
             const users = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
             if (users.length) throw new Error("Worktree is still used by another active thread; the checkout was kept.");
           };
+          checkOwnership();
+          const acpOwners = this.archivedAcpWorktreeOwners(key, current);
+          await prepareAcpOwners(acpOwners);
+          const check = () => {
+            checkOwnership();
+            for (const { source, id } of acpOwners) {
+              if (isAcpBackendId(source)) this.context.providers.acp.assertWorktreeArchiveReleased(source, id);
+            }
+          };
             check();
             scope.reserve(this.archiveWorkspaceMutations());
             return check;
         };
         const usesRemovalAdmission = Boolean(params.context && this.context.providers.codex.listArchiveCleanupThreadsPage);
+        let expectedCheckout: CheckoutIdentity | undefined;
         let snapshot: WorktreeSnapshotSummary;
         let admission: ArchiveWorktreeRemovalAdmission;
         for (;;) {
@@ -4359,6 +4373,8 @@ export class ThreadArchiveCoordinator {
               } : params.onStage,
               maxSnapshotBytes: params.snapshotLimitBytes ?? this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
               beforeRemove: usesRemovalAdmission ? () => admitRemoval(admission) : undefined,
+              ...(usesRemovalAdmission ? { onCheckoutVerified: (checkout: CheckoutIdentity) => { expectedCheckout ??= checkout; } } : {}),
+              ...(expectedCheckout ? { expectedCheckout } : {}),
             });
             break;
           } catch (error) {
