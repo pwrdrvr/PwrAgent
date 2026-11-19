@@ -685,28 +685,23 @@ describe("ActiveSubAgentsStrip", () => {
       expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
-    it("offers Stop on a running decision batch, which has no thread or turn", async () => {
-      const stopSubAgent = vi.fn().mockResolvedValue({ ok: true });
-      const task = "Decision batch triage: 120 of 500 done";
+    // Decision batches stop from their own strip, through the decisions
+    // service; a card an earlier build wrote for one has nothing to stop.
+    it("offers no Stop on a card an earlier build wrote for a decision batch", () => {
       render(
         <ActiveSubAgentsStrip
-          desktopApi={{ stopSubAgent } as unknown as DesktopApi}
+          desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
           thread={buildThread([
             buildSubAgent({
               monitorId: "system:decision-batch:batch_1",
-              task,
+              task: "Decision batch triage: 120 of 500 done",
               monitorThreadId: undefined,
               monitorTurnId: undefined,
             }),
           ])}
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: `Stop sub-agent: ${task}` }));
-      await waitFor(() => expect(stopSubAgent).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "parent-thread",
-        monitorId: "system:decision-batch:batch_1",
-      }));
+      expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
     it("offers Stop while a monitor reports pending external work", () => {
