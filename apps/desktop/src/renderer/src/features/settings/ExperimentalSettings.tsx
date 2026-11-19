@@ -218,16 +218,18 @@ export function ExperimentalSettings(props: {
       <SettingsSection
         eyebrow="Experimental"
         title="Research runs"
-        description="Coordinate local Codex workers, track findings and review research in the thread’s Research panel. Disabled by default."
+        description="Coordinate workers from any local thread, track findings and review research in the thread’s Research panel. Disabled by default."
         chip={researchEnabled.value ? "On" : "Off"}
         chipKind={researchEnabled.value ? "ok" : "default"}
       >
         <div className="settings-fields">
           <ToggleField
             checked={researchEnabled.value}
-            disabled={props.saving || (!codexToolDiscovery.value && !researchEnabled.value)}
+            disabled={props.saving}
             label="Enable research runs"
-            sub="Requires Codex Tool Discovery; research tools load only when requested."
+            sub={codexToolDiscovery.value
+              ? "Works in Codex, Claude and ACP threads."
+              : "Works in Claude and ACP threads. Codex threads also need Codex Tool Discovery."}
             help="Turning this off hides the Research panel, removes its tools and stops active research runs. Saved findings remain available when re-enabled. New threads and runtimes with tool refresh pick up changes on their next turn."
             source={sourceBadge(researchEnabled)}
             onChange={props.onResearchEnabledChange}

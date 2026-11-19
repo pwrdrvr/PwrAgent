@@ -104,8 +104,14 @@ for capability separation, provenance, workspace confinement and measured budget
 Research runs attach an objective, approaches, shared findings and submissions
 to a coordinating thread. The owner composition root constructs
 `ResearchService` from `packages/owner-core` with desktop execution ports and a
-profile-scoped `ResearchStore`. Workers are ordinary managed Codex handoffs;
-their identities are journaled before their first model turn starts. The
+profile-scoped `ResearchStore`. Research is for every local backend: Codex,
+Claude and ACP threads can coordinate a run. Workers are ordinary managed
+handoffs in the coordinator's backend; their identities are journaled before
+their first model turn starts. A worker's turns are recognised by the IDs its
+provider reports. The one ID ignored is the registry's stand-in,
+`pending:<threadId>`, for a turn its provider has not named yet; an ACP turn
+keeps its own `pending:<session>:<time>` ID from start to end
+(`researchTurnIsPlaceholder`). The
 operator chooses how many workers run at once and whether the run has a time
 limit; a run has none unless they set one. The owner admits no more than that
 worker count and stops the run when a limit they set is reached. Completed
@@ -121,13 +127,20 @@ snapshot reports the caller's unexpired request so the panel can show it as
 waiting to start, and the operator can withdraw it; a withdrawn, replaced or
 expired request refuses a later `research_start`. Neither path writes. Research is
 an opt-in, default-off experiment stored as `experimental.research_enabled`.
-Its context-rail tab, native/MCP catalogs, IPC and dispatch require this flag
-and Codex Tool Discovery. The five ordinary functions `research_start`,
-`research_read`, `research_update`, `research_search` and `research_assign`
-remain deferred and are discovered on demand; they have no eager exemption.
-Providers without native tool search can use the existing portable discovery
-transport. Disabling the feature or discovery fences admissions immediately
-and stops owned active runs through the existing cancellation lifecycle.
+Its context-rail tab, MCP catalog, IPC and dispatch require only this flag, for
+every local thread. Codex threads are offered the five ordinary functions
+`research_start`, `research_read`, `research_update`, `research_search` and
+`research_assign` only while Codex Tool Discovery is on, so they stay deferred
+and are discovered on demand there; they have no eager exemption. Claude and
+ACP threads receive them from the PwrAgent MCP server like every other
+PwrAgent tool. Providers without native tool search can use the existing
+portable discovery transport. `researchToolsOffered` holds both rules, and a
+call is accepted only from a live turn on a surface that offers the tools; a
+Codex thread cannot prepare a run without them. Turning Codex Tool Discovery
+off removes the tools from Codex threads, refuses their stale calls and stops
+the owned native runs a Codex thread coordinates; runs coordinated from Claude
+or ACP continue. Disabling the feature fences admissions immediately and stops
+owned active runs through the existing cancellation lifecycle.
 Retained evidence is preserved for re-enabling. Missing or malformed flags
 remain off, and stale loaded schemas cannot bypass the live gate.
 Disabling a three-worker run uses the existing five-commit stop budget,
@@ -270,8 +283,8 @@ its two exact queue boundaries add two commits and 57,680 bytes. At one
 revision per ten minutes across all workers that is approximately
 20.2 MB/day. Repeated or unrelated queue events write nothing.
 
-The renderer reads research through IPC. This first integration serves local
-Codex threads; federation viewers must use the owning instance. The owner
+The renderer reads research through IPC. It serves local threads of every
+backend; federation viewers must use the owning instance. The owner
 announces each change as `research:changed { backend, threadId, runId,
 revision }`. A change that names no run (the operator's waiting request)
 carries only the thread.

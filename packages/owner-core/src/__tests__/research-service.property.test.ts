@@ -85,6 +85,66 @@ describe("research lifecycle model", () => {
     }), { numRuns: 4 });
   });
 
+  it("a worker's turns start and end the same way on every backend; only the registry placeholder is ignored", async () => {
+    // Codex and Claude name turns with opaque IDs. An ACP turn keeps `pending:<session>:<time>` from start to end.
+    // The registry's stand-in for a turn not yet named is exactly `pending:<threadId>`.
+    const backend = fc.constantFrom("codex" as const, "claude" as const, "acp:gemini" as const);
+    const turnShape = fc.constantFrom("opaque" as const, "acp" as const);
+    const step = fc.oneof(
+      fc.record({ kind: fc.constant("start" as const) }),
+      fc.record({ kind: fc.constant("end" as const), n: fc.integer({ min: 0, max: 8 }) }),
+      fc.record({ kind: fc.constantFrom("placeholderStart" as const, "placeholderEnd" as const) }),
+    );
+    await fc.assert(fc.asyncProperty(backend, turnShape, fc.array(step, { maxLength: 8 }), async (kind, shape, steps) => {
+      const worker = { backend: kind, threadId: "w1" };
+      const turn = (n: number) => shape === "acp" ? `pending:${worker.threadId}:${1000 + n}` : `turn-${n}`;
+      const actor = { ...context, backend: kind };
+      const { service } = fixture({ spawn: async (_c, _task, _title, _mode, created) => { created(worker); return { ...worker, turnId: turn(0) }; } });
+      const run = await started(service, { ...request, approaches: [request.approaches[0]!] }, actor);
+      // Model: the worker's current turn, and whether it is still running. Its run has one worker,
+      // so once that turn ends the run is exhausted and later turns in the thread are not the run's.
+      let current = turn(0);
+      let running = true;
+      // A provider names each new turn once.
+      let latest = 0;
+      for (const event of steps) {
+        if (event.kind === "start") {
+          const next = turn(++latest);
+          await service.observeStart(worker, next);
+          if (running) current = next;
+        } else if (event.kind === "end") {
+          service.observeEnd(worker, turn(event.n));
+          if (turn(event.n) === current) running = false;
+        } else if (event.kind === "placeholderStart") await service.observeStart(worker, `pending:${worker.threadId}`);
+        else service.observeEnd(worker, `pending:${worker.threadId}`);
+        const now = service.read(run.id, actor);
+        expect(now.approaches[0]?.worker?.turnId).toBe(current);
+        expect(now.approaches[0]?.state).toBe(running ? "running" : "ended");
+        expect(now.activeWorkers).toBe(running ? 1 : 0);
+        expect(now.status).toBe(running ? "running" : "exhausted");
+      }
+      service.close();
+    }), { numRuns: 60 });
+  });
+
+  it("stopping the runs a filter selects leaves every other owned run running", async () => {
+    const backends = fc.array(fc.constantFrom("codex" as const, "claude" as const, "acp:kimi" as const), { minLength: 1, maxLength: 4 });
+    await fc.assert(fc.asyncProperty(backends, async (coordinators) => {
+      const { service } = fixture();
+      const ids: string[] = [];
+      for (const [index, backend] of coordinators.entries()) {
+        const actor = { ...context, backend, threadId: `coordinator-${index}`, callId: `start-${index}` };
+        ids.push((await service.start({ ...request, approaches: [request.approaches[0]!] }, actor)).id);
+      }
+      await service.stopOwnedRuns("Codex lost its tools", (run) => run.coordinator.backend === "codex");
+      for (const [index, backend] of coordinators.entries()) {
+        const run = service.read(ids[index]!, { ...context, backend, threadId: `coordinator-${index}` });
+        expect(["stopping", "stopped"].includes(run.status)).toBe(backend === "codex");
+      }
+      service.close();
+    }), { numRuns: 25 });
+  });
+
   it("ambiguous start errors retain the worker reservation and deadline", async () => {
     const cancelTimer = vi.fn();
     let deadline!: () => void;

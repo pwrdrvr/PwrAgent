@@ -4,6 +4,7 @@ import { ResearchAdmissionRefused } from "@pwragent/owner-core/research-service"
 import { createResearchOwnerIdentity } from "./research/research-owner-identity";
 import type { HandoffTaskResult, SendMessageToThreadResult } from "@pwragent/shared";
 import { initializeResearchRuntime, createResearchAgentHandler, closeResearchRuntime } from "./research/research-runtime";
+import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tools";
 import { isAcpBackendId } from "@pwragent/shared";
 import { initializeDesktopAutomationService, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
@@ -513,12 +514,21 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     },
   });
   researchRegistry.setResearchHandler(createResearchAgentHandler(research, (context) => researchRegistry.researchContextIsLive(context), researchEnabled), (thread) => research.isWorker(thread), researchEnabled);
+  // Codex threads are offered research only while Codex Tool Discovery is on.
+  const codexResearchOffered = () => researchToolsOffered("codex", { enabled: researchEnabled(), codexToolDiscovery: () => getDesktopSettingsService().resolveCodexToolDiscovery?.() !== false });
   let researchWasEnabled = researchEnabled();
+  let codexResearchWasOffered = codexResearchOffered();
   ownerSubscriptions.add(getDesktopConfigStore().subscribe(["experimental"], () => {
     const next = researchEnabled();
+    const codexNext = codexResearchOffered();
     const stop = researchWasEnabled && !next;
+    // A Codex coordinator and its workers can no longer post, review or stop, so their native runs stop.
+    const stopCodex = !stop && codexResearchWasOffered && !codexNext;
     researchWasEnabled = next;
+    codexResearchWasOffered = codexNext;
     if (stop) void research.stopOwnedRuns("Research runs were disabled in Experimental settings").catch((error) => mainLog.warn("research disable cancellation failed", { error: String(error) }));
+    if (stopCodex) void research.stopOwnedRuns("Codex Tool Discovery was turned off, so Codex threads can no longer use research tools", (run) => run.coordinator.backend === "codex" && !run.harness)
+      .catch((error) => mainLog.warn("research Codex discovery cancellation failed", { error: String(error) }));
   }));
   ownerSubscriptions.add(researchRegistry.onEvent((event) => {
     const method = event.notification.method;

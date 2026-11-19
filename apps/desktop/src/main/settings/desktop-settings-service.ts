@@ -2377,8 +2377,9 @@ export class DesktopSettingsService {
     return this.readExperimentalConfig().codexToolDiscovery ?? true;
   }
 
+  /** Research is for every local backend. Codex Tool Discovery decides only whether Codex threads are offered its tools. */
   resolveResearchEnabled(): boolean {
-    return this.readExperimentalConfig().researchEnabled === true && this.resolveCodexToolDiscovery();
+    return this.readExperimentalConfig().researchEnabled === true;
   }
 
   resolveManagedReviewEnabled(): boolean {

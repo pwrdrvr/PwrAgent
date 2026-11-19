@@ -668,6 +668,17 @@ export function sameResearchThread(a: ResearchThread, b: ResearchThread): boolea
   return a.backend === b.backend && a.threadId === b.threadId;
 }
 
+/**
+ * Whether a turn ID is the registry's stand-in for a turn the provider has not
+ * named yet: exactly `pending:<threadId>`. It describes a local submission, not
+ * an admitted turn, so it never establishes or ends a worker's turn. Other IDs
+ * that begin `pending:` are real: an ACP turn keeps `pending:<session>:<time>`
+ * from start to end.
+ */
+export function researchTurnIsPlaceholder(thread: ResearchThread, turnId: string): boolean {
+  return turnId === `pending:${thread.threadId}`;
+}
+
 export function researchApproachOccupiesSlot(approach: ResearchApproach): boolean {
   return !["ended", "failed", "stopped"].includes(approach.state) || Boolean(approach.revisionDeliveryIds?.length);
 }

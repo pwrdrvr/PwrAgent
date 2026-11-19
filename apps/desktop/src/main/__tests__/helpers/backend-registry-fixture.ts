@@ -2854,6 +2854,7 @@ export function createKimiAcpRegistry(options?: {
   configureWorkflowBudget?: AcpConfigureWorkflowBudget;
   offersThoughtLevel?: (sessionId: string, level: string) => boolean;
   resolvePassSetupVariablesToAgents?: () => boolean;
+  resolveCodexToolDiscovery?: () => boolean;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2980,6 +2981,9 @@ export function createKimiAcpRegistry(options?: {
       ?? (async () => "/Users/test/.pwragent/projects/acp-scratch"),
     ...(options?.resolvePassSetupVariablesToAgents
       ? { resolvePassSetupVariablesToAgents: options.resolvePassSetupVariablesToAgents }
+      : {}),
+    ...(options?.resolveCodexToolDiscovery
+      ? { resolveCodexToolDiscovery: options.resolveCodexToolDiscovery }
       : {}),
   });
   return {

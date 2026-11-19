@@ -5857,6 +5857,23 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("research is on exactly when its own setting is on; Codex Tool Discovery never turns it off", async () => {
+    for (const research of [undefined, false, true]) {
+      for (const discovery of [undefined, false, true]) {
+        const root = createTempRoot();
+        const configPath = path.join(root, "config.toml");
+        const lines = [
+          ...(research === undefined ? [] : [`research_enabled = ${research}`]),
+          ...(discovery === undefined ? [] : [`codex_tool_discovery = ${discovery}`]),
+        ];
+        fs.writeFileSync(configPath, `[experimental]\n${lines.join("\n")}\n`);
+        const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+        expect(service.resolveResearchEnabled()).toBe(research === true);
+        expect(service.resolveCodexToolDiscovery()).toBe(discovery ?? true);
+      }
+    }
+  });
+
   it("defaults managed review to false and persists the additive flag", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

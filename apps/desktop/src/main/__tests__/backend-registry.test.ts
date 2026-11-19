@@ -221,6 +221,8 @@ import type { ThreadSearchService } from "../thread-search/thread-search-service
 import type { AgentToolMcpRegistration, AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import { PwrAgentFederatedThreadMessageError, type PwrAgentFederatedThreadMessageRequest } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools/pwragent-tool-search";
+import { createResearchAgentHandler } from "../research/research-runtime";
+import type { ResearchService } from "@pwragent/owner-core/research-service";
 import { THREAD_MAINTENANCE_TOOL_WAIT_MS } from "../agent-tools/thread-maintenance-tool-scans";
 
 describe("DesktopBackendRegistry", () => {
@@ -3003,6 +3005,61 @@ describe("DesktopBackendRegistry", () => {
         const tools = (await catalog.buildCodexParentDynamicTools(false)).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
         expect(tools).toHaveLength(feature && discover ? 5 : 0);
         expect(tools.every((tool) => tool.deferLoading === true)).toBe(true);
+      }
+    });
+
+    it("offers and accepts research on every backend; Codex Tool Discovery gates only Codex's own catalog", async () => {
+      // Every combination of the two settings, through the real MCP server an ACP or Claude thread uses.
+      for (const [enabled, discovery] of [[false, false], [false, true], [true, false], [true, true]] as const) {
+        const backend = "acp:kimi" as const;
+        const threadId = "kimi-session-1";
+        const { registry } = createKimiAcpRegistry({
+          resolveCodexToolDiscovery: () => discovery,
+          startPrompt: vi.fn((params) => ({ sessionId: params.sessionId, turnId: params.turnId! })),
+        });
+        const summaries = vi.fn(() => []);
+        registry.setResearchHandler(
+          createResearchAgentHandler({ summaries } as unknown as ResearchService, (context) => registry.researchContextIsLive(context), () => enabled),
+          undefined,
+          () => enabled,
+        );
+        const client = new McpClient({ name: "acp-research-fixture", version: "1.0.0" });
+        try {
+          const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => Promise<DynamicToolSpec[]> };
+          const codexTools = (await catalog.buildCodexParentDynamicTools(false)).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+          expect(codexTools).toHaveLength(enabled && discovery ? 5 : 0);
+
+          await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
+          const turn = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Coordinate research" }] });
+          // An ACP turn keeps its `pending:<session>:<time>` ID for its whole life.
+          expect(turn.turnId).toMatch(/^pending:kimi-session-1:/);
+          const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+          const registration = await server.registerClient({ backend, threadId });
+          await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+            requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+          }));
+          const listed = (await client.listTools()).tools.map(({ name }) => name).filter((name) => name.startsWith("research_"));
+          expect(listed).toHaveLength(enabled ? 5 : 0);
+          expect(registry.researchContextIsLive({ backend, threadId, turnId: turn.turnId, callId: "live", transport: "mcp" })).toBe(enabled);
+          expect(registry.researchContextIsLive({ backend, threadId, turnId: "ended-turn", callId: "stale", transport: "mcp" })).toBe(false);
+          // Claude reaches the same MCP server; its turns carry opaque IDs.
+          await registry.publishLocalEvent({ backend: "claude", notification: { method: "turn/started", params: {
+            threadId: "claude-coordinator", turnId: "claude-turn", turn: { id: "claude-turn" },
+          } } });
+          expect(registry.researchContextIsLive({ backend: "claude", threadId: "claude-coordinator", turnId: "claude-turn", callId: "live", transport: "mcp" })).toBe(enabled);
+          await registry.publishLocalEvent({ backend: "claude", notification: { method: "turn/completed", params: {
+            threadId: "claude-coordinator", turnId: "claude-turn", turn: { id: "claude-turn", status: "completed" },
+          } } } as AgentEvent);
+          expect(registry.researchContextIsLive({ backend: "claude", threadId: "claude-coordinator", turnId: "claude-turn", callId: "ended", transport: "mcp" })).toBe(false);
+          if (enabled) {
+            const result = await client.callTool({ name: "research_read", arguments: {} });
+            expect(result.isError).not.toBe(true);
+            expect(summaries).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ backend, threadId, turnId: turn.turnId }));
+          }
+        } finally {
+          await client.close();
+          await registry.close();
+        }
       }
     });
 
