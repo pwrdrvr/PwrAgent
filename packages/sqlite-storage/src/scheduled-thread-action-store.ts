@@ -22,6 +22,7 @@ import type {
   ScheduledThreadActionStorage,
   UpdateScheduledThreadActionRecord,
 } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import { scheduledTurnQueueEntryId } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import type { StateDb } from "./state-db.js";
 import {
   FileScheduledThreadActionPayloadStore,
@@ -533,13 +534,24 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   ): ScheduledThreadAction | undefined {
     return this.stateDb.raw.transaction(() => {
       const held = this.stateDb.raw.prepare(
-        "SELECT 1 FROM scheduled_thread_actions WHERE action_id = ? AND status = 'held' AND claim_owner IS ?",
-      ).get(id, holderId ?? null);
+        "SELECT backend, thread_id, queue_entry_id FROM scheduled_thread_actions WHERE action_id = ? AND status = 'held' AND claim_owner IS ?",
+      ).get(id, holderId ?? null) as Pick<ScheduledThreadActionRow, "backend" | "thread_id" | "queue_entry_id"> | undefined;
       if (!held) return undefined;
-      return this.claimWith(id, params, {
+      const queueEntryId = held.queue_entry_id ?? scheduledTurnQueueEntryId(id);
+      const receipt = this.readQueuedRestartReceipt(queueEntryId, held);
+      // A real operator pause belongs to the checkpoint, including when
+      // the old scheduler's PID can no longer be confirmed.
+      if (receipt?.ownsScheduledTurn === 1) return undefined;
+      const claimed = this.claimWith(id, params, {
         queueEntryId: undefined,
         ...(options.readmit ? { manualReleaseRequired: false, holdCause: undefined } : {}),
       });
+      if (claimed && options.readmit && receipt) {
+        // Discard a legacy quiet-restart copy with the claim, even if its
+        // old PID has been reused and the restart store cannot claim it.
+        this.stateDb.raw.prepare("DELETE FROM restart_continuations WHERE entry_id = ?").run(queueEntryId);
+      }
+      return claimed;
     }).immediate();
   }
 
@@ -754,6 +766,21 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     ).run(leaseExpiresAt, now, ownerId);
   }
 
+  private readQueuedRestartReceipt(
+    entryId: string,
+    action: Pick<ScheduledThreadActionRow, "backend" | "thread_id">,
+  ): { ownsScheduledTurn: number | null } | undefined {
+    return this.stateDb.raw.prepare(
+      `SELECT json_extract(payload, '$.ownsScheduledTurn') AS ownsScheduledTurn
+       FROM restart_continuations WHERE entry_id = ?
+         AND CASE WHEN json_valid(payload) THEN
+           json_extract(payload, '$.kind') = 'queued' AND json_extract(payload, '$.id') = entry_id
+           AND json_extract(payload, '$.backend') = ? AND json_extract(payload, '$.threadId') = ?
+           AND json_type(payload, '$.input') = 'array'
+         END`,
+    ).get(entryId, action.backend, action.thread_id) as { ownsScheduledTurn: number | null } | undefined;
+  }
+
   expiredClaimOwnerIds(now: number): string[] {
     const rows = this.stateDb.raw.prepare(
       `SELECT DISTINCT claim_owner
@@ -771,7 +798,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   ): ScheduledThreadAction[] {
     return this.stateDb.raw.transaction(() => {
       const rows = this.stateDb.raw.prepare(
-        `SELECT action_id, claim_owner, status
+        `SELECT action_id, claim_owner, status, backend, thread_id, queue_entry_id
          FROM scheduled_thread_actions
          WHERE status IN ('dispatching', 'queued')
            AND (claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)`,
@@ -779,12 +806,17 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         action_id: string;
         claim_owner: string | null;
         status: "dispatching" | "queued";
-      }>;
+      } & Pick<ScheduledThreadActionRow, "backend" | "thread_id" | "queue_entry_id">>;
       return rows.flatMap((row) => {
         if (
           row.claim_owner
           && protectedOwnerIds.has(row.claim_owner)
         ) return [];
+        // Quiet restart checkpointed this entry before it started. The
+        // restart queue now owns it, including after the old lease expires.
+        if (row.status === "queued" && row.queue_entry_id && this.readQueuedRestartReceipt(row.queue_entry_id, row)) {
+          return [];
+        }
         const current = this.get(row.action_id);
         const updated = current?.manualReleaseRequired && row.status === "queued"
           // A queued release is announced just before the queue starts it,

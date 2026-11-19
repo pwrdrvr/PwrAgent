@@ -5143,7 +5143,7 @@ describe("DesktopBackendRegistry", () => {
       const payloads = () => (db.raw.prepare(
         "SELECT payload FROM restart_continuations ORDER BY created_at, entry_id",
       ).all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as StoredRestartContinuation);
-      return { payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+      return { db, payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
     };
     const launch = (
       store: RestartContinuationStore,
@@ -5373,6 +5373,165 @@ describe("DesktopBackendRegistry", () => {
         note: "one quiet restart with one running thread and one queued message: one commit saves both, one startup claim, one delete as each entry starts (~29 KB). Restarts are rare: 10 a day is ~0.3 MB/day. Idle and per-turn writes are 0.",
         writes,
       });
+    });
+
+    it.each(["checkpoint", "legacy receipt", "reused PID"] as const)(
+      "recovers a lock-held follow-up from its scheduled action exactly once (%s)",
+      async (scenario) => {
+        const { db, store, payloads } = durableStore();
+        const actions = new ScheduledThreadActionStore(db);
+        const thread = { backend: "codex" as const, threadId: "manager" };
+        const origin = { source: "operator" as const };
+        let now = Date.now();
+        const first = launch(store, "instance-a");
+        await first.registry.setThreadLock({ ...thread, locked: true }, origin);
+        const previous = new ScheduledThreadActionService({
+          registry: first.registry, store: actions, now: () => now, ownerId: "instance-a",
+        });
+        const followUp = await previous.createAgentFollowUp({
+          ...thread, scheduledFor: now + 60_000, prompt: "Check the deployment.",
+        });
+        now += 60_000;
+        await previous.evaluateDueActions();
+        const held = actions.get(followUp.id);
+        expect(held).toMatchObject({ status: "held", holdCause: "thread_lock", queueEntryId: expect.any(String) });
+        expect(first.codexClient.startTurnCallCount).toBe(0);
+        const queueEntryId = held!.queueEntryId!;
+
+        if (scenario === "checkpoint") {
+          first.registry.saveRestartContinuations(first.registry.beginQuietRestart(), now, true);
+          expect(payloads()).toEqual([]);
+        } else {
+          // Older builds checkpointed a lock hold as a plain paused entry.
+          store.saveAll("instance-a", [{
+            ...thread, id: queueEntryId, kind: "queued", input: text("Check the deployment."),
+            createdAt: now, queued: { origin: "scheduled", paused: true },
+          }]);
+          expect(payloads()).toHaveLength(1);
+        }
+        await first.registry.close();
+
+        const restartStore = scenario === "reused PID"
+          ? new RestartContinuationStore(db.raw, { processId: 4_243, processAlive: (pid) => pid === 4_242 })
+          : store;
+        const second = launch(restartStore, "instance-b");
+        expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([]);
+        await second.registry.setThreadLock({ ...thread, locked: true }, origin);
+        const scheduler = new ScheduledThreadActionService({
+          registry: second.registry, store: actions, now: () => now, ownerId: "instance-b",
+          isOwnerAlive: () => false,
+        });
+        onTestFinished(() => scheduler.dispose());
+        scheduler.start();
+        await vi.waitFor(() => expect(actions.listHeldHolds(followUp.id)).toEqual([
+          expect.objectContaining({ holderId: "instance-b" }),
+        ]));
+        expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([
+          expect.objectContaining({ queueEntryId, manualReleaseRequired: true }),
+        ]);
+        await second.registry.setThreadLock({ ...thread, locked: false }, origin);
+        await vi.waitFor(() => expect(actions.get(followUp.id)?.status).toBe("started"));
+        expect(second.codexClient.startTurnCallCount).toBe(1);
+
+        // Even if a reused PID delayed receipt recovery, a later launch must
+        // never restore a paused copy of a turn that has already run.
+        const third = launch(store, "instance-c");
+        expect(third.registry.getQueuedTurnsForThread(thread)).toEqual([]);
+        expect(payloads()).toEqual([]);
+        expect(third.codexClient.startTurnCallCount).toBe(0);
+      },
+    );
+
+    it.each([true, false])("restores checkpointed scheduled work while preserving its explicit pause (%s)", async (paused) => {
+      const { db, store, payloads } = durableStore();
+      const actions = new ScheduledThreadActionStore(db);
+      const thread = { backend: "codex" as const, threadId: "manager" };
+      const operator = { source: "operator" as const };
+      let now = Date.now();
+      const first = launch(store, "instance-a", [], {}, true);
+      await startRunningTurn(first.registry, thread.threadId);
+      const scheduler = (registry: DesktopBackendRegistry, ownerId: string) => {
+        const service = new ScheduledThreadActionService({
+          registry, store: actions, now: () => now, ownerId, isOwnerAlive: () => false,
+          setTimer: () => ({}) as ReturnType<typeof setTimeout>, clearTimer: () => undefined,
+        });
+        onTestFinished(() => service.dispose());
+        service.start();
+        return service;
+      };
+      const previous = scheduler(first.registry, "instance-a");
+      const followUp = await previous.createAgentFollowUp({
+        ...thread, scheduledFor: now + 60_000, prompt: "Check the deployment.",
+      });
+      now += 60_000;
+      await previous.evaluateDueActions();
+      const queueEntryId = actions.get(followUp.id)!.queueEntryId!;
+      if (paused) {
+        await first.registry.setQueuedTurnPaused({ queueEntryId, paused: true });
+      }
+      await first.registry.setThreadLock({ ...thread, locked: true }, operator);
+      // A lock-held submission covers the waiting FIFO, including an
+      // independently paused entry.
+      const blocker = "lock-hold-for-test";
+      await first.registry.submitHeldTurn({
+        ...thread, queueEntryId: blocker, input: text("Other lock-held work"),
+        holdReason: "This thread is locked. Unlock it to send.",
+      });
+      first.registry.cancelQueuedTurn(blocker);
+      expect(actions.get(followUp.id)?.status).toBe("held");
+      if (!paused) await first.registry.setThreadLock({ ...thread, locked: false }, operator);
+      expect(actions.get(followUp.id)?.status).toBe(paused ? "held" : "queued");
+      first.registry.beginQuietRestart();
+      await emitCompletedTurn(first.registry, "codex", thread.threadId, "turn-1");
+      first.registry.saveRestartContinuations([], now, true);
+      expect(payloads().map((entry) => entry.id)).toEqual([queueEntryId]);
+      previous.dispose();
+      await first.registry.close();
+
+      now += 60_000;
+      const second = launch(store, "instance-b");
+      if (paused) await second.registry.setThreadLock({ ...thread, locked: true }, operator);
+      const next = scheduler(second.registry, "instance-b");
+      expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([
+        expect.objectContaining({ queueEntryId, ...(paused ? { paused: true } : {}) }),
+      ]);
+      expect(actions.get(followUp.id)?.status).toBe(paused ? "held" : "queued");
+      if (paused) {
+        await expect(second.registry.setQueuedTurnPaused({ queueEntryId, paused: false }))
+          .rejects.toThrow("This thread is locked");
+        await second.registry.setThreadLock({ ...thread, locked: false }, operator);
+        await next.evaluateDueActions();
+        expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([
+          expect.objectContaining({ queueEntryId, paused: true }),
+        ]);
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+        await second.registry.setQueuedTurnPaused({ queueEntryId, paused: false });
+      }
+      second.registry.beginRestartContinuationDispatch();
+      await vi.waitFor(() => expect(actions.get(followUp.id)?.status).toBe("started"));
+      expect(second.codexClient.startTurnCallCount).toBe(1);
+      expect(payloads()).toEqual([]);
+    });
+
+    it("claims unrelated restart work when a scheduled payload is unreadable", () => {
+      const { db, store } = durableStore();
+      const actions = new ScheduledThreadActionStore(db);
+      const thread = { backend: "codex" as const, threadId: "manager" };
+      const id = "scheduled-action:unreadable";
+      const now = Date.now();
+      actions.create({
+        ...thread, id, kind: "turn", origin: "desktop", scheduledFor: now,
+        displayText: "Scheduled prompt", turn: { input: text("Scheduled prompt") }, now,
+      });
+      db.raw.prepare("UPDATE scheduled_thread_actions SET payload_ref = ? WHERE action_id = ?").run("missing.json", id);
+      const continuation = { ...thread, id: "unrelated-restart", input: text("Continue work"), createdAt: now };
+      const pending = { ...thread, id: "unrelated-queued", kind: "queued" as const, input: text("Later"), createdAt: now };
+      store.saveAll("instance-a", [
+        { ...thread, id: `scheduled-turn:${id}`, kind: "queued", input: text("Scheduled prompt"), createdAt: now },
+        continuation,
+        pending,
+      ]);
+      expect(store.claimOrphaned("instance-b", () => [])).toEqual([pending, continuation]);
     });
 
     it("opens the gate when a continuation is discarded", async () => {
