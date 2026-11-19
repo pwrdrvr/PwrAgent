@@ -3105,18 +3105,28 @@ describe("StarMapChatCard mentions", () => {
     ).toContain("$deploy");
   });
 
-  it("routes @ suggestions to the remote card owner on demand", async () => {
-    const desktopApi = mentionApi();
-    const thread = remoteThread();
-    renderCard({ desktopApi, thread });
-    const input = await findReadyTextbox({ name: "Message Remote work" });
-    expect(desktopApi.getNavigationQueryPage).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: "check @ap" } });
-    await screen.findByRole("option");
-    expect(desktopApi.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
-      federationTarget: thread.federation!.ref.target,
-      query: { kind: "directory-index", filter: "ap" },
-    }), expect.any(String));
+  it("shows a remote owner's home-relative match when the viewer has a different home", async () => {
+    const bootstrap = window as typeof window & { __pwragentHomeDir?: string };
+    const previousHome = bootstrap.__pwragentHomeDir;
+    bootstrap.__pwragentHomeDir = "/Users/viewer";
+    try {
+      const desktopApi = mentionApi({ getNavigationQueryPage: vi.fn(async (request) => ({
+        ...mentionPage(request),
+        ...(request.query.kind === "directory-index" ? { directoryMatch: "mention" as const } : {}),
+      })) });
+      const thread = remoteThread();
+      renderCard({ desktopApi, thread });
+      const input = await findReadyTextbox({ name: "Message Remote work" });
+      expect(desktopApi.getNavigationQueryPage).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "check @~/app" } });
+      await screen.findByRole("option", { name: /\/Users\/dev\/app$/ });
+      expect(desktopApi.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        federationTarget: thread.federation!.ref.target,
+        query: { kind: "directory-index", match: "mention", filter: "~/app" },
+      }), expect.any(String));
+    } finally {
+      bootstrap.__pwragentHomeDir = previousHome;
+    }
   });
 
   it("offers tracked directories on @ and links them as markdown", async () => {

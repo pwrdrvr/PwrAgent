@@ -2404,6 +2404,8 @@ export type NavigationQuery =
   | {
       kind: "directory-index";
       filter?: string;
+      /** Composer autocomplete ranks referenceable directories before paging. */
+      match?: "mention";
       /** Exact compact descriptors for off-page selected directories, at most 100. */
       keys?: string[];
       /** Exact owner paths for a path-only link; never a fuzzy path match. */
@@ -2538,6 +2540,8 @@ export type NavigationQueryPage = {
   counts: NavigationCounts;
   /** Exact item count for the queried collection, distinct from thread facet counts. */
   collectionSize?: number;
+  /** The owner applied directory mention filtering and ranking before paging. */
+  directoryMatch?: "mention";
   selectionDirectory?: NavigationDirectoryRow;
   /** Complete viewer projection dependencies, before pagination. Omitted when
    * coverage or the bounded metadata budget cannot establish an exclusion. */

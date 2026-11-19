@@ -72,6 +72,7 @@ export * from "./mcp-ipc-url";
 export * from "./profile-menu";
 export * from "./profile-names";
 export * from "./directory-pins";
+export * from "./directory-mention-match";
 export * from "./directory-navigation";
 export * from "./inbox";
 export * from "./navigation-state";

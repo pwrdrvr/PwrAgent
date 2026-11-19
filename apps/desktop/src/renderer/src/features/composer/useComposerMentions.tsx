@@ -96,6 +96,7 @@ export type ComposerMentionSources = {
   directories?: readonly Pick<NavigationDirectorySummary,
     "key" | "kind" | "label" | "path" | "latestUpdatedAt"
   >[];
+  ownerRankedDirectoryQuery?: string;
   /** Federation machines/profiles behind `@`. */
   instances?: readonly InstanceReference[];
   /** Called when `@` or `#` opens a popover. */
@@ -311,12 +312,13 @@ export function useComposerMentions(params: {
         : filterSlashCommandCandidates(commands, slashQuery),
     [commands, slashQuery],
   );
+  const ownerRankedDirectoryQuery = sources?.ownerRankedDirectoryQuery;
   const directoryOptions = useMemo(
     () =>
       directoryQuery === undefined
         ? []
-        : filterAtReferenceCandidates(directories, instances, directoryQuery),
-    [directories, instances, directoryQuery],
+        : filterAtReferenceCandidates(directories, instances, directoryQuery, ownerRankedDirectoryQuery),
+    [directories, instances, directoryQuery, ownerRankedDirectoryQuery],
   );
   const hashOptions = useMemo(
     () =>

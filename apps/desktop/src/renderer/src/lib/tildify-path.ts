@@ -1,4 +1,4 @@
-import { formatFilesystemPath } from "@pwragent/shared";
+import { abbreviateHomePath, formatFilesystemPath } from "@pwragent/shared";
 
 /**
  * Compact display of absolute filesystem paths by collapsing the user's
@@ -30,26 +30,7 @@ export function tildifyPath(
   absolutePath: string,
   homeDir: string | undefined = getHomeDir(),
 ): string {
-  const displayPath = formatFilesystemPath(absolutePath);
-  if (!absolutePath || !homeDir) {
-    return displayPath;
-  }
-  // Only POSIX paths use home abbreviation. Windows and remote paths keep
-  // their drive/share even when they happen to match the local home.
-  if (!displayPath.startsWith("/") || !homeDir.startsWith("/")) {
-    return displayPath;
-  }
-  const home = homeDir.replace(/\/+$/, "");
-  if (!home) {
-    return displayPath;
-  }
-  if (displayPath === home) {
-    return "~";
-  }
-  if (displayPath.startsWith(`${home}/`)) {
-    return `~${displayPath.slice(home.length)}`;
-  }
-  return displayPath;
+  return abbreviateHomePath(absolutePath, homeDir);
 }
 
 /**

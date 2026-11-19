@@ -3,6 +3,7 @@ import { navigationThreadSelectionKey } from "../lib/navigation-query-state";
 import {
   classifyDirectory,
   buildThreadIdentityKey,
+  rankDirectoryMentionMatches,
   rankThreadJumpMatches,
   type NavigationDirectorySummary,
   type NavigationQueryPage,
@@ -10,6 +11,7 @@ import {
   type NavigationThreadSummary,
   type NavigationRow,
 } from "@pwragent/shared";
+import { getHomeDir } from "../lib/tildify-path";
 
 type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {
   threadKeys?: string[];
@@ -136,10 +138,13 @@ export function navigationQueryFixture(
     }
     threads = [...selected.values()];
   }
-  const descriptors = (query.kind === "directory-index" || query.kind === "star-map-geometry"
+  const directoryCandidates = (query.kind === "directory-index" || query.kind === "star-map-geometry"
     ? population.directories ?? [] : scopedDirectory ? [scopedDirectory] : [])
     .filter((directory) => query.kind !== "directory-index" || ((!query.keys || query.keys.includes(directory.key))
-      && (!query.filter || `${directory.label}\n${directory.path ?? ""}`.toLowerCase().includes(query.filter.toLowerCase()))))
+      && (query.match === "mention" || !query.filter
+        || `${directory.label}\n${directory.path ?? ""}`.toLowerCase().includes(query.filter.toLowerCase()))));
+  const descriptors = (query.kind === "directory-index" && query.match === "mention"
+    ? rankDirectoryMentionMatches(directoryCandidates, query.filter ?? "", getHomeDir()) : directoryCandidates)
     .map((directory) => {
       const members = inDirectory(directory);
       const memberKeys = new Set(members.map(key));
@@ -183,6 +188,7 @@ export function navigationQueryFixture(
     protocol: 2, queryKey: JSON.stringify(query), generation: "fixture", ownerEpoch: "fixture", countsRevision: "fixture",
     coverage: { state: "complete" }, counts: counts(query.kind === "directory-index" ? all : threads), complete: !next, nextCursor: next,
     ...(lensRootCount !== undefined ? { collectionSize: lensRootCount } : {}),
+    ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
     ...(scopedDirectory ? { selectionDirectory: descriptors.find((directory) => directory.key === scopedDirectory.key) } : {}),
     directories: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.slice(offset, offset + size) : [],
     entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread, index) => {
