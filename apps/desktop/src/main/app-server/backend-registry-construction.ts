@@ -1,3 +1,6 @@
+import type { ThreadModelSettings } from "./thread-model-settings";
+import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
+import type { HeadlessAutomationTurns } from "./headless-automation-turns";
 import type { TurnEventObservers } from "./turn-event-observer";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryHandlers } from "./backend-registry-handlers";
@@ -218,6 +221,9 @@ export interface RegistryDependencies {
   forgeToolBridge: ForgeToolBridge;
   threadInspectionTools: ThreadInspectionTools;
   threadMcpConnections: ThreadMcpConnections;
+  headlessAutomation: HeadlessAutomationTurns;
+  acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
+  threadModelSettings: ThreadModelSettings;
   managedReviewService: ManagedReviewService;
   subAgentMonitorService: SubAgentMonitorService;
   threadUsageLedger: ThreadUsageLedger;

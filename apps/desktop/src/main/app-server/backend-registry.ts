@@ -1,3 +1,6 @@
+import type { ThreadModelSettings } from "./thread-model-settings";
+import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
+import type { HeadlessAutomationTurns } from "./headless-automation-turns";
 import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
 import { providerPickerValue } from "@pwragent/shared";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
@@ -169,9 +172,6 @@ import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUr
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import {
-  type McpConnectionBridgeRegistration,
-} from "../mcp-connections/mcp-connection-gateway-service";
-import {
   buildManagedReviewContextInput,
 } from "./managed-review";
 import {
@@ -227,7 +227,6 @@ import {
   type AnalyzeThreadToolHistoryResponse,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
-  type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type CodexEnvironmentOption,
   type CodexEnvironmentStartupFailure,
@@ -414,11 +413,9 @@ import {
 } from "@pwragent/shared";
 import {
   AcpBackendAdapter,
-  acpRuntimeValueLooksPrivileged,
   acpSessionToThreadSummary,
   findAcpModelConfigOption,
   findAcpThoughtLevelConfigOption,
-  formatAcpRuntimeLabel,
   inputToAcpPrompt,
   acpAdvertisesRuntimeModeSelector,
   isAcpSessionMissingForProjectError,
@@ -653,13 +650,11 @@ import {
   completedAtFromTerminalNotification,
   errorMessageFromTerminalNotification,
   fileChangeApprovalContextKey,
-  finalTextFromTerminalNotification,
   formatExecutionModeForError,
   isAcpPermissionRequest,
   isAppServerThreadStatus,
   messagingDynamicToolCategoryForCatalog,
   pendingRequestDecisionFromMessagingApproval,
-  prependAutomationRuntimeContext,
   questionnaireAnswerHasValue,
   queuedTurnDisplayText,
   queuedTurnPauseParams,
@@ -749,7 +744,6 @@ import { executionModeSettings } from "./execution-mode-settings";
 import {
   buildActiveTurnKey,
   buildActiveTurnModeKey,
-  buildHeadlessAutomationTurnKey,
   buildPendingRequestKey,
   buildTerminalNotificationKey,
   buildTurnStartReservationKey,
@@ -954,6 +948,7 @@ export class DesktopBackendRegistry {
   private readonly threadInspectionTools: ThreadInspectionTools;
   /** Thread MCP connections, the MCP gateway's approvals and Codex MCP servers. Importers use the facade below. */
   private readonly threadMcpConnections: ThreadMcpConnections;
+  private readonly headlessAutomation: HeadlessAutomationTurns;
   /** Review starts, review sub-agents and managed review output. Importers use the facade below. */
   private readonly managedReviewService: ManagedReviewService;
   private readonly subAgentMonitorService: SubAgentMonitorService;
@@ -1008,6 +1003,8 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly worktreeRecoveryService: WorktreeRecoveryService;
   private readonly acpBackend: AcpBackendAdapter;
+  private readonly acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
+  private readonly threadModelSettings: ThreadModelSettings;
   private readonly claudeBackend: ClaudeBackend;
   private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
@@ -1564,28 +1561,6 @@ export class DesktopBackendRegistry {
     | ThreadGitWorkingStateRefreshHandler
     | undefined;
   private ownerThreadSearchService: ThreadSearchService | undefined;
-  private readonly headlessAutomationTurns = new Map<
-    string,
-    {
-      agentThreadId: string;
-      backend: AppServerBackendKind;
-      automationName?: string;
-      automationRunId: string;
-      executionMode: ThreadExecutionMode;
-      executionThreadId: string;
-      queueEntryId: string;
-      startedAt: number;
-      suppressBindingBroadcast?: boolean;
-      mcpConnectionIds?: string[];
-      /** Connections the automation's own allowlist granted, not the Agent's selection. */
-      mcpGrantedConnectionIds?: string[];
-      mcpServerAliases?: Record<string, string[]>;
-      mcpAllowedServerNames?: string[];
-      toolAllowlist?: string[];
-      mcpRegistrations?: McpConnectionBridgeRegistration[];
-      pendingTerminalNotification?: AppServerNotification;
-    }
-  >();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -1606,25 +1581,9 @@ export class DesktopBackendRegistry {
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
   private readonly executionModeSelectionLocks = new PerKeyAsyncLock();
-  private readonly threadModelSettingsLocks = new PerKeyAsyncLock();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
   private readonly turnCausalContextLocks = new PerKeyAsyncLock();
-  private readonly queuedAcpRuntimeOptions = new Map<
-    string,
-    {
-      source: BackendAcpRuntimeOptionSource;
-      optionId: string;
-      value: string;
-      queuedAt: number;
-      queueId: string;
-      flushAttempts: number;
-      fromValue?: string;
-      fromLabel?: string;
-      toLabel?: string;
-    }
-  >();
-  private readonly queuedAcpRuntimeOptionFlushes = new Map<string, Promise<void>>();
   /**
    * Gate for the Codex `listThreads` probe. Returns `true` while the
    * first-run wizard is still asking the operator which Codex profile
@@ -1805,6 +1764,8 @@ export class DesktopBackendRegistry {
     this.claudeAgentToolMcpServer = dependencies.claudeAgentToolMcpServer;
     this.claudeBackend = dependencies.claudeBackend;
     this.acpBackend = dependencies.acpBackend;
+    this.acpSessionRuntimeOptions = dependencies.acpSessionRuntimeOptions;
+    this.threadModelSettings = dependencies.threadModelSettings;
     this.providerRuntimeFingerprints = dependencies.providerRuntimeFingerprints;
     this.messagingStore = dependencies.messagingStore;
     this.appManagementHandler = dependencies.handlers.appManagementHandler;
@@ -1815,6 +1776,7 @@ export class DesktopBackendRegistry {
     this.threadTitleGenerationService = dependencies.threadTitleGenerationService;
     this.threadInspectionTools = dependencies.threadInspectionTools;
     this.threadMcpConnections = dependencies.threadMcpConnections;
+    this.headlessAutomation = dependencies.headlessAutomation;
     this.managedReviewService = dependencies.managedReviewService;
     this.subAgentMonitorService = dependencies.subAgentMonitorService;
     this.threadUsageLedger = dependencies.threadUsageLedger;
@@ -1919,12 +1881,14 @@ export class DesktopBackendRegistry {
       get acceptedHandoffTaskRequests() { return current().acceptedHandoffTaskRequests; },
       get acpBackend() { return current().acpBackend; },
       get acpWorktreeRepositoryResolver() { return current().acpWorktreeRepositoryResolver; },
+      get acpSessionPromptLocks() { return current().acpSessionPromptLocks; },
       admitNewThreadModelSettings: (...args: Parameters<typeof this.admitNewThreadModelSettings>) => this.admitNewThreadModelSettings(...args),
       get agentThreadActions() { return current().agentThreadActions; },
       get appManagementHandler() { return current().appManagementHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
       approveGatewayInvocation: (...args: Parameters<ThreadMcpConnections["approveGatewayInvocation"]>) => this.threadMcpConnections.approveGatewayInvocation(...args),
+      appendPermissionTransition: (...args: Parameters<typeof this.appendPermissionTransition>) => this.appendPermissionTransition(...args),
       archiveThread: (...args: Parameters<ThreadArchiveCoordinator["archiveThread"]>) => this.threadArchiveCoordinator.archiveThread(...args),
       assertNotBootstrap: (...args: Parameters<typeof this.assertNotBootstrap>) => this.assertNotBootstrap(...args),
       assertThreadNotHandingOff: (...args: Parameters<typeof this.assertThreadNotHandingOff>) => this.assertThreadNotHandingOff(...args),
@@ -1978,8 +1942,8 @@ export class DesktopBackendRegistry {
       ensureDirectoryLaunchpad: (...args: Parameters<ThreadDirectoryService["ensureDirectoryLaunchpad"]>) => this.threadDirectoryService.ensureDirectoryLaunchpad(...args),
       get federatedThreadInspectionHandler() { return current().federatedThreadInspectionHandler; },
       get federationHandler() { return current().federationHandler; },
-      findHeadlessAutomationForThread: (...args: Parameters<typeof this.findHeadlessAutomationForThread>) => this.findHeadlessAutomationForThread(...args),
-      findHeadlessAutomationTurnForRequest: (...args: Parameters<typeof this.findHeadlessAutomationTurnForRequest>) => this.findHeadlessAutomationTurnForRequest(...args),
+      findHeadlessAutomationForThread: (...args: Parameters<typeof this.headlessAutomation.findHeadlessAutomationForThread>) => this.headlessAutomation.findHeadlessAutomationForThread(...args),
+      findHeadlessAutomationTurnForRequest: (...args: Parameters<typeof this.headlessAutomation.findHeadlessAutomationTurnForRequest>) => this.headlessAutomation.findHeadlessAutomationTurnForRequest(...args),
       findReviewForParentTurn: (...args: Parameters<ManagedReviewService["findReviewForParentTurn"]>) => this.managedReviewService.findReviewForParentTurn(...args),
       findThreadForWorkspaceHandoff: (...args: Parameters<typeof this.findThreadForWorkspaceHandoff>) => this.findThreadForWorkspaceHandoff(...args),
       flushQueuedAgentChange: (...args: Parameters<typeof this.flushQueuedAgentChange>) => this.flushQueuedAgentChange(...args),
@@ -3230,195 +3194,10 @@ export class DesktopBackendRegistry {
     await this.emit(event);
   }
 
-  async startAutomationHeadlessTurn(params: {
-    backend: AppServerBackendKind;
-    agentThreadId: string;
-    automationName?: string;
-    automationRunId: string;
-    cwd?: string;
-    executionMode?: ThreadExecutionMode;
-    fastMode?: boolean;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-    serviceTier?: string;
-    mcpAllowlist?: string[];
-    toolAllowlist?: string[];
-    suppressBindingBroadcast?: boolean;
-  }): Promise<{
-    backend: AppServerBackendKind;
-    headlessThreadId: string;
-    queueEntryId: string;
-    threadId: string;
-    turnId: string;
-  }> {
-    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    this.assertNotBootstrap("startAutomationHeadlessTurn");
-    this.assertThreadOwnership();
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.agentThreadId,
-    });
-    const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
-    const modeSettings = executionModeSettings(executionMode);
-    // An automation turn has nobody watching it, so only Auto asks, and only
-    // while the operator lets anything ask.
-    const approvalPolicy = getOwnerHostServices().runtimePolicy?.approvals === "never" || executionMode !== "auto"
-      ? "never"
-      : "on-request";
-    const sandbox = modeSettings.sandbox;
-    const modelSettings = await this.admitNewThreadModelSettings(params.backend, {
-      model: params.model ?? overlay?.model,
-      serviceTier: params.serviceTier ?? overlay?.serviceTier,
-      reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
-      fastMode:
-        params.backend === "codex"
-          ? params.fastMode ?? overlay?.fastMode
-          : undefined,
-    });
-    const cwd =
-      params.cwd ??
-      (params.backend === "codex"
-        ? await this.resolveThreadEnvironmentCwd(
-            params.backend,
-            params.agentThreadId,
-            overlay,
-          )
-        : undefined);
-    const input = prependAutomationRuntimeContext({
-      approvalPolicy,
-      executionMode,
-      input: params.input,
-      label: modeSettings.label,
-      sandbox,
-    });
-    const client = this.getClient(params.backend, executionMode);
-    const mcp = params.backend === "codex"
-      ? await this.threadMcpConnections.prepareAutomationMcp({ client, agentThreadId: params.agentThreadId, cwd, overlay, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist })
-      : undefined;
-    if (params.backend !== "codex" && (params.mcpAllowlist?.length || params.toolAllowlist?.length)) {
-      throw new Error("Automation MCP allowlists currently require the Codex backend.");
-    }
-    const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
-    backendRegistryLog.info("starting automation headless thread", {
-      agentThreadId: params.agentThreadId,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      approvalPolicy,
-      backend: params.backend,
-      cwd,
-      executionMode,
-      ephemeral: params.backend === "codex",
-      inputItemCount: input.length,
-      promptLength: submittedPrompt?.length ?? 0,
-      sandbox,
-    });
-    let headlessThread: { threadId: string };
-    try {
-      headlessThread = await this.withArchiveWorkspaceWrite(cwd ? [cwd] : [], async () => await client.startThread({
-        ...(cwd ? { cwd } : {}),
-        ...modelSettings,
-        approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        ephemeral: params.backend === "codex" ? true : undefined,
-        sandbox,
-        ...(mcp?.config ? { config: mcp.config } : {}),
-        ...(mcp?.connectionIds.length ? { dynamicTools: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)).buildDynamicToolSpecs() } : {}),
-      }));
-    } catch (error) {
-      for (const registration of mcp?.registrations ?? []) registration.revoke();
-      throw error;
-    }
-    backendRegistryLog.info("automation headless thread created", {
-      agentThreadId: params.agentThreadId,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      backend: params.backend,
-      executionMode,
-      headlessThreadId: headlessThread.threadId,
-    });
-    const queueEntryId = `headless:${params.automationRunId}`;
-    const pendingKey = buildHeadlessAutomationTurnKey(params.backend, headlessThread.threadId, "");
-    const record = {
-      agentThreadId: params.agentThreadId,
-      backend: params.backend,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      executionMode,
-      executionThreadId: headlessThread.threadId,
-      queueEntryId,
-      startedAt: Date.now(),
-      suppressBindingBroadcast: params.suppressBindingBroadcast,
-      mcpConnectionIds: mcp?.connectionIds,
-      mcpGrantedConnectionIds: mcp?.grantedConnectionIds,
-      mcpServerAliases: mcp?.serverAliases,
-      mcpAllowedServerNames: mcp?.allowedServerNames,
-      toolAllowlist: params.toolAllowlist,
-      mcpRegistrations: mcp?.registrations,
-      pendingTerminalNotification: undefined as AppServerNotification | undefined,
-    };
-    // Tool calls can arrive before turn/start returns. Install the scoped
-    // authorization before allowing the runtime to execute any tools.
-    this.headlessAutomationTurns.set(pendingKey, record);
-    for (const registration of mcp?.registrations ?? []) registration.bindThread(headlessThread.threadId);
-    let turn: Awaited<ReturnType<BackendClient["startTurn"]>>;
-    try {
-      turn = await client.startTurn({
-        threadId: headlessThread.threadId,
-        input,
-        ...(cwd ? { cwd } : {}),
-        ...modelSettings,
-        approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox,
-      });
-    } catch (error) {
-      this.headlessAutomationTurns.delete(pendingKey);
-      for (const registration of mcp?.registrations ?? []) registration.revoke();
-      throw error;
-    }
-    backendRegistryLog.info("automation headless turn started", {
-      agentThreadId: params.agentThreadId,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      approvalPolicy,
-      backend: params.backend,
-      executionMode,
-      headlessThreadId: turn.threadId,
-      queueEntryId,
-      sandbox,
-      turnId: turn.turnId,
-    });
-    if (this.headlessAutomationTurns.delete(pendingKey)) {
-      this.headlessAutomationTurns.set(buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId), record);
-    }
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/turnQueue/updated",
-        params: {
-          threadId: params.agentThreadId,
-          queueEntryId,
-          origin: "automation",
-          automationRunId: params.automationRunId,
-          automationName: params.automationName,
-          status: "started",
-          backendThreadId: turn.threadId,
-          turnId: turn.turnId,
-          suppressBindingBroadcast: params.suppressBindingBroadcast,
-        },
-      },
-    });
-    if (record.pendingTerminalNotification) {
-      await this.emitHeadlessAutomationLifecycle(params.backend, record.pendingTerminalNotification);
-    }
-    return {
-      backend: params.backend,
-      headlessThreadId: turn.threadId,
-      queueEntryId,
-      threadId: params.agentThreadId,
-      turnId: turn.turnId,
-    };
+  startAutomationHeadlessTurn(
+    ...args: Parameters<HeadlessAutomationTurns["startAutomationHeadlessTurn"]>
+  ): ReturnType<HeadlessAutomationTurns["startAutomationHeadlessTurn"]> {
+    return this.headlessAutomation.startAutomationHeadlessTurn(...args);
   }
 
   private publishCorrespondenceMessage(
@@ -5977,429 +5756,10 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async setAcpSessionRuntimeOption(
+  setAcpSessionRuntimeOption(
     params: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
-    if (!isAcpBackendId(params.backend)) {
-      throw new Error("ACP runtime options are only available for ACP backends");
-    }
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP session not found: ${params.threadId}`);
-    }
-
-    const currentValue = this.readAcpRuntimeOptionValue(session.acpRuntime, params);
-    if (currentValue === params.value) {
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        runtimeState: session.acpRuntime,
-      };
-    }
-
-    if (this.threadHasActiveTurn(params.threadId, params.backend)) {
-      await this.queueAcpSessionRuntimeOption(params, currentValue);
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        runtimeState: session.acpRuntime,
-      };
-    }
-
-    return await this.applyAcpSessionRuntimeOption(params);
-  }
-
-  private async queueAcpSessionRuntimeOption(
-    params: SetAcpSessionRuntimeOptionRequest,
-    fromValue: string | undefined,
-  ): Promise<void> {
-    if (!isAcpBackendId(params.backend)) {
-      return;
-    }
-    const queuedAt = Date.now();
-    const queueId = randomUUID();
-    const queueKey = this.buildAcpRuntimeQueueKey(params.backend, params.threadId);
-    const fromLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
-    const toLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
-    this.queuedAcpRuntimeOptions.set(queueKey, {
-      source: params.source,
-      optionId: params.optionId,
-      value: params.value,
-      queuedAt,
-      queueId,
-      flushAttempts: 0,
-      fromValue,
-      fromLabel,
-      toLabel,
-    });
-
-    await this.appendPermissionTransition({
-      backend: params.backend,
-      threadId: params.threadId,
-      transition: {
-        id: randomUUID(),
-        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
-          ? "full-access"
-          : "default",
-        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
-          ? "full-access"
-          : "default",
-        fromLabel,
-        toLabel,
-        status: "queued",
-        occurredAt: queuedAt,
-        queueId,
-      },
-    });
-
-    backendRegistryLog.info("queued ACP runtime option change", {
-      backend: params.backend,
-      threadId: params.threadId,
-      source: params.source,
-      optionId: params.optionId,
-      from: fromValue,
-      to: params.value,
-      queueId,
-    });
-  }
-
-  private async applyAcpSessionRuntimeOption(
-    params: SetAcpSessionRuntimeOptionRequest,
-    options?: {
-      fromQueue?: boolean;
-      queueId?: string;
-      fromValue?: string;
-      fromLabel?: string;
-      toLabel?: string;
-    },
-  ): Promise<SetAcpSessionRuntimeOptionResponse> {
-    if (!isAcpBackendId(params.backend)) {
-      throw new Error("ACP runtime options are only available for ACP backends");
-    }
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP session not found: ${params.threadId}`);
-    }
-    const client = await this.acpBackend.getClientForSession(
-      params.backend,
-      params.threadId,
-    );
-    await client.ensureSession?.(session);
-    const fromValue =
-      options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
-    const runtimeState = this.normalizeAcpRuntimeSelectionState(
-      params,
-      await client.setRuntimeOption?.({
-        sessionId: params.threadId,
-        source: params.source,
-        optionId: params.optionId,
-        value: params.value,
-        // Below, the requested value is recorded and broadcast as applied.
-        // A thought level the client skipped was never sent, so it must fail
-        // here instead, as the agent's own refusal did.
-        rejectUnofferedThoughtLevel: true,
-      }),
-    );
-    const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
-    const changesExecutionMode = this.isAcpRuntimeExecutionModeOption(params);
-    const nextExecutionMode = changesExecutionMode
-      ? acpRuntimeValueLooksPrivileged(params.value)
-        ? "full-access"
-        : "default"
-      : session.executionMode;
-    const updatedAt = Math.max(
-      session.updatedAt,
-      runtimeState?.updatedAt ?? Date.now(),
-    );
-    this.acpBackend.upsertSession({
-      ...session,
-      acpRuntime: mergedRuntime,
-      executionMode: nextExecutionMode,
-      updatedAt,
-    });
-    if (changesExecutionMode) {
-      await this.overlayStore.setThreadExecutionMode({
-        backend: params.backend,
-        threadId: params.threadId,
-        executionMode: nextExecutionMode ?? "default",
-        updatedAt,
-      });
-    }
-
-    const fromLabel =
-      options?.fromLabel ??
-      this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
-    const toLabel =
-      options?.toLabel ??
-      this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
-    await this.appendPermissionTransition({
-      backend: params.backend,
-      threadId: params.threadId,
-      transition: {
-        id: randomUUID(),
-        fromExecutionMode: changesExecutionMode
-          ? acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"
-          : session.executionMode ?? "default",
-        toExecutionMode: nextExecutionMode ?? "default",
-        fromLabel,
-        toLabel,
-        status: "applied",
-        occurredAt: Date.now(),
-        queueId: options?.queueId,
-      },
-    });
-
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/acpRuntime/updated",
-        params: {
-          threadId: params.threadId,
-          acpRuntime: mergedRuntime,
-        },
-      },
-    });
-    if (nextExecutionMode !== session.executionMode) {
-      await this.emit({
-        backend: params.backend,
-        notification: {
-          method: "thread/executionMode/updated",
-          params: {
-            threadId: params.threadId,
-            executionMode: nextExecutionMode,
-          },
-        },
-      });
-    }
-
-    return {
-      backend: params.backend,
-      threadId: params.threadId,
-      runtimeState: mergedRuntime,
-    };
-  }
-
-  private async flushQueuedAcpRuntimeOptionIfPresent(
-    backend: AcpBackendId,
-    threadId: string,
-  ): Promise<void> {
-    const queueKey = this.buildAcpRuntimeQueueKey(backend, threadId);
-    const activeFlush = this.queuedAcpRuntimeOptionFlushes.get(queueKey);
-    if (activeFlush) {
-      await activeFlush;
-      return;
-    }
-    const queue = this.queuedAcpRuntimeOptions.get(queueKey);
-    if (!queue) {
-      return;
-    }
-    if (!this.queuedAcpRuntimeOptions.delete(queueKey)) {
-      return;
-    }
-    const flush = this.applyClaimedQueuedAcpRuntimeOption(backend, threadId, queue);
-    this.queuedAcpRuntimeOptionFlushes.set(queueKey, flush);
-    try {
-      await flush;
-    } finally {
-      if (this.queuedAcpRuntimeOptionFlushes.get(queueKey) === flush) {
-        this.queuedAcpRuntimeOptionFlushes.delete(queueKey);
-      }
-    }
-  }
-
-  private async applyClaimedQueuedAcpRuntimeOption(
-    backend: AcpBackendId,
-    threadId: string,
-    queue: {
-      source: BackendAcpRuntimeOptionSource;
-      optionId: string;
-      value: string;
-      queueId: string;
-      flushAttempts: number;
-      fromValue?: string;
-      fromLabel?: string;
-      toLabel?: string;
-    },
-  ): Promise<void> {
-    try {
-      await this.applyAcpSessionRuntimeOption(
-        {
-          backend,
-          threadId,
-          source: queue.source,
-          optionId: queue.optionId,
-          value: queue.value,
-        },
-        {
-          fromQueue: true,
-          queueId: queue.queueId,
-          fromValue: queue.fromValue,
-          fromLabel: queue.fromLabel,
-          toLabel: queue.toLabel,
-        },
-      );
-    } catch (error) {
-      const attempts = queue.flushAttempts + 1;
-      if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS) {
-        await this.appendPermissionTransition({
-          backend,
-          threadId,
-          transition: {
-            id: randomUUID(),
-            fromExecutionMode: acpRuntimeValueLooksPrivileged(queue.fromValue)
-              ? "full-access"
-              : "default",
-            toExecutionMode: acpRuntimeValueLooksPrivileged(queue.value)
-              ? "full-access"
-              : "default",
-            fromLabel: queue.fromLabel,
-            toLabel: queue.toLabel,
-            status: "cancelled",
-            occurredAt: Date.now(),
-            queueId: queue.queueId,
-            note: `auto-cancelled after ${MAX_QUEUE_FLUSH_ATTEMPTS} failed flush attempts`,
-          },
-        });
-        backendRegistryLog.error(
-          "auto-cancelling queued ACP runtime option change after repeated failures",
-          {
-            backend,
-            threadId,
-            queueId: queue.queueId,
-            attempts,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-        return;
-      }
-      this.queuedAcpRuntimeOptions.set(this.buildAcpRuntimeQueueKey(backend, threadId), {
-        ...queue,
-        queuedAt: Date.now(),
-        flushAttempts: attempts,
-      });
-      backendRegistryLog.warn("queued ACP runtime option flush failed; will retry", {
-        backend,
-        threadId,
-        queueId: queue.queueId,
-        attempts,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private buildAcpRuntimeQueueKey(backend: AcpBackendId, threadId: string): string {
-    return buildThreadIdentityKey(backend, threadId);
-  }
-
-  private readAcpRuntimeOptionValue(
-    runtime: BackendAcpSessionRuntimeState | undefined,
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
-  ): string | undefined {
-    if (
-      params.source === "configOption" &&
-      runtime?.currentModeId &&
-      this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
-    ) {
-      return runtime.currentModeId;
-    }
-    if (params.source === "configOption") {
-      return runtime?.configValues?.[params.optionId];
-    }
-    return params.source === "mode"
-      ? runtime?.currentModeId
-      : runtime?.currentModelId;
-  }
-
-  private normalizeAcpRuntimeSelectionState(
-    params: SetAcpSessionRuntimeOptionRequest,
-    runtimeState: BackendAcpSessionRuntimeState | undefined,
-  ): BackendAcpSessionRuntimeState {
-    const updatedAt = runtimeState?.updatedAt ?? Date.now();
-    const selectedState: BackendAcpSessionRuntimeState =
-      params.source === "model"
-        ? {
-            currentModelId: params.value,
-            updatedAt,
-          }
-        : params.source === "mode" ||
-            this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
-          ? {
-              configValues:
-                params.source === "configOption"
-                  ? { [params.optionId]: params.value }
-                  : runtimeState?.configValues,
-              currentModeId: params.value,
-              updatedAt,
-            }
-          : {
-              configValues: { [params.optionId]: params.value },
-              updatedAt,
-            };
-    return mergeAcpRuntimeState(runtimeState, selectedState) ?? selectedState;
-  }
-
-  private isAcpRuntimeModeConfigOption(
-    backend: AppServerBackendKind,
-    optionId: string,
-  ): boolean {
-    if (!isAcpBackendId(backend)) {
-      return false;
-    }
-    const agent = this.acpBackend.getInstalledAgent(backend);
-    return (
-      agent?.runtimeCapabilities?.configOptions?.some(
-        (option) => option.id === optionId && option.category === "mode",
-      ) ?? false
-    );
-  }
-
-  private acpRuntimeConfigOptionMirrorsMode(
-    backend: AppServerBackendKind,
-    optionId: string,
-  ): boolean {
-    const capabilities = isAcpBackendId(backend)
-      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
-      : undefined;
-    return this.isAcpRuntimeModeConfigOption(backend, optionId)
-      && findAcpPermissionModeConfigOption(capabilities)?.id !== optionId;
-  }
-
-  private isAcpRuntimeExecutionModeOption(
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
-  ): boolean {
-    const agent = isAcpBackendId(params.backend)
-      ? this.acpBackend.getInstalledAgent(params.backend)
-      : undefined;
-    if (agent?.registryId === "grok") {
-      return params.source === "configOption"
-        && params.optionId === findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.id;
-    }
-    return (
-      params.source === "mode" ||
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
-    );
-  }
-
-  private formatAcpRuntimeOptionLabel(
-    backend: AcpBackendId,
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "source" | "optionId">,
-    value: string | undefined,
-  ): string | undefined {
-    if (!value) {
-      return undefined;
-    }
-    const runtime = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
-    if (params.source === "configOption") {
-      const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
-      const label = option?.values.find((item) => item.value === value)?.label;
-      return formatAcpRuntimeLabel(label ?? value);
-    }
-    if (params.source === "model") {
-      const label = runtime?.models?.availableModels.find((model) => model.id === value)?.label;
-      return formatAcpRuntimeLabel(label ?? value);
-    }
-    const label = runtime?.modes?.availableModes.find((mode) => mode.id === value)?.label;
-    return formatAcpRuntimeLabel(label ?? value);
+    return this.acpSessionRuntimeOptions.setAcpSessionRuntimeOption(params);
   }
 
   private async resolveAcpSessionForTurn(
@@ -7768,24 +7128,6 @@ export class DesktopBackendRegistry {
       providerLimitHistory: activity.limitHistory.filter((reading) => !isCodexLimitObservation(reading)),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
         backend === "codex" || hasAcpStructuredHelper(backend)) };
-  }
-
-  /**
-   * Codex fixes a thread's model provider when the thread starts; turn/start
-   * cannot change it. A model from another provider would fail on the next
-   * turn, after the operator had moved on, so refuse it here with the way out.
-   */
-  private assertCodexModelKeepsThreadProvider(threadId: string, model: string): void {
-    const threadProvider = this.codexClient.modelProviderForThread?.(threadId);
-    const requestedProvider = parseCodexProviderModelId(model).providerId;
-    if (threadProvider === requestedProvider) return;
-    const providers = this.resolveCodexModelProvidersFn();
-    const label = (id: string | undefined): string =>
-      id ? providers.find((provider) => provider.id === id)?.name ?? id : "Codex's default provider";
-    throw new Error(
-      `This thread runs on ${label(threadProvider)}, so it cannot switch to a ${label(requestedProvider)} model. `
-      + "Hand the thread off to a new thread to use that model.",
-    );
   }
 
   /**
@@ -9340,7 +8682,7 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertAgentMessageWithinThreadAccess(params);
-    await this.assertRequestedThreadModelAvailable(params);
+    await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     // A hibernated checkout starts coming back now; the send queues behind it.
@@ -9794,7 +9136,7 @@ export class DesktopBackendRegistry {
    * automation run's (the automation owns that run).
    */
   private listQuietRestartTargets(): QuietRestartTarget[] {
-    const automationThreadKeys = new Set([...this.headlessAutomationTurns.values()]
+    const automationThreadKeys = new Set([...this.headlessAutomation.runningTurns()]
       .map((run) => buildThreadIdentityKey(run.backend, run.executionThreadId)));
     const targets = new Map<string, QuietRestartTarget>();
     for (const key of this.context.turnState.registeredTurnKeys()) {
@@ -10938,7 +10280,7 @@ export class DesktopBackendRegistry {
         startedAt: number;
       }
     >();
-    for (const run of this.headlessAutomationTurns.values()) {
+    for (const run of this.headlessAutomation.runningTurns()) {
       automationExecutionThreadKeys.add(
         formatQuitThreadKey(run.backend, run.executionThreadId),
       );
@@ -11126,7 +10468,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
-    await this.assertRequestedThreadModelAvailable(params);
+    await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
     const result = await this.startTurnNow(params);
     await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
     return result;
@@ -11374,7 +10716,7 @@ export class DesktopBackendRegistry {
               params.backend,
             );
           }
-          await this.flushQueuedAcpRuntimeOptionIfPresent(
+          await this.acpSessionRuntimeOptions.flushQueuedAcpRuntimeOptionIfPresent(
             identity.backend,
             params.threadId,
           );
@@ -14441,24 +13783,12 @@ export class DesktopBackendRegistry {
     return this.threadMcpConnections.setThreadMcpConnections(request);
   }
 
-  async setThreadModelSettings(
-    params: SetThreadModelSettingsRequest
-  ): Promise<SetThreadModelSettingsResponse> {
-    const modelSettingsManuallyUpdatedAt =
-      "model" in params || "reasoningEffort" in params
-        ? Date.now()
-        : undefined;
-    return await this.threadModelSettingsLocks.run(
-      buildThreadIdentityKey(params.backend, params.threadId),
-      async () => {
-        const observedCodexSettings = await this.assertRequestedThreadModelAvailable(params);
-        return await this.setThreadModelSettingsInternal(
-          params,
-          modelSettingsManuallyUpdatedAt === undefined ? {} : { modelSettingsManuallyUpdatedAt },
-          observedCodexSettings,
-        );
-      },
-    );
+  setThreadModelSettings(params: SetThreadModelSettingsRequest): Promise<SetThreadModelSettingsResponse> {
+    return this.threadModelSettings.setThreadModelSettings(params);
+  }
+
+  applyThreadModelMigration(params: ApplyThreadModelMigrationRequest): Promise<ApplyThreadModelMigrationResponse> {
+    return this.threadModelSettings.applyThreadModelMigration(params);
   }
 
   /**
@@ -14607,345 +13937,6 @@ export class DesktopBackendRegistry {
       await this.threadPrAutoDispatchHandler?.sendPendingNow(params)
       ?? false;
     return { ...params, accepted };
-  }
-
-  private async setThreadModelSettingsInternal(
-    params: SetThreadModelSettingsRequest,
-    metadata: {
-      modelMigrationRevision?: string;
-      modelSettingsManuallyUpdatedAt?: number;
-    },
-    observedCodexSettings?: { model?: string; reasoningEffort?: string },
-  ): Promise<SetThreadModelSettingsResponse> {
-    const identity = {
-      backend: params.backend,
-      threadId: params.threadId,
-    };
-    const current = await this.overlayStore.getThreadOverlayState(identity);
-    const acpBackend = isAcpBackendId(params.backend) ? params.backend : undefined;
-    const requestedModel = params.model;
-    const hasExplicitEffort = "reasoningEffort" in params;
-    // Older or externally created threads may lack a PwrAgent model overlay.
-    const needsProviderSettings = !hasExplicitEffort && (
-      current?.model === undefined
-      || (requestedModel !== undefined && requestedModel !== current.model && current.reasoningEffort === undefined)
-    );
-    const liveCodexSettings = needsProviderSettings && params.backend === "codex"
-      ? observedCodexSettings ?? await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId })
-        .catch(() => undefined)
-      : undefined;
-    const acpRuntime = needsProviderSettings && acpBackend
-      ? this.acpBackend.getSession(acpBackend, params.threadId)?.acpRuntime
-      : undefined;
-    const acpCapabilities = acpRuntime && acpBackend
-      ? this.acpBackend.getInstalledAgent(acpBackend)?.runtimeCapabilities
-      : undefined;
-    const acpModelOption = findAcpModelConfigOption(acpCapabilities);
-    const acpEffortOption = findAcpThoughtLevelConfigOption(acpCapabilities);
-    const cachedSettings = needsProviderSettings ? this.threadInfoStore.getSummary(identity) : undefined;
-    const acpModel = (acpModelOption && acpRuntime?.configValues?.[acpModelOption.id])
-      ?? acpRuntime?.currentModelId;
-    const currentModel = current?.model
-      ?? liveCodexSettings?.model
-      ?? acpModel
-      ?? cachedSettings?.model;
-    // A provider can still report the previous model until the next turn.
-    // Use an observed effort only if its source model matches the current one.
-    const currentEffort = current?.reasoningEffort
-      ?? (currentModel === undefined ? undefined
-        : (liveCodexSettings?.model === currentModel ? liveCodexSettings.reasoningEffort : undefined)
-          ?? (acpModel === currentModel
-            ? (acpEffortOption && acpRuntime?.configValues?.[acpEffortOption.id]) ?? acpRuntime?.reasoningEffort
-            : undefined)
-          ?? (cachedSettings?.model === currentModel ? cachedSettings.reasoningEffort : undefined));
-    const modelChanged =
-      requestedModel !== undefined && requestedModel !== currentModel;
-    let fallbackReasoningEfforts: ModelSettings["fallbackReasoningEfforts"];
-    if (modelChanged && !hasExplicitEffort) {
-      const providerKey = providerPickerValue(params.backend, requestedModel);
-      const configured = this.resolveProviderModelDefaultsFn()[providerKey];
-      fallbackReasoningEfforts = [
-        configured?.reasoningEffortsByModel[requestedModel],
-        currentEffort,
-      ];
-    }
-    const modelSettings = await this.resolveModelSettings(
-      params.backend,
-      {
-        model: "model" in params ? params.model : currentModel,
-        reasoningEffort:
-          hasExplicitEffort
-            ? params.reasoningEffort
-            : modelChanged
-              ? undefined
-              : currentEffort,
-        reasoningEffortsByModel: current?.reasoningEffortsByModel,
-        fallbackReasoningEfforts,
-        serviceTier:
-          "serviceTier" in params
-            ? params.serviceTier
-            : "fastMode" in params
-              ? undefined
-              : current?.serviceTier,
-        fastMode: "fastMode" in params ? params.fastMode : current?.fastMode,
-      },
-      "settings-refresh",
-    );
-    const acpRuntimeModelChanged =
-      modelSettings.model !== current?.model ||
-      modelSettings.reasoningEffort !== current?.reasoningEffort;
-    const persistModelSettings = async (): Promise<void> => {
-      await this.overlayStore.setThreadModelSettings({
-        backend: params.backend,
-        threadId: params.threadId,
-        ...modelSettings,
-        ...metadata,
-      });
-    };
-    if (acpBackend && modelSettings.model && acpRuntimeModelChanged) {
-      const runtimeModel = modelSettings.model;
-      await this.acpSessionPromptLocks.run(
-        executionModeQueueKey(acpBackend, params.threadId),
-        async () => {
-          if (!this.threadHasActiveTurn(params.threadId, acpBackend)) {
-            const session = this.acpBackend.getSession(
-              acpBackend,
-              params.threadId,
-            );
-            if (!session) {
-              throw new Error(`ACP session not found: ${params.threadId}`);
-            }
-            const client = await this.acpBackend.getClientForSession(
-              acpBackend,
-              params.threadId,
-            );
-            await client.ensureSession?.(session);
-            await client.setRuntimeOption?.({
-              sessionId: params.threadId,
-              source: "model",
-              optionId: "model",
-              value: runtimeModel,
-              reasoningEffort: modelSettings.reasoningEffort,
-            });
-          }
-          await persistModelSettings();
-        },
-      );
-    } else {
-      await persistModelSettings();
-    }
-
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/modelSettings/updated",
-        params: {
-          threadId: params.threadId,
-          ...modelSettings,
-        },
-      },
-    });
-
-    return {
-      backend: params.backend,
-      threadId: params.threadId,
-      ...modelSettings,
-    };
-  }
-
-  async applyThreadModelMigration(
-    params: ApplyThreadModelMigrationRequest,
-  ): Promise<ApplyThreadModelMigrationResponse> {
-    // Keep the eligibility check and revision write in the same queue as
-    // manual model settings, including speed changes that read the provider.
-    return await this.threadModelSettingsLocks.run(
-      buildThreadIdentityKey(params.backend, params.threadId),
-      () => this.applyThreadModelMigrationInternal(params),
-    );
-  }
-
-  private async applyThreadModelMigrationInternal(
-    params: ApplyThreadModelMigrationRequest,
-  ): Promise<ApplyThreadModelMigrationResponse> {
-    const current = await this.overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
-    const migrations = this.resolveProviderThreadModelMigrationsFn();
-    const providerSummary = params.backend === "codex"
-      && !current?.model && !params.threadModel && Object.keys(migrations).length > 0
-      ? await this.findThreadForWorkspaceHandoff({
-          backend: params.backend, threadId: params.threadId, callerReason: "thread-model-migration",
-        })
-      : undefined;
-    const providerKey = providerPickerValue(params.backend, current?.model ?? params.threadModel ?? providerSummary?.model);
-    const migration = migrations[providerKey];
-    if (!migration || providerPickerValue(params.backend, migration.model) !== providerKey) {
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "none",
-      };
-    }
-
-    if (current?.modelMigrationRevision === migration.revision) {
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "already-applied",
-        revision: migration.revision,
-        model: current.model,
-        reasoningEffort: current.reasoningEffort,
-      };
-    }
-
-    if (
-      current?.modelSettingsManuallyUpdatedAt !== undefined
-      && current.modelSettingsManuallyUpdatedAt >= migration.createdAt
-    ) {
-      await this.overlayStore.setThreadModelSettings({
-        backend: params.backend,
-        threadId: params.threadId,
-        model: current.model,
-        reasoningEffort: current.reasoningEffort,
-        serviceTier: current.serviceTier,
-        fastMode: current.fastMode,
-        modelMigrationRevision: migration.revision,
-        modelSettingsManuallyUpdatedAt:
-          current.modelSettingsManuallyUpdatedAt,
-      });
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "acknowledged-manual-change",
-        revision: migration.revision,
-        model: current.model,
-        reasoningEffort: current.reasoningEffort,
-      };
-    }
-
-    const migrationUsesSourceFilter =
-      migration.sourceModels !== undefined
-      || migration.includeThreadsWithoutModel === true;
-    const needsThreadSummary =
-      params.threadCreatedAt === undefined
-      || (
-        migrationUsesSourceFilter
-        && current?.model === undefined
-        && params.threadModel === undefined
-      );
-    const threadSummary = providerSummary ?? (needsThreadSummary
-      ? await this.findThreadForWorkspaceHandoff({
-          backend: params.backend,
-          callerReason: "thread-model-migration",
-          threadId: params.threadId,
-        })
-      : undefined);
-    const threadCreatedAt =
-      params.threadCreatedAt ?? threadSummary?.createdAt;
-    if (threadCreatedAt === undefined) {
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "metadata-unavailable",
-        revision: migration.revision,
-        model: current?.model,
-        reasoningEffort: current?.reasoningEffort,
-      };
-    }
-
-    if (threadCreatedAt > migration.createdAt) {
-      await this.overlayStore.setThreadModelSettings({
-        backend: params.backend,
-        threadId: params.threadId,
-        model: current?.model,
-        reasoningEffort: current?.reasoningEffort,
-        serviceTier: current?.serviceTier,
-        fastMode: current?.fastMode,
-        modelMigrationRevision: migration.revision,
-      });
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "acknowledged-new-thread",
-        revision: migration.revision,
-        model: current?.model,
-        reasoningEffort: current?.reasoningEffort,
-      };
-    }
-
-    const sourceModel =
-      current?.model
-      ?? params.threadModel
-      ?? threadSummary?.model;
-    const sourceModelSelected =
-      !migrationUsesSourceFilter
-      || (
-        sourceModel
-          ? migration.sourceModels?.includes(sourceModel) === true
-          : migration.includeThreadsWithoutModel === true
-      );
-    if (!sourceModelSelected) {
-      await this.overlayStore.setThreadModelSettings({
-        backend: params.backend,
-        threadId: params.threadId,
-        model: current?.model,
-        reasoningEffort: current?.reasoningEffort,
-        serviceTier: current?.serviceTier,
-        fastMode: current?.fastMode,
-        modelMigrationRevision: migration.revision,
-      });
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "acknowledged-source-model",
-        revision: migration.revision,
-        model: current?.model ?? sourceModel,
-        reasoningEffort: current?.reasoningEffort,
-      };
-    }
-
-    const resolved = await this.resolveModelSettings(
-      params.backend,
-      {
-        model: migration.model,
-        reasoningEffort: migration.reasoningEffort,
-      },
-      "settings-refresh",
-    );
-    if (
-      resolved.model !== migration.model
-      || (
-        migration.reasoningEffort !== undefined
-        && resolved.reasoningEffort !== migration.reasoningEffort
-      )
-    ) {
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "unavailable",
-        revision: migration.revision,
-        model: migration.model,
-        reasoningEffort: migration.reasoningEffort,
-      };
-    }
-
-    const response = await this.setThreadModelSettingsInternal(
-      {
-        backend: params.backend,
-        threadId: params.threadId,
-        model: migration.model,
-        reasoningEffort: resolved.reasoningEffort,
-      },
-      {
-        modelMigrationRevision: migration.revision,
-      },
-    );
-    return {
-      ...response,
-      status: "applied",
-      revision: migration.revision,
-    };
   }
 
   async turnOffCodexFastEverywhere(): Promise<TurnOffCodexFastEverywhereResponse> {
@@ -15564,9 +14555,7 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.threadMcpConnections.clearSessionApprovals();
-    for (const run of this.headlessAutomationTurns.values()) {
-      for (const registration of run.mcpRegistrations ?? []) registration.revoke();
-    }
+    this.headlessAutomation.revokeRegistrations();
     this.closed = true;
     await Promise.all(this.transcriptRepairs.values());
     this.threadDirectoryService.flushCodexEnvironmentActionLiveOutputsForShutdown();
@@ -15704,27 +14693,6 @@ export class DesktopBackendRegistry {
       );
     }
     this.ownerAdmission?.close();
-  }
-
-  private async assertRequestedThreadModelAvailable(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    model?: string;
-  }): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
-    if (params.model === undefined) return;
-    assertThreadModelSettingsAvailable(params.backend,
-      await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
-      { model: params.model });
-    if (params.backend === "codex") {
-      let observedCodexSettings: { model?: string; reasoningEffort?: string } | undefined;
-      if (this.resolveCodexModelProvidersFn().length > 0
-        && this.codexClient.reportedModelProviderForThread
-        && !this.codexClient.reportedModelProviderForThread(params.threadId)) {
-        observedCodexSettings = await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId }) ?? {};
-      }
-      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
-      return observedCodexSettings;
-    }
   }
 
   private async admitNewThreadModelSettings(
@@ -16659,7 +15627,7 @@ export class DesktopBackendRegistry {
             || notification.method === "turn/failed"
             || (notification.method === "thread/status/changed"
               && readStatusType(notification.params.status) === "systemError"))
-              ? this.headlessAutomationErrorNoticeContext(
+              ? this.headlessAutomation.headlessAutomationErrorNoticeContext(
                   backend,
                   noticeThreadId,
                 )
@@ -16673,7 +15641,7 @@ export class DesktopBackendRegistry {
               );
             }
           }
-          await this.emitHeadlessAutomationLifecycle(backend, notification);
+          await this.headlessAutomation.emitHeadlessAutomationLifecycle(backend, notification);
           await this.emit({
             backend,
             notification,
@@ -16778,163 +15746,6 @@ export class DesktopBackendRegistry {
       serviceTier: observed.serviceTier ?? null,
       rawServiceTier: observed.rawServiceTier ?? null,
     });
-  }
-
-  private async emitHeadlessAutomationLifecycle(
-    backend: AppServerBackendKind,
-    notification: AppServerNotification,
-  ): Promise<void> {
-    if (
-      notification.method !== "turn/completed" &&
-      notification.method !== "turn/failed" &&
-      notification.method !== "turn/cancelled"
-    ) {
-      return;
-    }
-
-    const turnId = turnIdFromTerminalNotification(notification);
-    if (!turnId) {
-      return;
-    }
-    const pendingKey = buildHeadlessAutomationTurnKey(backend, notification.params.threadId, "");
-    const run = this.headlessAutomationTurns.get(
-      buildHeadlessAutomationTurnKey(
-        backend,
-        notification.params.threadId,
-        turnId,
-      ),
-    );
-    if (!run) {
-      const pending = this.headlessAutomationTurns.get(pendingKey);
-      if (pending) {
-        // The Agent must observe its run starting before it finishes. Keep
-        // authorization live during startup and publish this after "started".
-        pending.pendingTerminalNotification = notification;
-        return;
-      }
-    }
-    if (!run) {
-      backendRegistryLog.debug("terminal turn did not match a headless automation", {
-        backend,
-        method: notification.method,
-        threadId: notification.params.threadId,
-        turnId,
-      });
-      return;
-    }
-    this.headlessAutomationTurns.delete(
-      buildHeadlessAutomationTurnKey(
-        backend,
-        notification.params.threadId,
-        turnId,
-      ),
-    );
-    this.headlessAutomationTurns.delete(pendingKey);
-    for (const registration of run.mcpRegistrations ?? []) registration.revoke();
-    backendRegistryLog.info("automation headless turn reached terminal status", {
-      agentThreadId: run.agentThreadId,
-      automationName: run.automationName,
-      automationRunId: run.automationRunId,
-      backend,
-      finalTextLength: finalTextFromTerminalNotification(notification)?.length ?? 0,
-      method: notification.method,
-      queueEntryId: run.queueEntryId,
-      threadId: notification.params.threadId,
-      turnId,
-    });
-
-    await this.emit({
-      backend,
-      notification: {
-        method: "thread/turnQueue/updated",
-        params: {
-          threadId: run.agentThreadId,
-          queueEntryId: run.queueEntryId,
-          origin: "automation",
-          automationRunId: run.automationRunId,
-          automationName: run.automationName,
-          status: "terminal",
-          turnId,
-          errorMessage: errorMessageFromTerminalNotification(notification),
-          finalText: finalTextFromTerminalNotification(notification),
-          terminalStatus: notification.method,
-          suppressBindingBroadcast: run.suppressBindingBroadcast,
-        },
-      },
-    });
-  }
-
-  private headlessAutomationErrorNoticeContext(
-    backend: AppServerBackendKind,
-    executionThreadId: string,
-  ): AgentEvent["errorNoticeContext"] | undefined {
-    for (const run of this.headlessAutomationTurns.values()) {
-      if (run.backend !== backend || run.executionThreadId !== executionThreadId) {
-        continue;
-      }
-      const title = this.getCachedThreadSummary({
-        backend,
-        threadId: run.agentThreadId,
-      })?.title ?? run.automationName;
-      return {
-        backend,
-        threadId: run.agentThreadId,
-        ...(title ? { title } : {}),
-        ...(run.automationName ? { automationName: run.automationName } : {}),
-      };
-    }
-    return undefined;
-  }
-
-  private findHeadlessAutomationTurnForRequest(
-    backend: AppServerBackendKind,
-    request: AppServerPendingRequestNotification,
-  ):
-    | {
-        agentThreadId: string;
-        automationName?: string;
-        automationRunId: string;
-        executionMode: ThreadExecutionMode;
-        queueEntryId: string;
-        mcpConnectionIds?: string[];
-        mcpGrantedConnectionIds?: string[];
-        mcpServerAliases?: Record<string, string[]>;
-        mcpAllowedServerNames?: string[];
-        toolAllowlist?: string[];
-      }
-    | undefined {
-    const turnId = request.params.turnId?.trim();
-    if (turnId) {
-      return this.headlessAutomationTurns.get(
-        buildHeadlessAutomationTurnKey(backend, request.params.threadId, turnId),
-      ) ?? this.headlessAutomationTurns.get(buildHeadlessAutomationTurnKey(backend, request.params.threadId, ""));
-    }
-
-    const keyPrefix = `${backend}:${request.params.threadId}:`;
-    let match:
-      | {
-          agentThreadId: string;
-          automationName?: string;
-          automationRunId: string;
-          executionMode: ThreadExecutionMode;
-          queueEntryId: string;
-        }
-      | undefined;
-    for (const [key, run] of this.headlessAutomationTurns.entries()) {
-      if (!key.startsWith(keyPrefix)) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = run;
-    }
-    return match;
-  }
-
-  private findHeadlessAutomationForThread(backend: AppServerBackendKind, threadId: string) {
-    const matches = [...this.headlessAutomationTurns.values()].filter((run) => run.backend === backend && run.executionThreadId === threadId);
-    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private getClient(
@@ -19343,7 +18154,7 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const headlessAutomation = this.findHeadlessAutomationTurnForRequest(
+    const headlessAutomation = this.headlessAutomation.findHeadlessAutomationTurnForRequest(
       backend,
       request,
     );
@@ -19362,7 +18173,7 @@ export class DesktopBackendRegistry {
         : selected.providerServersEnabled;
       const consent = headlessAutomation.mcpAllowedServerNames?.includes(serverName)
         && stillSelected
-        && this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
+        && this.headlessAutomation.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
         ? buildAutomationMcpConsent({ request, serverNames: [serverName, ...aliases], toolAllowlist: headlessAutomation.toolAllowlist })
         : undefined;
       return consent ?? { action: "cancel", content: null, _meta: null };
@@ -21573,7 +20384,7 @@ export class DesktopBackendRegistry {
           backend: event.errorNoticeContext?.backend ?? event.backend,
           threadId: event.errorNoticeContext?.threadId ?? threadId,
         });
-        const automation = this.headlessAutomationErrorNoticeContext(owner.backend, owner.threadId);
+        const automation = this.headlessAutomation.headlessAutomationErrorNoticeContext(owner.backend, owner.threadId);
         const backend = automation?.backend ?? owner.backend;
         const ownerThreadId = automation?.threadId ?? owner.threadId;
         const title = automation?.title ?? event.errorNoticeContext?.title
@@ -22031,7 +20842,7 @@ export class DesktopBackendRegistry {
           event.backend,
         );
       }
-      await this.flushQueuedAcpRuntimeOptionIfPresent(
+      await this.acpSessionRuntimeOptions.flushQueuedAcpRuntimeOptionIfPresent(
         event.backend,
         notification.params.threadId,
       );
@@ -22158,7 +20969,7 @@ export class DesktopBackendRegistry {
               event.backend,
             );
           }
-          await this.flushQueuedAcpRuntimeOptionIfPresent(
+          await this.acpSessionRuntimeOptions.flushQueuedAcpRuntimeOptionIfPresent(
             event.backend,
             event.notification.params.threadId,
           );

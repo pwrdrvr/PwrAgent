@@ -1,3 +1,4 @@
+import { headlessAutomationRecords } from "./helpers/headless-automation-records";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,7 +34,6 @@ describe("forge project rules at the write gate", () => {
   /** What Codex reported for the thread: `openai` is its default provider. */
   let codexProvider: string | undefined;
   let internals: {
-    headlessAutomationTurns: Map<string, unknown>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<DynamicResult>;
   };
   const request = (tool: string, args: Record<string, unknown>, callId: string): AppServerPendingRequestNotification => ({
@@ -381,7 +381,7 @@ describe("forge project rules at the write gate", () => {
 
   describe("in an automation", () => {
     beforeEach(() => {
-      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
         agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
       });
     });

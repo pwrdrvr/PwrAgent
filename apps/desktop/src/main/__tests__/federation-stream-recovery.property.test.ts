@@ -1,3 +1,4 @@
+import { headlessAutomationRecords } from "./helpers/headless-automation-records";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AppServerBackendKind, AppServerNotification } from "@pwragent/shared";
@@ -43,10 +44,8 @@ async function exercise(kind: WorkerKind, parentBackend: AppServerBackendKind,
     completedTaskMonitorsByThread: Map<string, TaskMonitorDelegationRecord>;
   };
   const reviews = modules.managedReviewService.activeReviewSubAgentRecords as Map<string, ReviewSubAgentRecord>;
-  const headless = (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns;
-  const automationOwner = vi.spyOn(registry as unknown as {
-    headlessAutomationErrorNoticeContext(backend: AppServerBackendKind, threadId: string): AgentEvent["errorNoticeContext"];
-  }, "headlessAutomationErrorNoticeContext");
+  const headless = headlessAutomationRecords(registry);
+  const automationOwner = vi.spyOn(modules.headlessAutomation, "headlessAutomationErrorNoticeContext");
   // Native Codex workers have Codex parents. Other workers can cross providers.
   const ownerBackend = kind === "native" || kind === "automation" ? "codex" : parentBackend;
   for (const worker of ["worker-a", "worker-b"]) {

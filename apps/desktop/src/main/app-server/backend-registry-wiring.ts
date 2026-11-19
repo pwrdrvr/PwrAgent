@@ -1,3 +1,6 @@
+import { ThreadModelSettings } from "./thread-model-settings";
+import { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
+import { HeadlessAutomationTurns } from "./headless-automation-turns";
 import { TurnEventObservers, type TurnEventObserver } from "./turn-event-observer";
 import { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import { RegistryTurnState } from "./registry-turn-state";
@@ -133,6 +136,9 @@ export interface RegistryModules {
   readonly forgeToolBridge: ForgeToolBridge;
   readonly threadInspectionTools: ThreadInspectionTools;
   readonly threadMcpConnections: ThreadMcpConnections;
+  readonly headlessAutomation: HeadlessAutomationTurns;
+  readonly acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
+  readonly threadModelSettings: ThreadModelSettings;
   readonly managedReviewService: ManagedReviewService;
   readonly subAgentMonitorService: SubAgentMonitorService;
   readonly threadUsageLedger: ThreadUsageLedger;
@@ -1510,6 +1516,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadMaintenanceToolScans,
   }, () => ports);
   const threadMcpConnections = new ThreadMcpConnections(context, { forgeToolBridge }, () => ports);
+  const threadModelSettings = new ThreadModelSettings(overlayStore, codexClient, acpBackend, {
+    resolveProviderModelDefaultsFn,
+    resolveProviderThreadModelMigrationsFn,
+    resolveCodexModelProvidersFn,
+  }, context.emit, () => ports);
+  const acpSessionRuntimeOptions = new AcpSessionRuntimeOptions(acpBackend, overlayStore, context.emit, () => ports);
+  const headlessAutomation = new HeadlessAutomationTurns(context, threadMcpConnections, mcpGatewayTools, () => ports);
   const managedReviewService = new ManagedReviewService(context, () => ports);
   const subAgentMonitorService = new SubAgentMonitorService(context, {
     forgeToolBridge,
@@ -1608,6 +1621,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     forgeToolBridge,
     threadInspectionTools,
     threadMcpConnections,
+    headlessAutomation,
+    acpSessionRuntimeOptions,
+    threadModelSettings,
     managedReviewService,
     subAgentMonitorService,
     threadUsageLedger,
@@ -1708,6 +1724,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     forgeToolBridge,
     threadInspectionTools,
     threadMcpConnections,
+    headlessAutomation,
+    acpSessionRuntimeOptions,
+    threadModelSettings,
     managedReviewService,
     subAgentMonitorService,
     threadUsageLedger,

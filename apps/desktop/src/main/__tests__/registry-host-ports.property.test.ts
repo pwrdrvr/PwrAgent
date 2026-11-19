@@ -1,30 +1,38 @@
+import type { AcpSessionRuntimeOptionsHost } from "../app-server/acp-session-runtime-options";
 import type { CodexRuntimeSupervisorHost } from "../app-server/codex-runtime-supervisor";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { expect, expectTypeOf, it } from "vitest";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { ArchiveCleanupInventoryHost } from "../app-server/archive-cleanup-inventory";
 import type { RegistryHandlers } from "../app-server/backend-registry-handlers";
 import type { ForgeToolBridgeHost } from "../app-server/forge-tool-bridge";
+import type { HeadlessAutomationTurnsHost } from "../app-server/headless-automation-turns";
 import type { ManagedReviewServiceHost } from "../app-server/managed-review-service";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "../app-server/registry-host-ports";
 import type { SubAgentMonitorServiceHost } from "../app-server/subagent-monitor-service";
 import type { ThreadArchiveCoordinatorHost } from "../app-server/thread-archive-coordinator";
 import type { ThreadDirectoryServiceHost } from "../app-server/thread-directory-service";
 import type { ThreadInspectionToolsHost } from "../app-server/thread-inspection-tools";
+import type { ThreadModelSettingsHost } from "../app-server/thread-model-settings";
 import type { ThreadMcpConnectionsHost } from "../app-server/thread-mcp-connections";
 import type { ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
 import type { ThreadWorkspaceServiceHost } from "../app-server/thread-workspace-service";
 
 type Hosts = {
+  AcpSessionRuntimeOptionsHost: AcpSessionRuntimeOptionsHost;
+  ArchiveCleanupInventoryHost: ArchiveCleanupInventoryHost;
   CodexRuntimeSupervisorHost: CodexRuntimeSupervisorHost;
   ForgeToolBridgeHost: ForgeToolBridgeHost;
+  HeadlessAutomationTurnsHost: HeadlessAutomationTurnsHost;
   ManagedReviewServiceHost: ManagedReviewServiceHost;
   SubAgentMonitorServiceHost: SubAgentMonitorServiceHost;
   ThreadArchiveCoordinatorHost: ThreadArchiveCoordinatorHost;
   ThreadDirectoryServiceHost: ThreadDirectoryServiceHost;
   ThreadInspectionToolsHost: ThreadInspectionToolsHost;
   ThreadMcpConnectionsHost: ThreadMcpConnectionsHost;
+  ThreadModelSettingsHost: ThreadModelSettingsHost;
   ThreadUsageLedgerHost: ThreadUsageLedgerHost;
   ThreadWorkspaceServiceHost: ThreadWorkspaceServiceHost;
 };
@@ -86,6 +94,12 @@ it("declares no operation separately in multiple module hosts", () => {
     const url = new URL(name, directory);
     const file = ts.createSourceFile(fileURLToPath(url), readFileSync(url, "utf8"), ts.ScriptTarget.Latest, true);
     for (const node of file.statements) {
+      if (ts.isTypeAliasDeclaration(node) && node.name.text.endsWith("Host")
+        && ts.isTypeReferenceNode(node.type)
+        && node.type.typeName.getText(file) === "Pick"
+        && node.type.typeArguments?.[0]?.getText(file) === "RegistryHostPorts") {
+        hosts.push(node.name.text);
+      }
       if (!ts.isInterfaceDeclaration(node) || !node.name.text.endsWith("Host")) continue;
       hosts.push(node.name.text);
       for (const member of node.members) {
@@ -99,14 +113,18 @@ it("declares no operation separately in multiple module hosts", () => {
   }
   // Keep the type-level inventory above exhaustive as modules are extracted.
   const checkedHosts: Record<keyof Hosts, true> = {
+    AcpSessionRuntimeOptionsHost: true,
+    ArchiveCleanupInventoryHost: true,
     CodexRuntimeSupervisorHost: true,
     ForgeToolBridgeHost: true,
+    HeadlessAutomationTurnsHost: true,
     ManagedReviewServiceHost: true,
     SubAgentMonitorServiceHost: true,
     ThreadArchiveCoordinatorHost: true,
     ThreadDirectoryServiceHost: true,
     ThreadInspectionToolsHost: true,
     ThreadMcpConnectionsHost: true,
+    ThreadModelSettingsHost: true,
     ThreadUsageLedgerHost: true,
     ThreadWorkspaceServiceHost: true,
   };
