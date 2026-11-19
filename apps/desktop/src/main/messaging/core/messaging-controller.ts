@@ -28,9 +28,7 @@ import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
 import { asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { automatedWorkStartedLabel, automationRunFailureNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
-import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
-import type { NavigationQuery } from "@pwragent/shared";
-import { readMessagingLaunchpadContext, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
+import { MessagingBrowseWorkflow } from "./messaging-browse-workflow";
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
@@ -38,11 +36,11 @@ import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentit
 import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize, MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
-import { defaultAgentBackendSupport, defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
+import { defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply } from "./messaging-adapter.js";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
@@ -51,7 +49,6 @@ import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
-import { buildBoundedResumeIntent, isNewThreadLaunchAction, parseResumeCommandArgs, resumeBrowserPageSize } from "./messaging-resume-browser.js";
 import { buildStatusAcpRuntimeModePickerIntent, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, handoffRequestFromValue, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
 import { acpBackendDeclaresExecutionMode, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
 import { buildSkillRemovedIntent, buildSkillSelectedIntent, buildSkillsBrowserIntent, buildSkillsSearchPromptIntent, flattenSkillEntries, isSkillsWorkflowIntent, skillSelectionFromValue } from "./messaging-skills-browser.js";
@@ -293,13 +290,7 @@ export class MessagingController {
   // handle open, which blocks the test harness from deleting the temp profile
   // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
   private disposed = false;
-  private readonly browseRenderGenerations = new Map<string, symbol>();
-  private readonly browseQueryPool = new MessagingBrowseQueryPool((request) => {
-    const backend = this.options.backend;
-    if (!backend.getNavigationQueryPage) throw new Error("Upgrade this instance to support bounded messaging navigation.");
-    return backend.getNavigationQueryPage(request);
-  }, () => this.now());
-  private readonly progressiveBrowseByConversation = new Map<string, symbol>();
+  private readonly browse: MessagingBrowseWorkflow;
   private readonly outboundDelivery: MessagingOutboundDelivery;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -430,6 +421,25 @@ export class MessagingController {
     const readMonitorConfig = () => this.options;
     const readTurns = () => this.turns;
     const readDisposed = () => this.disposed;
+    this.browse = new MessagingBrowseWorkflow({
+      get backend() { return readBackend(); },
+      get store() { return readStore(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get pendingIntentTtlMs() { return readPendingIntentTtl(); },
+      get disposed() { return readDisposed(); },
+      get logger() { return readLogger(); },
+      now: () => this.now(),
+      deliver: (...args) => this.deliver(...args),
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      resolveNewThreadBackendForSession: (...args) => this.newThreadWorkflow.resolveNewThreadBackendForSession(...args),
+      loadDefaultAgentBackendSummaries: () => this.inboundTurns.loadDefaultAgentBackendSummaries(),
+      actorHasPermission: (...args) => this.accessControl.actorHasPermission(...args),
+      canResumeFullAccessThreads: () => this.accessControl.canResumeFullAccessThreads(),
+      deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
+      clearPendingNewThreadPrompt: (sessionId) => this.inboundTurns.clearPendingNewThreadPrompt(sessionId),
+      clearPendingFullAccessNewThreadPrompt: (sessionId) => { this.inboundTurns.pendingFullAccessNewThreadPrompts.delete(sessionId); },
+    });
     this.monitorWorkflow = new MessagingMonitorWorkflow({
       get store() { return readStore(); },
       get backend() { return readBackend(); },
@@ -567,7 +577,7 @@ export class MessagingController {
     this.inboundTurns.markAdmissionStage(event, "handled");
     // An actor's next action owns the surface. Late browse arrivals must not
     // overwrite a selection, cancellation, query edit, or a newer browser.
-    this.progressiveBrowseByConversation.delete(buildMessagingConversationKey(event.channel));
+    this.browse.cancelProgressiveBrowse(event.channel);
 
     // Breadcrumb self-healing and managed-topic observation are optional UX
     // bookkeeping for turn input. Start them from this lifecycle boundary, but
@@ -922,7 +932,7 @@ export class MessagingController {
       ensureFullAccessEscalationAllowed: (...args) => this.accessControl.ensureFullAccessEscalationAllowed(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
-      deliverInvalidBrowseSelection: (...args) => this.deliverInvalidBrowseSelection(...args),
+      deliverInvalidBrowseSelection: (...args) => this.browse.deliverInvalidBrowseSelection(...args),
       storePendingIntent: (...args) => this.storePendingIntent(...args),
       getBackendSummary: (...args) => this.getBackendSummary(...args),
       ensureAcpRuntimeModeAllowed: (...args) => this.ensureAcpRuntimeModeAllowed(...args),
@@ -947,8 +957,8 @@ export class MessagingController {
       handleStatusCallback: (...args) => this.callbackHandlers.handleStatusCallback(...args),
       presentStatus: (...args) => this.presentStatus(...args),
       detachBinding: (...args) => this.bindingService.detachBinding(...args),
-      presentResumeBrowser: (...args) => this.presentResumeBrowser(...args),
-      presentAgentBrowser: (...args) => this.presentAgentBrowser(...args),
+      presentResumeBrowser: (...args) => this.browse.presentResumeBrowser(...args),
+      presentAgentBrowser: (...args) => this.browse.presentAgentBrowser(...args),
       rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
@@ -959,7 +969,7 @@ export class MessagingController {
       submitMessagingReview: (...args) => this.reviewWorkflow.submitMessagingReview(...args),
       presentReviewPicker: (...args) => this.reviewWorkflow.presentReviewPicker(...args),
       deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
-      presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
+      presentDefaultAgentAssignmentBrowser: (...args) => this.browse.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
       stopMonitoringForChannel: (...args) => this.monitorWorkflow.stopMonitoringForChannel(...args),
@@ -1002,7 +1012,7 @@ export class MessagingController {
     const readController = () => this;
     return this.callbackHostPorts ??= {
       get commandHandlers() { return readController().commandHandlers; },
-      presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
+      presentDefaultAgentAssignmentBrowser: (...args) => this.browse.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
       requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
@@ -1030,10 +1040,10 @@ export class MessagingController {
       resolveSteerableActiveTurn: (...args) => this.resolveSteerableActiveTurn(...args),
       deliverQueuedTurnNotice: (...args) => this.deliverQueuedTurnNotice(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
-      renderResumeBrowser: (...args) => this.renderResumeBrowser(...args),
+      renderResumeBrowser: (...args) => this.browse.renderResumeBrowser(...args),
       resolveNewThreadBackendForSession: (...args) => this.newThreadWorkflow.resolveNewThreadBackendForSession(...args),
-      retireBrowseSession: (...args) => this.retireBrowseSession(...args),
-      deliverInvalidBrowseSelection: (...args) => this.deliverInvalidBrowseSelection(...args),
+      retireBrowseSession: (...args) => this.browse.retireBrowseSession(...args),
+      deliverInvalidBrowseSelection: (...args) => this.browse.deliverInvalidBrowseSelection(...args),
       startNewThreadFromProject: (...args) => this.newThreadWorkflow.startNewThreadFromProject(...args),
       updateNewThreadStickySettings: (...args) => this.newThreadWorkflow.updateNewThreadStickySettings(...args),
       presentNewThreadPromptGate: (...args) => this.newThreadWorkflow.presentNewThreadPromptGate(...args),
@@ -2101,9 +2111,7 @@ export class MessagingController {
 
   dispose(): void {
     this.disposed = true;
-    this.progressiveBrowseByConversation.clear();
-    this.browseQueryPool.clear();
-    this.browseRenderGenerations.clear();
+    this.browse.dispose();
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
@@ -2140,216 +2148,6 @@ export class MessagingController {
   /** Resolves after detached queued-message actions finish. */
   async whenQueuedTurnActionsSettled(): Promise<void> {
     await Promise.all(this.queuedTurnActions);
-  }
-
-  private async presentResumeBrowser(
-    event: MessagingInboundCommandEvent,
-    options?: {
-      cancelDestination?: MessagingBrowseSessionRecord["cancelDestination"];
-      targetSurface?: MessagingSurfaceRef;
-    },
-  ): Promise<void> {
-    const parsed = parseResumeCommandArgs(event.args);
-    if (parsed.error) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("resume-error"),
-          createdAt: this.now(),
-          title: "Resume command error",
-          body: parsed.error,
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    await this.presentProgressiveBrowse(event, {
-      backend: "all",
-      filter: parsed.query,
-    }, async (navigation, current) => {
-      const selectedBackend =
-        isNewThreadLaunchAction(parsed.launchAction)
-          ? await this.newThreadWorkflow.resolveNewThreadBackendForSession(
-              {
-                launchpadBackend: navigation.launchpadDefaults.backend,
-              },
-              event,
-            )
-          : undefined;
-      if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
-        return;
-      }
-      const selectedDirectory = navigation.directory;
-      const preferences = parsed.preferences
-        ? {
-            ...parsed.preferences,
-            updatedAt: this.now(),
-          }
-        : undefined;
-      const session: MessagingBrowseSessionRecord = {
-        id: this.newIntentId("browse"),
-        allowedActorIds: [event.actor.platformUserId],
-        backend: selectedBackend?.kind,
-        cancelDestination: options?.cancelDestination,
-        channel: event.channel,
-        createdAt: this.now(),
-        updatedAt: this.now(),
-        expiresAt: this.now() + this.pendingIntentTtlMs,
-        launchAction: parsed.launchAction,
-        mode: parsed.cwd && parsed.mode === "recents" ? "project_threads" : parsed.mode,
-        pageIndex: 0,
-        pageSize: resumeBrowserPageSize(this.capabilityProfile),
-        preferences,
-        query: parsed.query,
-        directorySelector: parsed.cwd,
-        returnTo: parsed.launchAction === "start_new_thread"
-          ? {
-              launchAction: "resume_thread",
-              mode: "recents",
-              pageIndex: 0,
-              preferences,
-              query: parsed.query,
-        directorySelector: parsed.cwd,
-            }
-          : undefined,
-        selectedProject: selectedDirectory
-          ? {
-              directoryKey: selectedDirectory.key,
-              label: selectedDirectory.label,
-              path: selectedDirectory.path,
-            }
-          : undefined,
-        surface: options?.targetSurface,
-      };
-      await this.renderResumeBrowser(session, navigation, event, current);
-      return session;
-    }, parsed.cwd);
-  }
-
-  private async presentAgentBrowser(
-    event: MessagingInboundCommandEvent,
-    options?: {
-      cancelDestination?: MessagingBrowseSessionRecord["cancelDestination"];
-      targetSurface?: MessagingSurfaceRef;
-    },
-  ): Promise<void> {
-    const parsed = parseResumeCommandArgs(event.args);
-    if (parsed.error) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("agent-error"),
-          createdAt: this.now(),
-          title: "Agent command error",
-          body: parsed.error,
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    await this.presentProgressiveBrowse(event, {
-      backend: "all",
-      filter: parsed.query,
-    }, async (navigation, current) => {
-      const selectedBackend =
-        parsed.launchAction === "start_new_thread"
-          ? await this.newThreadWorkflow.resolveNewThreadBackendForSession(
-              {
-                launchpadBackend: navigation.launchpadDefaults.backend,
-              },
-              event,
-            )
-          : undefined;
-      if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
-        return;
-      }
-      const selectedDirectory = navigation.directory;
-      const session: MessagingBrowseSessionRecord = {
-        id: this.newIntentId("browse"),
-        allowedActorIds: [event.actor.platformUserId],
-        backend: selectedBackend?.kind,
-        cancelDestination: options?.cancelDestination,
-        channel: event.channel,
-        createdAt: this.now(),
-        updatedAt: this.now(),
-        expiresAt: this.now() + this.pendingIntentTtlMs,
-        launchAction: parsed.launchAction === "start_new_thread"
-          ? "start_new_agent_thread"
-          : "resume_thread",
-        mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
-        pageIndex: 0,
-        pageSize: resumeBrowserPageSize(this.capabilityProfile),
-        preferences: parsed.preferences
-          ? {
-              ...parsed.preferences,
-              updatedAt: this.now(),
-            }
-          : undefined,
-        query: parsed.query,
-        directorySelector: parsed.cwd,
-        selectedProject: selectedDirectory
-          ? {
-              directoryKey: selectedDirectory.key,
-              label: selectedDirectory.label,
-              path: selectedDirectory.path,
-            }
-          : undefined,
-        surface: options?.targetSurface,
-      };
-      await this.renderResumeBrowser(session, navigation, event, current);
-      return session;
-    }, parsed.cwd);
-  }
-
-  private async presentProgressiveBrowse(
-    event: MessagingInboundEvent,
-    _request: { backend?: "all"; filter?: string },
-    initial: (navigation: MessagingLaunchpadContext, current: () => boolean) => Promise<MessagingBrowseSessionRecord | undefined>,
-    _requestedDirectory?: string,
-  ): Promise<void> {
-    const key = buildMessagingConversationKey(event.channel);
-    const generation = Symbol("browse");
-    this.progressiveBrowseByConversation.set(key, generation);
-    const current = (): boolean => !this.disposed && this.progressiveBrowseByConversation.get(key) === generation;
-    try {
-      const configuration = await readMessagingLaunchpadContext({ backend: this.options.backend });
-      if (current()) await initial(configuration, current);
-    } finally {
-      if (current()) this.progressiveBrowseByConversation.delete(key);
-    }
-  }
-
-  private async presentDefaultAgentAssignmentBrowser(
-    event: MessagingInboundEvent,
-    scopeKind: MessagingDefaultAgentScopeKind,
-  ): Promise<void> {
-    const scope = defaultAgentScopeForChannel(event.channel, scopeKind);
-    if (!scope) {
-      await this.deliverDefaultAgentCommandError(
-        event,
-        `This messaging surface does not expose a normalized ${scopeKind} scope.`,
-      );
-      return;
-    }
-    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend });
-    const session: MessagingBrowseSessionRecord = {
-      id: this.newIntentId("default-agent-browse"),
-      allowedActorIds: [event.actor.platformUserId],
-      channel: event.channel,
-      createdAt: this.now(),
-      updatedAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: "assign_default_agent",
-      defaultAgentScope: scope,
-      mode: "agents",
-      pageIndex: 0,
-      pageSize: resumeBrowserPageSize(this.capabilityProfile),
-    };
-    await this.renderResumeBrowser(session, navigation, event);
   }
 
   private async clearDefaultAgentAssignment(
@@ -2452,101 +2250,6 @@ export class MessagingController {
       undefined,
       event,
     );
-  }
-
-  private async retireBrowseSession(
-    session: MessagingBrowseSessionRecord,
-  ): Promise<void> {
-    this.browseQueryPool.release(session.id);
-    this.inboundTurns.clearPendingNewThreadPrompt(session.id);
-    this.inboundTurns.pendingFullAccessNewThreadPrompts.delete(session.id);
-    await this.options.store.deleteBrowseSession(session.id);
-    try {
-      const removed = await this.options.store.deletePendingIntentsForChannel({
-        channel: session.channel,
-      });
-      if (removed.length > 0) {
-        this.logger.debug?.("messaging retired channel pending intents on browse close", {
-          channel: session.channel.channel,
-          removedCount: removed.length,
-          sessionId: session.id,
-        });
-      }
-    } catch (error) {
-      this.logger.debug?.("messaging pending-intent cleanup failed on browse close", {
-        channel: session.channel.channel,
-        error: error instanceof Error ? error.message : String(error),
-        sessionId: session.id,
-      });
-    }
-  }
-
-  private async renderResumeBrowser(
-    session: MessagingBrowseSessionRecord,
-    _navigation: MessagingNewThreadNavigation,
-    event: MessagingInboundEvent,
-    stillCurrent: () => boolean = () => true,
-  ): Promise<void> {
-    if (!stillCurrent()) return;
-    const parentCurrent = stillCurrent;
-    const token = Symbol("browse-render");
-    this.browseRenderGenerations.set(session.id, token);
-    stillCurrent = () => parentCurrent() && this.browseRenderGenerations.get(session.id) === token;
-    const inventory = await this.options.backend.listNavigationOwners?.() ?? { owners: [{ label: "This instance" }], omitted: 0 };
-    const canReadRemote = this.accessControl.actorHasPermission(event, "federation.remote_control");
-    let owners = inventory.owners.filter((owner) => !owner.target || (canReadRemote && session.launchAction !== "assign_default_agent"));
-    if (!session.directorySelector && session.selectedProject && session.mode !== "projects" && session.mode !== "new_project") {
-      const target = session.selectedProject.federationTarget;
-      owners = target?.scope === "remote"
-        ? (canReadRemote ? [{ target, label: inventory.owners.find((owner) => owner.target?.instanceId === target.instanceId)?.label ?? target.instanceId }] : [])
-        : owners.filter((owner) => !owner.target);
-    }
-    const backendSummaries = session.launchAction === "assign_default_agent" ? await this.inboundTurns.loadDefaultAgentBackendSummaries() : undefined;
-    const eligibility = {
-      filter: session.query,
-      agentOnly: session.mode === "agents" || session.launchAction === "assign_default_agent",
-      ...(session.launchAction === "assign_default_agent" ? { allowedBackends: ["codex" as const,
-        ...(backendSummaries ?? []).filter((backend) => backend.kind !== "codex" && defaultAgentBackendSupport(backend.kind, backendSummaries) === "supported")
-          .map((backend) => backend.kind)] } : {}),
-      excludeFullAccess: session.launchAction === "resume_thread" && !await this.accessControl.canResumeFullAccessThreads(),
-    };
-    const query: NavigationQuery = session.mode === "projects" || session.mode === "new_project"
-      ? { kind: "messaging-projects", ...eligibility, scratchpadFirst: isNewThreadLaunchAction(session.launchAction) }
-      : { kind: "messaging-threads", ...eligibility, directoryKey: session.directorySelector ?? session.selectedProject?.directoryKey };
-    const publish = async (page: Awaited<ReturnType<MessagingBrowseQueryPool["read"]>>): Promise<void> => {
-      if (!stillCurrent()) return;
-      session = { ...session, pageIndex: page.pageIndex, ...(page.selectedProject ? { selectedProject: page.selectedProject } : {}) };
-      await this.options.store.upsertBrowseSession(session);
-      const intent = buildBoundedResumeIntent({ id: this.newIntentId("resume"), createdAt: this.now(), page, session });
-      if (!stillCurrent()) return;
-      await this.storePendingIntent(intent, undefined, event);
-      if (!stillCurrent()) return;
-      const result = await this.deliver(intent, undefined, event);
-      if (!stillCurrent() || !result.surface) {
-        return;
-      }
-
-      session = { ...session, surface: result.surface, updatedAt: this.now() };
-      await this.options.store.upsertBrowseSession(session);
-      await this.options.store.upsertPendingIntent({
-        id: intent.id,
-        channel: event.channel,
-        intent,
-        allowedActorIds: [event.actor.platformUserId],
-        createdAt: this.now(),
-        expiresAt: this.now() + this.pendingIntentTtlMs,
-        surface: result.surface,
-      });
-    };
-    try {
-      const page = await this.browseQueryPool.read({ sessionId: session.id, query, owners,
-        omittedOwners: canReadRemote ? inventory.omitted : 0, pageSize: session.pageSize, pageIndex: session.pageIndex, onProgress: publish });
-      await publish(page);
-    } catch (error) {
-      if (stillCurrent()) throw error;
-    } finally {
-      if (this.browseRenderGenerations.get(session.id) === token) this.browseRenderGenerations.delete(session.id);
-    }
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -2852,8 +2555,8 @@ export class MessagingController {
     const target = bindingTarget?.scope === "remote" ? bindingTarget : undefined;
     const pageIndex = branchPageIndexFromValue(event.value);
     const sessionId = `handoff-projects:${binding.id}`;
-    if (pageIndex === 0) this.browseQueryPool.release(sessionId);
-    const page = await this.browseQueryPool.read({
+    if (pageIndex === 0) this.browse.queryPool.release(sessionId);
+    const page = await this.browse.queryPool.read({
       sessionId,
       query: { kind: "messaging-projects" },
       owners: [{ target, label: target?.instanceId ?? "Local" }],
@@ -5158,22 +4861,6 @@ export class MessagingController {
 
     this.logger.debug?.(
       `messaging turn state changed reason=${reason} backend=${binding.backend} thread=${binding.threadId} binding=${binding.id} previous=${previousTurn?.status ?? "none"}:${previousTurn?.turnId ?? "none"} next=${nextTurn?.status ?? "none"}:${nextTurn?.turnId ?? "none"}`,
-    );
-  }
-
-  private async deliverInvalidBrowseSelection(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("invalid-browse-selection"),
-        createdAt: this.now(),
-        title: "Invalid selection",
-        body: "That resume selection is no longer available. Use /resume to refresh.",
-        recoverable: true,
-      }),
-      undefined,
-      event,
     );
   }
 
