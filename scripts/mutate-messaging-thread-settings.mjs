@@ -102,7 +102,11 @@ try {
   // Staging new files includes them in the tracked patch. The live worktree
   // is only read, so interruption cannot leave a mutated file there.
   git(root, "clone", "--quiet", "--shared", "--no-checkout", "--", root, checkout);
-  git(checkout, "checkout", "--quiet", "--detach", head);
+  // The mutation suites do not use the LFS-backed visual baselines.
+  execFileSync("git", ["checkout", "--quiet", "--detach", head], {
+    cwd: checkout,
+    env: { ...env, GIT_LFS_SKIP_SMUDGE: "1" },
+  });
   if (patch.length) execFileSync("git", ["apply", "--binary", "-"], { cwd: checkout, input: patch });
   const installLog = join(logs, "install.log");
   if (pnpm(installLog, "install", "--frozen-lockfile") !== 0) throw new Error(`Install failed; see ${installLog}`);
