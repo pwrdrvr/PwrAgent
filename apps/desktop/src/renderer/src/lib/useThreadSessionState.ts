@@ -3318,6 +3318,15 @@ function contextWindowFill(
   };
 }
 
+function readContextWindowFill(reading: unknown): ThreadContextWindowState | undefined {
+  const record = readRecord(reading);
+  if (!record) return undefined;
+  const { usedTokens, modelContextWindow } = record;
+  if (typeof usedTokens !== "number" || !Number.isFinite(usedTokens) || usedTokens < 0
+    || typeof modelContextWindow !== "number" || !Number.isFinite(modelContextWindow) || modelContextWindow <= 0) return undefined;
+  return contextWindowFill(usedTokens, modelContextWindow);
+}
+
 function normalizeThreadContextWindowState(
   tokenUsage: unknown
 ): ThreadContextWindowState | undefined {
@@ -5564,6 +5573,7 @@ export function useThreadSessionState(params: {
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
+  const liveContextWindowVersionsRef = useRef(new Map<string, number>());
   const liveTranscriptVersionsRef = useRef(new Map<string, number>());
   // The live transcript version at which each item was first observed. Only
   // items not yet covered by an adopted read are kept.
@@ -5628,6 +5638,9 @@ export function useThreadSessionState(params: {
     const retainedThreadKeys = new Set(Object.keys(sessions));
     for (const key of liveLifecycleVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveLifecycleVersionsRef.current.delete(key);
+    }
+    for (const key of liveContextWindowVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) liveContextWindowVersionsRef.current.delete(key);
     }
     for (const key of liveTranscriptVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveTranscriptVersionsRef.current.delete(key);
@@ -5800,6 +5813,7 @@ export function useThreadSessionState(params: {
       const attempt = hydration.attempt;
       hydrationsRef.current.set(targetThreadKey, hydration);
       const liveTranscriptVersion = liveTranscriptVersionsRef.current.get(targetThreadKey);
+      const liveContextWindowVersion = liveContextWindowVersionsRef.current.get(targetThreadKey);
 
       updateSession(targetThreadKey, (current) => ({
         ...current,
@@ -6080,12 +6094,16 @@ export function useThreadSessionState(params: {
             }
           }
 
+          // Recover missed readings from the owner, while a live reading
+          // received during this read takes precedence over its snapshot.
+          const snapshotContextWindow =
+            liveContextWindowVersion === liveContextWindowVersionsRef.current.get(targetThreadKey)
+            && (!currentAfterStaleThinking.contextWindow || (response.backend === "claude" && !fetchedResponse.unchanged))
+              ? readContextWindowFill(response.replay.contextWindow)
+              : undefined;
           return {
             ...currentAfterStaleThinking,
-            ...(!currentAfterStaleThinking.contextWindow && response.replay.contextWindow
-              && response.replay.contextWindow.modelContextWindow > 0
-              ? { contextWindow: contextWindowFill(response.replay.contextWindow.usedTokens, response.replay.contextWindow.modelContextWindow) }
-              : {}),
+            ...(snapshotContextWindow ? { contextWindow: snapshotContextWindow } : {}),
             ...transitionHydratedActiveTurn(current, {
               clear: shouldClearStaleThinking,
               pendingTurnId: hydratedPendingTurnId,
@@ -6748,6 +6766,14 @@ export function useThreadSessionState(params: {
         isThreadLocalTranscriptNotification(event.notification)
       ) {
         return;
+      }
+
+      const liveContextWindow = event.notification.method === "thread/contextWindow/updated"
+        ? readContextWindowFill(event.notification.params)
+        : undefined;
+      if (liveContextWindow) {
+        const previous = liveContextWindowVersionsRef.current.get(targetThreadKey) ?? 0;
+        liveContextWindowVersionsRef.current.set(targetThreadKey, previous + 1);
       }
 
       if (liveTranscriptEventFiltering) {
@@ -7892,7 +7918,7 @@ export function useThreadSessionState(params: {
               : undefined,
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
-            contextWindow: undefined,
+            contextWindow: event.backend === "claude" ? current.contextWindow : undefined,
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
@@ -7936,16 +7962,13 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "thread/contextWindow/updated") {
-          // A fill-only report (ACP usage_update). Replace the indicator
+          // A fill-only report from Claude or ACP. Replace the indicator
           // without touching turn usage: leaving the cumulative fields unset
           // keeps deriveTurnUsageBaseline on its total - last path.
-          const { modelContextWindow, usedTokens } = event.notification.params;
-          if (!(modelContextWindow > 0) || !(usedTokens >= 0)) {
-            return current;
-          }
+          if (!liveContextWindow) return current;
           return {
             ...current,
-            contextWindow: contextWindowFill(usedTokens, modelContextWindow),
+            contextWindow: liveContextWindow,
             lastTouchedAt: nextLastTouchedAt,
           };
         }

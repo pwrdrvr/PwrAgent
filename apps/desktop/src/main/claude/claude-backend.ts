@@ -3007,9 +3007,9 @@ export class ClaudeBackend {
         delete current.sdkSessionId;
         delete current.resumeSessionAt;
       }
-      // Totals and occupancy describe the removed turns.
+      // Billing starts over on the kept branch. Keep the last measured
+      // occupancy until Claude can measure the resumed context.
       delete current.modelUsage;
-      delete current.contextWindow;
       current.thread.updatedAt = Date.now();
       const truncationId = await this.store.truncate(threadId, target.messageId);
       current.rewinds = [...current.rewinds ?? [], {
