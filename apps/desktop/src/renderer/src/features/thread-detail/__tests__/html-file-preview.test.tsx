@@ -236,6 +236,23 @@ describe("HtmlFilePreview", () => {
     }
   });
 
+  it("never runs a peer's page by default, whatever the read reported", async () => {
+    const { api } = previewApi();
+    render(
+      <HtmlFilePreview
+        content="<script>draw()</script>"
+        desktopApi={api}
+        federationTarget={{ scope: "remote", instanceId: "peer" }}
+        label="Brief"
+        path="/work/brief/index.html"
+        threadWorkspace
+      />,
+    );
+
+    expect((await frame()).getAttribute("sandbox")).toBe("");
+    expect(await screen.findByRole("group", { name: "Page scripts" })).toBeInTheDocument();
+  });
+
   it("runs a page's scripts from the notice, or puts the notice away", async () => {
     const { api } = previewApi();
     render(

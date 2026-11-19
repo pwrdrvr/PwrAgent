@@ -119,7 +119,10 @@ async function readMarkdownFile(
 ): Promise<ReadMarkdownFileResponse> {
   if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
     try {
-      return await getDesktopFederationRuntime().pullMarkdownFile(request.federationTarget, request);
+      // A peer's say-so never makes its page the viewer's own work.
+      const { threadWorkspace: _threadWorkspace, ...response } = await getDesktopFederationRuntime()
+        .pullMarkdownFile(request.federationTarget, request);
+      return response;
     } catch (error) {
       return { path: request.path, error: error instanceof Error ? error.message : "Remote file could not be read." };
     }
@@ -144,7 +147,8 @@ async function readMarkdownFile(
     if (!fileStat.isFile()) {
       return { path: target, error: `Path is not a file: ${target}` };
     }
-    const maxBytes = filePreviewKind(resolved) === "html"
+    const html = filePreviewKind(resolved) === "html";
+    const maxBytes = html
       ? MAX_HTML_PREVIEW_FILE_BYTES
       : MAX_PREVIEW_FILE_BYTES;
     if (fileStat.size > maxBytes) {
@@ -155,8 +159,7 @@ async function readMarkdownFile(
     return {
       path: target,
       content,
-      ...(request.thread && filePreviewKind(resolved) === "html"
-        && await readsThreadWorkspaceFile(resolved, request.thread)
+      ...(request.thread && html && await readsThreadWorkspaceFile(resolved, request.thread)
         ? { threadWorkspace: true }
         : {}),
     };
@@ -170,7 +173,12 @@ async function readsThreadWorkspaceFile(
   request: NonNullable<ReadMarkdownFileRequest["thread"]>,
 ): Promise<boolean> {
   try {
-    const thread = await resolveFilePullThread(getDesktopBackendRegistry(), request.backend, request.threadId);
+    // Live threads only: an archived thread's lookup would force a listing on
+    // every preview, and its page still opens behind the scripts notice.
+    const thread = await getDesktopBackendRegistry().resolveThread({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
     return thread ? await isThreadWorkspaceFile(resolved, thread) : false;
   } catch {
     // An unknown thread only loses the default; the operator can still run scripts.

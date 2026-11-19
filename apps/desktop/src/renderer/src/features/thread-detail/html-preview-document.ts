@@ -257,7 +257,7 @@ export function prepareHtmlPreviewDocument(
 
     element.removeAttribute("ping");
     if (!hasScripts) {
-      hasScripts = name === "script"
+      hasScripts = (name === "script" && isExecutableScript(element))
         || element.getAttributeNames().some((attribute) => /^on/i.test(attribute));
     }
     for (const attribute of RESOURCE_ATTRIBUTES) {
@@ -311,6 +311,18 @@ export function prepareHtmlPreviewDocument(
     missingLocal: missing.size,
     hasScripts,
   };
+}
+
+/**
+ * A script block the browser would run. `application/json`, `text/template`
+ * and the like only carry data for the page's other scripts.
+ */
+function isExecutableScript(element: Element): boolean {
+  const type = (element.getAttribute("type") ?? "").trim().toLowerCase();
+  return type === ""
+    || type === "module"
+    || /^(?:text|application)\/(?:x-)?(?:javascript|ecmascript)$/.test(type)
+    || type === "text/jscript";
 }
 
 /** The `file:` URL for a local path, as the page's base for relative links. */

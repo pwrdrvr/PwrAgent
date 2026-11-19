@@ -20,9 +20,11 @@ export function transcriptThreadDirectories(thread: AppServerThreadSummary): str
 
 /**
  * Whether a file is the thread's own work: inside one of its directories, or
- * in the scratchpad Claude Code keeps for the session. Claude Code puts that
- * at `<CLAUDE_CODE_TMPDIR or /tmp>/claude-<uid>/<cwd key>/<session id>/scratchpad`,
- * and a PwrAgent Claude thread's id is its session id.
+ * in a scratchpad Claude Code kept for a session run in one of them. Claude
+ * Code puts that at
+ * `<CLAUDE_CODE_TMPDIR or /tmp>/claude-<uid>/<cwd key>/<session id>/scratchpad`.
+ * The session id is matched loosely: a rewound, restarted or forked thread
+ * runs under a new one.
  *
  * `resolved` must already be a real path.
  */
@@ -31,17 +33,25 @@ export async function isThreadWorkspaceFile(
   thread: AppServerThreadSummary,
   options: { tmpRoot?: string; uid?: number } = {},
 ): Promise<boolean> {
-  const roots = await Promise.all(
-    transcriptThreadDirectories(thread).map((directory) => realpath(directory).catch(() => undefined)),
-  );
+  const directories = transcriptThreadDirectories(thread);
+  const roots = await Promise.all(directories.map((directory) => realpath(directory).catch(() => undefined)));
   if (roots.some((root) => root !== undefined && isInside(root, resolved))) return true;
   const uid = options.uid ?? process.getuid?.();
   if (thread.source !== "claude" || uid === undefined) return false;
   const tmpRoot = options.tmpRoot ?? process.env.CLAUDE_CODE_TMPDIR ?? "/tmp";
   const sessions = await realpath(path.join(tmpRoot, `claude-${uid}`)).catch(() => undefined);
   if (!sessions || !isInside(sessions, resolved)) return false;
-  const [, sessionId, folder, ...rest] = path.relative(sessions, resolved).split(path.sep);
-  return sessionId === thread.id && folder === "scratchpad" && rest.length > 0;
+  const [cwdKey = "", , folder, ...rest] = path.relative(sessions, resolved).split(path.sep);
+  if (folder !== "scratchpad" || rest.length === 0) return false;
+  const cwds = [...directories, ...roots].filter((cwd): cwd is string => Boolean(cwd));
+  return cwds.some((cwd) => matchesClaudeCwdKey(cwdKey, cwd));
+}
+
+/** Claude Code names a cwd's folders with every non-alphanumeric as `-`, cut and hashed past 200. */
+function matchesClaudeCwdKey(key: string, cwd: string): boolean {
+  const sanitized = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+  return key === sanitized
+    || (sanitized.length > 200 && key.startsWith(`${sanitized.slice(0, 200)}-`));
 }
 
 function isInside(root: string, target: string): boolean {
@@ -77,11 +87,7 @@ export async function resolveTranscriptFiles(
     if (!target) continue;
     try {
       const resolved = await realpath(target);
-      if (restrictToDirectories && !roots.some((root) => {
-        if (!root) return false;
-        const relative = path.relative(root, resolved);
-        return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-      })) continue;
+      if (restrictToDirectories && !roots.some((root) => root !== undefined && isInside(root, resolved))) continue;
       if (!(await stat(resolved)).isFile()) continue;
       files.push({
         ...candidate,

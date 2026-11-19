@@ -45,6 +45,11 @@ describe("prepareHtmlPreviewDocument scripts", () => {
       ['<button ONCLICK="go()">Go</button>', true],
       ['<svg><circle onmouseover="hi()" r="4"/></svg>', true],
       ["<noscript>Turn on scripts</noscript><p>Text</p>", false],
+      ['<script type="application/json">{"rows":[]}</script><table></table>', false],
+      ['<script type="application/ld+json">{}</script>', false],
+      ['<script type="text/template"><li></li></script>', false],
+      ['<script type="module">import "./app.js"</script>', true],
+      ['<script type=" Text/JavaScript ">draw()</script>', true],
     ];
     for (const [html, expected] of pages) {
       expect(prepareHtmlPreviewDocument(html, NO_RESOURCES, {}).hasScripts, html).toBe(expected);

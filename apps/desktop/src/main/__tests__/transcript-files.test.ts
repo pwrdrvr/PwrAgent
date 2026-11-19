@@ -57,17 +57,19 @@ describe("transcript file resolution", () => {
     await expect(resolveTranscriptFiles({ references: Array(129).fill("notes.md") }, [root])).rejects.toThrow("128");
   });
 
-  it("counts a file as the thread's own work only in its directories or its own Claude scratchpad", async () => {
-    const worktree = path.join(root, "worktree");
+  it("counts a file as the thread's own work only in its directories or a Claude scratchpad for them", async () => {
+    const worktree = path.join(root, "work.tree");
     const tmpRoot = path.join(root, "tmp");
-    const sessions = path.join(tmpRoot, "claude-501", "-Users-me-worktree");
+    const sessions = path.join(tmpRoot, "claude-501", worktree.replace(/[^a-zA-Z0-9]/g, "-"));
     const files = {
       inWorktree: path.join(worktree, "docs", "review.html"),
-      worktreeSibling: path.join(root, "worktree-other", "review.html"),
+      worktreeSibling: path.join(root, "work.tree-other", "review.html"),
       ownScratchpad: path.join(sessions, "thread-1", "scratchpad", "pa", "review.html"),
+      // A rewound, restarted or forked thread runs under a new session id.
+      newSessionScratchpad: path.join(sessions, "8d1c-rewound", "scratchpad", "review.html"),
       ownSessionOutsideScratchpad: path.join(sessions, "thread-1", "tasks", "review.html"),
-      otherScratchpad: path.join(sessions, "thread-2", "scratchpad", "review.html"),
-      otherUser: path.join(tmpRoot, "claude-502", "-Users-me-worktree", "thread-1", "scratchpad", "review.html"),
+      otherProjectScratchpad: path.join(tmpRoot, "claude-501", "-elsewhere", "thread-1", "scratchpad", "review.html"),
+      otherUser: path.join(tmpRoot, "claude-502", worktree.replace(/[^a-zA-Z0-9]/g, "-"), "thread-1", "scratchpad", "review.html"),
     };
     for (const file of Object.values(files)) {
       await mkdir(path.dirname(file), { recursive: true });
@@ -83,8 +85,9 @@ describe("transcript file resolution", () => {
       inWorktree: [true, true],
       worktreeSibling: [false, false],
       ownScratchpad: [true, false],
+      newSessionScratchpad: [true, false],
       ownSessionOutsideScratchpad: [false, false],
-      otherScratchpad: [false, false],
+      otherProjectScratchpad: [false, false],
       otherUser: [false, false],
     };
     for (const [name, file] of Object.entries(files) as Array<[keyof typeof files, string]>) {

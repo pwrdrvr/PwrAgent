@@ -62,13 +62,14 @@ export function HtmlFilePreview(props: {
   // The operator's choice for this page, once made, outlasts the default
   // arriving or changing.
   const [chosenScripts, setChosenScripts] = useState<boolean>();
-  const scripts = chosenScripts ?? (runScriptsByDefault || Boolean(props.threadWorkspace));
-  const [scriptsNoticeDismissed, setScriptsNoticeDismissed] = useState(false);
-  const [resourceState, setResourceState] = useState<ResourceState>({ status: "loading" });
-  const [pendingLink, setPendingLink] = useState<PendingLink>();
   const remote = Boolean(
     props.federationTarget && isRemoteFederationTarget(props.federationTarget),
   );
+  // Another machine's page is never the viewer's own work.
+  const scripts = chosenScripts ?? (runScriptsByDefault || (Boolean(props.threadWorkspace) && !remote));
+  const [scriptsNoticeDismissed, setScriptsNoticeDismissed] = useState(false);
+  const [resourceState, setResourceState] = useState<ResourceState>({ status: "loading" });
+  const [pendingLink, setPendingLink] = useState<PendingLink>();
   const readHtmlPreviewAssets = props.desktopApi?.readHtmlPreviewAssets;
   const onHtmlPreviewNavigation = props.desktopApi?.onHtmlPreviewNavigation;
   const onOpenLocalFile = props.onOpenLocalFile;
