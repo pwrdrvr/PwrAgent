@@ -1,10 +1,11 @@
 import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
-import { applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchApproachOccupiesSlot, researchWorkerLimit,
+import { applyResearchBounds, applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchApproachOccupiesSlot, researchWorkerLimit,
   researchItemSearchText, researchSearchHit, RESEARCH_BOARD_DELIVERIES, RESEARCH_BOARD_FAILURES, RESEARCH_BOARD_PAGE, RESEARCH_CHANGES_PAGE, RESEARCH_MAP_LEAVES,
   type ResearchEvent, type ResearchRun, type ResearchThread, type ResearchRunHeader, type ResearchItem, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchRunSummary, type ResearchEventRange, type ResearchEventPage, type ResearchApproach, type ResearchDelivery, type ResearchSubmission,
   type ResearchBoardRange, type ResearchBoardPage, type ResearchChangesCursor, type ResearchChangePage, type ResearchRunState, type ResearchApproachLeaves,
   type ResearchFinding, type ResearchHarnessPhase, type ResearchProfileRunsQuery, type ResearchProfileRun, type ResearchRunAttention, RESEARCH_RUN_ATTENTION_ORDER,
+  type ResearchBounds, type ResearchEventData, type ResearchWorkerTime,
 } from "@pwragent/shared/research";
 import type { StateDb } from "./state-db";
 
@@ -94,6 +95,8 @@ CREATE INDEX IF NOT EXISTS idx_research_events_harness ON research_events(run_id
   WHERE json_extract(payload, '$.data.type') = 'harness';
 CREATE INDEX IF NOT EXISTS idx_research_events_adopted ON research_events(run_id, seq DESC)
   WHERE json_extract(payload, '$.data.type') = 'adopted';
+CREATE INDEX IF NOT EXISTS idx_research_events_bounds ON research_events(run_id, seq DESC)
+  WHERE json_extract(payload, '$.data.type') = 'bounds';
 CREATE INDEX IF NOT EXISTS idx_research_events_harness_record ON research_events(run_id, json_extract(payload, '$.provenance.seq'))
   WHERE json_extract(payload, '$.data.type') = 'harness_observation';
 `;
@@ -103,10 +106,16 @@ const HARNESS_STATE = `coalesce((SELECT json_extract(payload, '$.data.state') FR
   WHERE run_id = r.run_id AND json_extract(payload, '$.data.type') = 'harness' ORDER BY seq DESC LIMIT 1),
   (SELECT json_extract(payload, '$.data.harness') FROM research_events WHERE run_id = r.run_id AND seq = 1))`;
 
-/** What every header read selects: the creation event, and the columns and counts that change after it. */
+/**
+ * What every header read selects: the creation event, and the columns and counts that change after it. The
+ * owner and the bounds are each the latest of their events, one indexed row; a run that never had one reads
+ * them from its creation.
+ */
 const HEADER_COLUMNS = `r.run_id, r.status, r.reason, e.payload,
   (SELECT json_extract(payload, '$.data') FROM research_events
     WHERE run_id = r.run_id AND json_extract(payload, '$.data.type') = 'adopted' ORDER BY seq DESC LIMIT 1) AS owner,
+  (SELECT json_extract(payload, '$.data') FROM research_events
+    WHERE run_id = r.run_id AND json_extract(payload, '$.data.type') = 'bounds' ORDER BY seq DESC LIMIT 1) AS bounds,
   (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
   (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers`;
 /** A summary adds the review counts. Each is an index range, not a scan of item payloads. */
@@ -142,7 +151,7 @@ const PROFILE_RUNS = "WITH s AS (SELECT " + SUMMARY_COLUMNS + ", " + HARNESS_PHA
   + " WHERE (@source IS NULL OR (@source = 'harness') = (s.harness_phase IS NOT NULL))"
   + " AND (@text IS NULL OR instr(lower(json_extract(s.payload, '$.data.objective')), @text) > 0)) ";
 
-type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; owner: string | null; revision: number; active_workers: number; harness?: string | null };
+type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; owner: string | null; bounds: string | null; revision: number; active_workers: number; harness?: string | null };
 type SummaryRow = HeaderRow & { unreviewed: number; accepted: number; harness_phase: string | null };
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
@@ -365,6 +374,13 @@ export class ResearchStore implements ResearchStorage {
         leafIds: leaves.slice(0, RESEARCH_MAP_LEAVES).map((leaf) => leaf.id) };
     });
   }
+  /** Read only for a run whose operator set a total worker time. The type index bounds it to the run's approaches. */
+  workerTime(id: string): ResearchWorkerTime {
+    const row = this.stateDb.raw.prepare(`SELECT total(json_extract(payload, '$.record.workedMs')) AS closed,
+      json_group_array(json_extract(payload, '$.record.turnSince')) FILTER (WHERE json_extract(payload, '$.record.turnSince') IS NOT NULL) AS open
+      FROM research_items WHERE run_id = ? AND item_type = 'approach'`).get(id) as { closed: number; open: string | null };
+    return { closedMs: row.closed, openSince: row.open ? JSON.parse(row.open) as number[] : [] };
+  }
   findCommand(id: string, commandId: string): ResearchEvent | undefined {
     const row = this.stateDb.raw.prepare("SELECT payload FROM research_events WHERE run_id = ? AND command_id = ?").get(id, commandId) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) as ResearchEvent : undefined;
@@ -467,9 +483,14 @@ function headerFromRow(row: HeaderRow): ResearchRunHeader {
   const data = event.data;
   // The process holding the run: whoever took it over last, or the one that started it.
   const owner = row.owner ? JSON.parse(row.owner) as Pick<ResearchRunHeader, "ownerId" | "ownerPid" | "ownerStartedAt"> : data;
+  // The bounds as the operator last set them, or as the run started.
+  const created: ResearchBounds = { workerLimit: researchWorkerLimit(data), ...(data.deadlineAt !== undefined ? { deadlineAt: data.deadlineAt } : {}),
+    ...(data.turnMinutes !== undefined ? { turnMinutes: data.turnMinutes } : {}), ...(data.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: data.totalWorkerMinutes } : {}) };
+  const bounds = row.bounds ? applyResearchBounds(created, JSON.parse(row.bounds) as Extract<ResearchEventData, { type: "bounds" }>) : created;
   return { id: row.run_id, revision: row.revision, objective: data.objective, coordinator: data.coordinator, ownerId: owner.ownerId, ownerPid: owner.ownerPid,
-    ownerStartedAt: owner.ownerStartedAt, createdAt: event.at, deadlineAt: data.deadlineAt, workspaceMode: data.workspaceMode, status: row.status,
-    ...(row.reason !== null ? { reason: row.reason } : {}), workerLimit: researchWorkerLimit(data), activeWorkers: row.active_workers,
+    ownerStartedAt: owner.ownerStartedAt, createdAt: event.at, deadlineAt: bounds.deadlineAt, workspaceMode: data.workspaceMode, status: row.status,
+    ...(row.reason !== null ? { reason: row.reason } : {}), workerLimit: bounds.workerLimit, activeWorkers: row.active_workers,
+    ...(bounds.turnMinutes !== undefined ? { turnMinutes: bounds.turnMinutes } : {}), ...(bounds.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: bounds.totalWorkerMinutes } : {}),
     ...(row.harness ? { harness: JSON.parse(row.harness) as NonNullable<ResearchRun["harness"]> } : {}) };
 }
 

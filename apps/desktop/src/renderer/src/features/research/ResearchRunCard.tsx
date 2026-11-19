@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { RESEARCH_HARNESS_RECONCILABLE, researchHarnessEffectiveState } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
-import { formatClock, isResearchRunLive, plural, researchCutOffWorkers, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
+import { ResearchBoundsEditor, type ResearchBoundsChange } from "./ResearchBoundsEditor";
+import { formatClock, formatResearchDuration, isResearchRunLive, plural, researchWorkerMinutesUsed, researchCutOffWorkers, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
-export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop, onFinish, onReconcile, onResume }: {
+export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop, onFinish, onReconcile, onResume, onChangeBounds }: {
   run: ResearchRunView; now: number; coordinator: boolean; writable: boolean; busy: boolean;
   onStop: () => void; onFinish: () => void; onReconcile?: () => void; onResume?: () => void;
+  /** The operator's change to a running run's bounds. Resolves true once the owner records it. */
+  onChangeBounds?: (change: ResearchBoundsChange) => Promise<boolean>;
 }) {
   const [confirmingStop, setConfirmingStop] = useState(false);
+  const [editingBounds, setEditingBounds] = useState(false);
   const phase = researchRunPhase(run);
   const counts = researchRunCounts(run);
   const live = isResearchRunLive(run);
@@ -17,6 +21,10 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
   const finishableRetired = harness ? run.status !== "completed" && ["ended", "imported"].includes(harness.state)
     : ["interrupted", "exhausted"].includes(run.status) && run.accepted > 0;
   const controls = coordinator && writable && (live || finishableRetired);
+  // Bounds are the operator's to change, on a running PwrAgent run this process holds. A Harness run takes its own from the bridge.
+  const changeBounds = controls && !harness && run.status === "running" ? onChangeBounds : undefined;
+  const editing = Boolean(changeBounds) && editingBounds;
+  const workerUsed = run.totalWorkerMinutes === undefined ? 0 : researchWorkerMinutesUsed(run, now);
   const finishBlocker = researchFinishBlocker(run);
   const outcome = researchHarnessOutcome(run);
   // Quitting ends the turns in flight, never the run. Nothing restarts until the operator asks.
@@ -41,6 +49,11 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
         <div><dt>Findings</dt><dd>{counts.findings}</dd></div>
         <div><dt>{counts.unreviewed ? "Candidates to review" : "Candidates"}</dt><dd>{counts.unreviewed ? `${counts.unreviewed} of ${counts.candidates}` : counts.candidates}</dd></div>
       </dl>}
+    {!harness && (run.turnMinutes !== undefined || run.totalWorkerMinutes !== undefined) && <dl className="research-stats" aria-label="Worker limits">
+      {run.turnMinutes !== undefined && <div><dt>Each worker</dt><dd>{formatResearchDuration(run.turnMinutes)}</dd></div>}
+      {run.totalWorkerMinutes !== undefined && <div><dt>Worker time</dt><dd>{formatResearchDuration(workerUsed)} of {formatResearchDuration(run.totalWorkerMinutes)}
+        <span className="research-bar research-bar--wide" aria-hidden="true"><i style={{ width: `${Math.min(100, Math.round(workerUsed / run.totalWorkerMinutes * 100))}%` }} /></span></dd></div>}
+    </dl>}
     {outcome && <div className="research-callout" role="group" aria-label="Unresolved source outcome">
       <strong>{outcome.title}</strong>
       <p className="research-muted">{outcome.body}</p>
@@ -75,9 +88,11 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
     {!harness && run.reason && !live && <p className="research-muted">{run.reason}</p>}
     {!writable && run.status !== "completed" && !outcome && <p className="research-muted">Another running PwrAgent process owns this run. Its records are kept here as they arrive; review and finish it from that process.</p>}
     {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
-    {controls && !confirmingStop && <div className="research-card__actions">
+    {editing && changeBounds && <ResearchBoundsEditor run={run} now={now} busy={busy} onSave={changeBounds} onCancel={() => setEditingBounds(false)} />}
+    {controls && !confirmingStop && !editing && <div className="research-card__actions">
       {finishBlocker && <span className="research-muted">{finishBlocker}</span>}
       <span className="research-actions">
+        {changeBounds && <button type="button" className="research-button" disabled={busy} onClick={() => setEditingBounds(true)}>Change bounds…</button>}
         {live && <button type="button" className="research-button" disabled={busy || run.status === "stopping"} onClick={() => setConfirmingStop(true)}>{harness?.mode === "import" ? "Stop observing…" : "Stop run…"}</button>}
         <button type="button" className={`research-button${finishBlocker ? "" : " research-button--primary"}`} disabled={busy || Boolean(finishBlocker) || run.status === "stopping"} onClick={onFinish}>Finish run</button>
       </span>

@@ -34,13 +34,20 @@ type Faults = {
  */
 const STEP_WEIGHTS = {
   start: 5, finding: 14, submit: 8, review: 10, direction: 3, abandon: 2, stop: 1, finish: 2, work: 10, assign: 8,
-  observe_start: 4, observe_end: 9, observe_queue: 8, advance: 3, toggle: 1, stop_owned: 1, restart: 1, repeat: 3, resend: 4, reuse: 2, read: 3,
+  observe_start: 4, observe_end: 9, observe_queue: 8, advance: 3, toggle: 1, stop_owned: 1, restart: 1, repeat: 3, resend: 4, reuse: 2, read: 3, bounds: 4,
 } as const;
 type StepKind = keyof typeof STEP_WEIGHTS;
-const STEP_KINDS = (Object.entries(STEP_WEIGHTS) as [StepKind, number][]).flatMap(([kind, weight]) => Array.from({ length: weight }, () => kind));
+const stepKinds = (weights: Partial<Record<StepKind, number>>) => (Object.entries(weights) as [StepKind, number][]).flatMap(([kind, weight]) => Array.from({ length: weight }, () => kind));
+/**
+ * Weighted toward what a per-worker time limit and total worker time need to be reached: runs that set them,
+ * turns that start and run on, the operator changing them, restarts, and time passing for their timers to fire.
+ */
+const BOUNDS_STEP_WEIGHTS: Partial<Record<StepKind, number>> = {
+  start: 5, finding: 3, submit: 3, review: 2, work: 2, assign: 3, observe_start: 6, observe_end: 4, advance: 12, bounds: 8, restart: 2, stop: 1, repeat: 2, resend: 2, read: 1,
+};
 
-export const researchDifferentialStepArb = fc.record({
-  kind: fc.constantFrom(...STEP_KINDS),
+const stepArb = (weights: Partial<Record<StepKind, number>>) => fc.record({
+  kind: fc.constantFrom(...stepKinds(weights)),
   run: fc.nat(), actor: fc.nat(), approach: fc.nat(), item: fc.nat(), other: fc.nat(), variant: fc.nat(), flag: fc.boolean(),
   faults: fc.record<Faults>({
     spawn: fc.constantFrom("ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "refused", "error", "no_turn"),
@@ -49,6 +56,8 @@ export const researchDifferentialStepArb = fc.record({
     cancel: fc.constantFrom("plain", "plain", "turn", "error"),
   }),
 });
+export const researchDifferentialStepArb = stepArb(STEP_WEIGHTS);
+export const researchDifferentialBoundsStepArb = stepArb(BOUNDS_STEP_WEIGHTS);
 export type ResearchDifferentialStep = typeof researchDifferentialStepArb extends fc.Arbitrary<infer T> ? T : never;
 
 /** What the generated sequences reached, so a test can show its generator crosses the rules it claims to compare. */
@@ -130,8 +139,10 @@ type Action = (world: World) => unknown;
 function summary(result: unknown): unknown {
   if (Array.isArray(result)) return result.map(summary);
   if (result && typeof result === "object" && "objective" in result && "status" in result) {
-    const run = result as unknown as { id: string; revision: number; status: string; activeWorkers: number };
-    return { id: run.id, revision: run.revision, status: run.status, activeWorkers: run.activeWorkers };
+    const run = result as unknown as { id: string; revision: number; status: string; activeWorkers: number } & Partial<Record<"workerLimit" | "deadlineAt" | "turnMinutes" | "totalWorkerMinutes", number>>;
+    // The bounds as a header reads them, which the stored projection must answer as replay does.
+    return { id: run.id, revision: run.revision, status: run.status, activeWorkers: run.activeWorkers,
+      bounds: [run.workerLimit, run.deadlineAt, run.turnMinutes, run.totalWorkerMinutes] };
   }
   return result;
 }
@@ -197,7 +208,12 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
       expect(summary(worlds[1]!.service.summaries(thread)), `${context}: summaries ${thread.threadId}`).toEqual(summary(worlds[0]!.service.summaries(thread)));
     }
   }
-  for (const events of reference.records.values()) for (const event of events) coverage.events[event.data.type] = (coverage.events[event.data.type] ?? 0) + 1;
+  for (const events of reference.records.values()) for (const event of events) {
+    // The bounds' own outcomes, which only their timers produce, are tallied apart so a test can require them.
+    const key = event.data.type === "worker" && event.data.note?.startsWith("Stopped at the per-worker time limit") ? "worker:turn-limit"
+      : event.data.type === "status" && event.data.reason.endsWith("Total worker time reached") ? "status:worker-time" : event.data.type;
+    coverage.events[key] = (coverage.events[key] ?? 0) + 1;
+  }
   for (const world of worlds) world.service.close();
 
   function resolve(step: ResearchDifferentialStep, runs: ResearchRun[], position: number): Action {
@@ -235,7 +251,9 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
     switch (step.kind) {
       case "start": {
         const count = step.variant % 9 === 8 ? 0 : 1 + step.variant % 3;
+        // Sometimes with a per-worker time limit or total worker time, which arm timers the advance steps fire.
         const request: StartResearchRequest = { objective: `Objective ${text}`, minutes: 1 + step.other % 20, workspaceMode: step.flag ? "none" : "new_worktree",
+          ...(step.variant % 4 === 1 ? { turnMinutes: 1 + step.item % 15 } : {}), ...(step.variant % 5 === 2 ? { totalWorkerMinutes: 1 + step.approach % 30 } : {}),
           approaches: Array.from({ length: count }, (_, n) => ({ title: step.variant % 7 === 6 ? "Same title" : `Approach ${n + 1}`, task: `Task ${n + 1}` })) };
         // Mostly a new call; sometimes an earlier call ID, which repeats that start or reuses its key with other arguments.
         const context: ResearchExecutionContext = { ...(step.actor % 8 >= 4 && actor.kind === "agent" ? actor as ResearchExecutionContext : coordinator), callId: step.other % 4 === 3 ? `start-${step.item % 2}` : `start-${call}` };
@@ -321,6 +339,18 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
         world.renew();
         world.service.initialize();
       };
+      // The operator's change to a run's bounds: mostly a valid one, sometimes out of range, already passed or empty, and sometimes sent by an agent.
+      case "bounds": {
+        const choose = (n: number) => n % 4 === 0 ? undefined : n % 4 === 1 ? null : 1 + n % 25;
+        const fields = { workers: step.variant % 3 ? step.variant % 7 : undefined, minutes: choose(step.other), turnMinutes: choose(step.item), totalWorkerMinutes: choose(step.approach) };
+        const command = { action: "bounds", ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) } as ResearchCommand;
+        const requestId = `request-${++requests}`;
+        const sender: ResearchActor = step.flag || step.actor % 5 ? { ...COORDINATOR, kind: "operator" } : actor;
+        const resend = (from: ResearchActor): Action => async (world) => await world.service.update(runId, requestId, structuredClone(command), from);
+        const action = resend(sender);
+        Object.assign(previous, { action, resend, requestId, runId, actor: sender });
+        return action;
+      }
       // The last command again, exactly: a redelivery, which must not append twice.
       case "repeat": return previous.action ?? (() => undefined);
       // The last command again, key and content, from another sender: the same thread acting as operator instead of agent, or another thread.

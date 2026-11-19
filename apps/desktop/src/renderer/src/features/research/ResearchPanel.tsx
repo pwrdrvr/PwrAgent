@@ -12,7 +12,7 @@ import { ResearchReviewView } from "./ResearchReviewView";
 import { ResearchRunCard } from "./ResearchRunCard";
 import { ResearchPendingCard, ResearchStartForm, type ResearchStartValues } from "./ResearchStartForm";
 import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
-import { excerpt, isResearchRunLive, researchRunPhase, researchRunView } from "./research-view-model";
+import { excerpt, isResearchRunLive, researchRunPhase, researchRunView, researchStartLimits } from "./research-view-model";
 import { useResearchSync } from "./useResearchSync";
 import { useResearchNow } from "./useResearchNow";
 import { researchErrorMessage as message, useResearchRunActions } from "./useResearchRunActions";
@@ -89,7 +89,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     try {
       const { intentId } = await api.prepareResearch({ ...identity, ...values });
       prepared = true;
-      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, ${values.minutes === undefined ? "no time limit (omit minutes)" : `minutes=${values.minutes}`}, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently change the worker count, or add or change a time limit.`);
+      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, ${researchStartLimits(values)}, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not change the worker count or any limit, and do not add one.`);
       setCreating(false);
       return true;
     } catch (failure) {
@@ -146,6 +146,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
         onResume={() => { void update({ action: "resume" }); }}
+        onChangeBounds={(bounds) => update({ action: "bounds", ...bounds })}
         onReconcile={api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
       <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount} onChoose={chooseView} />
       <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">

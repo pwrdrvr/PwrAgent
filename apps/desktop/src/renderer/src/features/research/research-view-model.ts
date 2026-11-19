@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, researchWorkerTime, researchWorkerTimeUsed, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,
@@ -128,6 +128,24 @@ export function formatResearchDuration(minutes: number): string {
 /** The operator's time limit for a run, in words. */
 export function researchTimeLimitLabel(minutes: number | undefined): string {
   return minutes === undefined ? "no time limit" : `${formatResearchDuration(minutes)} limit`;
+}
+
+/** The operator's limits as the coordinator is told to pass them: each one set, and each one left out. */
+export type ResearchLimits = { minutes?: number; turnMinutes?: number; totalWorkerMinutes?: number };
+export function researchStartLimits(limits: ResearchLimits): string {
+  const part = (name: keyof ResearchLimits, none: string) => limits[name] === undefined ? `${none} (omit ${name})` : `${name}=${limits[name]}`;
+  return [part("minutes", "no time limit"), part("turnMinutes", "no per-worker time limit"), part("totalWorkerMinutes", "no total worker time")].join(", ");
+}
+
+/** A request's limits in words, naming the worker limits only when set: "no time limit · 45 min per worker". */
+export function researchLimitsLabel(limits: ResearchLimits): string {
+  return [researchTimeLimitLabel(limits.minutes), ...(limits.turnMinutes !== undefined ? [`${formatResearchDuration(limits.turnMinutes)} per worker`] : []),
+    ...(limits.totalWorkerMinutes !== undefined ? [`${formatResearchDuration(limits.totalWorkerMinutes)} of worker time`] : [])].join(" · ");
+}
+
+/** Whole minutes of worker time the run's turns have used at `now`, from the approaches the window holds. */
+export function researchWorkerMinutesUsed(run: Pick<ResearchRunView, "approaches">, now: number): number {
+  return Math.floor(researchWorkerTimeUsed(researchWorkerTime(run.approaches), now) / 60_000);
 }
 
 /** Remaining time for a live run, or when its time limit fell for a finished one. A run may have no limit. */
