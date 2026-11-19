@@ -1,4 +1,5 @@
 {
+  "research-retained-review-and-finish": {"commits": 2, "note": "After a restart: one accepted decision and one completion on a retained run. No worker, bridge or model effect.", "observedWalBytes": 41200, "rowsChanged": 4, "statements": 4},
   "research-harness-check": {"commits": 0, "note": "A bridge capability check sends hello only and records nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-reconcile": {"commits": 3, "note": "Reconcile intent, one seven-record source page with its cursor, and the settled outcome. Read-only; no execute or cancel.", "observedWalBytes": 131840, "rowsChanged": 20, "statements": 20},
   "agent-follow-up-lock-held-restart": {"commits": 7, "note": "one agent follow-up a lock holds across a restart: create, claim, held (recording its holder); the next launch claims it from the dead holder and holds it again (two commits); the unlock queues it under a lease before the start, then started. The restart costs two commits per held action and the unlock one more than a direct start.", "observedWalBytes": 119512, "rowsChanged": 8, "statements": 8},

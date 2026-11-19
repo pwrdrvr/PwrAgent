@@ -5,13 +5,14 @@ import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
 import { normalizeHarnessRecords, object, text } from "./research-harness-records";
 import { normalizeHarnessDiscovery } from "./research-harness-discovery";
+import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy } from "./research-ownership";
 
 export interface ResearchHarnessConnection {
   model?: { model: string; endpointOrigin: string };
   request(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): void | Promise<void>;
 }
-export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | "ownerStartedAt" | "changed" | "now" | "onError" | "schedule" | "enabled"> & {
+export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | "ownerStartedAt" | "isOwnerAlive" | "changed" | "now" | "onError" | "schedule" | "enabled"> & {
   open: (workspace: string, id: string, mode: "import" | "execute") => ResearchHarnessConnection;
   /** An actual ordinary-function round trip, bound to the configured endpoint and model. */
   probe: (id: string, signal: AbortSignal) => Promise<void>;
@@ -182,7 +183,9 @@ export class ResearchHarnessService {
 
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string): Promise<ResearchRunHeader> {
     const run = this.run(id);
-    if (this.closed || run.ownerId !== this.ports.ownerId || !sameResearchThread(run.coordinator, actor)) throw new Error("Harness owner or coordinator unavailable");
+    if (this.closed || !sameResearchThread(run.coordinator, actor)) throw new Error("Harness owner or coordinator unavailable");
+    // Cancelling needs the process that holds the bridge; completing a retained run needs only that no other process still does.
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
     if (outcome === "completed") {
       if (!this.storage.hasSubmission(id, "accepted")) throw new Error("Accept a submission before completing the run");
       if (["ended", "imported"].includes(run.harness!.state) && ["exhausted", "interrupted"].includes(run.status)) {
@@ -250,7 +253,7 @@ export class ResearchHarnessService {
     const effective = researchHarnessEffectiveState(run.status, origin);
     if (!RESEARCH_HARNESS_RECONCILABLE.includes(effective)) throw new Error("This run has no unresolved source outcome to reconcile");
     if (this.connections.has(id) || this.pending.has(id) || this.reconciling.has(id)) throw new Error("This run's bridge connection is still open");
-    if (["running", "stopping"].includes(run.status) && run.ownerId !== this.ports.ownerId) throw new Error("Another PwrAgent process owns this run");
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
     this.reconciling.set(id, undefined);
     const prior = effective === "reconciling" ? origin.mode === "import" ? "imported" : "unknown" : effective;
     const from = origin.cursor;

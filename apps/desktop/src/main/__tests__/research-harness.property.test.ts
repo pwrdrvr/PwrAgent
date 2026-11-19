@@ -36,7 +36,7 @@ function setup(options: { records?: unknown[]; enabled?: () => boolean; hello?: 
     if (method === "records") { const records = delivered ? [] : options.records ?? harnessRecords().slice(0, 4); delivered = true; return { swarm: "fixture-swarm", records }; }
     throw new Error("Unexpected request");
   }) };
-  const ports: ResearchHarnessPorts = { enabled: options.enabled, ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, changed: vi.fn(), now: () => 1000,
+  const ports: ResearchHarnessPorts = { enabled: options.enabled, ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, isOwnerAlive: () => true, changed: vi.fn(), now: () => 1000,
     schedule: () => () => {}, onError: vi.fn(), open: vi.fn(() => connection), probe: options.probe ?? vi.fn(async () => {}) };
   const service = new ResearchHarnessService(store, ports); services.push(service);
   return { service, store, connection, ports };

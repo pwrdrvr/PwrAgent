@@ -23,7 +23,7 @@ const request = (mode: "execute" | "import" = "execute", source: "swarm" | "disc
   objective: "Compare invented queue hypotheses", project: "fixture-project", session: "fixture-session", swarm: "fixture-swarm", workers: 2, minutes: 10, budgetAcknowledged: mode === "execute" });
 
 beforeEach(() => { vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1"); fixture = createTempStateDb("pwragent-harness-reconcile-"); db = StateDb.open(fixture.dbPath); resetSqliteWriteMetrics(); });
-afterEach(async () => { for (const service of services.splice(0)) await service.close(); db.close(); rmSync(fixture.tempDir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
+afterEach(async () => { running.clear(); for (const service of services.splice(0)) await service.close(); db.close(); rmSync(fixture.tempDir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 
 /**
  * The source as the bridge contract describes it: records after a cursor, at
@@ -55,9 +55,12 @@ function source(options: { page: number; visible: number; cancel?: "confirmed" |
   return { state, connections, methods, open };
 }
 
+/** Processes on this profile that are still running. A test ends one by removing it. */
+const running = new Set<string>();
 function setup(oracle: ReturnType<typeof source>, ownerId = "owner") {
   const store = new ResearchStore(db);
-  const ports: ResearchHarnessPorts = { ownerId, ownerPid: 42, ownerStartedAt: 100, changed: vi.fn(), now: () => 1000,
+  running.add(ownerId);
+  const ports: ResearchHarnessPorts = { ownerId, ownerPid: 42, ownerStartedAt: 100, isOwnerAlive: (owner) => running.has(owner.ownerId), changed: vi.fn(), now: () => 1000,
     schedule: () => () => {}, onError: vi.fn(), open: oracle.open, probe: vi.fn(async () => {}) };
   const service = new ResearchHarnessService(store, ports); services.push(service);
   return { service, store, ports };
@@ -114,7 +117,8 @@ describe("Harness reconcile and bridge check over real SQLite", () => {
     const dead = setup(oracle, "owner-that-dies");
     const run = await dead.service.start(request(), fixture.tempDir);
     expect(dead.store.header(run.id)).toMatchObject({ status: "running", harness: { state: "running", cursor: 4 } });
-    const recovery = new ResearchService(dead.store, { ownerId: "next-launch", ownerPid: 2, ownerStartedAt: 200, isOwnerAlive: () => false,
+    running.delete("owner-that-dies");
+    const recovery = new ResearchService(dead.store, { ownerId: "next-launch", ownerPid: 2, ownerStartedAt: 200, isOwnerAlive: (owner) => running.has(owner.ownerId),
       spawn: async () => { throw new Error("Recovery must not dispatch"); }, stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
       changed: () => {}, schedule: () => () => {}, onError: () => {} });
     recovery.initialize(); recovery.close();
@@ -171,7 +175,18 @@ describe("Harness reconcile and bridge check over real SQLite", () => {
     const foreign = await other.service.start(request(), fixture.tempDir);
     await other.service.stop(foreign.id, actor, "stopped", "Stop");
     expect(store.header(foreign.id)).toMatchObject({ status: "stopping", harness: { state: "unknown" } });
-    await expect(service.reconcile(foreign.id, actor)).rejects.toThrow("Another PwrAgent process owns this run");
+    await expect(service.reconcile(foreign.id, actor)).rejects.toThrow("Another running PwrAgent process owns this run");
+    // Once that process is gone and recovery has retired its run, this one may reconcile it.
+    running.delete("other-owner");
+    await other.service.close();
+    // Still marked stopping: only recovery may retire another process's live run.
+    expect(store.header(foreign.id)?.status).toBe("stopping");
+    await expect(service.reconcile(foreign.id, actor)).rejects.toThrow("Another running PwrAgent process owns this run");
+    const recovery = new ResearchService(store, { ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, isOwnerAlive: (owner) => running.has(owner.ownerId),
+      spawn: async () => { throw new Error("Recovery must not dispatch"); }, stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
+      changed: () => {}, schedule: () => () => {}, onError: () => {} });
+    recovery.initialize(); recovery.close();
+    await expect(service.reconcile(foreign.id, actor)).resolves.toMatchObject({ status: "interrupted", harness: { state: "unknown" } });
   });
 
   it("restores the prior outcome when the bridge fails mid-reconcile, keeping records already read", async () => {

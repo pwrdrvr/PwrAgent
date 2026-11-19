@@ -12,7 +12,11 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
   const counts = researchRunCounts(run);
   const live = isResearchRunLive(run);
   const harness = run.harness;
-  const controls = coordinator && writable && (live || (run.status !== "completed" && harness && ["ended", "imported"].includes(harness.state)));
+  // A run that ended without being finished can still be completed once a candidate is accepted:
+  // a settled Harness run, or a PwrAgent run that was interrupted (as every live run is when the app quits).
+  const finishableRetired = harness ? run.status !== "completed" && ["ended", "imported"].includes(harness.state)
+    : ["interrupted", "exhausted"].includes(run.status) && run.accepted > 0;
+  const controls = coordinator && writable && (live || finishableRetired);
   const finishBlocker = researchFinishBlocker(run);
   const outcome = researchHarnessOutcome(run);
   // The owner refuses a reconcile it cannot do; offering it only where it can succeed keeps the action honest.
@@ -57,8 +61,7 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       </dl>
     </details>}
     {!harness && run.reason && !live && <p className="research-muted">{run.reason}</p>}
-    {!harness && !writable && (live || run.status === "interrupted") && <p className="research-muted">This run’s owner is not running in this window’s process. Its evidence is kept. Open the worker threads to inspect them before you start a new run.</p>}
-    {harness && !writable && live && !outcome && <p className="research-muted">This run’s owner is another PwrAgent process. Its records are kept here as they arrive.</p>}
+    {!writable && run.status !== "completed" && !outcome && <p className="research-muted">Another running PwrAgent process owns this run. Its records are kept here as they arrive; review and finish it from that process.</p>}
     {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
     {controls && !confirmingStop && <div className="research-card__actions">
       {finishBlocker && <span className="research-muted">{finishBlocker}</span>}

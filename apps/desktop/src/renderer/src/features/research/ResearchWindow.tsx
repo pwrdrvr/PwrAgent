@@ -166,7 +166,7 @@ function ResearchWindowRun({ api, listed }: { api: DesktopApi; listed: ResearchP
       <ResearchItemDetail key={`${run.id}:${inspected}`} api={api} thread={identity} run={run} itemId={inspected} writable={writable && !run.harness} coordinator
         onBack={() => setInspected(undefined)} backLabel="Close" onOpenItem={setInspected}>
         {submission && <CandidateDecision run={run} submission={submission} live={live} canReview={writable} busy={actions.busy}
-          blocked="The PwrAgent process that owned this run has ended, so a decision cannot be recorded. Its records are kept."
+          blocked="Another running PwrAgent process owns this run. Record the decision from that process."
           onReview={(submissionId, decision, reason) => actions.update({ action: "review", submissionId, decision, reason })} />}
       </ResearchItemDetail>
     </aside>}

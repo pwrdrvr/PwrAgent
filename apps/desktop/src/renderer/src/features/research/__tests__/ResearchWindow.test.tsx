@@ -64,7 +64,7 @@ it("lists every run by what it needs, and reads the selected run as its own coor
   const live = nativeRun("native-live", "other-thread", "Why does the release job skip the changelog step?", 5000);
   const imported = harnessRun("imported");
   imported.id = "imported-run";
-  // After a restart this process owns none of the retained runs.
+  // Another PwrAgent process on this profile is still running and owns these runs.
   const { api, mocks } = owner([live, imported, unknown], 50, false);
   render(<ResearchWindow desktopApi={api} />);
   const rail = await screen.findByRole("navigation", { name: "Research runs" });
@@ -78,10 +78,10 @@ it("lists every run by what it needs, and reads the selected run as its own coor
   const main = screen.getByRole("main", { name: "Research run" });
   expect(await within(main).findByRole("group", { name: "Unresolved source outcome" })).toBeInTheDocument();
   expect(mocks.researchChanges).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "parent", runId: unknown.id }));
-  // A run this process does not own cannot take a decision; the inspector says so instead of showing nothing.
+  // A run another live process owns cannot take a decision here; the inspector says so instead of showing nothing.
   fireEvent.click(await within(main).findByRole("button", { name: /Candidate.*Invented source candidate/ }));
   const inspector = await screen.findByRole("complementary", { name: "Selected item" });
-  expect(await within(inspector).findByText(/process that owned this run has ended, so a decision cannot be recorded/)).toBeInTheDocument();
+  expect(await within(inspector).findByText(/Another running PwrAgent process owns this run\. Record the decision from that process\./)).toBeInTheDocument();
   expect(within(inspector).queryByLabelText("Reason for your decision")).not.toBeInTheDocument();
 
   fireEvent.click(within(rail).getByRole("button", { name: /Running.*release job/ }));
@@ -159,4 +159,34 @@ it("opens the Research window on the panel's run from its pop-out button", async
   await screen.findByRole("region", { name: "Research run summary" });
   fireEvent.click(screen.getByRole("button", { name: "Open in Research window" }));
   expect(openResearchWindow).toHaveBeenCalledWith({ runId: run.id });
+});
+
+it("finishes a run that was interrupted by a restart once a candidate is accepted", async () => {
+  const actor = { backend: "codex", threadId: "thread-a", kind: "agent" } as const;
+  const events: ResearchEvent[] = [];
+  const add = (data: ResearchEvent["data"]) => events.push({ seq: events.length + 1, at: 1000 + events.length, commandId: `e${events.length}`, signature: "t", actor, data });
+  add({ type: "created", objective: "Queue ordering", coordinator: actor, ownerId: "earlier-process", ownerPid: 1, deadlineAt: 600_000, workspaceMode: "none",
+    approaches: [{ id: "a1", title: "Events", task: "Trace ordering", state: "ended" }] });
+  add({ type: "submission", submission: { id: "s1", approachId: "a1", text: "Preserve the original event order", paths: [] } });
+  add({ type: "status", status: "interrupted", reason: "PwrAgent closed. Research evidence is retained; execution was not automatically resumed." });
+  const interrupted = projectResearchRun("run-a", events);
+  const { api, mocks } = owner([interrupted]);
+  const view = render(<ResearchWindow desktopApi={api} />);
+  await screen.findByRole("region", { name: "Research run summary" });
+  // Nothing to finish until something is accepted: the card offers no run controls yet.
+  expect(screen.queryByRole("button", { name: "Finish run" })).not.toBeInTheDocument();
+  view.unmount();
+
+  add({ type: "review", submissionId: "s1", decision: "accepted", reason: "Independent review" });
+  const accepted = projectResearchRun("run-a", events);
+  const next = owner([accepted]);
+  render(<ResearchWindow desktopApi={next.api} />);
+  const finish = await screen.findByRole("button", { name: "Finish run" });
+  expect(finish).toBeEnabled();
+  // The run is over: there is nothing to stop, only an outcome to record.
+  expect(screen.queryByRole("button", { name: "Stop run…" })).not.toBeInTheDocument();
+  fireEvent.click(finish);
+  await waitFor(() => expect(next.mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({ threadId: "thread-a", runId: "run-a",
+    command: { action: "finish", reason: "Completed after operator review" } })));
+  expect(mocks.updateResearch).not.toHaveBeenCalled();
 });

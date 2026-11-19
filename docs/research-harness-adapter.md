@@ -174,7 +174,11 @@ all read it, so a dead run never shows as running and can always be reconciled.
 cursor. It applies to `unknown`, `stopping`, `imported` and stale `reconciling`
 swarm runs; a discovery snapshot has no cursor and takes a new snapshot instead.
 It is refused for a non-coordinator, while this process still holds the run's
-connection, and for a running or stopping run another live process owns. The
+connection, and for a run another process holds. Holding follows
+`researchRunHeldBy`: a run's own process, or any later process once the run is
+no longer live and the process that started it is gone. The same rule lets the
+operator review and finish a retained import or ended execution after a
+restart; cancelling still needs the process that holds the bridge. The
 `reconciling` intent commits before the bridge starts. The bridge must advertise
 `import`; the owner sends only `hello` and `records`, never `execute` or
 `cancel`. Each page commits with its cursor under the same validation as a live

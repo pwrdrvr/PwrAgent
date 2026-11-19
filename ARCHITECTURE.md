@@ -162,7 +162,23 @@ research operations and run boundaries write; streamed tokens do not. The
 checked-in SQLite budgets cover those boundaries. Recovery validates the
 owner's PID, runtime instance ID and start time against the existing profile
 marker. A dead owner becomes interrupted without replaying model work; a
-different live process retains authority. Older journals without a process
+different live process retains authority.
+
+Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. A
+run's own process always may. A restart is a new process, so a later one may
+too once the run is no longer running or stopping and the process that started
+it is gone: the operator and coordinating thread are the same, and nobody else
+could record on it. That covers reviewing candidates, finishing the run and
+reconciling a Harness source. A run that ended as interrupted or exhausted,
+as every live run does when PwrAgent quits, can be completed once a candidate
+is accepted; that appends the outcome and stops nothing. Work that needs a
+live run (assigning, revision delivery, stopping workers or a bridge) stays
+with the process that holds it. A live run of a dead process is not held by
+anyone until recovery at the next launch retires it. Snapshots, change pages
+and the run list report `writable` by the same function, reading liveness once
+per distinct owner. A review plus a finish on a retained run is two commits
+(41,200 observed WAL bytes), on operator action only: about 0.82 MB/day at
+twenty a day. Older journals without a process
 start time cannot prove live ownership and become interrupted. Revision
 queue receipts identify exactly which pending sends a
 run may cancel. An unknown cancellation outcome keeps the run stopping.

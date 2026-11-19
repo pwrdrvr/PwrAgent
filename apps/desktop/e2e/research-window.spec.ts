@@ -58,6 +58,12 @@ for (const theme of ["dark", "light"] as const) {
       await expect(main.getByLabel("Research map")).toBeVisible();
       await testInfo.attach(`research-window-${theme}`, { body: await research.screenshot(), contentType: "image/png" });
       await expectAccessible(research, `window with inspector ${theme}`);
+      // The process that imported this run is gone, as after any restart. This one may still record a decision.
+      await inspector.getByLabel("Reason for your decision").fill("Independent review of the invented evidence");
+      await inspector.getByRole("button", { name: "Accept", exact: true }).click();
+      await expect(main.getByRole("status")).toContainText("Decision recorded: accepted.");
+      await expect(inspector.getByText("Accepted", { exact: true })).toBeVisible();
+      await expect(inspector.getByText(/Independent review of the invented evidence/)).toBeVisible();
       await inspector.getByRole("button", { name: "Close", exact: true }).click();
       await expect(inspector).toHaveCount(0);
 

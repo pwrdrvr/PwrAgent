@@ -39,7 +39,7 @@ it("executes a real process through an explicit endpoint probe, eager functions 
     endpoint: `http://127.0.0.1:${address.port}/v1/chat/completions`, model: "contrived-model" };
   const complete = createHarnessModelTransport(config);
   const service = new ResearchHarnessService(new ResearchStore(db), {
-    ownerId: "owner", ownerPid: 1, ownerStartedAt: 100, changed: () => {}, schedule: () => () => {}, onError: (error) => { throw error; },
+    ownerId: "owner", ownerPid: 1, ownerStartedAt: 100, isOwnerAlive: () => true, changed: () => {}, schedule: () => () => {}, onError: (error) => { throw error; },
     open: (cwd) => openResearchHarnessProcess(config, cwd, async (method, params, signal) => {
       if (method !== "model_complete") throw new Error("Only the model adapter is available");
       return await complete(researchModelRequest(config.model, params.messages), signal);
