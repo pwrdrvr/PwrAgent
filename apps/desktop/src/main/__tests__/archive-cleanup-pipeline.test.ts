@@ -609,6 +609,67 @@ describe("archive cleanup pipeline", () => {
     if (reason !== "snapshot failure") expect(fixture.archiveWorktree).not.toHaveBeenCalled();
   });
 
+  async function archiveClaudeWithOverlappingArchives(count: number, sharesCheckout = false) {
+    const fixture = build([]);
+    const ids = ["parent", ...Array.from({ length: count }, (_, index) => `overlap-${index}`)];
+    const sessions = ids.map((id) => {
+      const cwd = sharesCheckout ? "/contrived/parent" : `/contrived/${id}`;
+      return { cwd, thread: { ...codexThread({ id, projectKey: cwd, linkedDirectories: [{
+        id, kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: cwd,
+      }] }), source: "claude" as const } };
+    });
+    const visible = new Set(["parent"]);
+    vi.mocked(fixture.claudeStore.list).mockImplementation(async () => sessions.filter(({ thread }) => visible.has(thread.id)));
+    vi.spyOn(fixture.claudeStore, "read").mockImplementation(async (id) => sessions.find(({ thread }) => thread.id === id)!);
+    vi.spyOn(fixture.claudeStore, "save").mockImplementation(async ({ thread }) => { visible.add(thread.id); });
+    const savedSnapshots = vi.fn(async () => {});
+    Object.assign(fixture.store, { upsertWorktreeSnapshot: savedSnapshots });
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    let injected = false;
+    fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+      const guard = await params.beforeRemove!();
+      if (params.threadId === "parent" && !injected) {
+        injected = true;
+        // The checkout has a snapshot and is waiting for the repository's
+        // removal lock when the next local archive changes membership.
+        for (const threadId of ids.slice(1)) {
+          await fixture.registry.archiveThread({ backend: "claude", threadId, backgroundCleanup: true, preserveWorktrees: true });
+        }
+      }
+      return guard;
+    } }));
+    const completion = new Promise<AgentEvent>((resolve) => {
+      fixture.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "parent") resolve(event);
+      });
+    });
+    try {
+      const response = await fixture.registry.archiveThread({ backend: "claude", threadId: "parent", backgroundCleanup: true });
+      expect(response.cleanupPending).toBe(true);
+      const event = await drivePacer(fixture.registry, completion);
+      expect(event.notification.params).toMatchObject({ threadId: "parent", cleanup: [{
+        worktreePath: "/contrived/parent", removedWorktree: true,
+      }] });
+      expect(fixture.removedWorktrees.has(path.resolve("/contrived/parent"))).toBe(true);
+      expect(fixture.archiveWorktree).toHaveBeenCalledTimes(2);
+      expect(savedSnapshots.mock.calls).toEqual((sharesCheckout ? ids : ["parent"]).map((threadId) => [
+        expect.objectContaining({ threadId, snapshot: expect.objectContaining({ worktreePath: "/contrived/parent" }) }),
+      ]));
+    } finally {
+      await fixture.registry.close();
+    }
+  }
+
+  it("removes an archived Claude checkout when another local archive finishes after admission", async () => {
+    vi.useFakeTimers();
+    await archiveClaudeWithOverlappingArchives(1);
+  });
+
+  it("settled archive-only mutations do not strand already archived checkouts", async () => {
+    vi.useFakeTimers();
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.boolean(), archiveClaudeWithOverlappingArchives), { numRuns: 10 });
+  });
+
   it("reports Claude archive metadata failure instead of an empty successful cleanup", async () => {
     vi.useFakeTimers();
     const fixture = build([]);
