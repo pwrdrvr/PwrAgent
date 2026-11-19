@@ -176,6 +176,7 @@ describe("explicit attached PR review", () => {
         known: true,
         matches: false,
         differences: ["this checkout is on stack-2, not the pull request's stack-1"],
+        otherBranch: "stack-2",
       });
     // An unprobed working state is unknown, never "matches".
     expect(describeAttachedPullRequestLocalSync({ currentBranch: "stack-1", pr }))

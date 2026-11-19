@@ -120,6 +120,41 @@ describe("PrRollupChip", () => {
     expect(screen.queryByRole("group")).toBeNull();
   });
 
+  /**
+   * Rule: each popover row leads with the time its stack sorts by, so a long
+   * open status cannot cut it off and a merged stack whose older PR merged
+   * last does not read as an ascending number sort. A plain merged or closed
+   * status is replaced by the time, which already says it; a merge queue's
+   * account of the merge stays.
+   */
+  it("leads each row with the time its stack sorts by", () => {
+    const now = Date.UTC(2026, 10, 19, 16, 30);
+    vi.useFakeTimers({ now });
+    const hour = 3_600_000;
+    const { container } = renderRollup([
+      pr(20, { createdAt: now - 2 * hour }),
+      pr(21, { lifecycleState: "merged", state: "merged", mergedAt: now - 17 * hour }),
+      pr(22, { lifecycleState: "merged", state: "merged", mergedAt: now - 15 * hour }),
+      pr(23, { lifecycleState: "closed", state: "closed", closedAt: now - 20 * hour }),
+      pr(24, {
+        lifecycleState: "merged", state: "merged", mergedAt: now - 30 * hour,
+        mergeQueue: { kind: "merge_queue", state: "merged_by_queue" } as PrSummary["mergeQueue"],
+      }),
+    ]);
+    fireEvent.click(container.querySelector<HTMLElement>("[data-pr-rollup]")!);
+    const list = screen.getByRole("group", { name: "Pull requests for Orbit refactor" });
+    const statuses = [...list.querySelectorAll(".pr-rollup-popover__status")]
+      .map((status) => status.textContent);
+    expect(statuses.slice(0, 4)).toEqual([
+      "opened 2h ago · ready for review · checks passing",
+      "merged 15h ago",
+      "merged 17h ago",
+      "closed 20h ago",
+    ]);
+    expect(statuses[4]).toMatch(/^merged 1d ago · \S/);
+    expect(statuses[4]).not.toBe("merged 1d ago");
+  });
+
   it("draws the eye on the chip and on each watched PR's row", () => {
     const prWatches = summarizeThreadPrWatches([{
       watchId: "watch-ci",

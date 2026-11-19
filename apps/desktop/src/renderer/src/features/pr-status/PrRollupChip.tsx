@@ -26,6 +26,7 @@ import { placeRollupPopover } from "./pr-rollup-popover-placement";
 import {
   prChipModifierClasses,
   prStatusLabel,
+  resolveLifecycleState,
   resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { prBranchBehindLabel, type PrBranchDrift } from "./pr-branch-drift";
@@ -33,6 +34,7 @@ import {
   prNumberLabel,
   prOverflowLabel,
   prRollupLabel,
+  prStackTimeLabel,
   resolvePrOverflow,
   resolvePrRollup,
 } from "./pr-rollup";
@@ -559,6 +561,19 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 const status = behind
                   ? `${prStatusLabel(pr)} · ${behind}`
                   : prStatusLabel(pr);
+                // The time each stack sorts by, so the order reads as one.
+                // It leads, so a long open status never cuts it off. A
+                // finished PR's status says only that it merged or closed,
+                // which the time already says; a merge queue's account of
+                // the merge stays.
+                const stackTime = prStackTimeLabel(pr);
+                const lifecycle = resolveLifecycleState(pr);
+                const statusLine = !stackTime
+                  ? status
+                  : lifecycle === "closed"
+                    || (lifecycle === "merged" && pr.mergeQueue?.state !== "merged_by_queue")
+                    ? stackTime
+                    : `${stackTime} · ${status}`;
                 const rowPresentation = resolvePrChipPresentation(pr);
                 const rowWaitingForCi = Boolean(watchFor(pr)?.ci);
                 const openRow = (): void => {
@@ -598,7 +613,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       <span className="pr-rollup-popover__title">
                         {pr.title ?? `${pr.org}/${pr.repo}`}
                       </span>
-                      <span className="pr-rollup-popover__status">{status}</span>
+                      <span className="pr-rollup-popover__status">{statusLine}</span>
                     </button>
                     {/* The chip as Mission Control draws it, ✕ included. It is
                         a pointer shortcut beside the row's button, not a second

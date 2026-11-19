@@ -48545,6 +48545,102 @@ button.composer__subthread-source-parent:hover {
   font: inherit;
 }
 
+/* The Attached PR target's list. It sits in the panel rather than opening as
+   a popup: a thread holds a handful of PRs, and each row needs room for its
+   state, branch and age. Past about six rows it scrolls. */
+.review-pr-picker {
+  display: flex;
+  max-height: 260px;
+  flex-direction: column;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-weight: 400;
+}
+
+.review-pr-picker__group-label {
+  padding: 6px 8px 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-pr-picker__row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.review-pr-picker__row:hover {
+  background: var(--bg-panel-hover);
+}
+
+.review-pr-picker__row.is-checked {
+  background: var(--accent-soft);
+}
+
+.review-pr-picker__input {
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.review-pr-picker__input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-pr-picker__row .pr-chip {
+  margin: 0;
+}
+
+.review-pr-picker__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+}
+
+.review-pr-picker__title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-pr-picker__status {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-pr-picker__branch {
+  font-family: var(--font-mono);
+}
+
+.review-pr-picker__age {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
 .review-commit-picker__menu {
   position: absolute;
   z-index: 45;
@@ -48704,6 +48800,17 @@ button.composer__subthread-source-parent:hover {
 
 .composer__review-after[aria-checked="true"]:hover {
   color: var(--accent-bright);
+}
+
+/* Off and not choosable, as for a batch of PR reviews. It must not read as a
+   plain "off" the operator could turn back on. */
+.composer__review-after:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.composer__review-after:disabled:hover {
+  color: var(--text-secondary);
 }
 
 .composer__review-after:focus-visible {

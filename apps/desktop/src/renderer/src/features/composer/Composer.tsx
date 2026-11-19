@@ -193,6 +193,10 @@ import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-cli
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { ReviewAutoFixSwitch } from "./ReviewAutoFixSwitch";
+import {
+  orderReviewPullRequests,
+  ReviewPullRequestPicker,
+} from "./ReviewPullRequestPicker";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isScheduledThreadAction } from "../../lib/useScheduledThreadActionProjection";
 import {
@@ -935,7 +939,11 @@ type AutocompleteKind =
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 type ReviewConfigState = {
-  pullRequestUrl?: string;
+  /**
+   * The checked attached pull requests, in list order. Each gets its own
+   * review; more than one queues them behind each other.
+   */
+  pullRequestUrls?: string[];
   branch: string;
   branchSource?: "auto" | "user";
   commit: string;
@@ -1427,13 +1435,13 @@ function createReviewConfig(params: {
     return checkedOutPullRequest
       ? {
           ...config,
-          pullRequestUrl: checkedOutPullRequest.url,
+          pullRequestUrls: [checkedOutPullRequest.url],
           target: "pullRequest",
         }
       : config;
   }
   if (target.type === "pullRequest") {
-    return { ...config, target: "pullRequest", pullRequestUrl: target.url };
+    return { ...config, target: "pullRequest", pullRequestUrls: [target.url] };
   }
   if (target.type === "uncommittedChanges") {
     return { ...config, target: "uncommittedChanges" };
@@ -1570,11 +1578,14 @@ function buildConfiguredReviewCommand(
   const cwd = config.workspaceCwd?.trim() || undefined;
 
   if (config.target === "pullRequest") {
-    return config.pullRequestUrl ? {
+    // Several checked PRs are submitted one review at a time by
+    // submitReviewConfig; this builds the first.
+    const pullRequestUrl = config.pullRequestUrls?.[0];
+    return pullRequestUrl ? {
       ...(cwd ? { cwd } : {}),
       runMode: config.runMode,
-      target: { type: "pullRequest", url: config.pullRequestUrl },
-      displayText: `Review ${config.pullRequestUrl}`,
+      target: { type: "pullRequest", url: pullRequestUrl },
+      displayText: `Review ${pullRequestUrl}`,
     } : undefined;
   }
 
@@ -3154,7 +3165,7 @@ function useComposerController(props: ComposerProps) {
     reviewOptionRefs,
     reviewCommitInputRef,
     reviewCustomTextareaRef,
-    reviewPullRequestSelectRef,
+    reviewPullRequestInputRef,
     skillListboxId,
     slashListboxId,
     directoryRefListboxId,
@@ -3370,7 +3381,7 @@ function useComposerController(props: ComposerProps) {
     const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
     const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-    const reviewPullRequestSelectRef = useRef<HTMLSelectElement | null>(null);
+    const reviewPullRequestInputRef = useRef<HTMLInputElement | null>(null);
     const skillListboxId = useId();
     const slashListboxId = useId();
     const directoryRefListboxId = useId();
@@ -3866,7 +3877,7 @@ function useComposerController(props: ComposerProps) {
       reviewOptionRefs,
       reviewCommitInputRef,
       reviewCustomTextareaRef,
-      reviewPullRequestSelectRef,
+      reviewPullRequestInputRef,
       skillListboxId,
       slashListboxId,
       directoryRefListboxId,
@@ -6216,9 +6227,20 @@ function useComposerController(props: ComposerProps) {
       : reviewPullRequestRepositoryNamesAmbiguous
         ? `${pr.org}/${pr.repo}`
         : pr.repo;
-  const selectedReviewPullRequest = reviewPullRequests.find(
-    (pr) => pr.url === reviewConfig?.pullRequestUrl,
+  const selectedReviewPullRequests = reviewPullRequests
+    .filter((pr) => reviewConfig?.pullRequestUrls?.includes(pr.url));
+  // The branch, sync and workspace lines below describe one PR.
+  const selectedReviewPullRequest = selectedReviewPullRequests.length === 1
+    ? selectedReviewPullRequests[0]
+    : undefined;
+  // Several PRs queue one review each, through the owner's review queue, so
+  // only a thread composer whose owner takes queued reviews offers checkboxes.
+  const reviewPullRequestsMultiple = Boolean(
+    props.thread
+    && !props.launchpad
+    && props.desktopApi?.createScheduledThreadAction,
   );
+  const reviewPullRequestBatch = selectedReviewPullRequests.length > 1;
   // What a local review would cover that this PR does not, so the two targets
   // never read as interchangeable when they are not.
   const selectedReviewPullRequestSync = selectedReviewPullRequest && props.thread
@@ -7747,13 +7769,22 @@ function useComposerController(props: ComposerProps) {
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
-    if (config?.target === "pullRequest" && !reviewPullRequestOptions.some((option) =>
-      option.pr.url === config.pullRequestUrl && option.workspaces.includes(config.workspaceCwd ?? "")
-    )) {
+    // A checked PR this project can no longer review (detached while the
+    // panel was open) is dropped rather than failing the rest: the list no
+    // longer draws it, so the operator could not uncheck it.
+    const pullRequestUrls = config?.target === "pullRequest"
+      ? (config.pullRequestUrls ?? []).filter((url) => reviewPullRequestOptions.some((option) =>
+        option.pr.url === url && option.workspaces.includes(config.workspaceCwd ?? "")
+      ))
+      : [];
+    if (config?.target === "pullRequest" && pullRequestUrls.length === 0) {
       setSendError("Choose an attached pull request.");
       return;
     }
-    const configuredReviewCommand = buildConfiguredReviewCommand(config);
+    const pullRequestBatch = pullRequestUrls.length > 1;
+    const configuredReviewCommand = buildConfiguredReviewCommand(
+      config?.target === "pullRequest" ? { ...config, pullRequestUrls } : config,
+    );
     if (!configuredReviewCommand) {
       return;
     }
@@ -7780,10 +7811,50 @@ function useComposerController(props: ComposerProps) {
         ? runModeDecision.runMode : undefined,
       // An owner that predates auto-fix gets no field, so it is never told a
       // choice it would ignore.
+      // Fixes land in this one checkout, which is on at most one of a
+      // batch's branches, so a batch never auto-fixes.
       ...(reviewAutoFixSupported
-        ? { afterReview: reviewWaitsAfter(config) ? "wait" as const : "auto-fix" as const }
+        ? {
+            afterReview: reviewWaitsAfter(config) || pullRequestBatch
+              ? "wait" as const
+              : "auto-fix" as const,
+          }
         : {}),
     };
+    if (pullRequestBatch) {
+      // One review per pull request, in list order. The owner's queue starts
+      // the first when the thread is free and runs each of the rest after the
+      // one before it; each is pinned to its own published head when queued.
+      const batchUrls = new Set(pullRequestUrls);
+      const orderedUrls = orderReviewPullRequests(
+        reviewPullRequestOptions.map((option) => option.pr),
+      )
+        .map((pr) => pr.url)
+        .filter((url) => batchUrls.has(url));
+      for (const [index, url] of orderedUrls.entries()) {
+        const queued = await queueReviewCommand(
+          {
+            ...routedReviewCommand,
+            target: { type: "pullRequest", url },
+            displayText: `Review ${url}`,
+          },
+          futureScheduledDraftSendAt
+            ? { scheduledSendAt: futureScheduledDraftSendAt }
+            : undefined,
+        );
+        if (typeof queued === "string") {
+          // The panel closed when the first review queued, so name the
+          // reviews that did not, or the batch reads as all queued.
+          const unqueued = orderedUrls.slice(index).map((unqueuedUrl) => {
+            const pr = reviewPullRequestOptions.find((option) => option.pr.url === unqueuedUrl)?.pr;
+            return pr ? `#${pr.number}` : unqueuedUrl;
+          });
+          setSendError(`${queued} Not queued: ${unqueued.join(", ")}.`);
+          return;
+        }
+      }
+      return;
+    }
     if (futureScheduledDraftSendAt) {
       if (props.launchpad && !props.launchpadMaterializing && !sendingRef.current) {
         await scheduleLaunchpadMaterialization(
@@ -7814,7 +7885,7 @@ function useComposerController(props: ComposerProps) {
       } else if (target === "custom") {
         reviewCustomTextareaRef.current?.focus();
       } else if (target === "pullRequest") {
-        reviewPullRequestSelectRef.current?.focus();
+        reviewPullRequestInputRef.current?.focus();
       }
     });
   };
@@ -7845,14 +7916,16 @@ function useComposerController(props: ComposerProps) {
     };
   };
 
-  const selectReviewPullRequest = (
+  const selectReviewPullRequests = (
     config: ReviewConfigState,
-    pullRequestUrl: string | undefined,
+    pullRequestUrls: string[],
   ): ReviewConfigState => {
-    const option = reviewPullRequestOptions.find((candidate) => candidate.pr.url === pullRequestUrl);
+    // The list follows one project once a PR is checked, so the first
+    // checked PR's project is every checked PR's project.
+    const option = reviewPullRequestOptions.find((candidate) => candidate.pr.url === pullRequestUrls[0]);
     const workspaceCwd = option?.workspaces.includes(config.workspaceCwd ?? "")
       ? config.workspaceCwd : option?.workspaces[0] ?? config.workspaceCwd;
-    return { ...withReviewWorkspace(config, workspaceCwd), pullRequestUrl };
+    return { ...withReviewWorkspace(config, workspaceCwd), pullRequestUrls };
   };
 
   const getReviewConfigWithTarget = (
@@ -7869,8 +7942,8 @@ function useComposerController(props: ComposerProps) {
     if (target !== "pullRequest") {
       return { ...current, target };
     }
-    if (current.pullRequestUrl) {
-      return selectReviewPullRequest({ ...current, target }, current.pullRequestUrl);
+    if (current.pullRequestUrls?.length) {
+      return selectReviewPullRequests({ ...current, target }, current.pullRequestUrls);
     }
     // Reaching the PR target with nothing picked lands on the obvious
     // candidate rather than a disabled Start button. A project with no PR of
@@ -7886,7 +7959,7 @@ function useComposerController(props: ComposerProps) {
         : undefined)
       ?? (candidates.length === 1 ? candidates[0]?.pr.url : undefined);
     if (pullRequestUrl) {
-      return selectReviewPullRequest({ ...current, target }, pullRequestUrl);
+      return selectReviewPullRequests({ ...current, target }, [pullRequestUrl]);
     }
     return withReviewWorkspace(
       { ...current, target },
@@ -7916,7 +7989,7 @@ function useComposerController(props: ComposerProps) {
     if (
       (target === "commit" && !nextConfig.commit.trim()) ||
       (target === "custom" && !nextConfig.customInstructions.trim()) ||
-      (target === "pullRequest" && !nextConfig.pullRequestUrl)
+      (target === "pullRequest" && !nextConfig.pullRequestUrls?.length)
     ) {
       focusReviewDetail(target);
       return;
@@ -8676,7 +8749,7 @@ function useComposerController(props: ComposerProps) {
       reviewer?: ModelSettingsRecent;
     },
     options?: { scheduledSendAt?: number },
-  ): Promise<void> | undefined => {
+  ): Promise<true | string> | undefined => {
     // Setup has no thread id yet. Keep the review in the starting composer's
     // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
     if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
@@ -8791,9 +8864,12 @@ function useComposerController(props: ComposerProps) {
         setScheduleArmed(true);
         setReviewConfig(undefined);
         setSendError(undefined);
+        return true as const;
       },
-      (error) => {
-        setSendError(error instanceof Error ? error.message : String(error));
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setSendError(message);
+        return message;
       },
     );
     return queued;
@@ -11800,7 +11876,7 @@ function useComposerController(props: ComposerProps) {
     // chip's tooltip cannot disagree.
     const reviewPullRequestWorkspaceNote =
       reviewConfig?.target === "pullRequest"
-      && selectedReviewPullRequest
+      && selectedReviewPullRequests.length > 0
       && reviewWorkspaceSelectionRequired
       && reviewConfig.workspaceCwd
       && props.thread
@@ -13904,15 +13980,16 @@ function useComposerController(props: ComposerProps) {
                   // target, a project's sole PR is the obvious choice,
                   // as it is when the target is chosen.
                   const projectOptions = reviewPullRequestOptionsForWorkspace(workspaceCwd);
-                  const keptUrl = projectOptions.some((option) =>
-                    option.pr.url === next.pullRequestUrl
-                  ) ? next.pullRequestUrl : undefined;
+                  const keptUrls = (next.pullRequestUrls ?? []).filter((url) =>
+                    projectOptions.some((option) => option.pr.url === url)
+                  );
                   return {
                     ...next,
-                    pullRequestUrl: keptUrl
-                      ?? (next.target === "pullRequest" && projectOptions.length === 1
-                        ? projectOptions[0]?.pr.url
-                        : undefined),
+                    pullRequestUrls: keptUrls.length > 0
+                      ? keptUrls
+                      : next.target === "pullRequest" && projectOptions.length === 1
+                        ? [projectOptions[0]!.pr.url]
+                        : undefined,
                   };
                 });
                 setSendError(undefined);
@@ -13968,27 +14045,30 @@ function useComposerController(props: ComposerProps) {
         ) : null}
 
         {reviewConfig?.target === "pullRequest" ? (
-          <label className="composer__review-field">
-            <span>Pull request</span>
-            <select
-              aria-label="Attached pull request"
-              className="composer__review-input"
-              ref={reviewPullRequestSelectRef}
-              value={selectedReviewPullRequest?.url ?? ""}
-              onChange={(event) => {
-                const url = event.target.value;
-                setReviewConfig((current) => current ? selectReviewPullRequest(current, url) : current);
-                setSendError(undefined);
-              }}
-            >
-              <option value="" disabled>Choose pull request</option>
-              {reviewPullRequests.map((pr) => (
-                <option key={pr.url} value={pr.url}>
-                  {`${reviewPullRequestRepositoryLabel(pr)}#${pr.number} ${pr.title ?? "Untitled pull request"}`}
-                  {pr.headRefName ? ` — ${pr.headRefName}` : ""}
-                </option>
-              ))}
-            </select>
+          <div className="composer__review-field">
+            <span>{reviewPullRequestsMultiple ? "Pull requests" : "Pull request"}</span>
+            {reviewPullRequests.length > 0 ? (
+              <ReviewPullRequestPicker
+                prs={reviewPullRequests}
+                selectedUrls={reviewConfig.pullRequestUrls ?? []}
+                multiple={reviewPullRequestsMultiple}
+                repositoryLabel={reviewPullRequestRepositoryLabel}
+                firstInputRef={reviewPullRequestInputRef}
+                onChange={(urls) => {
+                  setReviewConfig((current) => current
+                    ? urls.length > 0
+                      ? selectReviewPullRequests(current, urls)
+                      : { ...current, pullRequestUrls: undefined }
+                    : current);
+                  setSendError(undefined);
+                }}
+              />
+            ) : null}
+            {reviewPullRequestBatch ? (
+              <small className="composer__review-divergence">
+                {`${selectedReviewPullRequests.length} reviews, one per pull request, run one after another in this order. Each is pinned to its published head when you start.`}
+              </small>
+            ) : null}
             {selectedReviewPullRequest ? (
               <small>
                 {`${selectedReviewPullRequest.headRefName ?? "Unknown branch"} → ${selectedReviewPullRequest.baseRefName ?? "unknown base"}`}
@@ -13997,12 +14077,20 @@ function useComposerController(props: ComposerProps) {
                   : ""}
                 {". Refreshed and pinned to the published head when you start the review."}
               </small>
-            ) : reviewPullRequests.length > 0 ? (
-              <small>Choose which attached pull request to review.</small>
+            ) : reviewPullRequestBatch ? null : reviewPullRequests.length > 0 ? (
+              <small>
+                {reviewPullRequestsMultiple
+                  ? "Choose one or more attached pull requests to review."
+                  : "Choose which attached pull request to review."}
+              </small>
             ) : (
               <small>No attached pull request belongs to this project.</small>
             )}
-            {selectedReviewPullRequestSync?.differences.length ? (
+            {selectedReviewPullRequestSync?.otherBranch ? (
+              <small className="composer__review-divergence">
+                {`This checkout is on ${selectedReviewPullRequestSync.otherBranch}, not the pull request's ${selectedReviewPullRequest?.headRefName ?? "branch"}, so reviewing the pull request skips it. Base branch reviews what is here.`}
+              </small>
+            ) : selectedReviewPullRequestSync?.differences.length ? (
               <small className="composer__review-divergence">
                 {`Reviewing the pull request skips this checkout's ${formatReviewDivergence(selectedReviewPullRequestSync.differences)}. Base branch reviews what is here.`}
               </small>
@@ -14017,7 +14105,7 @@ function useComposerController(props: ComposerProps) {
                 {reviewPullRequestWorkspaceNote}
               </small>
             ) : null}
-          </label>
+          </div>
         ) : null}
 
         {reviewConfig?.target === "baseBranch" ? (
@@ -14226,7 +14314,8 @@ function useComposerController(props: ComposerProps) {
         <div className="composer__review-actions">
           {reviewAutoFixSupported ? (
             <ReviewAutoFixSwitch
-              checked={reviewAutoFixChecked}
+              checked={reviewAutoFixChecked && !reviewPullRequestBatch}
+              disabled={reviewPullRequestBatch}
               onToggle={() => {
                 setReviewConfig((current) => {
                   const base = current ?? createReviewConfig({
@@ -14262,11 +14351,21 @@ function useComposerController(props: ComposerProps) {
                   futureScheduledDraftSendAt,
                   scheduleNow,
                 )}`
-              : "Start review"}
+              : reviewPullRequestBatch
+                ? `Start ${selectedReviewPullRequests.length} reviews`
+                : "Start review"}
           </button>
         </div>
+        {reviewAutoFixSupported && reviewPullRequestBatch ? (
+          <p className="composer__review-note">
+            Auto-fix is off while several pull requests are selected: fixes
+            land in this one checkout, which is on at most one of their
+            branches.
+          </p>
+        ) : null}
         {reviewAutoFixSupported
           && reviewAutoFixChecked
+          && !reviewPullRequestBatch
           && reviewerSelection.backend
           && reviewerSelection.backend !== props.thread?.source ? (
             <p className="composer__review-note">

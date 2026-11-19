@@ -178,6 +178,12 @@ export type AttachedPullRequestLocalSync = {
   matches: boolean;
   /** Why the checkout differs, most specific first. Empty when unknown. */
   differences: string[];
+  /**
+   * The checkout's branch, when it is not the pull request's head. The
+   * checkout then has nothing in common with the PR to count, so callers say
+   * so as a sentence rather than listing what the review would skip.
+   */
+  otherBranch?: string;
 };
 
 const UNKNOWN_PULL_REQUEST_SYNC: AttachedPullRequestLocalSync = {
@@ -226,6 +232,7 @@ export function describeAttachedPullRequestLocalSync(params: {
       differences: [
         `this checkout is on ${currentBranch}, not the pull request's ${pr.headRefName}`,
       ],
+      otherBranch: currentBranch,
     };
   }
   if (!gitWorkingState) {
