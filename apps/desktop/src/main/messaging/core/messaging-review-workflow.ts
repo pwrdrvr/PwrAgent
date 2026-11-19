@@ -1,6 +1,7 @@
 import path from "node:path";
 import { findThreadForBinding } from "./messaging-callback-helpers";
-import { asPlainRecord } from "./messaging-backend-event-helpers";
+import { asPlainRecord, federationTargetForBinding } from "./messaging-backend-event-helpers";
+import { DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
 import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { buildReviewBranchOptions, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd } from "@pwragent/shared";
@@ -10,7 +11,7 @@ import { applyActionCapabilityLimits } from "@pwragent/messaging-interface";
 import { buildConfirmationIntent, buildErrorIntent, buildReviewStartConfirmationIntent, messagingReviewStartTarget } from "./messaging-renderer.js";
 import { isMessagingThreadContext, type MessagingNavigationContext } from "./messaging-thread-state.js";
 import { resolveExecutionModeForThread, turnSettingsForThread } from "./messaging-inbound-helpers";
-import type { MessagingReviewContext } from "./messaging-review-context";
+import type { MessagingReviewContext, MessagingReviewSubmission } from "./messaging-review-context";
 
 export class MessagingReviewWorkflow {
   constructor(private readonly context: MessagingReviewContext) {}
@@ -1020,47 +1021,57 @@ export class MessagingReviewWorkflow {
     });
   }
 
-  async submitMessagingReview(params: {
-    binding: MessagingBindingRecord;
-    event: MessagingInboundEvent;
-    target: AppServerReviewTarget;
-    cwd?: string;
-    runMode?: ReviewRunMode;
-    afterReview?: ReviewAfterAction;
-    /** Reviewer override typed on the command; absent means inherit. */
-    reviewBackend?: AppServerBackendKind;
-    /** Human-facing reviewer label resolved by the picker, when known. */
-    reviewerLabel?: string;
-    model?: string;
-    reasoningEffort?: string;
-    targetSurface?: MessagingSurfaceRef;
-    pendingIntentId?: string;
-  }): Promise<void> {
+  async submitMessagingReview(params: MessagingReviewSubmission): Promise<void> {
     const submitReview = this.context.backend.submitReview?.bind(
       this.context.backend,
     );
-    if (!submitReview || !await this.reviewSupportedForBinding(params.binding)) {
+    const pullRequestCommand = "pullRequestArgs" in params;
+    if (!submitReview || (!pullRequestCommand && !await this.reviewSupportedForBinding(params.binding))) {
       await this.deliverReviewUnsupported(params.binding, params.event);
       return;
     }
 
     try {
-      const owner = await this.context.host().getBackendSummary(params.binding.backend);
-      if (params.runMode !== undefined) {
-        if (owner?.capabilities.reviewRunMode !== true) {
-          throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
-        }
+      const federationTarget = pullRequestCommand ? federationTargetForBinding(params.binding) : undefined;
+      const owner = await this.context.host().getBackendSummary(params.binding.backend, federationTarget);
+      const navigation = await this.context.host().readBoundThreadConfiguration(params.binding);
+      const target = pullRequestCommand
+        ? parseReviewPullRequestArguments(params.pullRequestArgs, navigation.thread.prs ?? [])
+        : params.target;
+      const combined = target.type === "pullRequests";
+      if (pullRequestCommand && (!owner?.available || (!owner.capabilities.startReview
+        && !(combined && owner.capabilities.reviewClaudeCodeReview)))) {
+        await this.deliverReviewUnsupported(params.binding, params.event);
+        return;
       }
-      const afterReview = params.afterReview ?? (owner?.capabilities.reviewAutoFix === true ? "auto-fix" : undefined);
+      if (combined && owner?.capabilities.reviewPullRequestSet !== true) {
+        throw new Error("This owner does not support combined reviews. Update that PwrAgent instance before starting this review.");
+      }
+      const runMode = params.runMode ?? (combined
+        ? prefersClaudeCodeReview({ ownerSummary: owner, thread: navigation.thread, reviewerChosen: Boolean(params.reviewBackend) })
+          ? "claude-code-review" : "pwragent-sub-agent"
+        : undefined);
+      if (runMode !== undefined && owner?.capabilities.reviewRunMode !== true) {
+        throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
+      }
+      if (combined && runMode === "pwragent-sub-agent" && !params.reviewBackend
+        && owner?.capabilities.reviewRunner !== true) {
+        throw new Error("PwrAgent Sub Agent is unavailable for this thread's provider.");
+      }
+      const afterReview = combined
+        ? (owner?.capabilities.reviewAutoFix === true ? "wait" : undefined)
+        : params.afterReview ?? (owner?.capabilities.reviewAutoFix === true ? "auto-fix" : undefined);
       if (afterReview === "auto-fix" && owner?.capabilities.reviewAutoFix !== true) {
         throw new Error("This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review.");
       }
-      const navigation = await this.context.host().readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
+      const claudeCodeReview = runMode === "claude-code-review";
       const reviewer = {
         backend: params.reviewBackend ?? params.binding.backend,
         ...(params.reviewerLabel ? { label: params.reviewerLabel } : {}),
-        ...(params.reviewBackend
+        ...(claudeCodeReview
+          ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, source: "thread_default" as const }
+          : params.reviewBackend
           ? {
               ...(params.model ? { model: params.model } : {}),
               ...(params.reasoningEffort
@@ -1079,14 +1090,17 @@ export class MessagingReviewWorkflow {
       const result = await submitReview({
         backend: params.binding.backend,
         threadId: params.binding.threadId,
-        target: params.target,
+        ...(federationTarget ? { federationTarget } : {}),
+        target,
         delivery: "inline",
-        ...(params.runMode ? { runMode: params.runMode } : {}),
+        ...(runMode ? { runMode } : {}),
         ...(afterReview ? { afterReview } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         // An explicit reviewer replaces the binding's inherited settings
         // wholesale — its model belongs to a different catalog.
-        ...(params.reviewBackend
+        ...(claudeCodeReview
+          ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+          : params.reviewBackend
           ? {
               reviewBackend: params.reviewBackend,
               ...(params.model ? { model: params.model } : {}),
@@ -1117,7 +1131,7 @@ export class MessagingReviewWorkflow {
           createdAt: this.context.now(),
           notification: {
             status: result.status,
-            target: messagingReviewStartTarget(params.target),
+            target: messagingReviewStartTarget(target),
             reviewer,
           },
           ...(params.targetSurface

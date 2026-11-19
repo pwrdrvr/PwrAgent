@@ -400,6 +400,21 @@ export class MessagingCommandHandlers {
       await this.presentThreadCommandNeedsBinding(event);
       return;
     }
+    const argument = event.args.join(" ").trim();
+    const pullRequestFlag = /^--pr(?:\s+|$)/.exec(argument);
+    if (pullRequestFlag) {
+      if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
+        event, binding, "review:remote-instance",
+      )) {
+        return;
+      }
+      await this.context.host().submitMessagingReview({
+        binding,
+        event,
+        pullRequestArgs: argument.slice(pullRequestFlag[0].length),
+      });
+      return;
+    }
     if (!await this.context.host().reviewSupportedForBinding(binding)) {
       await this.context.host().deliverReviewUnsupported(binding, event);
       return;
@@ -416,7 +431,7 @@ export class MessagingCommandHandlers {
             createdAt: this.context.now(),
             title: "Invalid review command",
             body:
-              "Use /review, /review <base branch>, /review --pr <attached GitHub.com PR URL>, /review --commit <sha>, or /review --custom <instructions>.",
+              "Use /review, /review <base branch>, /review --pr <attached PR numbers or URLs>, /review --commit <sha>, or /review --custom <instructions>.",
             recoverable: true,
           }),
           binding,

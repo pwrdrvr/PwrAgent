@@ -367,12 +367,12 @@ export function pullRequestSetProblem(urls: readonly string[]): string | undefin
   if (normalized.length > PULL_REQUEST_SET_MAX) {
     return `A combined review takes at most ${PULL_REQUEST_SET_MAX} pull requests.`;
   }
-  if (new Set(normalized).size !== normalized.length) {
+  if (new Set(normalized.map(url => url.toLowerCase())).size !== normalized.length) {
     return "A combined review names each pull request once.";
   }
   const repositories = new Set<string>();
   for (const url of normalized) {
-    if (!EXPLICIT_REVIEW_PULL_REQUEST_URL.test(url)) {
+    if (!EXPLICIT_REVIEW_PULL_REQUEST_URL.test(url) || /[\s,?#]/.test(url)) {
       return "A combined review takes GitHub.com pull requests.";
     }
     repositories.add(pullRequestRepositoryKey({ url }));

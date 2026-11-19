@@ -4044,7 +4044,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   describe("Claude code-review findings", () => {
-    async function fixture() {
+    async function fixture(combined = false) {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-review-"));
       const repo = path.join(root, "repo");
       const cwd = path.join(root, ".pwragent", "worktrees", "fixture", "repo");
@@ -4058,9 +4058,11 @@ describe("DesktopBackendRegistry", () => {
         provider: "github.com", org: "example", repo: "repo", number: 41, state: "passing",
         lifecycleState: "open", headRefName: "feature/review", url: "https://github.com/example/repo/pull/41",
       } as const;
+      const secondPr = { ...pr, number: 42, url: "https://github.com/example/repo/pull/42" };
       const overlayStore = createOverlayStoreMock({ overlays: {
         [`claude:${threadId}`]: {
-          backend: "claude", threadId, executionMode: "default", extraLinkedDirectories: [directory], prs: [pr],
+          backend: "claude", threadId, executionMode: "default", extraLinkedDirectories: [directory],
+          prs: combined ? [pr, secondPr] : [pr],
         },
       } });
       const store = new ClaudeSessionStore(path.join(root, "sessions"));
@@ -4097,8 +4099,40 @@ describe("DesktopBackendRegistry", () => {
         await registry.close();
         await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       });
-      return { registry, threadId, cwd, repo, pr, store };
+      return { registry, threadId, cwd, repo, pr, secondPr, store };
     }
+
+    it("runs the agent tool's combined review as one Claude Code command after the parent turn completes", async () => {
+      const { registry, threadId, repo, pr, secondPr } = await fixture(true);
+      await git(repo, ["remote", "add", "origin", "https://github.com/example/repo.git"]);
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      const turnId = "invoking-turn";
+      await registry.publishLocalEvent({ backend: "claude", notification: {
+        method: "turn/started", params: { threadId, turnId, turn: { id: turnId } },
+      } });
+      const call = (urls: string[]) => callRegistryMcpTool({
+        registry, backend: "claude", threadId, turnId, tool: "start_review",
+        args: { target: { type: "pullRequests", pullRequests: urls.map(url => ({ url })) } },
+      });
+      const unattached = await call([pr.url, "https://github.com/example/repo/pull/43"]);
+      expect(unattached).toMatchObject({ isError: true });
+      expect(JSON.stringify(unattached)).toContain("attached to this thread");
+
+      const target = { type: "pullRequests", pullRequests: [{ url: pr.url }, { url: secondPr.url }] };
+      expect(await call([pr.url, secondPr.url])).toMatchObject({
+        structuredContent: { status: "scheduled", target },
+      });
+      const reviewMessages = async () => (await registry.readThread({ backend: "claude", threadId })).replay.entries
+        .filter(entry => entry.type === "message" && entry.text.startsWith("/code-review"));
+      expect(await reviewMessages()).toEqual([]);
+      await registry.publishLocalEvent({ backend: "claude", notification: {
+        method: "turn/completed", params: { threadId, turnId, turn: { id: turnId, status: "completed", output: [] } },
+      } });
+      await vi.waitFor(async () => expect(await reviewMessages()).toEqual([
+        expect.objectContaining({ text: "/code-review high 41,42" }),
+      ]));
+    });
 
     it("publishes a review card naming the workspace, branch, and attached pull request", async () => {
       const { registry, threadId, cwd, repo, pr } = await fixture();

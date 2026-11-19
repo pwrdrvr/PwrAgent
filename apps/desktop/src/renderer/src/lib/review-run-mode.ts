@@ -5,7 +5,10 @@ import {
   type NavigationThreadSummary,
   type ReviewRunMode,
 } from "@pwragent/shared";
+import { prefersClaudeCodeReview } from "../../../shared/review-command";
 import { formatBackendLabel } from "./backend-label";
+
+export { prefersClaudeCodeReview };
 
 export type ReviewRunModeDecision = {
   /** The thread is a Claude thread, so the mode menu offers Claude Code. */
@@ -41,23 +44,6 @@ function backendLabel(
   summary?: BackendSummary,
 ): string {
   return formatBackendLabel(backend, summary ? [summary] : undefined);
-}
-
-/**
- * Whether a review runs as Claude Code's `/code-review` in the thread: on a
- * Claude thread whose owner can run it, when the operator chose that mode, or
- * chose no mode and no other reviewer. It is the Claude thread's default.
- */
-export function prefersClaudeCodeReview(params: {
-  ownerSummary?: BackendSummary;
-  requestedRunMode?: ReviewRunMode;
-  reviewerChosen?: boolean;
-  thread?: Pick<NavigationThreadSummary, "source">;
-}): boolean {
-  return params.thread?.source === "claude"
-    && params.ownerSummary?.capabilities.reviewClaudeCodeReview === true
-    && (params.requestedRunMode === "claude-code-review"
-      || (params.requestedRunMode === undefined && !params.reviewerChosen));
 }
 
 export const PULL_REQUEST_SET_RUN_MODE_REASON =
