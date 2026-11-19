@@ -9,7 +9,7 @@ import { type MessagingArtifact } from "./messaging-artifact-renderer.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
 import { type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
-import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantStreamBuffer, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 
 export interface MessagingBackendEventHost {
   readonly refreshStatusSurfacesForBackend: (backend: AppServerBackendKind, reason: string, federationTarget?: FederationTarget) => Promise<void>;
@@ -53,10 +53,7 @@ export interface MessagingBackendEventHost {
   readonly workingUpdateSurfaces: Map<string, Map<string, MessagingSurfaceRef>>;
   readonly workingUpdateCancellationFailures: Set<string>;
   readonly waitForAssistantStreamDeliveriesForEvent: (event: AgentEvent, binding: MessagingBindingRecord) => Promise<void>;
-  readonly assistantStreamBufferKeysForEvent: (event: AgentEvent, binding: MessagingBindingRecord) => string[];
-  readonly assistantStreamBuffers: Map<string, AssistantStreamBuffer>;
-  readonly assistantStreamDeliveryQueues: Map<string, Promise<MessagingDeliveryResult>>;
-  readonly assistantStreamCancellationSignals: Map<string, MessagingCancellationSignal>;
+  readonly discardAssistantStreamItemForEvent: (event: AgentEvent, binding: MessagingBindingRecord, itemId: string | undefined) => void;
   readonly deliverAssistantStreamUpdate: (delta: AssistantStreamDelta, binding: MessagingBindingRecord, options?: { bufferOnly?: boolean; }) => Promise<void>;
   readonly privateResponses: Pick<MessagingPrivateResponses, "hold" | "heldText" | "completeReply">;
   readonly deliverPrivateResponseFallback: (params: { binding: MessagingBindingRecord; event: AgentEvent; text: string; turnId: string; }) => Promise<void>;

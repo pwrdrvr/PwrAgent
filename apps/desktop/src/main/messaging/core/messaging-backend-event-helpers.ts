@@ -44,19 +44,6 @@ export type AssistantStreamDelta = {
   turnId: string;
 };
 
-export type AssistantStreamBuffer = AssistantStreamDelta & {
-  // Earliest time a non-final `stream_update` may be emitted for this message.
-  // Deltas arriving before it are coalesced into `text`; see
-  // {@link coalesceBackoffMs}. The final flush ignores this and emits at once.
-  nextReleaseAt: number;
-  // Count of non-final edits already emitted for this message, driving the
-  // exponential backoff between successive coalesced releases.
-  releaseCount: number;
-  sequence: number;
-  surface?: MessagingSurfaceRef;
-  text: string;
-};
-
 export type AssistantMessageDeliveryIdentity = {
   itemId?: string;
   threadId?: string;
@@ -903,3 +890,7 @@ export type TurnLifecycleParams = {
     status?: string | null;
   };
 };
+
+export function messagingSurfaceKey(surface: MessagingSurfaceRef): string {
+  return `${surface.channel}\0${surface.id}`;
+}
