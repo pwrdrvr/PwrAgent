@@ -31,6 +31,8 @@ export type RecreateWorktreeParams = {
   /** Refuse unless the branch still points here. A hibernated checkout comes
    * back only onto the commit it was saved on. */
   expectedHead?: string;
+  /** With `detached`: the commit to check out, ahead of the checkpoint's parent. */
+  startPoint?: string;
   now?: number;
 };
 
@@ -159,7 +161,8 @@ export class WorktreeRecoveryService {
 
       let startPoint: string;
       if (detached) {
-        startPoint = checkpoint?.parent
+        startPoint = params.startPoint
+          ?? checkpoint?.parent
           ?? (params.branch ? await this.resolveCommit(repositoryPath, `refs/heads/${params.branch}`) : undefined)
           ?? await this.resolveCommit(repositoryPath, "HEAD")
           ?? "HEAD";

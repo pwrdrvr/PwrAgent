@@ -35,7 +35,7 @@ describe("detachedRestoreNotices", () => {
   });
 
   it.each([
-    ["moved", "fix/retry has moved since the thread was archived"],
+    ["moved", "fix/retry has moved since its changes were saved"],
     ["missing", "fix/retry no longer exists"],
   ] as const)("explains a %s branch without a holder", (reason, lead) => {
     const [notice] = detachedRestoreNotices([response([

@@ -2674,6 +2674,12 @@ export type AppServerNotification =
         threadId: string;
         workspace?: ThreadHibernatedWorkspace | null;
         keepAwake?: boolean;
+        /** Sent once with `workspace: null` when the checkout came back on a
+         * detached HEAD instead of its branch. */
+        restoredDetached?: {
+          worktreePath: string;
+          detachedFrom: NonNullable<WorktreeSnapshotSummary["detachedFrom"]>;
+        };
       };
     }
   | {

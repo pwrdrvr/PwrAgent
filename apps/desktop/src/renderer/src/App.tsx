@@ -44,6 +44,7 @@ import {
   isRemoteFederationTarget,
   resolveNewThreadBackend,
   type AppServerBackendKind,
+  type WorktreeSnapshotSummary,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
@@ -204,7 +205,7 @@ import {
   type SubthreadLaunchpadDraft,
 } from "./lib/useThreadNavigation";
 import { ArchiveGroupConfirmation, useArchiveGroupConfirmation } from "./features/navigation/ArchiveGroupConfirmation";
-import { detachedRestoreNotices } from "./features/workspace-recovery/detached-restore-notice";
+import { detachedRestoreNotice, detachedRestoreNotices } from "./features/workspace-recovery/detached-restore-notice";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -1472,6 +1473,23 @@ function DesktopAppShell(props: {
               threadLink,
             }),
           });
+          return;
+        }
+        // A hibernated checkout restored by Restore now or by a send can come
+        // back detached; its card is gone by then, so say so here.
+        if (event.notification.method === "thread/checkoutHibernation/updated") {
+          const params = event.notification.params as {
+            threadId: string;
+            restoredDetached?: { worktreePath: string; detachedFrom: NonNullable<WorktreeSnapshotSummary["detachedFrom"]> };
+          };
+          if (params.restoredDetached) {
+            dispatchAppNotice({ type: "show", notice: detachedRestoreNotice({
+              backend: event.backend as AppServerBackendKind,
+              threadId: params.threadId,
+              ...params.restoredDetached,
+              threadTitle: labelForThread(event.backend, params.threadId),
+            }) });
+          }
           return;
         }
         if (event.notification.method === "codex/missingThreads/updated") {

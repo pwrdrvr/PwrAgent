@@ -67,6 +67,7 @@ import {
   type ThreadMaintenanceRunItem,
   type SetThreadCheckoutHibernationResponse,
   type ThreadHibernatedWorkspace,
+  type WorktreeRecoveryFailureReason,
   type WorktreeSnapshotSummary,
   buildThreadIdentityKey,
   parseThreadIdentityKey,
@@ -153,6 +154,14 @@ import {
 } from "./thread-archive-helpers";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+
+/** The refusals a hibernated restore answers with a detached HEAD instead. */
+const DETACHED_RESTORE_REASONS: Partial<Record<WorktreeRecoveryFailureReason,
+  NonNullable<WorktreeSnapshotSummary["detachedFrom"]>["reason"]>> = {
+  "branch-checked-out": "in-use",
+  "branch-moved": "moved",
+  "branch-missing": "missing",
+};
 
 /** Codex rows, and the summaries built from ACP sessions, carry no archive
  * time even on the archived page. Which page listed a thread is its archive
@@ -1229,7 +1238,11 @@ export class ThreadArchiveCoordinator {
    * checkout (null once awake), Keep it awake, or both. */
   private async publishCheckoutHibernation(
     identity: { backend: AppServerBackendKind; threadId: string },
-    change: { workspace?: ThreadHibernatedWorkspace | null; keepAwake?: boolean },
+    change: {
+      workspace?: ThreadHibernatedWorkspace | null;
+      keepAwake?: boolean;
+      restoredDetached?: { worktreePath: string; detachedFrom: NonNullable<WorktreeSnapshotSummary["detachedFrom"]> };
+    },
   ): Promise<void> {
     await this.context.emit({ backend: identity.backend, notification: {
       method: "thread/checkoutHibernation/updated",
@@ -1455,15 +1468,27 @@ export class ThreadArchiveCoordinator {
       } });
       throw new Error(message);
     };
-    const result = await this.withArchiveWorkspaceWrite([snapshot.worktreePath], async () => await this.host().worktreeRecoveryService.recreate({
-      ...identity,
-      repositoryPath: snapshot.repositoryPath,
-      worktreePath: snapshot.worktreePath,
-      branch: snapshot.sourceBranch,
-      detached: !snapshot.sourceBranch,
-      checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit },
-      expectedHead: snapshot.sourceHead,
-    }));
+    const recreate = async (detachedAt?: string) => await this.withArchiveWorkspaceWrite([snapshot.worktreePath], async () =>
+      await this.host().worktreeRecoveryService.recreate({
+        ...identity,
+        repositoryPath: snapshot.repositoryPath,
+        worktreePath: snapshot.worktreePath,
+        checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit },
+        ...(detachedAt
+          ? { detached: true, startPoint: detachedAt }
+          : { branch: snapshot.sourceBranch, detached: !snapshot.sourceBranch, expectedHead: snapshot.sourceHead }),
+      }));
+    let result = await recreate();
+    // The branch is checked out elsewhere, moved, or gone. Every refusal for
+    // those comes before Git writes anything, so the checkout comes back at
+    // its saved HEAD on a detached HEAD instead, and the branch is untouched.
+    const conflict = result.status === "failed" ? DETACHED_RESTORE_REASONS[result.reason] : undefined;
+    let detachedFrom: WorktreeSnapshotSummary["detachedFrom"];
+    if (result.status === "failed" && conflict && snapshot.sourceBranch && snapshot.sourceHead) {
+      detachedFrom = { branch: snapshot.sourceBranch, head: snapshot.sourceHead, reason: conflict,
+        ...(result.branchCheckedOutAt ? { checkedOutAt: result.branchCheckedOutAt } : {}) };
+      result = await recreate(snapshot.sourceHead);
+    }
     if (result.status === "failed") return await fail(result.message);
     if (result.checkpoint && !result.checkpoint.restored) {
       // The checkout came back without its changes. Remove it again so the
@@ -1472,17 +1497,19 @@ export class ThreadArchiveCoordinator {
       return await fail("The saved changes did not apply to the restored checkout. They are kept in its snapshot.");
     }
     const restoredAt = Date.now();
-    await this.context.stores.archive.upsertWorktreeSnapshot({ ...identity, snapshot: { ...snapshot, state: "restored", restoredAt } });
+    await this.context.stores.archive.upsertWorktreeSnapshot({ ...identity, snapshot: { ...snapshot, state: "restored", restoredAt, detachedFrom } });
     this.checkoutRestoreFailures.delete(key);
     this.undeliveredCheckoutRestoreFailures.delete(key);
-    backendRegistryLog.info("hibernated checkout restored", { ...identity, worktreePath: snapshot.worktreePath });
+    backendRegistryLog.info("hibernated checkout restored", { ...identity, worktreePath: snapshot.worktreePath,
+      ...(detachedFrom ? { detachedFrom: detachedFrom.reason } : {}) });
     await this.rerunEnvironmentSetupAfterRestore(identity, setupRuntime, snapshot.worktreePath, async () => {
       const setup = { ...progress, restorePhase: "setup" as const };
       this.checkoutRestoreProgress.set(key, setup);
       await this.publishCheckoutHibernation(identity, { workspace: setup });
     });
     this.checkoutRestoreProgress.delete(key);
-    await this.publishCheckoutHibernation(identity, { workspace: null });
+    await this.publishCheckoutHibernation(identity, { workspace: null,
+      ...(detachedFrom ? { restoredDetached: { worktreePath: snapshot.worktreePath, detachedFrom } } : {}) });
     this.host().invalidateThreadListCache(identity.backend, true, identity.threadId);
     this.host().threadInfoStore.invalidateSummaries(identity);
     await this.host().publishLocalEvent({ backend: identity.backend, notification: {
