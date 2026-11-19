@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { checkEnvironment, releaseMetadata } from "./release.mjs";
 
-export function requiresReadOnlyRecovery(eventName, runAttempt) {
-  // Only the first attempt of a protected tag push is eligible to submit.
-  return eventName !== "push" || runAttempt !== "1";
+export function requiresReadOnlyRecovery(eventName, runAttempt, priorSubmissionsSkipped = false) {
+  return eventName !== "push" || (runAttempt !== "1"
+    && !(/^[1-9]\d*$/.test(runAttempt) && priorSubmissionsSkipped === true));
 }
 
 export function releaseSource(context, ancestors) {

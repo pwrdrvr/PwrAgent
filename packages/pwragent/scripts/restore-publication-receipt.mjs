@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
-// Run-scoped artifact reads only. A missing/expired receipt is never permission
-// to publish; publish.mjs treats all workflow retries as read-only recovery.
+// Run-scoped artifact reads only. A missing or expired receipt does not
+// establish whether an earlier attempt called npm.
 const name = process.argv[2];
 assert.ok(["outpost-publication-attempt", "outpost-release-receipt"].includes(name));
 assert.match(process.env.GITHUB_RUN_ID, /^\d+$/);
