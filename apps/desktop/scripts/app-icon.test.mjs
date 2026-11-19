@@ -1,14 +1,14 @@
 // Pins the macOS icon inputs generate-macos-app-icon.swift derives from the
-// authored build/icon.png and, on a Mac with Xcode 26, compiles the Icon
-// Composer package through electron-builder's own helper so a package that
-// passes here is what packages at release time. See AGENTS.md "macOS app icon".
+// authored build/icon.png. The opt-in native integration suite compiles the
+// Icon Composer package through the same electron-builder helper as packaging.
+// See docs/macos-app-icons.md.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { compileAppIcon } from "./lib/compile-app-icon.mjs";
 import { opaqueBounds, pixelAt, readPixels } from "./lib/icon-pixels.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -26,48 +26,6 @@ const ACCENT = [232, 116, 58];
  */
 function readManifest() {
   return JSON.parse(readFileSync(join(iconPackage, "icon.json"), "utf8"));
-}
-
-/**
- * Major version of the selected Xcode's actool (0 when unavailable) and why,
- * so a lane that requires it can report the probe failure instead of a bare
- * 0. electron-builder refuses to compile a .icon with anything below 26.
- */
-function probeActool() {
-  if (process.platform !== "darwin") return { major: 0, reason: `no actool on ${process.platform}` };
-  try {
-    const plist = execFileSync("xcrun", ["actool", "--version"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const json = JSON.parse(
-      execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
-        input: plist,
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-      }),
-    );
-    const version = String(json["com.apple.actool.version"]["short-bundle-version"]);
-    return { major: Number.parseInt(version.split(".")[0], 10) || 0, reason: `actool ${version}` };
-  } catch (error) {
-    return { major: 0, reason: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/**
- * electron-builder's own compile step, reached through its dependency graph
- * so this test cannot drift from what packages at release time. app-builder-lib
- * copies the package to `Icon.icon` (actool resolves `--app-icon Icon` by the
- * basename and silently writes no icns otherwise), creates the --compile
- * directory, runs its actool invocation, refuses actool < 26, and returns
- * Assets.car plus the derived legacy icns. The Info.plist keys are set by its
- * macPackager at package time (CFBundleIconName = Icon, CFBundleIconFile =
- * icon.icns), not by actool's partial plist, so they are not asserted here.
- */
-function loadIconComposer() {
-  const fromHere = createRequire(import.meta.url);
-  const fromElectronBuilder = createRequire(fromHere.resolve("electron-builder"));
-  return fromElectronBuilder("app-builder-lib/out/util/macosIconComposer");
 }
 
 describe("macOS app icon", () => {
@@ -155,28 +113,18 @@ describe("build/icon.icon (Icon Composer package)", () => {
   });
 });
 
-const actool = probeActool();
-const requireActool = process.env.PWRAGENT_REQUIRE_ACTOOL === "1";
-
-// The skip below is a convenience for Linux, Windows, and Macs without Xcode
-// 26 — not for the release lane, which exists to compile the package.
-// release.yml sets PWRAGENT_REQUIRE_ACTOOL=1 on its unit-test step so a probe
-// failure or a wrong Xcode selection fails here, with the reason, instead of
-// surfacing as the first actool error inside the sign job.
-it.runIf(requireActool)("finds actool 26+ when PWRAGENT_REQUIRE_ACTOOL=1", () => {
-  expect(actool.major, actool.reason).toBeGreaterThanOrEqual(26);
-});
-
-describe.skipIf(actool.major < 26)("actool compile of build/icon.icon", () => {
+// CI and release set this after selecting Xcode. The first native operation
+// belongs to the integration hook, where electron-builder checks actool 26+
+// asynchronously and propagates any failure to the required suite.
+describe.runIf(process.env.PWRAGENT_REQUIRE_ACTOOL === "1")("actool compile of build/icon.icon", () => {
   let tempDir;
-  let compiled;
 
   // In beforeAll, not the describe body: vitest runs a skipped suite's body
   // at collection but never its hooks.
   beforeAll(async () => {
+    if (process.platform !== "darwin") throw new Error("PWRAGENT_REQUIRE_ACTOOL=1 requires macOS");
     tempDir = mkdtempSync(join(tmpdir(), "pwragent-icon-"));
-    compiled = await loadIconComposer().generateAssetCatalogForIcon(iconPackage);
-    writeFileSync(join(tempDir, "Icon.icns"), compiled.icnsFile);
+    await compileAppIcon(iconPackage, tempDir, 115_000);
   }, 120_000);
 
   afterAll(() => {
@@ -184,13 +132,13 @@ describe.skipIf(actool.major < 26)("actool compile of build/icon.icon", () => {
   });
 
   it("emits Assets.car and the legacy Icon.icns", () => {
-    expect(compiled.assetCatalog.byteLength).toBeGreaterThan(0);
-    expect(compiled.icnsFile.subarray(0, 4).toString("latin1")).toBe("icns");
+    expect(statSync(join(tempDir, "Assets.car")).size).toBeGreaterThan(0);
+    expect(readFileSync(join(tempDir, "Icon.icns")).subarray(0, 4).toString("latin1")).toBe("icns");
   });
 
   it("derives a legacy .icns on Apple's padded template for macOS 15", async () => {
     // actool writes four reps (16, 16@2x, 128, 128@2x); 256px is its
-    // ceiling — see AGENTS.md. Measure the largest PNG iconutil extracts.
+    // ceiling. Measure the largest PNG iconutil extracts.
     const iconset = join(tempDir, "Icon.iconset");
     execFileSync("iconutil", ["-c", "iconset", join(tempDir, "Icon.icns"), "-o", iconset]);
     let largest = null;
