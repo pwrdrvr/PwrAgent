@@ -2543,7 +2543,7 @@ export type NavigationQueryPage = {
   /** The owner applied directory mention filtering and ranking before paging. */
   directoryMatch?: "mention";
   selectionDirectory?: NavigationDirectoryRow;
-  /** Complete viewer projection dependencies, before pagination. Omitted when
+  /** Complete projection dependencies, before pagination. Omitted when
    * coverage or the bounded metadata budget cannot establish an exclusion. */
   metadataDependencies?: NavigationMetadataDependencies;
   facets?: NavigationStarMapFacetCounts;
@@ -2584,7 +2584,10 @@ export type NavigationMetadataDependencies = {
   version: 1;
   /** JSON tuples [ownerInstanceId or null, backend, threadId]. */
   threadKeys: string[];
+  /** Viewer-side PR dependencies. Owner proofs leave this set empty. */
   prKeys: string[];
+  /** Paths that can change projected rows, independent of count dependencies. */
+  workingStatePaths?: string[];
 };
 
 /** Selected launchpad configuration excludes unsent text, attachments and environment output. */

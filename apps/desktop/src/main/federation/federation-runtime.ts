@@ -428,7 +428,7 @@ import {
   validateArchivedThreadLookup,
 } from "./federation-collection-reads";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
-import { FederationAccountingStream, FEDERATION_EVENT_STREAM_METHOD } from "./federation-event-stream";
+import { FederationAccountingStream, FEDERATION_EVENT_STREAM_METHOD, type FederationEventStreamCursor } from "./federation-event-stream";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
@@ -6944,11 +6944,19 @@ export class DesktopFederationRuntime {
     }
     const stream = this.incomingEventSubscriptions.get(subscriberInstanceId)?.stream;
     if (stream && eventStream) {
+      // A different transcript interest starts a fresh epoch. Name the last
+      // frame of the old epoch only when the navigation subscription was
+      // continuous. The viewer must also prove it received through that frame.
+      const previousNavigationCursor = previous?.stream && previous.viaPeerId === sourcePeerId
+        && previous.eventClasses.has("navigation") && nextSelection.eventClasses.has("navigation")
+        && equalFederationThreadSelections(selectionForEventClass(previous, "navigation"), selectionForEventClass(nextSelection, "navigation"))
+        ? { epoch: previous.stream.epoch, sequence: previous.stream.sequence } : undefined;
       this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
         id: `federation-stream:${randomUUID()}`,
         kind: "notification",
         method: FEDERATION_EVENT_STREAM_METHOD,
-        params: { subscriptionId: eventStream.subscriptionId, epoch: stream.epoch },
+        params: { subscriptionId: eventStream.subscriptionId, epoch: stream.epoch,
+          ...(previousNavigationCursor ? { previousNavigationCursor } : {}) },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: this.ensureLocalInstanceId(),
         targetInstanceId: subscriberInstanceId,
@@ -7262,23 +7270,26 @@ export class DesktopFederationRuntime {
       }
       if (envelope.targetInstanceId !== this.ensureLocalInstanceId()
         || (envelope.sourceInstanceId !== sourcePeerId && sourcePeerId !== this.gatewayInstanceId)) return true;
-      const params = envelope.params as { subscriptionId?: string; epoch?: string };
+      const params = envelope.params as { subscriptionId?: string; epoch?: string; previousNavigationCursor?: FederationEventStreamCursor };
       if (!params || typeof params.epoch !== "string" || params.epoch.length > 128
         || !params.subscriptionId || this.desiredEventStreamIds.get(envelope.sourceInstanceId) !== params.subscriptionId) return true;
-      if (this.receivedEventStreams.get(envelope.sourceInstanceId)?.epoch === params.epoch) return true;
+      const previous = this.receivedEventStreams.get(envelope.sourceInstanceId);
+      if (previous?.epoch === params.epoch) return true;
+      const navigationContinuous = previous && previous.epoch === params.previousNavigationCursor?.epoch
+        && previous.sequence === params.previousNavigationCursor.sequence;
       this.receivedEventStreams.set(envelope.sourceInstanceId, {
         epoch: params.epoch, sequence: 0, accounting: new FederationAccountingStream(),
       });
-      // The acknowledgement is ordered before subsequent live events. A read
-      // started now covers the subscription/reconnection gap, even if the
-      // owner is idle waiting for a prompt and never emits another event.
-      this.remoteThreadSummaryCache?.invalidate(envelope.sourceInstanceId);
+      // The acknowledgement is ordered before subsequent live events. Repair
+      // an unproven navigation baseline even if the owner never emits again.
+      if (!navigationContinuous) this.remoteThreadSummaryCache?.invalidate(envelope.sourceInstanceId);
       this.publishReceivedBackendEvent({
         backend: "codex",
         federationTarget: { scope: "remote", instanceId: envelope.sourceInstanceId },
         notification: {
           method: "federation/eventStream/changed",
-          params: { instanceId: envelope.sourceInstanceId, epoch: params.epoch },
+          params: { instanceId: envelope.sourceInstanceId, epoch: params.epoch,
+            ...(navigationContinuous ? { navigationContinuous: true } : {}) },
         },
       });
       return true;

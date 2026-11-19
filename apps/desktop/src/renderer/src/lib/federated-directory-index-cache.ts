@@ -157,10 +157,7 @@ export class FederatedDirectoryIndexCache {
       return;
     }
     const method = event.notification.method as string;
-    if (
-      method === "federation/peerStatus/changed"
-      || method === "federation/eventStream/changed"
-    ) {
+    if (method === "federation/peerStatus/changed") {
       this.invalidate(target.instanceId);
       return;
     }

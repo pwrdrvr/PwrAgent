@@ -14,6 +14,79 @@ import { NavigationWindowQueries } from "../navigation-window-queries";
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each([3, 6])("keeps every rendered row in order during a scoped remote refresh with %i expanded directories", async (groups) => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  vi.stubGlobal("__pwragentFederationTarget", target);
+  let threads: NavigationThreadSummary[] = [];
+  const directories = Array.from({ length: groups }, (_, group) => {
+    const path = `/fixture-${group}`;
+    const linkedDirectories = [{ id: path, kind: "local" as const, label: path, path }];
+    const members = Array.from({ length: 3 }, (_, tray) => {
+      const id = `parent-${group}-${tray}`;
+      const parent: NavigationThreadSummary = { id, source: "codex", title: id, titleSource: "explicit",
+        inbox: { inInbox: false }, linkedDirectories, projectKey: `${path}/${tray}`, subthreadsCollapsed: false };
+      return [parent, { ...parent, id: `${id}-child`, projectKey: `${path}/${tray}/child`, parentThreadId: id }];
+    }).flat();
+    threads.push(...members);
+    return { key: `directory:${path}`, path, label: path, kind: "directory" as const, needsAttentionCount: 0,
+      threadKeys: members.map(({ id }) => `codex:${id}`) };
+  });
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const tasks = new Set<() => void>();
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    const page = navigationQueryFixture(request, { directories, threads });
+    // These fixture collections fit on one page. The native protocol test
+    // separately proves that the owner includes dependencies beyond page one.
+    page.metadataDependencies = readNavigationMetadataDependencies({ version: 1, prKeys: [], threadKeys: [],
+      workingStatePaths: page.entries.flatMap(({ row }) => threads.find((thread) => thread.id === row.id)?.projectKey ?? []) });
+    return page;
+  });
+  const api: DesktopApi = { getNavigationQueryPage: read, releaseNavigationQuery: async () => undefined,
+    onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  const rows = () => Array.from(document.querySelectorAll("[data-thread-key]"), (row) => row.getAttribute("data-thread-key"));
+  const commits: ReturnType<typeof rows>[] = [];
+  let capturing = false;
+  let navigation!: ReturnType<typeof useThreadNavigation>;
+  function Window() {
+    navigation = useThreadNavigation(api, { scheduleNavigationRefresh: (callback) => {
+      tasks.add(callback); return () => { tasks.delete(callback); };
+    } });
+    return <Profiler id="remote-navigation" onRender={() => { if (capturing) commits.push(rows()); }}>
+      <Sidebar backends={[]} browseMode={navigation.browseMode} directories={navigation.directories}
+        directoryDisclosure={navigation.directoryDisclosure} threads={navigation.threads} inboxThreads={navigation.inboxThreads}
+        pagedNavigation={navigation.pagedNavigation} loading={navigation.loading} selectedItemKey={navigation.selectedItemKey}
+        selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
+        onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
+        onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />
+    </Profiler>;
+  }
+  const mounted = render(<Window />);
+  const idle = () => [...navigation.pagedNavigation.resources.values()].every((resource) => !resource.loading);
+  try {
+    await waitFor(() => expect(navigation.directories).toHaveLength(groups));
+    await act(async () => {
+      navigation.setBrowseMode("directories");
+      navigation.directoryDisclosure.setExpandedByKey(Object.fromEntries(directories.map(({ key }) => [key, true])));
+    });
+    await waitFor(() => { expect(rows()).toHaveLength(groups * 6); expect(idle()).toBe(true); });
+    const ordered = rows();
+    capturing = true;
+    read.mockClear();
+    threads = threads.map((thread) => thread.id === "parent-0-0-child" ? { ...thread, gitWorkingStateFetchedAt: 100 } : thread);
+    await act(async () => {
+      for (const emit of listeners) emit({ backend: "codex", federationTarget: target, notification: { method: "navigation/invalidated",
+        params: { sourceMethod: "navigation/threadGitWorkingState/updated", worktreePath: "/fixture-0/0/child" } } });
+      const scheduled = [...tasks]; tasks.clear(); scheduled.forEach((task) => task());
+    });
+    await waitFor(() => expect(idle()).toBe(true));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]?.[0].query).toMatchObject({ kind: "children", parent: { threadId: "parent-0-0" } });
+    expect(commits.length).toBeGreaterThan(0);
+    for (const commit of commits) expect(commit).toEqual(ordered);
+  } finally { mounted.unmount(); vi.unstubAllGlobals(); }
+});
+
 it("bounds IPC, row, child projection and byte-sizing work for a small burst in twelve expanded projects", async () => {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   const directories = Array.from({ length: 12 }, (_, i) => ({

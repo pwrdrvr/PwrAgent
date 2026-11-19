@@ -2023,7 +2023,7 @@ export type FederationPeerStatusChangedNotification = {
 
 export type FederationEventStreamChangedNotification = {
   method: "federation/eventStream/changed";
-  params: { instanceId: string; epoch: string };
+  params: { instanceId: string; epoch: string; navigationContinuous?: true };
 };
 
 export type FederationCelestialIconsChangedNotification = {

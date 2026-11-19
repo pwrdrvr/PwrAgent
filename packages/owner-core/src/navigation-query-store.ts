@@ -265,7 +265,8 @@ function pageBase(params: {
     countsRevision: generation.completeRevision,
     coverage: generation.materialization.coverage,
     counts: generation.materialization.counts,
-    ...(generation.materialization.metadataDependencies ? { metadataDependencies: generation.materialization.metadataDependencies } : {}),
+    ...(generation.materialization.metadataDependencies && !generation.materialization.metadataDependencies.workingStatePaths
+      ? { metadataDependencies: generation.materialization.metadataDependencies } : {}),
     ...(generation.materialization.collectionSize !== undefined ? { collectionSize: generation.materialization.collectionSize } : {}),
     ...(generation.materialization.directoryMatch ? { directoryMatch: generation.materialization.directoryMatch } : {}),
     ...(generation.materialization.selectionDirectory ? { selectionDirectory: generation.materialization.selectionDirectory } : {}),
@@ -395,7 +396,7 @@ export class NavigationQueryStore {
           complete: true,
           unchanged: true,
         };
-        this.assertPageBudget(unchanged);
+        this.finishPage(unchanged, generation);
         generation.lastAccessedAt = now;
         return unchanged;
       }
@@ -412,7 +413,7 @@ export class NavigationQueryStore {
         ownerEpoch: this.ownerEpoch, pageSize: 0 });
       page.rangeStart = range.start;
       page.rangeUnchanged = { start: range.start, count: range.count };
-      this.assertPageBudget(page);
+      this.finishPage(page, generation);
       generation.lastAccessedAt = now;
       if (newCurrentKey && page.nextCursor) {
         this.retainGeneration(generation);
@@ -637,8 +638,20 @@ export class NavigationQueryStore {
         scopeKey: params.generation.scopeKey,
       });
     }
-    this.assertPageBudget(page);
+    this.finishPage(page, params.generation);
     return page;
+  }
+
+  private finishPage(page: NavigationQueryPage, generation: NavigationQueryGeneration): void {
+    // Owner exclusion proofs are optional. Fit the same rows and cursor even
+    // when adding the proof would force another page or reject a large row.
+    const proof = generation.materialization.metadataDependencies;
+    if (proof?.workingStatePaths) {
+      page.metadataDependencies = proof;
+      if (serializedBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return;
+      delete page.metadataDependencies;
+    }
+    this.assertPageBudget(page);
   }
 
   private retainGeneration(

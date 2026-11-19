@@ -8,9 +8,12 @@ export const NAVIGATION_METADATA_DEPENDENCY_MAX_BYTES = 64 * 1024;
 export function readNavigationMetadataDependencies(value: unknown): NavigationMetadataDependencies | undefined {
   if (!value || typeof value !== "object") return undefined;
   const proof = value as NavigationMetadataDependencies;
+  const paths = proof.workingStatePaths;
   if (proof.version !== 1 || !Array.isArray(proof.threadKeys) || !Array.isArray(proof.prKeys)
-    || proof.threadKeys.length + proof.prKeys.length > NAVIGATION_METADATA_DEPENDENCY_MAX_KEYS
-    || !proof.threadKeys.every((key) => typeof key === "string") || !proof.prKeys.every((key) => typeof key === "string")) return undefined;
+    || (paths !== undefined && !Array.isArray(paths))
+    || proof.threadKeys.length + proof.prKeys.length + (paths?.length ?? 0) > NAVIGATION_METADATA_DEPENDENCY_MAX_KEYS
+    || !proof.threadKeys.every((key) => typeof key === "string") || !proof.prKeys.every((key) => typeof key === "string")
+    || (paths && !paths.every((path) => typeof path === "string"))) return undefined;
   let bytes = 0;
   for (const char of JSON.stringify(proof)) {
     const point = char.codePointAt(0)!;
