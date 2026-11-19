@@ -15,6 +15,7 @@ import type { SubAgentMonitorServiceHost } from "../app-server/subagent-monitor-
 import type { ThreadArchiveCoordinatorHost } from "../app-server/thread-archive-coordinator";
 import type { ThreadDirectoryServiceHost } from "../app-server/thread-directory-service";
 import type { ThreadInspectionToolsHost } from "../app-server/thread-inspection-tools";
+import type { ThreadModelSettingsHost } from "../app-server/thread-model-settings";
 import type { ThreadMcpConnectionsHost } from "../app-server/thread-mcp-connections";
 import type { ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
 import type { ThreadWorkspaceServiceHost } from "../app-server/thread-workspace-service";
@@ -31,6 +32,7 @@ type Hosts = {
   ThreadDirectoryServiceHost: ThreadDirectoryServiceHost;
   ThreadInspectionToolsHost: ThreadInspectionToolsHost;
   ThreadMcpConnectionsHost: ThreadMcpConnectionsHost;
+  ThreadModelSettingsHost: ThreadModelSettingsHost;
   ThreadUsageLedgerHost: ThreadUsageLedgerHost;
   ThreadWorkspaceServiceHost: ThreadWorkspaceServiceHost;
 };
@@ -122,6 +124,7 @@ it("declares no operation separately in multiple module hosts", () => {
     ThreadDirectoryServiceHost: true,
     ThreadInspectionToolsHost: true,
     ThreadMcpConnectionsHost: true,
+    ThreadModelSettingsHost: true,
     ThreadUsageLedgerHost: true,
     ThreadWorkspaceServiceHost: true,
   };
