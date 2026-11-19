@@ -1703,21 +1703,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
       return;
     }
 
+    const createDailyRunLimit = parseLimitSelectValue(dailyRunLimit);
+    const createRunTimeoutMs = parseLimitSelectValue(runTimeoutMs);
     await props.onSubmit({
       kind: "create",
       request: {
         ...assignment,
         backlogPolicy,
-        ...(parseLimitSelectValue(dailyRunLimit) !== null
-          ? { dailyRunLimit: parseLimitSelectValue(dailyRunLimit) }
-          : {}),
+        ...(createDailyRunLimit !== null ? { dailyRunLimit: createDailyRunLimit } : {}),
         enabled,
         executionProfile,
         gate: gate.gate,
         ...(priorRunLookback ? { priorRunLookback } : {}),
-        ...(parseLimitSelectValue(runTimeoutMs) !== null
-          ? { runTimeoutMs: parseLimitSelectValue(runTimeoutMs) }
-          : {}),
+        ...(createRunTimeoutMs !== null ? { runTimeoutMs: createRunTimeoutMs } : {}),
         ...(triggerKind === "inbound_message"
           ? {
               inboundCoalesceWindowMs: parseCoalesceWindowMs(

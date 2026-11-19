@@ -1270,6 +1270,11 @@ export class DesktopAutomationService {
       terminalStatus?: string;
       backendThreadId?: string;
     };
+    // A run its timeout ended was already reported. Its interrupted turn's
+    // own end must not rewrite that report or notify bound conversations again.
+    const timedOutBefore = params.automationRunId
+      ? this.options.store.getRun(params.automationRunId)?.failureReason === "timed_out"
+      : false;
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: params.automationRunId,
       status: params.status,
@@ -1278,7 +1283,7 @@ export class DesktopAutomationService {
       turnId: params.turnId,
       errorMessage: params.errorMessage,
     });
-    if (params.automationRunId) {
+    if (params.automationRunId && !timedOutBefore) {
       if (
         params.status === "failed"
         || params.status === "cancelled"

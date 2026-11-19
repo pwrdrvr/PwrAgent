@@ -435,9 +435,18 @@ export class AutomationScheduler {
     this.coalesceWindows.delete(automationId);
     if (!open || open.sources.length === 0) return;
     const automation = this.options.store.getAutomation(automationId);
-    if (!automation || automation.status !== "enabled") return;
+    if (!automation) return;
     const [primary, ...rest] = open.sources;
     if (!primary) return;
+    if (automation.pausedReason === "daily_run_limit") {
+      // Batched while the daily run limit paused the automation: each message
+      // is recorded as skipped, not dropped.
+      for (const source of open.sources) {
+        this.recordSkipWhilePaused(automation, { trigger: "inbound_message", source });
+      }
+      return;
+    }
+    if (automation.status !== "enabled") return;
     const source: AutomationRunSourceMetadata =
       rest.length > 0
         ? {
@@ -756,7 +765,7 @@ export class AutomationScheduler {
         priorRuns: this.collectPriorRunContext(params.automation, run.id, params.now),
         run,
       });
-      this.options.store.markRunStarted({
+      const started = this.options.store.markRunStarted({
         runId: params.runId,
         backendThreadId: result.backendThreadId,
         backendTurnId: result.turnId,
@@ -764,7 +773,11 @@ export class AutomationScheduler {
         startedAt: params.now,
         now: params.now,
       });
-      this.armRunTimeout(params.automation, params.runId);
+      // A turn can end before its submission is acknowledged; a run that is
+      // already settled needs no timeout.
+      if (started?.status === "running") {
+        this.armRunTimeout(params.automation, params.runId);
+      }
       automationSchedulerLog.info("automation run submitted", {
         automationId: params.automation.id,
         automationName: params.automation.name,

@@ -1662,3 +1662,90 @@ describe("AutomationScheduler daily run limit", () => {
     expect(store.getAutomation("automation-1")?.nextRunAt).toBe(2 * 60 * 60 * 1000);
   });
 });
+
+describe("AutomationScheduler limits review regressions", () => {
+  it("arms no timeout for a run whose turn ended before its submission returned", async () => {
+    const clock = new FakeClock();
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Fast",
+      taskPrompt: "Fast",
+      schedule: { kind: "interval", every: 1, unit: "hours", anchorAt: 0 },
+      runTimeoutMs: 15 * 60 * 1000,
+      now: 0,
+    });
+    const scheduler: AutomationScheduler = new AutomationScheduler({
+      store,
+      now: () => clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      runner: {
+        async submitRun({ run }) {
+          await scheduler.handleTurnQueueUpdate({
+            automationRunId: run.id,
+            status: "terminal",
+            terminalStatus: "turn/completed",
+            now: clock.now,
+          });
+          return { status: "started", queueEntryId: "queue-1", turnId: "turn-1" };
+        },
+      },
+    });
+    await scheduler.runNow("automation-1", clock.now);
+    expect(store.listRunsForAutomation("automation-1")[0]?.status).toBe("completed");
+    expect(clock.timers.size).toBe(0);
+  });
+
+  it("records messages batched in a window as skipped when the daily limit paused the automation", async () => {
+    const clock = new FakeClock();
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Inbound",
+      taskPrompt: "Answer",
+      schedule: { kind: "interval", every: 1, unit: "hours", anchorAt: 0 },
+      inboundCoalesceWindowMs: 30_000,
+      maxRunsPerHour: null,
+      dailyRunLimit: 5,
+      now: 0,
+    });
+    const scheduler = new AutomationScheduler({
+      store,
+      runner: new HeadlessAutomationRunner(launcher),
+      now: () => clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+    });
+    const source = (key: string) => ({
+      kind: "messaging",
+      sourceEventKey: key,
+      receivedAt: clock.now,
+      matchedTriggerId: "trigger-1",
+      actor: { id: "user-1" },
+      conversation: { channel: "slack", conversationId: "C1" },
+    }) as unknown as Parameters<AutomationScheduler["runFromInboundEvent"]>[0]["source"];
+    const inbound = async (key: string) => {
+      const automation = store.getAutomation("automation-1")!;
+      await scheduler.runFromInboundEvent({ automation, source: source(key), now: clock.now });
+    };
+
+    await inbound("event-1");
+    await inbound("event-2");
+    await inbound("event-3");
+    expect(launcher.started).toHaveLength(1);
+    // Another trigger reaches the limit while the window is open.
+    store.pauseAutomationForDailyLimit("automation-1", clock.now);
+
+    await clock.advance(30_000);
+    expect(launcher.started).toHaveLength(1);
+    const skipped = store.listRunsForAutomation("automation-1")
+      .filter((run) => run.skipReason === "daily_limit");
+    expect(skipped).toHaveLength(1);
+    // The first message is written at once; the second waits for the flush.
+    scheduler.stop();
+    expect(store.getRun(skipped[0]!.id)?.coalescedCount).toBe(2);
+  });
+});

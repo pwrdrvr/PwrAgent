@@ -5,6 +5,7 @@ import {
   DesktopAutomationService,
   replayCandidateLimitPerSource,
 } from "../automations/desktop-automation-service";
+import { HeadlessAutomationRunner } from "../automations/automation-runner";
 import { AutomationStore } from "../storage/automation-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -490,6 +491,71 @@ describe("DesktopAutomationService", () => {
         }),
       ]),
     });
+  });
+
+  it("reports a timed-out run once, even when its interrupted turn ends later", async () => {
+    const timers: Array<{ delayMs: number; callback: () => void }> = [];
+    (registry as unknown as { interruptTurn: unknown }).interruptTurn = vi.fn(async () => undefined);
+    const service = new DesktopAutomationService({
+      registry,
+      store,
+      scheduler: {
+        setTimer: ((callback: () => void, delayMs: number) => {
+          timers.push({ callback, delayMs });
+          return timers.length as unknown as ReturnType<typeof setTimeout>;
+        }) as unknown as typeof setTimeout,
+        clearTimer: () => undefined,
+        runner: new HeadlessAutomationRunner(registry),
+      },
+    });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Hangs",
+      taskPrompt: "Hang",
+      schedule: { kind: "interval", every: 1, unit: "hours" },
+      runTimeoutMs: 15 * 60 * 1000,
+    });
+    const runNow = await service.runNow({ automationId: created.automation.id });
+    const timeout = timers.find((timer) => timer.delayMs === 15 * 60 * 1000);
+    expect(timeout).toBeDefined();
+    timeout!.callback();
+    await vi.waitFor(() =>
+      expect(store.getRun(runNow.run.id)?.failureReason).toBe("timed_out"));
+    const failureUpdates = () => publishedEvents.filter((event) =>
+      event.notification.method === "automation/run/updated"
+      && (event.notification.params as { runId?: string }).runId === runNow.run.id
+      && (event.notification.params as { status?: string }).status === "failed");
+    await vi.waitFor(() => expect(failureUpdates()).toHaveLength(1));
+    expect(registry.interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "headless-thread-1",
+      turnId: "turn-1",
+    });
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: runNow.queueEntryId ?? "headless:run-1",
+              origin: "automation",
+              status: "terminal",
+              terminalStatus: "turn/cancelled",
+              automationRunId: runNow.run.id,
+              finalText: "Partial output",
+              turnId: "turn-1",
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+    expect(failureUpdates()).toHaveLength(1);
+    expect(store.getRunArtifact(runNow.run.id)?.finalText).toBeUndefined();
   });
 
   it("captures run usage from pricing events through one debounced write", async () => {
