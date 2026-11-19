@@ -1,15 +1,17 @@
 import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const baseline = "d0000337463c9f8a643496d1301d8a5e9fc24891";
+// Compare the merge commit to its parent so unrelated main changes made
+// before and after the extraction stay outside this verification.
+const baseline = "96142fa3d8af8edc70433aa496c01fbf3590ed2e";
+const extraction = "cdf4b930c350d3513e28b294cb00abd184a94d04";
 const core = "apps/desktop/src/main/messaging/core/";
 const controller = "messaging-controller.ts";
 
 function source(name, original = false) {
   const path = core + name;
-  const text = original ? execFileSync("git", ["show", baseline + ":" + path], { encoding: "utf8" }) : readFileSync(path, "utf8");
+  const text = execFileSync("git", ["show", (original ? baseline : extraction) + ":" + path], { encoding: "utf8" });
   const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
   assert.deepEqual(file.parseDiagnostics.map(diagnostic => diagnostic.messageText), [], name);
   return file;
@@ -98,6 +100,7 @@ for (const [name, definition] of originalDeclarations) {
 
 console.log(JSON.stringify({
   baseline,
+  extraction,
   movedMembers: moved.size,
   movedDeclarations: [...deliveryDeclarations.keys()].filter(name => originalDeclarations.has(name)).length,
   originalControllerLines: original.text.trimEnd().split("\n").length,
