@@ -96,7 +96,10 @@ describe("CI completion reporters", () => {
   it("compares Playwright's selected test IDs before and after execution", () => {
     for (const change of ["none", "reorder", "missing", "extra", "replace", "duplicate"]) {
       const destination = reportFile();
-      const makeTest = (id) => ({ id, titlePath: () => [id], outcome: () => "expected", expectedStatus: "passed", results: [{ status: "passed" }] });
+      const makeTest = (id) => ({
+        id, titlePath: () => [id], outcome: () => "expected", expectedStatus: "passed",
+        location: { file: `/fixture/${id}.spec.ts` }, results: [{ status: "passed" }],
+      });
       let tests = [makeTest("a"), makeTest("b")];
       const reporter = new PlaywrightReporter();
       reporter.onBegin({}, { allTests: () => tests });
@@ -106,7 +109,9 @@ describe("CI completion reporters", () => {
       if (change === "replace") tests[1] = makeTest("c");
       if (change === "duplicate") tests[1] = makeTest("a");
       reporter.onEnd({ status: "passed" });
-      expect(JSON.parse(readFileSync(destination, "utf8")).complete, change).toBe(change === "none" || change === "reorder");
+      const report = JSON.parse(readFileSync(destination, "utf8"));
+      expect(report.complete, change).toBe(change === "none" || change === "reorder");
+      expect(report.tests.map(({ file }) => file)).toEqual(tests.map(({ location }) => location.file));
     }
   });
 });
