@@ -50060,7 +50060,7 @@ script = "printf setup"
     expect(failurePayload).toMatchObject({
       code: "unsupported_workspace",
       message: expect.stringMatching(
-        /cwd was omitted[\s\S]*retry with cwd set to that project path[\s\S]*Do not switch to workspaceMode="none"/,
+        /cwd was omitted[\s\S]*retry with cwd set to that project path[\s\S]*Omit branchName[\s\S]*Do not switch to a shared checkout or ask the child to create a worktree/,
       ),
     });
     expect(codexClient.lastStartThreadParams).toBeUndefined();

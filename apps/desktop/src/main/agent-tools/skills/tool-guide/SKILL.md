@@ -20,9 +20,10 @@ Use handoff_task for local child work.
 Use create_instance_thread for work on a selected machine.
 Pass environment to either tool to pick the child's environment by id or name, or none.
 Those tools create threads immediately. For an operator-dispatched follow-up, use add_todo with action.type=start_thread.
+Set action.workMode=worktree for Git work unless the instructions require a shared checkout. Use local to share the source checkout.
+Give the child its task in the assigned checkout. Do not ask the child to create a worktree.
 Set action.backend for a different registered provider, plus its model and reasoningEffort from list_instance_projects.
 Use update_todo with backend, model and reasoningEffort to change an existing handoff card. Empty optional fields restore inheritance: source settings for the same provider, destination defaults for a different provider.
-Set workMode=local on the card to share the source thread's checkout, including its worktree. An explicit backend proposal overrides remembered dispatch settings; the operator can still change the card's selection.
 Use manage_thread_dependencies with a marked_done condition to mark work waiting until someone says it is done; holdMerge holds merging, and deliver operator with steps reminds the operator of the follow-up.
 Use manage_thread_dependencies with one same-thread Codex compaction_completed condition and an authorized recovery continuation to refresh instructions after future live compactions. repeat true keeps one durable subscription. Keep the ongoing authorized task running after registration: this is an event subscription, not a wait barrier. It steers only the compacted active turn, never starts or queues a turn, skips stopped/ended/replaced assignments, and cannot guarantee delivery before the next action.
 Compaction recovery is limited to one automatic attempt per five minutes and three per thirty minutes across all hooks on the thread, with a hard ceiling of eight per active turn. Further eligible attempts suspend recovery until the local operator rearms it in Continue After. Never bypass this by re-registering or changing the prompt.

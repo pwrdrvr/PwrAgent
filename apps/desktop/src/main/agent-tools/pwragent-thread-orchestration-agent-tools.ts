@@ -294,7 +294,7 @@ function inputSchemaForOperation(
           task: {
             type: "string",
             description:
-              "Give the new thread a concrete task. Include the user's requested work, not the parent transcript. Select the workspace with cwd and workspaceMode.",
+              "Give the child a concrete task in its assigned checkout. Select the workspace with cwd and workspaceMode. Do not ask the child to create a worktree.",
           },
           title: {
             type: "string",

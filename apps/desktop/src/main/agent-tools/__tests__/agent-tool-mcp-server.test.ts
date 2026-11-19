@@ -124,6 +124,17 @@ describe("AgentToolMcpServer", () => {
       expect(tools.map((tool) => tool.name)).not.toContain("get_current_location");
       expect(tools.map((tool) => tool.name)).not.toContain("render_messaging_pdf_pages");
 
+      // The workspace rule must reach clients that only read tool schemas,
+      // and clients that load the authored guide.
+      const todo = tools.find((tool) => tool.name === "add_todo");
+      const action = todo?.inputSchema.properties?.action as {
+        properties: { workMode: { description: string }; prompt: { description: string } };
+      };
+      expect(action.properties.workMode.description).toMatch(/use worktree for Git work unless .*share/i);
+      expect(action.properties.prompt.description).toMatch(/do not ask the child to create .*worktree/i);
+      expect(PWRAGENT_TOOL_GUIDE).toMatch(/workMode=worktree for Git work unless .*share/);
+      expect(PWRAGENT_TOOL_GUIDE).toMatch(/do not ask the child to create .*worktree/i);
+
       expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(tools.map((tool) => tool.name)));
       expect(client.getInstructions()).toContain("skill://waiting-on-work/SKILL.md");
       expect(client.getInstructions()).toContain("watch_thread_pull_request and end the turn");

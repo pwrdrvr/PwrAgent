@@ -2651,10 +2651,14 @@ export class ThreadWorkspaceService {
       );
     } catch (error) {
       const baseMessage = error instanceof Error ? error.message : String(error);
-      const message =
-        workspaceMode === "new_worktree" && !requestedCwd
-          ? `${baseMessage} cwd was omitted, so PwrAgent used the current project as the worktree source. If the user named a different local project, retry with cwd set to that project path. Do not switch to workspaceMode="none".`
-          : baseMessage;
+      const message = workspaceMode === "new_worktree"
+        ? baseMessage
+          + (!requestedCwd
+            ? " cwd was omitted. If the user named a different project, retry with cwd set to that project path."
+            : "")
+          + " Keep workspaceMode=new_worktree on retry. Omit branchName to use the default base, or pass an existing ref."
+          + " Do not switch to a shared checkout or ask the child to create a worktree."
+        : baseMessage;
       this.failPendingThreadHandoff(handoffId, new Error(message));
       return threadOrchestrationFailure(
         workspaceMode === "new_worktree" ? "unsupported_workspace" : "internal_error",
