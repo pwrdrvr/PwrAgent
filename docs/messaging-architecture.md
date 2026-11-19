@@ -942,6 +942,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-command-context.ts` | Narrow command store/backend collaborators and exact workflow port signatures; reads remain late bound |
 | `apps/desktop/src/main/messaging/core/messaging-command-helpers.ts` | Pure command parsing and shared message-origin attribution used by command and inbound workflows |
 | `apps/desktop/src/main/messaging/core/messaging-browse-workflow.ts` | Presents and retires resume, Agent and default Agent browse sessions. Owns render cancellation and shares the bounded query pool with the handoff picker. |
+| `apps/desktop/src/main/messaging/core/messaging-handoff-workflow.ts` | Presents workspace handoff choices, validates confirmations against live binding and workspace facts, and coordinates migration and status updates. |
 | `apps/desktop/src/main/messaging/core/messaging-review-workflow.ts` | Review picker, workspace/target/reviewer choices, capability checks, pending records and accepted-review confirmations; backend admission owns execution |
 | `apps/desktop/src/main/messaging/core/messaging-review-context.ts` | Narrow review store/backend collaborators and six lazy host ports with preserved receiver and error boundaries |
 | `apps/desktop/src/main/messaging/core/messaging-agent-tools.ts` | Agent tool dispatch, retained destinations, attachment/rename workflows, private responses and file/PDF tool orchestration; existing owners keep turn state, delivery and binding effects |
