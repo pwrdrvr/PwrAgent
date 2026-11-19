@@ -4894,12 +4894,15 @@ function SidebarContent(props: SidebarProps) {
           <ProjectCheckoutsDialog
             projectPath={projectCheckoutsDirectory.path}
             checkoutPaths={projectCheckoutsDirectory.checkoutPaths}
+            projectLabel={projectCheckoutsDirectory.label}
+            repositoryKey={projectCheckoutsDirectory.repositoryKey}
             suggestions={props.directories.flatMap((directory) =>
               projectCheckoutsDirectory.repositoryKey && directory.repositoryKey === projectCheckoutsDirectory.repositoryKey
                 && directory.path && !directory.checkoutPaths && !directory.localAvailability ? [directory.path] : [])}
             returnFocus={directoryContextMenuOpenerRef}
             pickCheckout={props.onPickProjectCheckout}
             copyPath={(path) => { void copyText(path); }}
+            revealLabel={canRevealPath ? revealInFileManagerLabel(props.platform) : undefined}
             revealPath={canRevealPath ? (path) => revealProjectPath(path, projectCheckoutsDirectory.label) : undefined}
             onSave={props.onSetProjectCheckoutGroup}
             onClose={() => setProjectCheckoutsDirectory(undefined)}
