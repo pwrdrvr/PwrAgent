@@ -241,6 +241,7 @@ export function researchActivityRows(run: Pick<ResearchRunView, "items" | "appro
       case "item_work": rows.push(row(researchLabel(data.work.state), data.work.note ?? itemExcerpt(data.itemId), data.itemId)); break;
       case "harness": rows.push(row("Harness", data.state.note)); break;
       case "harness_observation": rows.push(row(`Harness ${data.event}`, data.text)); break;
+      case "members": rows.push(row("Members", `${data.approaches.length} admitted from the source`)); break;
     }
   }
   return rows;

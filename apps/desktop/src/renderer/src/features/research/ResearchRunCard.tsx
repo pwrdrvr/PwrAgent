@@ -33,7 +33,7 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
     {harness?.source === "discovery"
       ? <p className="research-muted">Read-only discovery snapshot from <code className="research-code">{harness.project} / {harness.swarm}</code>.</p>
       : <dl className="research-stats">
-        <div><dt>{harness ? "Members" : "Worker slots"}</dt><dd>{harness ? `${harness.members.length} of ${counts.workerLimit}` : `${counts.slotsInUse} of ${counts.workerLimit}`}
+        <div><dt>{harness ? "Members" : "Worker slots"}</dt><dd>{harness ? harness.mode === "execute" ? `${harness.members.length} of ${counts.workerLimit}` : harness.members.length : `${counts.slotsInUse} of ${counts.workerLimit}`}
           {/* One segment per slot reads at a glance for a handful of workers; past that, one proportional bar. */}
           {!harness && (counts.workerLimit <= 12
             ? <span className="research-meter" aria-hidden="true">{Array.from({ length: counts.workerLimit }, (_, index) => <i key={index} className={index < counts.slotsInUse ? "is-on" : undefined} />)}</span>

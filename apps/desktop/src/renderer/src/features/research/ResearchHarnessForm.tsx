@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { RESEARCH_HARNESS_IMPORT_MEMBERS, RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessStatus, type ResearchThread } from "@pwragent/shared";
+import { RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessStatus, type ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type Operation = "import" | "discovery" | "execute";
@@ -85,8 +85,8 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel }: {
     const request: Omit<ResearchHarnessRequest, "requestId"> = { ...thread, mode: execute ? "execute" : "import", source: discovery ? "discovery" : "swarm",
       objective: execute ? objective.trim() : title, project: project.trim(), session: discovery ? "" : session.trim(), swarm: swarm.trim(),
       ...(discovery && problem.trim() ? { problem: problem.trim() } : {}),
-      // An import has no deadline: it reads what the source has. Only execution binds one, as the bridge requires.
-      workers: execute ? workers : RESEARCH_HARNESS_IMPORT_MEMBERS, ...(execute ? { minutes } : {}), budgetAcknowledged: execute && acknowledged };
+      // An import has no member limit or deadline: it reads what the source has, members included. Only execution binds them, as the bridge requires.
+      ...(execute ? { workers, minutes } : {}), budgetAcknowledged: execute && acknowledged };
     identity.current = harnessRequestIdentity(identity.current, request, () => crypto.randomUUID());
     setBusy(true); setError("");
     try {

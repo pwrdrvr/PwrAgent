@@ -1,4 +1,5 @@
 {
+  "research-harness-import-64-members": {"commits": 5, "note": "Intent, admission, two source pages with their cursors (the first declares all 64 members), and the ended boundary; commits do not scale with members.", "observedWalBytes": 486192, "rowsChanged": 394, "statements": 394},
   "research-resume-workers": {"commits": 9, "note": "One operator resume of eight cut-off workers: one commit gives each its slot back, then one per worker records the turn its message started.", "observedWalBytes": 206000, "rowsChanged": 25, "statements": 33},
   "research-retained-review-and-finish": {"commits": 2, "note": "After a restart: one accepted decision and one completion on a retained run. No worker, bridge or model effect.", "observedWalBytes": 41200, "rowsChanged": 4, "statements": 4},
   "openai-decisions-batch-announce": {"commits": 0, "note": "one 500-item decisions_invoke batch: announced at start, at each tenth, and at the end as events, never written. Item results stay in memory and the result file. 0 commits per batch (was 11 for the sub-agent card).", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
@@ -1685,7 +1686,7 @@
   "openai-decisions-delete": {"commits": 1, "note": "one decisions_delete tool call (every version soft-deleted in one statement): ~0.8 MB/day at 100 deletes/day.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 1},
   "research-harness-disabled-admission": {"commits": 0, "note": "Disabled import or execution is refused before intent, process admission or model work.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-discovery-repeat": {"commits": 0, "note": "Repeated request identity returns retained discovery without service calls or persistence", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "research-harness-discovery-import": {"commits": 3, "note": "Intent, read-only bridge admission and one atomic bounded discovery snapshot including raw observations; no per-node writes", "observedWalBytes": 131872, "rowsChanged": 10, "statements": 10},
+  "research-harness-discovery-import": {"commits": 3, "note": "Intent, read-only bridge admission and one atomic bounded discovery snapshot including raw observations; no per-node writes", "observedWalBytes": 98912, "rowsChanged": 9, "statements": 9},
   "research-harness-config-reads": {"commits": 0, "note": "1000 adapter status/admission config reads use the immutable owner snapshot without filesystem or SQLite work", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-config-revision": {"commits": 1, "note": "one existing config snapshot commit per changed Harness configuration revision", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "research-harness-model-admission": {"commits": 4, "note": "Intent, owner-selected model provenance before the paid probe, dispatch and one initial source page. No per-token writes.", "observedWalBytes": 185432, "rowsChanged": 17, "statements": 17},
@@ -1697,5 +1698,5 @@
   "research-harness-idle-and-duplicates": {"commits": 0, "note": "Fifty repeated service pages add no writes and cannot replace local review records.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-page": {"commits": 1, "note": "Six structured source records and the durable cursor share one commit; no per-token writes.", "observedWalBytes": 70040, "rowsChanged": 13, "statements": 13},
   "research-harness-redelivery": {"commits": 0, "note": "An ambiguous execution intent is read back without replay or writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "research-harness-import": {"commits": 4, "note": "One intent, bridge admission, atomic source page/cursor and execution boundary; source verdict never creates a local review.", "observedWalBytes": 185432, "rowsChanged": 35, "statements": 35}
+  "research-harness-import": {"commits": 4, "note": "One intent, bridge admission, atomic source page/cursor and execution boundary; source verdict never creates a local review.", "observedWalBytes": 156592, "rowsChanged": 36, "statements": 36}
 }

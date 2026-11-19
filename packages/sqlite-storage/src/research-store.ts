@@ -1,5 +1,5 @@
 import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
-import { applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchApproachOccupiesSlot,
+import { applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchApproachOccupiesSlot, researchWorkerLimit,
   researchItemSearchText, researchSearchHit, RESEARCH_BOARD_DELIVERIES, RESEARCH_BOARD_FAILURES, RESEARCH_BOARD_PAGE, RESEARCH_CHANGES_PAGE, RESEARCH_MAP_LEAVES,
   type ResearchEvent, type ResearchRun, type ResearchThread, type ResearchRunHeader, type ResearchItem, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchRunSummary, type ResearchEventRange, type ResearchEventPage, type ResearchApproach, type ResearchDelivery, type ResearchSubmission,
@@ -469,7 +469,7 @@ function headerFromRow(row: HeaderRow): ResearchRunHeader {
   const owner = row.owner ? JSON.parse(row.owner) as Pick<ResearchRunHeader, "ownerId" | "ownerPid" | "ownerStartedAt"> : data;
   return { id: row.run_id, revision: row.revision, objective: data.objective, coordinator: data.coordinator, ownerId: owner.ownerId, ownerPid: owner.ownerPid,
     ownerStartedAt: owner.ownerStartedAt, createdAt: event.at, deadlineAt: data.deadlineAt, workspaceMode: data.workspaceMode, status: row.status,
-    ...(row.reason !== null ? { reason: row.reason } : {}), workerLimit: data.approaches.length, activeWorkers: row.active_workers,
+    ...(row.reason !== null ? { reason: row.reason } : {}), workerLimit: researchWorkerLimit(data), activeWorkers: row.active_workers,
     ...(row.harness ? { harness: JSON.parse(row.harness) as NonNullable<ResearchRun["harness"]> } : {}) };
 }
 
