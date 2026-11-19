@@ -4,6 +4,7 @@ import {
   DECISION_JEV_ENDPOINT,
   DECISION_LOCAL_DEFAULT_ENDPOINT,
   DECISION_LOCAL_DEFAULT_MODEL,
+  DECISION_PROVIDER_IDS,
   DECISION_PROVIDER_LINKS,
   decisionLocalEndpointProblem,
   normalizeDecisionLocalEndpoint,
@@ -84,8 +85,11 @@ export function DecisionModelDefaults(props: {
   const resolved = resolveDecisionModelSettings(settings);
   const secrets = decisionSecrets(props.snapshot);
   const save = (change: Partial<DesktopDecisionModelSettings>) => props.onSave({ ...settings, ...change });
-  const modelHelp =
-    resolved.model === "local" ? <>Runs {resolved.localModel} at {resolved.localEndpoint}.</>
+  // A saved choice whose provider is off reads as Off until it is back on.
+  const chosenOff = resolved.chosenModel !== "off" && resolved.model === "off";
+  const modelHelp = chosenOff
+    ? <>{DECISION_PROVIDER_NAMES[resolved.chosenModel as DecisionProviderId]} is off, so no decision model is in use. Turn it on under Providers to use it again.</>
+    : resolved.model === "local" ? <>Runs {resolved.localModel} at {resolved.localEndpoint}.</>
       : resolved.model === "jev" ? secrets.jevApiKey.configured
         ? <>Runs {resolved.jevModel} on TypeSafe.</>
         : <>Runs {resolved.jevModel} on TypeSafe once it has an API key, under Providers → {DECISION_PROVIDER_NAMES.jev}.</>
@@ -107,8 +111,9 @@ export function DecisionModelDefaults(props: {
               disabled={props.saving}
               value={resolved.model}
               options={[
-                { value: "local", label: DECISION_PROVIDER_NAMES.local },
-                { value: "jev", label: DECISION_PROVIDER_NAMES.jev },
+                ...DECISION_PROVIDER_IDS
+                  .filter((provider) => resolved.enabled[provider])
+                  .map((provider) => ({ value: provider, label: DECISION_PROVIDER_NAMES[provider] })),
                 { value: "off", label: "Off" },
               ]}
               onChange={(model) => { void save({ model: model as DecisionModelChoice }); }}
@@ -122,6 +127,7 @@ export function DecisionModelDefaults(props: {
           disabled={props.saving}
           sub="Live voice can send camera frames to the decision model, so it can react to a gesture or to you stepping away."
           lockedReason={resolved.model === "local" ? undefined
+            : !resolved.enabled.local ? "Turn on the local decision model to use camera cues."
             : resolved.model === "off" ? "Choose the local decision model to use camera cues."
               : "Camera frames go only to the local decision model, so they never leave this Mac."}
           onChange={async (cameraCues) => await save({ cameraCues })}
@@ -135,13 +141,37 @@ function modelIdProblem(value: string): string | undefined {
   return value.length > 200 ? "Use a model id of 200 characters or fewer." : undefined;
 }
 
-/** The local section without blank keys, or undefined when nothing is left. */
-function localSettings(local: { endpoint?: string; model?: string }): DesktopDecisionModelSettings["local"] {
+/**
+ * A provider section without blank keys or `enabled: true` (on is the
+ * default), or undefined when nothing is left.
+ */
+function providerSection<T extends { enabled?: boolean; endpoint?: string; model?: string }>(section: T): T | undefined {
   const kept = {
-    ...(local.endpoint ? { endpoint: local.endpoint } : {}),
-    ...(local.model ? { model: local.model } : {}),
-  };
+    ...(section.enabled === false ? { enabled: false } : {}),
+    ...(section.endpoint ? { endpoint: section.endpoint } : {}),
+    ...(section.model ? { model: section.model } : {}),
+  } as T;
   return Object.keys(kept).length ? kept : undefined;
+}
+
+/** The Enabled switch at the top of a decision provider's Connection section. */
+function ProviderEnabledField(props: {
+  provider: DecisionProviderId;
+  enabled: boolean;
+  saving: boolean;
+  sub: ReactNode;
+  onChange: (enabled: boolean) => Promise<unknown>;
+}) {
+  return (
+    <ToggleField
+      checked={props.enabled}
+      disabled={props.saving}
+      label="Enabled"
+      switchQualifier={DECISION_PROVIDER_NAMES[props.provider]}
+      sub={props.sub}
+      onChange={props.onChange}
+    />
+  );
 }
 
 /** A text setting saved on Enter or on leaving the box, checked first. */
@@ -218,6 +248,13 @@ export function DecisionProviderScreen(props: {
   const secrets = decisionSecrets(props.snapshot);
   const name = DECISION_PROVIDER_NAMES[props.provider];
   const inUse = resolved.model === props.provider;
+  const enabled = resolved.enabled[props.provider];
+  const chip = enabled ? inUse ? "In use" : undefined : "Disabled";
+  const chipKind = inUse ? "ok" : "muted";
+  const saveLocal = (local: NonNullable<DesktopDecisionModelSettings["local"]>) =>
+    props.onSave({ ...settings, local: providerSection({ ...settings.local, ...local }) });
+  const saveJev = (jev: NonNullable<DesktopDecisionModelSettings["jev"]>) =>
+    props.onSave({ ...settings, jev: providerSection({ ...settings.jev, ...jev }) });
 
   if (props.provider === "local") {
     return (
@@ -230,10 +267,17 @@ export function DecisionProviderScreen(props: {
         <SettingsSection
           title="Connection"
           sectionId="decision-local-connection"
-          chip={inUse ? "In use" : undefined}
-          chipKind="ok"
+          chip={chip}
+          chipKind={chipKind}
         >
           <div className="settings-fields">
+            <ProviderEnabledField
+              provider="local"
+              enabled={enabled}
+              saving={props.saving}
+              sub="Agents can run decisions on it, and live voice can send it camera frames. Turning this off keeps its address, model and key."
+              onChange={async (next) => await saveLocal({ enabled: next })}
+            />
             <LinkRow
               label="Suggested model"
               sub="No local model yet? Cloudflare's Clef answers camera questions on a Mac."
@@ -249,9 +293,8 @@ export function DecisionProviderScreen(props: {
               placeholder={DECISION_LOCAL_DEFAULT_ENDPOINT}
               disabled={props.saving}
               validate={decisionLocalEndpointProblem}
-              onSave={async (endpoint) => await props.onSave({
-                ...settings,
-                local: localSettings({ ...settings.local, endpoint: endpoint ? normalizeDecisionLocalEndpoint(endpoint) : undefined }),
+              onSave={async (endpoint) => await saveLocal({
+                endpoint: endpoint ? normalizeDecisionLocalEndpoint(endpoint) : undefined,
               })}
             />
             <DraftTextField
@@ -261,7 +304,7 @@ export function DecisionProviderScreen(props: {
               placeholder={DECISION_LOCAL_DEFAULT_MODEL}
               disabled={props.saving}
               validate={modelIdProblem}
-              onSave={async (model) => await props.onSave({ ...settings, local: localSettings({ ...settings.local, model }) })}
+              onSave={async (model) => await saveLocal({ model })}
             />
             <SecretField
               label="API key"
@@ -301,10 +344,17 @@ export function DecisionProviderScreen(props: {
       <SettingsSection
         title="Connection"
         sectionId="decision-jev-connection"
-        chip={inUse ? "In use" : undefined}
-        chipKind="ok"
+        chip={chip}
+        chipKind={chipKind}
       >
         <div className="settings-fields">
+          <ProviderEnabledField
+            provider="jev"
+            enabled={enabled}
+            saving={props.saving}
+            sub="Agents can run decisions on Jev. Turning this off keeps the saved key and model."
+            onChange={async (next) => await saveJev({ enabled: next })}
+          />
           <LinkRow
             label="Account"
             sub="Jev needs a TypeSafe API key."
@@ -328,7 +378,7 @@ export function DecisionProviderScreen(props: {
             placeholder={DECISION_JEV_DEFAULT_MODEL}
             disabled={props.saving}
             validate={modelIdProblem}
-            onSave={async (model) => await props.onSave({ ...settings, jev: model ? { model } : undefined })}
+            onSave={async (model) => await saveJev({ model })}
           />
           <SettingsField
             label="Connection test"

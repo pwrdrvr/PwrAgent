@@ -6,7 +6,12 @@ import type {
 } from "@pwragent/shared";
 import { DraftTextField } from "./DecisionModelSettings";
 import { SecretField } from "./SecretField";
-import { SettingsPanelHead, SettingsSection, SettingsSectionStack } from "./SettingsLayout";
+import {
+  SettingsPanelHead,
+  SettingsSection,
+  SettingsSectionStack,
+  ToggleField,
+} from "./SettingsLayout";
 
 export const OPENAI_DECISIONS_FOCUS = "openai-decisions";
 
@@ -14,6 +19,11 @@ const UNSET_SECRET: DesktopSettingsSecretState = { configured: false, source: "u
 
 export function openAIDecisionsKeyState(snapshot: DesktopSettingsSnapshot): DesktopSettingsSecretState {
   return snapshot.models.openaiDecisions?.apiKey ?? UNSET_SECRET;
+}
+
+/** Whether agents may run decisions on OpenAI. On unless turned off. */
+export function openAIDecisionsEnabled(snapshot: DesktopSettingsSnapshot): boolean {
+  return snapshot.models.openaiDecisions?.enabled !== false;
 }
 
 /** Where the key comes from: an env override is not a saved key. */
@@ -42,11 +52,17 @@ export function OpenAIDecisionsScreen(props: {
   onReplaceSecret: (secret: DesktopSettingsSecretName, value: string) => Promise<boolean>;
 }) {
   const settings = props.snapshot.models.openaiDecisions;
-  const ids: DesktopOpenAIDecisionsSettings = {
+  const accountIds: DesktopOpenAIDecisionsSettings = {
     ...(settings?.organizationId ? { organizationId: settings.organizationId } : {}),
     ...(settings?.projectId ? { projectId: settings.projectId } : {}),
   };
+  // Every save sends the whole section, so an id edit keeps the switch.
+  const ids: DesktopOpenAIDecisionsSettings = {
+    ...(settings?.enabled === false ? { enabled: false } : {}),
+    ...accountIds,
+  };
   const keyState = openAIDecisionsKeyState(props.snapshot);
+  const enabled = openAIDecisionsEnabled(props.snapshot);
   return (
     <SettingsSectionStack paneId="models-openai-decisions" aria-label="OpenAI Decisions settings">
       <SettingsPanelHead
@@ -57,10 +73,18 @@ export function OpenAIDecisionsScreen(props: {
       <SettingsSection
         title="Connection"
         sectionId="openai-decisions-connection"
-        chip={openAIDecisionsKeyLabel(keyState)}
-        chipKind={keyState.configured ? "ok" : "muted"}
+        chip={enabled ? openAIDecisionsKeyLabel(keyState) : "Disabled"}
+        chipKind={enabled && keyState.configured ? "ok" : "muted"}
       >
         <div className="settings-fields">
+          <ToggleField
+            checked={enabled}
+            disabled={props.saving}
+            label="Enabled"
+            switchQualifier="OpenAI Decisions"
+            sub="Agents can register and run decisions on OpenAI. Turning this off keeps the saved key and IDs."
+            onChange={async (next) => await props.onSave({ ...accountIds, ...(next ? {} : { enabled: false }) })}
+          />
           <SecretField
             label="API key"
             sub="An OpenAI platform API key from a project that can call POST /v1/decisions. Signing in to ChatGPT or Codex does not provide one. Each run bills that API project, not your subscription."

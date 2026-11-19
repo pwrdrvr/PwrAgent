@@ -33,19 +33,30 @@ export type DesktopDecisionModelSettings = {
   /** Live voice sends camera frames to the decision model. Absent = on. */
   cameraCues?: boolean;
   local?: {
+    /** Agents may run decisions on it and live voice may use it. Absent = on. */
+    enabled?: boolean;
     /** Base URL of the local server. Absent = {@link DECISION_LOCAL_DEFAULT_ENDPOINT}. */
     endpoint?: string;
     /** Absent = {@link DECISION_LOCAL_DEFAULT_MODEL}. */
     model?: string;
   };
   jev?: {
+    /** Agents may run decisions on it. Absent = on. */
+    enabled?: boolean;
     /** Absent = {@link DECISION_JEV_DEFAULT_MODEL}. */
     model?: string;
   };
 };
 
 export type DecisionModelResolution = {
+  /**
+   * The decision model in effect: the saved choice, or "off" while that
+   * provider is turned off. Turning it back on restores the choice.
+   */
   model: DecisionModelChoice;
+  /** The saved choice, whether or not its provider is on. */
+  chosenModel: DecisionModelChoice;
+  enabled: Record<DecisionProviderId, boolean>;
   localEndpoint: string;
   localModel: string;
   jevModel: string;
@@ -55,8 +66,15 @@ export type DecisionModelResolution = {
 export function resolveDecisionModelSettings(
   settings: DesktopDecisionModelSettings | undefined,
 ): DecisionModelResolution {
+  const chosenModel = settings?.model ?? "off";
+  const enabled = {
+    local: settings?.local?.enabled ?? true,
+    jev: settings?.jev?.enabled ?? true,
+  };
   return {
-    model: settings?.model ?? "off",
+    model: chosenModel !== "off" && !enabled[chosenModel] ? "off" : chosenModel,
+    chosenModel,
+    enabled,
     localEndpoint: settings?.local?.endpoint ?? DECISION_LOCAL_DEFAULT_ENDPOINT,
     localModel: settings?.local?.model ?? DECISION_LOCAL_DEFAULT_MODEL,
     jevModel: settings?.jev?.model ?? DECISION_JEV_DEFAULT_MODEL,
@@ -115,6 +133,9 @@ export function decisionCameraCueAvailability(
   settings: DesktopDecisionModelSettings | undefined,
 ): DecisionCameraCueAvailability {
   const resolved = resolveDecisionModelSettings(settings);
+  if (!resolved.enabled.local && resolved.chosenModel === "local") {
+    return { available: false, reason: "The local decision model is off in Settings → AI Providers." };
+  }
   if (resolved.model === "off") {
     return { available: false, reason: "Choose a decision model in Settings → AI Providers to use camera cues." };
   }
@@ -139,7 +160,8 @@ function modelId(value: unknown): string | undefined {
 
 /**
  * Drops what this build cannot use: an unknown model choice, a local endpoint
- * that is not on this Mac, a blank model id. Returns undefined when nothing
+ * that is not on this Mac, a blank model id. A provider that is on drops its
+ * `enabled` key, since on is the default. Returns undefined when nothing
  * is left, so an all-default section is not written.
  */
 export function normalizeDecisionModelSettings(value: {
@@ -148,19 +170,30 @@ export function normalizeDecisionModelSettings(value: {
   localEndpoint?: unknown;
   localModel?: unknown;
   jevModel?: unknown;
+  localEnabled?: unknown;
+  jevEnabled?: unknown;
 }): DesktopDecisionModelSettings | undefined {
   const model = value.model === "local" || value.model === "jev" || value.model === "off" ? value.model : undefined;
   const cameraCues = typeof value.cameraCues === "boolean" ? value.cameraCues : undefined;
   const endpoint = typeof value.localEndpoint === "string" ? normalizeDecisionLocalEndpoint(value.localEndpoint) : undefined;
   const localModel = modelId(value.localModel);
   const jevModel = modelId(value.jevModel);
-  if (model === undefined && cameraCues === undefined && endpoint === undefined && localModel === undefined && jevModel === undefined) {
+  // Only "off" is written: on is the default, so an absent key means on.
+  const localOff = value.localEnabled === false;
+  const jevOff = value.jevEnabled === false;
+  const local = {
+    ...(localOff ? { enabled: false } : {}),
+    ...(endpoint ? { endpoint } : {}),
+    ...(localModel ? { model: localModel } : {}),
+  };
+  const jev = { ...(jevOff ? { enabled: false } : {}), ...(jevModel ? { model: jevModel } : {}) };
+  if (model === undefined && cameraCues === undefined && !Object.keys(local).length && !Object.keys(jev).length) {
     return undefined;
   }
   return {
     ...(model ? { model } : {}),
     ...(cameraCues === undefined ? {} : { cameraCues }),
-    ...(endpoint || localModel ? { local: { ...(endpoint ? { endpoint } : {}), ...(localModel ? { model: localModel } : {}) } } : {}),
-    ...(jevModel ? { jev: { model: jevModel } } : {}),
+    ...(Object.keys(local).length ? { local } : {}),
+    ...(Object.keys(jev).length ? { jev } : {}),
   };
 }

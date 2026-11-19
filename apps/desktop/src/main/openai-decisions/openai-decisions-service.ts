@@ -75,6 +75,7 @@ export type OpenAIDecisionsErrorCode =
   | "invalid_definition"
   | "invalid_input"
   | "credential_missing"
+  | "provider_disabled"
   | "credential_rejected"
   | "model_unavailable"
   | "rate_limited"
@@ -122,6 +123,11 @@ export type OpenAIDecisionsServiceOptions = {
   readSystemOneTarget?: (provider: "jev" | "local") => Promise<SystemOneTarget | undefined>;
   /** The provider for a registration that names none. Defaults to openai. */
   resolveDefaultProvider?: () => Promise<RegisteredDecisionProvider>;
+  /**
+   * Whether Settings lets agents use a provider. Read on each register,
+   * update and invoke. Absent = every provider is on.
+   */
+  isProviderEnabled?: (provider: RegisteredDecisionProvider) => boolean;
   readAccountSettings: () => { organizationId?: string; projectId?: string };
   profileId: () => string;
   /** Writes a batch of summed usage lines in one transaction. */
@@ -163,7 +169,13 @@ const INVOKE_KEYS = new Set([
 ]);
 const BATCH_RESULTS_KEYS = new Set(["batchId", "status", "from", "limit", "detail"]);
 /** A failure every later item in a batch would repeat. */
-const BATCH_STOPPING_CODES = new Set(["credential_missing", "credential_rejected", "model_unavailable"]);
+const BATCH_STOPPING_CODES = new Set(["credential_missing", "provider_disabled", "credential_rejected", "model_unavailable"]);
+/** Each provider's name on its Settings → AI Providers screen. */
+const PROVIDER_SETTINGS_NAMES: Record<RegisteredDecisionProvider, string> = {
+  openai: "OpenAI Decisions",
+  jev: "TypeSafe Jev",
+  local: "Local decision model",
+};
 const TARGET_KEYS = new Set(["name", "decisionId"]);
 /** A batch card is rewritten at each further tenth of its items. */
 const BATCH_CARD_STEPS = 10;
@@ -229,6 +241,7 @@ export class OpenAIDecisionsService {
     const provider = definition.provider
       ?? await this.options.resolveDefaultProvider?.()
       ?? "openai";
+    this.assertProviderEnabled(provider);
     const decisionId = (this.options.newDecisionId ?? randomUUID)();
     const record: OpenAIDecisionVersionRecord = {
       decisionId,
@@ -280,6 +293,7 @@ export class OpenAIDecisionsService {
         version: record.version,
         scope: record.scope,
         provider: record.provider,
+        ...(this.options.isProviderEnabled?.(record.provider) === false ? { providerDisabled: true } : {}),
         questions: record.questions.map((question) => summarizeQuestion(question, includeInstructions)),
         inputSchema: record.inputSchema,
         hasPrefix: record.prefix !== undefined,
@@ -304,6 +318,11 @@ export class OpenAIDecisionsService {
     }
     const version = current.version + 1;
     const definition = parsed.value;
+    // Editing a decision whose provider is off is allowed; moving one onto
+    // a provider that is off is not.
+    if (definition.provider !== undefined && definition.provider !== current.provider) {
+      this.assertProviderEnabled(definition.provider);
+    }
     const record: OpenAIDecisionVersionRecord = {
       ...current,
       version,
@@ -705,6 +724,17 @@ export class OpenAIDecisionsService {
     return { record, schema: definition.inputSchema };
   }
 
+  /** Refuses a provider the operator turned off in Settings. */
+  private assertProviderEnabled(provider: RegisteredDecisionProvider): void {
+    if (this.options.isProviderEnabled?.(provider) === false) {
+      const name = PROVIDER_SETTINGS_NAMES[provider];
+      throw new OpenAIDecisionsError(
+        "provider_disabled",
+        `${name} is turned off. Turn it on in Settings → AI Providers → ${name}.`,
+      );
+    }
+  }
+
   /**
    * Checks the provider's credential once, then returns the function that
    * runs one validated input. It throws OpenAIDecisionsError on failure.
@@ -731,6 +761,21 @@ export class OpenAIDecisionsService {
     record: OpenAIDecisionVersionRecord,
     signal: AbortSignal | undefined,
   ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
+    const run = await this.ungatedItemRunner(caller, record, signal);
+    // Checked again per item: turning a provider off stops a batch that is
+    // running and a call waiting in its lane. The error stops the batch.
+    return async (input) => {
+      this.assertProviderEnabled(record.provider);
+      return await run(input);
+    };
+  }
+
+  private async ungatedItemRunner(
+    caller: OpenAIDecisionCaller,
+    record: OpenAIDecisionVersionRecord,
+    signal: AbortSignal | undefined,
+  ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
+    this.assertProviderEnabled(record.provider);
     if (record.provider !== "openai") {
       const provider = record.provider;
       const target = await this.options.readSystemOneTarget?.(provider);

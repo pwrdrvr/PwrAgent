@@ -797,6 +797,8 @@ export function isMessagingRuntimeSecret(
 
 /** Optional OpenAI dashboard ids sent as OpenAI-Organization / OpenAI-Project. Not keys. */
 export type DesktopOpenAIDecisionsSettings = {
+  /** Agents may run decisions on OpenAI. Absent = on. */
+  enabled?: boolean;
   organizationId?: string;
   projectId?: string;
 };
