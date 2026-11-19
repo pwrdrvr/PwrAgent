@@ -911,6 +911,15 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   passSetupVariablesToAgents: DesktopSettingsValue<boolean>;
   /**
+   * Refuse an agent's send_message_to_thread or steer_thread when the target
+   * would act on it with more access than the sender has, so a Default Access
+   * thread cannot get Full Access work done through a message. Naming a lower
+   * mode for the turn does not get past it: the text stays in the thread's
+   * history for its later turns. Operator-typed messages and to-do cards the
+   * operator approves are never affected.
+   */
+  blockAgentMessagesToHigherAccess: DesktopSettingsValue<boolean>;
+  /**
    * Skip the notice the image lightbox shows before an SVG's own scripts run
    * in its isolated frame. The notice's "Always Run" sets this.
    */
@@ -1809,6 +1818,7 @@ export type DesktopSettingsConfigPatch = {
     pinnedThreadsOnTop?: boolean;
     autoFixReviews?: boolean;
     passSetupVariablesToAgents?: boolean;
+    blockAgentMessagesToHigherAccess?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     htmlPreviewRunScripts?: boolean;

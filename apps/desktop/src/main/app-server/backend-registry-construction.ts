@@ -153,6 +153,7 @@ export type DesktopBackendRegistryOptions = {
   resolveHelperModelSettings?: () => DesktopHelperModelSettings;
   resolveTaskMonitorModels?: () => Record<string, DesktopTaskMonitorModelChoice>;
   resolvePassSetupVariablesToAgents?: () => boolean;
+  resolveBlockAgentMessagesToHigherAccess?: () => boolean;
   resolveUsageAccountGroups?: () => Record<string, string>;
   resolveProviderThreadModelMigrations?: () => Record<
     string,
@@ -250,6 +251,8 @@ export interface RegistryDependencies {
   resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
   resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   resolvePassSetupVariablesToAgentsFn: () => boolean;
+  /** `general.block_agent_messages_to_higher_access`, read at each message. */
+  resolveBlockAgentMessagesToHigherAccessFn: () => boolean;
   resolveUsageAccountGroupsFn: () => Record<string, string>;
   resolveProviderThreadModelMigrationsFn: () => Record<
     string,

@@ -99,6 +99,7 @@ export * from "./mcp-elicitation-purpose";
 export * from "./secret-field-names";
 export * from "./thread-lock";
 export * from "./project-forge-automation";
+export * from "./agent-message-access";
 export * from "./thread-terminal";
 export * from "./thread-titles";
 export * from "./text-graphemes";

@@ -1753,6 +1753,13 @@ function SettingsSectionBody(props: {
           },
         });
       }}
+      onBlockAgentMessagesToHigherAccessChange={async (
+        blockAgentMessagesToHigherAccess,
+      ) => {
+        return await props.settings.writeConfig({
+          general: { blockAgentMessagesToHigherAccess },
+        });
+      }}
       onManagedCodexBuildsChange={async (managedBuilds) => {
         return await props.settings.writeConfig({
           models: {

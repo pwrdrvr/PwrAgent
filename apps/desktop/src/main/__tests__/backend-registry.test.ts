@@ -31,6 +31,7 @@ import {
   resetProjectForgeAutomationIndexForTests,
 } from "../app-server/project-forge-automation-index";
 import { launchpadStorageKey } from "@pwragent/shared";
+import { agentMessageAccessRefusalMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
@@ -51635,6 +51636,7 @@ script = "printf setup"
       sourceThread: {
         backend: "codex", threadId: "sender", title: "sender",
         messageId: expect.stringMatching(/^correspondence:/),
+        executionMode: "default",
       },
       operatorApproved: true,
       threadTodo: todo,
@@ -51667,6 +51669,7 @@ script = "printf setup"
       sourceThread: {
         backend: "codex", threadId: "sender", title: "Sender",
         messageId: expect.stringMatching(/^correspondence:/),
+        executionMode: "default",
       },
       operatorApproved: true,
       threadTodo: { id: "todo-8", title: "Hand it over" },
@@ -51794,7 +51797,7 @@ script = "printf setup"
       backend: "codex", threadId: "named", todo: { id: "todo-9", title: "  Ship it  " },
     })).resolves.toEqual({
       kind: "agent",
-      sourceThread: { backend: "codex", threadId: "named", title: "Named" },
+      sourceThread: { backend: "codex", threadId: "named", title: "Named", executionMode: "default" },
       operatorApproved: true,
       threadTodo: { id: "todo-9", title: "Ship it" },
     });
@@ -51802,7 +51805,7 @@ script = "printf setup"
       backend: "codex", threadId: "unnamed", todo: { id: "todo-10" },
     })).resolves.toEqual({
       kind: "agent",
-      sourceThread: { backend: "codex", threadId: "unnamed" },
+      sourceThread: { backend: "codex", threadId: "unnamed", executionMode: "default" },
       operatorApproved: true,
       threadTodo: { id: "todo-10" },
     });
@@ -52077,6 +52080,7 @@ script = "printf setup"
           title: "M4 runner-host conversion preflight",
           turnId: "turn-1", rootTurnId: "root-original",
           messageId: expect.stringMatching(/^correspondence:/),
+          executionMode: "full-access",
         },
       },
     });
@@ -54188,6 +54192,7 @@ script = "printf setup"
           title: "M4 runner-host conversion preflight",
           turnId: "turn-1",
           messageId: expect.stringMatching(/^correspondence:/),
+          executionMode: "default",
         },
       },
       executionMode: undefined,
@@ -54256,6 +54261,316 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
+  });
+
+  describe("agent messages to higher-access threads", () => {
+    async function createAccessRegistry(params: {
+      senderMode: "default" | "auto" | "full-access";
+      targetMode: "default" | "auto" | "full-access";
+      block?: boolean;
+      startTurnDelay?: Promise<unknown>;
+    }) {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        ...(params.startTurnDelay ? { startTurnDelay: params.startTurnDelay } : {}),
+        threads: [{
+          source: "codex",
+          id: "target-thread",
+          title: "Target",
+          titleSource: "explicit",
+          linkedDirectories: [],
+        }],
+      });
+      const registry = createDesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:parent-thread": {
+              backend: "codex",
+              threadId: "parent-thread",
+              executionMode: params.senderMode,
+              extraLinkedDirectories: [],
+            },
+            "codex:target-thread": {
+              backend: "codex",
+              threadId: "target-thread",
+              executionMode: params.targetMode,
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+        ...(params.block === undefined
+          ? {}
+          : { resolveBlockAgentMessagesToHigherAccess: () => params.block! }),
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "parent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+      return { codexClient, registry };
+    }
+
+    async function sendToTarget(
+      registry: DesktopBackendRegistry,
+      extra: Record<string, unknown> = {},
+    ) {
+      return await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "target-thread",
+          prompt: "Please run the release script.",
+          includeRemote: false,
+          ...extra,
+        },
+      });
+    }
+
+    it("refuses a message to a thread with more access when the setting is on by default", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "full-access",
+      });
+
+      const response = await sendToTarget(registry);
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      expect(JSON.stringify(response)).toContain("Raise a to-do card with add_todo");
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("refuses a message that asks the target turn to run above the sender", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "auto",
+        targetMode: "auto",
+        block: true,
+      });
+
+      const response = await sendToTarget(registry, { executionMode: "full-access" });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("refuses a raw approval override that grants more than the sender has", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "default",
+        block: true,
+      });
+
+      const response = await sendToTarget(registry, { approvalPolicy: "never" });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("refuses a steer into a thread with more access", async () => {
+      const { registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "auto",
+        block: true,
+      });
+
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "steer_thread",
+        args: {
+          backend: "codex",
+          threadId: "target-thread",
+          requestId: "steer-1",
+          prompt: "Also push the tag.",
+          includeRemote: false,
+        },
+      });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+
+      await registry.close();
+    });
+
+    it.each([
+      ["an equal", "auto", "auto"],
+      ["a lower", "full-access", "default"],
+    ] as const)("delivers a message to %s-access thread", async (_label, senderMode, targetMode) => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode,
+        targetMode,
+        block: true,
+      });
+
+      const response = await sendToTarget(registry);
+
+      expect(response).toMatchObject({
+        structuredContent: { backend: "codex", threadId: "target-thread" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("delivers every message when the operator turns the setting off", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "full-access",
+        block: false,
+      });
+
+      const response = await sendToTarget(registry);
+
+      expect(response).toMatchObject({
+        structuredContent: { backend: "codex", threadId: "target-thread" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("delivers an operator-approved to-do card to a thread with more access", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "full-access",
+        block: true,
+      });
+
+      await registry.sendThreadTodoMessage({
+        sourceBackend: "codex",
+        sourceThreadId: "parent-thread",
+        target: { backend: "codex", threadId: "target-thread" },
+        prompt: "Please run the release script.",
+        todo: { id: "todo-access", title: "Run the release" },
+      });
+
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("counts a target turn that is still starting as running", async () => {
+      const startTurnDelay = createDeferred<void>();
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "auto",
+        block: true,
+        startTurnDelay: startTurnDelay.promise,
+      });
+      // The operator's own turn is starting; the agent's message would join it.
+      const operatorTurn = registry.submitTurn({
+        backend: "codex",
+        threadId: "target-thread",
+        input: [{ type: "text", text: "Operator's turn." }],
+        origin: "manual",
+      });
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+
+      const response = await sendToTarget(registry, { executionMode: "default" });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      startTurnDelay.resolve();
+      await operatorTurn;
+      await registry.close();
+    });
+
+    it("reports a refusal from the owning peer as forbidden", async () => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = createDesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:parent-thread": {
+              backend: "codex",
+              threadId: "parent-thread",
+              executionMode: "default",
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      const federatedSend = vi.fn(async () => {
+        throw new Error(agentMessageAccessRefusalMessage({
+          senderExecutionMode: "default",
+          targetExecutionMode: "full-access",
+        }));
+      });
+      registry.setFederatedThreadMessageHandler(federatedSend);
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "parent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "remote-thread",
+          instanceId: "pwr_studio",
+          prompt: "Please run the release script.",
+        },
+      });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      // The sender's own mode travels with the message for the owner to check.
+      expect(federatedSend).toHaveBeenCalledWith(expect.objectContaining({
+        messageOrigin: expect.objectContaining({
+          sourceThread: expect.objectContaining({ executionMode: "default" }),
+        }),
+      }));
+
+      await registry.close();
+    });
   });
 
   it("routes stop and steer controls to an explicit federated owner", async () => {
@@ -54333,6 +54648,7 @@ script = "printf setup"
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
           turnId: "parent-turn",
+          executionMode: "default",
         },
       },
     });
@@ -76672,6 +76988,8 @@ describe("agent tool access ceiling", () => {
     targetMode?: Mode;
     /** Registers the caller as the Voice and Star Map manager thread. */
     manager?: boolean;
+    /** `general.block_agent_messages_to_higher_access`; on unless named. */
+    blockMessagesToHigherAccess?: boolean;
   }) {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
@@ -76720,6 +77038,9 @@ describe("agent tool access ceiling", () => {
       createScratchProjectDirectory: async () => "/repo/scratch",
       overlayStore,
       threadTitleGenerationService: null,
+      ...(params.blockMessagesToHigherAccess === undefined
+        ? {}
+        : { resolveBlockAgentMessagesToHigherAccess: () => params.blockMessagesToHigherAccess! }),
     });
     // The live turn takes the thread's stored mode as it starts.
     await registry.publishLocalEvent({
@@ -77072,7 +77393,12 @@ describe("agent tool access ceiling", () => {
         for (const targetMode of MODES) {
           for (const executionMode of MODES) {
             for (const sandbox of SANDBOXES) {
-              const { codexClient, registry, call } = await startCaller({ callerMode, targetMode });
+              // The ceiling alone; the message-access setting has its own property.
+              const { codexClient, registry, call } = await startCaller({
+                callerMode,
+                targetMode,
+                blockMessagesToHigherAccess: false,
+              });
               const ceiling = Math.min(rank(callerMode), rank(targetMode));
               const requested = Math.max(
                 rank(executionMode),
@@ -77261,7 +77587,13 @@ describe("agent tool access ceiling", () => {
             });
             const turns = codexClient.startTurnCalls.filter((turn) => turn.threadId === "target-thread");
             const scenario = { callerMode, targetMode, sandbox };
-            if (rank(threadExecutionModeForRawPermissions({ sandbox })) > ceiling) {
+            // No mode named, so the turn runs at the target's own mode, which
+            // the agent-message access setting (on by default) refuses when
+            // it is above the caller's.
+            if (
+              rank(threadExecutionModeForRawPermissions({ sandbox })) > ceiling
+              || rank(targetMode) > rank(callerMode)
+            ) {
               expect({ ...scenario, success: result.success, turns: turns.length })
                 .toEqual({ ...scenario, success: false, turns: 0 });
             } else {
@@ -77270,6 +77602,120 @@ describe("agent tool access ceiling", () => {
               expect({ ...scenario, access: turnAccess(turns[0]!) <= rank(targetMode) })
                 .toEqual({ ...scenario, access: true });
             }
+            await registry.close();
+          }
+        }
+      }
+    });
+
+    // Property: with general.block_agent_messages_to_higher_access on, the
+    // target never acts on an agent's message with more access than its
+    // sender: a named mode runs the new turn at that mode, and with no mode
+    // the turn runs at the target's own, which is refused when above the
+    // sender. With it off, only the access ceiling above decides.
+    it("never runs an agent's message above its sender while the block is on", async () => {
+      for (const blockMessagesToHigherAccess of [true, false]) {
+        for (const callerMode of MODES) {
+          for (const targetMode of MODES) {
+            for (const executionMode of [undefined, ...MODES]) {
+              const { codexClient, registry, call } = await startCaller({
+                callerMode,
+                targetMode,
+                blockMessagesToHigherAccess,
+              });
+              const ceiling = Math.min(rank(callerMode), rank(targetMode));
+              // A lower named mode does not get past the block: the text stays
+              // in the target's history, read by its later turns at its own mode.
+              const refused = (executionMode !== undefined && rank(executionMode) > ceiling)
+                || (blockMessagesToHigherAccess && rank(targetMode) > rank(callerMode));
+              const result = await call("send_message_to_thread", {
+                backend: "codex",
+                threadId: "target-thread",
+                prompt: "Take this one.",
+                ...(executionMode ? { executionMode } : {}),
+              });
+              const turns = codexClient.startTurnCalls.filter((turn) => turn.threadId === "target-thread");
+              const scenario = { blockMessagesToHigherAccess, callerMode, targetMode, executionMode };
+              if (refused) {
+                expect({ ...scenario, success: result.success, turns: turns.length })
+                  .toEqual({ ...scenario, success: false, turns: 0 });
+                expect(result.payload).toMatchObject({ code: "forbidden" });
+              } else {
+                expect({ ...scenario, success: result.success, turns: turns.length })
+                  .toEqual({ ...scenario, success: true, turns: 1 });
+                if (blockMessagesToHigherAccess) {
+                  expect({ ...scenario, access: turnAccess(turns[0]!) <= rank(callerMode) })
+                    .toEqual({ ...scenario, access: true });
+                }
+              }
+              await registry.close();
+            }
+          }
+        }
+      }
+    });
+
+    it("refuses a lower named mode when the message would steer a running higher turn", async () => {
+      const { codexClient, registry, call } = await startCaller({
+        callerMode: "default",
+        targetMode: "auto",
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "target-thread", turnId: "target-turn", turn: { id: "target-turn" } },
+        },
+      });
+
+      const result = await call("send_message_to_thread", {
+        backend: "codex",
+        threadId: "target-thread",
+        prompt: "Take this one.",
+        executionMode: "default",
+      });
+
+      expect(result).toMatchObject({
+        success: false,
+        payload: { code: "forbidden", message: expect.stringContaining("add_todo") },
+      });
+      expect(codexClient.startTurnCalls.filter((turn) => turn.threadId === "target-thread")).toHaveLength(0);
+      await registry.close();
+    });
+
+    it("judges a running target at the higher of its live turn and its stored mode", async () => {
+      for (const callerMode of MODES) {
+        for (const liveMode of MODES) {
+          for (const storedMode of MODES) {
+            const { overlayStore, registry, call } = await startCaller({
+              callerMode,
+              targetMode: liveMode,
+            });
+            // The target's turn starts at its stored mode, which then changes:
+            // a raise reaches the turns after this one, which read the message.
+            await registry.publishLocalEvent({
+              backend: "codex",
+              notification: {
+                method: "turn/started",
+                params: { threadId: "target-thread", turnId: "target-turn", turn: { id: "target-turn" } },
+              },
+            });
+            await overlayStore.setThreadExecutionMode({
+              backend: "codex",
+              threadId: "target-thread",
+              executionMode: storedMode,
+            });
+
+            const result = await call("send_message_to_thread", {
+              backend: "codex",
+              threadId: "target-thread",
+              prompt: "Take this one.",
+            });
+
+            const scenario = { callerMode, liveMode, storedMode };
+            const refused = Math.max(rank(liveMode), rank(storedMode)) > rank(callerMode);
+            expect({ ...scenario, refused: !result.success && result.payload.code === "forbidden" })
+              .toEqual({ ...scenario, refused });
             await registry.close();
           }
         }
