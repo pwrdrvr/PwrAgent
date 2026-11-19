@@ -24,6 +24,7 @@ import {
 } from "../member-containment";
 import type { StateDb } from "../state/state-db";
 import { AcpSessionStore } from "../storage/acp-session-store";
+import { createAcpPromptSettlement } from "./fixtures/acp-prompt-settlement";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 // Rule: when this member's containment changes while a session is open, the
@@ -178,7 +179,9 @@ it("gives an open ACP session the new role's tools at its next turn, and refuses
       await transport.closeAll();
       await server.close();
     });
+    const settlement = createAcpPromptSettlement();
     const client = new AcpAgentClient({
+      ...settlement.callbacks,
       backendId: "acp:grok",
       store: new AcpSessionStore(stateDb),
       transport,
@@ -209,11 +212,9 @@ it("gives an open ACP session the new role's tools at its next turn, and refuses
         expect(dispatched.length - before).toBe(allowed ? 1 : 0);
       } else {
         const prompts = transport.promptTools.length;
-        client.startPrompt({ sessionId: sessionIds[next.session]!, prompt: "next" });
-        await vi.waitFor(() => {
-          expect(client.hasActiveTurns()).toBe(false);
-          expect(transport.promptTools).toHaveLength(prompts + 1);
-        });
+        await settlement.finish(client, { sessionId: sessionIds[next.session]!, prompt: "next" });
+        expect(client.hasActiveTurns()).toBe(false);
+        expect(transport.promptTools).toHaveLength(prompts + 1);
         expect(transport.promptTools.at(-1)).toEqual(expectedTools(current));
       }
     }

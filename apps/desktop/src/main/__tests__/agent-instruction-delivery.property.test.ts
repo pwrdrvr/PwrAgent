@@ -28,6 +28,7 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
+import { createAcpPromptSettlement } from "./fixtures/acp-prompt-settlement";
 import { AgentInstructionCodexTransport } from "./fixtures/agent-instruction-transport";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
@@ -467,6 +468,7 @@ describe("the ACP instruction block", () => {
   it("is sent exactly when the loaded agent session does not hold the current instructions", async () => {
     await fc.assert(fc.asyncProperty(fc.array(step, { minLength: 1, maxLength: 16 }), async (steps) => {
       const db = openInMemoryStateDb();
+      const settlement = createAcpPromptSettlement();
       const store = new AcpSessionStore(db);
       let failNext = false;
       let compactNext: Compaction = "none";
@@ -497,7 +499,7 @@ describe("the ACP instruction block", () => {
           }
           return await request(method, params, timeoutMs);
         });
-        const client = new AcpAgentClient({ backendId: ACP, store, transport });
+        const client = new AcpAgentClient({ backendId: ACP, store, transport, ...settlement.callbacks });
         await client.initialize();
         return { client, transport };
       };
@@ -526,11 +528,9 @@ describe("the ACP instruction block", () => {
             failNext = next.fails;
             compactNext = next.compaction;
             const sent = transport.requests.length;
-            client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: current });
-            await vi.waitFor(() => {
-              expect(client.hasActiveTurns()).toBe(false);
-              expect(transport.requests.length).toBeGreaterThan(sent);
-            });
+            await settlement.finish(client, { sessionId, prompt: "operator text", agentInstructions: current });
+            expect(client.hasActiveTurns()).toBe(false);
+            expect(transport.requests.length).toBeGreaterThan(sent);
             const prompt = transport.requests.at(-1)!.params!.prompt as Array<{ type: string; text: string }>;
             expect(prompt.at(-1)).toEqual({ type: "text", text: "operator text" });
             expect(prompt.slice(0, -1)).toEqual(current === held
@@ -594,14 +594,15 @@ describe("the ACP instruction block", () => {
       }
       return await request(method, params, timeoutMs);
     });
-    const client = new AcpAgentClient({ backendId: ACP, store, transport });
+    const settlement = createAcpPromptSettlement();
+    const client = new AcpAgentClient({ backendId: ACP, store, transport, ...settlement.callbacks });
     try {
       await client.initialize();
       const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
       const blocks: boolean[] = [];
       const turn = async () => {
-        client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: "alpha" });
-        await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
+        await settlement.finish(client, { sessionId, prompt: "operator text", agentInstructions: "alpha" });
+        expect(client.hasActiveTurns()).toBe(false);
         blocks.push(JSON.stringify(transport.requests.at(-1)!.params).includes(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER));
       };
       await turn();
@@ -626,14 +627,15 @@ describe("the ACP instruction block", () => {
       initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
       "session/prompt": { stopReason: "end_turn" },
     });
-    const client = new AcpAgentClient({ backendId: ACP, store, transport });
+    const settlement = createAcpPromptSettlement();
+    const client = new AcpAgentClient({ backendId: ACP, store, transport, ...settlement.callbacks });
     try {
       await client.initialize();
       const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
       const protocolSessionId = store.getSession(ACP, sessionId)!.agentSessionId ?? sessionId;
       const turn = async () => {
-        client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: "alpha" });
-        await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
+        await settlement.finish(client, { sessionId, prompt: "operator text", agentInstructions: "alpha" });
+        expect(client.hasActiveTurns()).toBe(false);
       };
       await turn();
       const { writes } = await measureSqliteWrites(() => {
@@ -725,15 +727,14 @@ describe("the ACP instruction block", () => {
         loadSession: true, sessionCapabilities: { close: {} },
       } },
     });
-    const client = new AcpAgentClient({ backendId: ACP, store, transport });
+    const settlement = createAcpPromptSettlement();
+    const client = new AcpAgentClient({ backendId: ACP, store, transport, ...settlement.callbacks });
     const prompts = () => transport.requests.filter((request) => request.method === "session/prompt");
     const turn = async () => {
       const sent = prompts().length;
-      client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: "alpha" });
-      await vi.waitFor(() => {
-        expect(client.hasActiveTurns()).toBe(false);
-        expect(prompts().length).toBeGreaterThan(sent);
-      });
+      await settlement.finish(client, { sessionId, prompt: "operator text", agentInstructions: "alpha" });
+      expect(client.hasActiveTurns()).toBe(false);
+      expect(prompts().length).toBeGreaterThan(sent);
       return JSON.stringify(prompts().at(-1)!.params);
     };
     await client.initialize();
