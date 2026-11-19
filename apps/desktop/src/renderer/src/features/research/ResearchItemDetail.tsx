@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
+import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, researchDeadlinePassed, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
@@ -78,7 +78,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
   const item = context?.item;
   const record = item?.record;
   const workActive = writable && (run.status === "running" || (coordinator && run.status === "exhausted"));
-  const assignable = writable && coordinator && ["running", "exhausted"].includes(run.status) && Date.now() < run.deadlineAt && api.submitThreadReply;
+  const assignable = writable && coordinator && ["running", "exhausted"].includes(run.status) && !researchDeadlinePassed(run, Date.now()) && api.submitThreadReply;
   const related = record && "relatesTo" in record && record.relatesTo ? run.items.get(record.relatesTo) : undefined;
   const source = record && "itemId" in record && record.itemId ? run.items.get(record.itemId) : undefined;
   const transitions = item ? RESEARCH_WORK_TRANSITIONS[item.work.state].filter((value) => coordinator || !["open", "cancelled"].includes(value)) as ResearchWorkCommand["state"][] : [];
@@ -124,7 +124,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {assignable && ["open", "blocked"].includes(item.work.state) && !item.work.assignee && !(item.type === "approach" && researchApproachOccupiesSlot(item.record)) && <div className="research-review-form">
         <label htmlFor={`${id}-task`}>Task for a focused child</label>
         <textarea id={`${id}-task`} rows={2} maxLength={2000} value={task} onChange={(event) => setTask(event.target.value)} aria-describedby={`${id}-task-hint`} />
-        <p id={`${id}-task-hint`} className="research-muted">Uses a free slot within this run’s {run.workerLimit}-worker limit and its original deadline.</p>
+        <p id={`${id}-task-hint`} className="research-muted">Uses a free slot within this run’s {run.workerLimit}-worker limit{run.deadlineAt === undefined ? "" : " and its time limit"}.</p>
         <div className="research-actions"><button type="button" className="research-button" disabled={busy || !task.trim()} onClick={() => { void assign(); }}>Request focused child</button></div>
       </div>}
       <p className="research-detail__footer">Updated {formatClock(item.updatedAt)} · <code>{item.id}</code></p>

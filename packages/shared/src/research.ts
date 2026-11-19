@@ -42,7 +42,8 @@ export type StartResearchRequest = {
   intentId?: string;
   objective: string;
   approaches: Array<{ title: string; task: string }>;
-  minutes: number;
+  /** The operator's time limit for the run. Absent means none: the run goes on until it is stopped or finished. */
+  minutes?: number;
   workspaceMode: "new_worktree" | "none";
 };
 export type PrepareResearchRequest = ResearchThread & Omit<StartResearchRequest, "approaches" | "intentId"> & { workers: number };
@@ -89,7 +90,7 @@ export type ResearchCommand =
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
 export type ResearchEventData =
-  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
+  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt?: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
   | { type: "harness"; state: ResearchHarnessState }
   | { type: "harness_observation"; event: string; text: string }
   | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string }
@@ -124,7 +125,8 @@ export type ResearchRun = {
   /** Absent in older journals, whose process identity cannot be validated. */
   ownerStartedAt?: number;
   createdAt: number;
-  deadlineAt: number;
+  /** When the operator's time limit ends the run. Absent when the operator set none. */
+  deadlineAt?: number;
   workspaceMode: StartResearchRequest["workspaceMode"];
   status: ResearchStatus;
   reason?: string;
@@ -280,7 +282,7 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   const initial = first.data;
   const run: ResearchRun = {
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
-    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, deadlineAt: initial.deadlineAt,
+    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...(initial.deadlineAt !== undefined ? { deadlineAt: initial.deadlineAt } : {}),
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
     findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [], harness: initial.harness,
   };
@@ -590,7 +592,7 @@ export function researchBoardPage(run: ResearchRun, range: ResearchBoardRange): 
 /** The in-memory oracle for a stored run summary. */
 export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
-    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, deadlineAt: run.deadlineAt, workspaceMode: run.workspaceMode, status: run.status,
+    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}), workspaceMode: run.workspaceMode, status: run.status,
     ...(run.reason !== undefined ? { reason: run.reason } : {}), workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     ...(run.harness ? { harness: researchHarnessPhase(run.harness) } : {}) };
@@ -604,6 +606,27 @@ export function researchApproachOccupiesSlot(approach: ResearchApproach): boolea
   return !["ended", "failed", "stopped"].includes(approach.state) || Boolean(approach.revisionDeliveryIds?.length);
 }
 
-export const RESEARCH_MAX_WORKERS = 8;
-export const RESEARCH_MAX_EVENTS = 4096;
+/**
+ * How many workers one run may hold at once. The operator chooses the number;
+ * this only stops a mistyped or model-proposed count from starting hundreds of
+ * live agent threads. It is the one place the bound is written.
+ */
+export const RESEARCH_MAX_WORKERS = 64;
+/** Ten years. A time limit is the operator's to choose; this only keeps the deadline a valid time. */
+export const RESEARCH_MAX_MINUTES = 5_256_000;
+/** The longest one timer may wait (about 24 days). A longer delay overflows and fires at once, so long limits wait in steps. */
+export const RESEARCH_MAX_TIMER_MS = 2_147_483_647;
+/** The operator's time limit, when they set one: a whole number of minutes. */
+export function validResearchMinutes(minutes: unknown): minutes is number | undefined {
+  return minutes === undefined || (typeof minutes === "number" && Number.isSafeInteger(minutes) && minutes >= 1 && minutes <= RESEARCH_MAX_MINUTES);
+}
+/** Whether the run's time limit has passed. A run with no limit never passes one. */
+export function researchDeadlinePassed(run: { deadlineAt?: number }, now: number): boolean {
+  return run.deadlineAt !== undefined && now >= run.deadlineAt;
+}
+/**
+ * A guard against a runaway journal, not a budget for a run. Commands and views read stored projections,
+ * so their cost does not grow with the journal (`research-cost.bench.test.ts` measures it at this size).
+ */
+export const RESEARCH_MAX_EVENTS = 100_000;
 export const RESEARCH_FINDING_KINDS: ResearchFindingKind[] = ["lemma", "partial", "counterexample", "dead_end", "experiment", "file", "note"];

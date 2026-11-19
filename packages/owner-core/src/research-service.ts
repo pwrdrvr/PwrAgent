@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, RESEARCH_MAX_TIMER_MS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
@@ -245,7 +245,7 @@ export class ResearchService {
       if (duplicate.signature !== signature || duplicate.data.type !== "assignment") throw new Error("Assignment command key was reused");
       return this.assignmentReceipt(run.id, duplicate.data.approach.id, request.itemId);
     }
-    if (!["running", "exhausted"].includes(run.status) || this.now() >= run.deadlineAt) throw new Error("Research run is no longer accepting assignments");
+    if (!["running", "exhausted"].includes(run.status) || researchDeadlinePassed(run, this.now())) throw new Error("Research run is no longer accepting assignments");
     if (run.revision + (run.status === "exhausted" ? 1 : 0) >= RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; finish this run before starting another");
     boundedText(request.task, "assignment task", 2000);
     const item = this.requireItemVersion(run.id, request.itemId, request.expectedVersion);
@@ -285,7 +285,7 @@ export class ResearchService {
       return this.storage.readItem(id, command.itemId)!;
     }
     const coordinator = actor.kind === "operator" || sameResearchThread(header.coordinator, actor);
-    if ((header.status !== "running" && !(coordinator && header.status === "exhausted")) || this.now() >= header.deadlineAt) throw new Error("Research run is no longer accepting work");
+    if ((header.status !== "running" && !(coordinator && header.status === "exhausted")) || researchDeadlinePassed(header, this.now())) throw new Error("Research run is no longer accepting work");
     boundedText(requestId, "requestId", 300);
     boundedText(command.reason, "reason", 2000);
     const item = this.requireItemVersion(id, command.itemId, command.expectedVersion);
@@ -343,7 +343,7 @@ export class ResearchService {
   /** Bind the operator's form limits before asking the coordinator to propose directions. No writes or spend. */
   prepare(request: PrepareResearchRequest): { intentId: string } {
     this.requireOpen();
-    if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error("Choose 1–8 workers");
+    if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} workers`);
     validateStartResearch({ ...request, approaches: Array.from({ length: request.workers }, (_, i) => ({ title: `Approach ${i + 1}`, task: "Awaiting assignment" })) });
     const id = randomUUID();
     const preparedAt = this.now();
@@ -382,7 +382,7 @@ export class ResearchService {
     const approaches: ResearchApproach[] = request.approaches.map((a, index) => ({ title: a.title, task: a.task, id: `a${index + 1}`, state: "pending" }));
     this.storage.create(id, key, { seq: 1, commandId: "start", signature: JSON.stringify(request), at: this.now(), actor: context,
       data: { type: "created", objective: request.objective, coordinator: { backend: context.backend, threadId: context.threadId }, approaches, ownerId: this.ports.ownerId,
-        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, deadlineAt: this.now() + request.minutes * 60_000, workspaceMode: request.workspaceMode } });
+        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, ...(request.minutes !== undefined ? { deadlineAt: this.now() + request.minutes * 60_000 } : {}), workspaceMode: request.workspaceMode } });
     if (intent) this.intents.delete(intentKey);
     this.ports.changed({ backend: context.backend, threadId: context.threadId, runId: id, revision: 1 });
     this.scheduleDeadline(this.requireHeader(id));
@@ -392,7 +392,7 @@ export class ResearchService {
     }
     const current = this.requireHeader(id);
     if (current.status === "stopping") this.finishStopping(current);
-    else if (current.status === "running" && this.now() >= current.deadlineAt) await this.stop(id, context, "deadline", "Research deadline reached");
+    else if (current.status === "running" && researchDeadlinePassed(current, this.now())) await this.stop(id, context, "deadline", "Research deadline reached");
     else this.finishExploration(current);
     return this.requireHeader(id);
   }
@@ -781,7 +781,15 @@ export class ResearchService {
   private scheduleDeadline(run: ResearchRunHeader): void {
     const callback = () => { void this.stop(run.id, this.operator(run), "deadline", "Research deadline reached").catch(this.ports.onError); };
     const schedule = this.ports.schedule ?? ((fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return () => clearTimeout(timer); });
-    this.deadlines.set(run.id, schedule(callback, Math.max(0, run.deadlineAt - this.now())));
+    const deadlineAt = run.deadlineAt;
+    // No time limit, no timer: the run ends when the operator stops or finishes it.
+    if (deadlineAt === undefined) return;
+    // One timer cannot wait longer than about 24 days, and a longer delay fires at once. Wait in steps.
+    const arm = (): void => {
+      const remaining = deadlineAt - this.now();
+      this.deadlines.set(run.id, remaining > RESEARCH_MAX_TIMER_MS ? schedule(arm, RESEARCH_MAX_TIMER_MS) : schedule(callback, Math.max(0, remaining)));
+    };
+    arm();
   }
 
   /** Appends at `run.revision`, which must be the journal's current revision, and tells the run's members. */
@@ -796,7 +804,7 @@ export class ResearchService {
     if (this.closed) throw new Error("Research service is closed");
     if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
   }
-  private canDispatch(run: ResearchRunHeader): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && this.now() < run.deadlineAt; }
+  private canDispatch(run: ResearchRunHeader): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && !researchDeadlinePassed(run, this.now()); }
   private canAdmitApproach(run: ResearchRunHeader, approach: Pick<ResearchApproach, "id" | "itemId">): boolean {
     if (!this.canDispatch(run)) return false;
     if (run.activeWorkers > run.workerLimit) return false;
@@ -818,7 +826,7 @@ export class ResearchService {
 
 export function validateStartResearch(request: StartResearchRequest): void {
   boundedText(request.objective, "objective", 8000);
-  if (!Number.isInteger(request.minutes) || request.minutes < 1 || request.minutes > 120) throw new Error("Research deadline must be 1–120 minutes");
+  if (!validResearchMinutes(request.minutes)) throw new Error("A research time limit is a whole number of minutes, at least 1. Leave it out for no limit.");
   if (!["new_worktree", "none"].includes(request.workspaceMode)) throw new Error("Choose isolated worktrees or scratch workspaces");
   if (!Array.isArray(request.approaches) || request.approaches.length < 1 || request.approaches.length > RESEARCH_MAX_WORKERS) throw new Error(`Research needs 1–${RESEARCH_MAX_WORKERS} workers`);
   const titles = new Set<string>();

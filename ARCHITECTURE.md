@@ -106,13 +106,14 @@ to a coordinating thread. The owner composition root constructs
 `ResearchService` from `packages/owner-core` with desktop execution ports and a
 profile-scoped `ResearchStore`. Workers are ordinary managed Codex handoffs;
 their identities are journaled before their first model turn starts. The
-owner admits at most the operator's requested one to eight concurrent workers
-and enforces a deadline of one to 120 minutes. Completed workers free slots
-for explicit item assignments within the original deadline. A research worker
-cannot create another research run or delegate additional managed workers
-through `handoff_task`.
+operator chooses how many workers run at once and whether the run has a time
+limit; a run has none unless they set one. The owner admits no more than that
+worker count and stops the run when a limit they set is reached. Completed
+workers free slots for explicit item assignments while the run is open. A
+research worker cannot create another research run or delegate additional
+managed workers through `handoff_task`.
 
-The Research panel binds its exact objective, worker count, deadline and
+The Research panel binds its exact objective, worker count, time limit and
 workspace choice to an in-memory request before submitting it to the
 coordinator. That request is caller-scoped, single-use and expires after five
 minutes without admission. It is neither persisted nor federated. The owner's

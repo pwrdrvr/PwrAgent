@@ -238,8 +238,10 @@ export class ResearchStore implements ResearchStorage {
   approaches(id: string, filter: { worker: ResearchThread } | { occupying: true }): ResearchApproach[] {
     const db = this.stateDb.raw;
     const rows = "worker" in filter
+      // The unary plus keeps the planner on the worker index: without it, it walks the whole run in creation
+      // order to avoid a sort of what is a handful of rows.
       ? db.prepare(`SELECT payload FROM research_items WHERE worker_backend = ? AND worker_thread_id = ? AND run_id = ?
-          ORDER BY created_seq, item_id`).all(filter.worker.backend, filter.worker.threadId, id)
+          ORDER BY +created_seq, +item_id`).all(filter.worker.backend, filter.worker.threadId, id)
       : db.prepare("SELECT payload FROM research_items WHERE run_id = ? AND occupies_slot = 1 ORDER BY created_seq, item_id").all(id);
     return (rows as { payload: string }[]).flatMap((row) => {
       const item = JSON.parse(row.payload) as ResearchItem;

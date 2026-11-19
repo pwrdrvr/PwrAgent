@@ -323,7 +323,7 @@ describe("Research panel", () => {
     render(<ResearchPanel desktopApi={api} thread={thread} />);
     const card = await screen.findByRole("region", { name: "Research request waiting to start" });
     expect(card).toHaveTextContent("Why does the changelog step skip?");
-    expect(card).toHaveTextContent("2 workers · 15 min · scratch workspaces");
+    expect(card).toHaveTextContent("2 workers · 15 min limit · scratch workspaces");
     expect(screen.queryByLabelText("Objective")).not.toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: "Withdraw request" }));
     await waitFor(() => expect(mocks.withdrawResearch).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" }));

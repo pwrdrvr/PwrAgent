@@ -65,6 +65,10 @@ describe("research run phase", () => {
     expect(researchTimeLeft({ status: "running", deadlineAt }, deadlineAt + 1)).toBe("Deadline passed");
     expect(researchTimeLeft({ status: "running", deadlineAt }, deadlineAt - 125 * 60_000)).toMatch(/^2 h 5 min left/);
     expect(researchTimeLeft({ status: "completed", deadlineAt }, deadlineAt - 60_000)).toMatch(/^Deadline /);
+    // The operator may set a limit of any length, or none.
+    expect(researchTimeLeft({ status: "running", deadlineAt }, deadlineAt - (3 * 1440 + 5 * 60 + 12) * 60_000)).toMatch(/^3 d 5 h left · ends \w+ \d+, /);
+    expect(researchTimeLeft({ status: "running" }, deadlineAt)).toBe("No time limit");
+    expect(researchTimeLeft({ status: "interrupted" }, deadlineAt)).toBe("No time limit");
   });
 });
 

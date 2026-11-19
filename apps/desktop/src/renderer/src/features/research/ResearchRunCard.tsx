@@ -32,7 +32,10 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       ? <p className="research-muted">Read-only discovery snapshot from <code className="research-code">{harness.project} / {harness.swarm}</code>.</p>
       : <dl className="research-stats">
         <div><dt>{harness ? "Members" : "Worker slots"}</dt><dd>{harness ? `${harness.members.length} of ${counts.workerLimit}` : `${counts.slotsInUse} of ${counts.workerLimit}`}
-          {!harness && <span className="research-meter" aria-hidden="true">{Array.from({ length: counts.workerLimit }, (_, index) => <i key={index} className={index < counts.slotsInUse ? "is-on" : undefined} />)}</span>}</dd></div>
+          {/* One segment per slot reads at a glance for a handful of workers; past that, one proportional bar. */}
+          {!harness && (counts.workerLimit <= 12
+            ? <span className="research-meter" aria-hidden="true">{Array.from({ length: counts.workerLimit }, (_, index) => <i key={index} className={index < counts.slotsInUse ? "is-on" : undefined} />)}</span>
+            : <span className="research-bar research-bar--wide" aria-hidden="true"><i style={{ width: `${Math.round(counts.slotsInUse / counts.workerLimit * 100)}%` }} /></span>)}</dd></div>
         <div><dt>Findings</dt><dd>{counts.findings}</dd></div>
         <div><dt>{counts.unreviewed ? "Candidates to review" : "Candidates"}</dt><dd>{counts.unreviewed ? `${counts.unreviewed} of ${counts.candidates}` : counts.candidates}</dd></div>
       </dl>}

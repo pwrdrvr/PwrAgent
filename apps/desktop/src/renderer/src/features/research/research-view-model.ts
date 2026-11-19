@@ -92,7 +92,7 @@ export function researchHarnessTime(run: Pick<ResearchRunView, "status" | "deadl
   const harness = run.harness!;
   if (harness.mode === "import") return harness.observedAt ? `Observed ${formatClock(harness.observedAt)}` : `Requested ${formatClock(run.createdAt)}`;
   if (isResearchRunLive(run) && harness.state !== "unknown") return researchTimeLeft(run, now);
-  return `Started ${formatClock(run.createdAt)} · ${Math.round((run.deadlineAt - run.createdAt) / 60_000)} min limit`;
+  return `Started ${formatClock(run.createdAt)}${run.deadlineAt === undefined ? "" : ` · ${formatResearchDuration(Math.round((run.deadlineAt - run.createdAt) / 60_000))} limit`}`;
 }
 
 /** The unresolved-outcome callout for a Harness run, or undefined when its source outcome is settled. */
@@ -115,16 +115,29 @@ export function researchHarnessOutcome(run: Pick<ResearchRunView, "status" | "ha
   return { title, body: `${harness.note} ${tail}` };
 }
 
-/** Remaining time for a live run, or when its deadline fell for a finished one. */
+/** A length of time in the largest two units that matter: "45 min", "3 h 20 min", "2 d 4 h". */
+export function formatResearchDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+}
+
+/** The operator's time limit for a run, in words. */
+export function researchTimeLimitLabel(minutes: number | undefined): string {
+  return minutes === undefined ? "no time limit" : `${formatResearchDuration(minutes)} limit`;
+}
+
+/** Remaining time for a live run, or when its time limit fell for a finished one. A run may have no limit. */
 export function researchTimeLeft(run: Pick<ResearchRun, "status" | "deadlineAt">, now: number): string {
-  const at = formatClock(run.deadlineAt);
+  if (run.deadlineAt === undefined) return "No time limit";
+  const at = formatRunWhen(run.deadlineAt, now) === formatClock(run.deadlineAt) ? formatClock(run.deadlineAt) : `${formatRunWhen(run.deadlineAt, now)}, ${formatClock(run.deadlineAt)}`;
   if (!isResearchRunLive(run)) return `Deadline ${at}`;
   const remaining = run.deadlineAt - now;
   if (remaining <= 0) return "Deadline passed";
   if (remaining < 60_000) return `Under a minute left · ends ${at}`;
-  const minutes = Math.floor(remaining / 60_000);
-  if (minutes < 60) return `${minutes} min left · ends ${at}`;
-  return `${Math.floor(minutes / 60)} h ${minutes % 60} min left · ends ${at}`;
+  return `${formatResearchDuration(Math.floor(remaining / 60_000))} left · ends ${at}`;
 }
 
 /** When a run in a list happened: the time today, otherwise the date. */

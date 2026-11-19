@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, researchHarnessEffectiveState, sameResearchThread, type ResearchActor, type ResearchEvent,
+import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, RESEARCH_MAX_TIMER_MS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, researchHarnessEffectiveState, sameResearchThread, type ResearchActor, type ResearchEvent,
   type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
@@ -54,7 +54,7 @@ export class ResearchHarnessService {
     const now = this.now();
     this.storage.create(id, key, { seq: 1, commandId: "start", signature, at: now, actor, data: { type: "created", objective: request.objective,
       coordinator: { backend: actor.backend, threadId: actor.threadId }, ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
-      ownerStartedAt: this.ports.ownerStartedAt, deadlineAt: now + request.minutes * 60_000, workspaceMode: "none", harness: state,
+      ownerStartedAt: this.ports.ownerStartedAt, ...(request.minutes !== undefined ? { deadlineAt: now + request.minutes * 60_000 } : {}), workspaceMode: "none", harness: state,
       approaches: Array.from({ length: request.workers }, (_, i) => ({ id: `a${i + 1}`, title: `Harness member ${i + 1}`, task: request.objective, state: "unknown" })) } });
     this.changed(id);
     this.scheduleDeadline(id);
@@ -71,8 +71,11 @@ export class ResearchHarnessService {
     for (const v of [request.project, request.swarm, ...(request.source === "discovery" ? [] : [request.session])]) text(v, 64);
     if (request.problem !== undefined) text(request.problem, 64);
     text(request.objective, 8000);
-    if (!["import", "execute"].includes(request.mode) || !Number.isInteger(request.workers) || request.workers < 1 || request.workers > 8
-      || !Number.isInteger(request.minutes) || request.minutes < 1 || request.minutes > 120) throw new Error("Choose 1–8 workers and 1–120 minutes");
+    if (!["import", "execute"].includes(request.mode)) throw new Error("Unsupported Harness operation");
+    if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} members`);
+    if (!validResearchMinutes(request.minutes)) throw new Error("A time limit is a whole number of minutes, at least 1");
+    // The bridge binds a deadline before it admits a swarm, so execution needs one. An import only reads.
+    if (request.mode === "execute" && request.minutes === undefined) throw new Error("Set a deadline for the swarm; the bridge requires one before it starts");
     // Imports and snapshots make no model call; execution spends model budget without a hard cap.
     if (request.mode === "execute" && request.budgetAcknowledged !== true) throw new Error("Acknowledge unknown token/dollar usage and cancellation billing before continuing");
   }
@@ -83,7 +86,7 @@ export class ResearchHarnessService {
       this.connections.set(id, connection);
       const hello = object(await connection.request("hello", { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION }));
       if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
-      if (this.closed || this.ports.enabled?.() === false || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before probing");
+      if (this.closed || this.ports.enabled?.() === false || this.run(id).status !== "running" || researchDeadlinePassed(this.run(id), this.now())) throw new Error("Harness admission was fenced before probing");
       const capabilities = hello as unknown as ResearchHarnessCapabilities;
       if (request.source === "discovery" && capabilities.discovery !== true) throw new Error("Harness bridge does not support discovery observation");
       if (capabilities[request.mode] !== true) throw new Error(`Harness bridge does not support ${request.mode}`);
@@ -99,7 +102,7 @@ export class ResearchHarnessService {
         } finally { this.probes.delete(id); }
       }
       // Stop/close can win while hello or the compatibility probe is outstanding.
-      if (this.closed || this.ports.enabled?.() === false || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before dispatch");
+      if (this.closed || this.ports.enabled?.() === false || this.run(id).status !== "running" || researchDeadlinePassed(this.run(id), this.now())) throw new Error("Harness admission was fenced before dispatch");
       this.append(id, [{ type: "harness", state: { ...state, state: "running", note: request.mode === "execute" ? "Execution dispatch recorded; no automatic replay." : "Observing source records; source work is not owned by this import." } }]);
       if (request.mode === "execute") {
         // Durable boundary above must remain before this potentially budget-spending call.
@@ -117,7 +120,7 @@ export class ResearchHarnessService {
   private async observeDiscovery(id: string): Promise<void> {
     const run = this.run(id), origin = run.harness!, connection = this.connections.get(id)!;
     const params = { project: origin.project, run: origin.swarm };
-    const admitted = () => !this.closed && this.connections.has(id) && this.run(id).status === "running" && this.now() < this.run(id).deadlineAt;
+    const admitted = () => !this.closed && this.connections.has(id) && this.run(id).status === "running" && !researchDeadlinePassed(this.run(id), this.now());
     const status = await connection.request("discovery.status", params);
     if (!admitted()) return;
     const problems = await connection.request("discovery.problems", params);
@@ -348,8 +351,15 @@ export class ResearchHarnessService {
     this.ports.onError(error);
   }
   private scheduleDeadline(id: string): void {
-    const delay = Math.max(0, this.run(id).deadlineAt - this.now());
-    this.timers.set(`${id}:deadline`, this.schedule(() => { void this.stop(id, this.actor(this.run(id)), "deadline", "Research deadline reached").catch(this.ports.onError); }, delay));
+    const deadlineAt = this.run(id).deadlineAt;
+    // An import has no deadline of its own: it reads what the source has and stops.
+    if (deadlineAt === undefined) return;
+    const arm = (): void => {
+      const remaining = deadlineAt - this.now();
+      this.timers.set(`${id}:deadline`, remaining > RESEARCH_MAX_TIMER_MS ? this.schedule(arm, RESEARCH_MAX_TIMER_MS)
+        : this.schedule(() => { void this.stop(id, this.actor(this.run(id)), "deadline", "Research deadline reached").catch(this.ports.onError); }, Math.max(0, remaining)));
+    };
+    arm();
   }
   private schedulePoll(id: string, delay: number): void {
     this.timers.set(`${id}:poll`, this.schedule(() => { this.timers.delete(`${id}:poll`); void this.poll(id); }, delay));

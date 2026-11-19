@@ -7,7 +7,7 @@ import { readResearchHarnessConfig } from "../settings/config-store/research-run
 import { openResearchHarnessProcess } from "./research-harness-process";
 import { createHarnessModelTransport, selectHarnessModel } from "./research-harness-model";
 import type { ResearchHarnessStatus } from "@pwragent/shared";
-import { RESEARCH_BOARD_PAGE } from "@pwragent/shared";
+import { RESEARCH_BOARD_PAGE, researchDeadlinePassed } from "@pwragent/shared";
 import type { ResearchActor, ResearchCommand, StartResearchRequest, ResearchAssignRequest, ResearchSearchQuery, ResearchItem } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
@@ -55,7 +55,7 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
       const connection = openResearchHarnessProcess(config, workspace, async (method, params, signal) => {
         const run = storage.header(id);
         const model = models.get(id);
-        if (method !== "model_complete" || !model || modelBusy || ports.enabled?.() === false || run?.status !== "running" || run.harness?.state !== "running" || Date.now() >= run.deadlineAt) throw new Error("Research model admission unavailable");
+        if (method !== "model_complete" || !model || modelBusy || ports.enabled?.() === false || run?.status !== "running" || run.harness?.state !== "running" || researchDeadlinePassed(run, Date.now())) throw new Error("Research model admission unavailable");
         modelBusy = true;
         try { return await model.complete(researchModelRequest(model.model, params.messages), signal); }
         finally { modelBusy = false; }
