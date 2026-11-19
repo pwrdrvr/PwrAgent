@@ -453,6 +453,8 @@ export type DesktopSettingsConfig = {
     archive?: DesktopThreadArchiveConfig;
     hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
+    /** `base_directory`: replaces the home folder for `user-home` worktrees. */
+    baseDirectory?: string;
   };
 };
 
@@ -2407,6 +2409,14 @@ export function desktopSettingsPatchToEdits(
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
   }
+  if (patch.worktrees?.baseDirectory !== undefined) {
+    const baseDirectory = patch.worktrees.baseDirectory?.trim();
+    if (baseDirectory) {
+      set(["worktrees", "base_directory"], baseDirectory);
+    } else if (currentTables["worktrees"]?.base_directory !== undefined) {
+      edits.push({ op: "delete", path: ["worktrees", "base_directory"] });
+    }
+  }
 
   return edits;
 }
@@ -2978,6 +2988,7 @@ function normalizeDesktopConfig(
         restoreOn: hibernate.restore_on === "send" || hibernate.restore_on === "open" ? hibernate.restore_on : undefined,
       } : undefined,
       storage: readWorktreeStorage(worktrees?.storage),
+      baseDirectory: readWorktreeBaseDirectory(worktrees?.base_directory),
     },
   });
 }
@@ -4473,6 +4484,12 @@ function isDesktopMessagingImageProfile(
   value: string,
 ): value is DesktopMessagingImageProfile {
   return value === "low" || value === "medium" || value === "high" || value === "actual";
+}
+
+/** Only an absolute folder; a relative one would follow the process cwd. */
+function readWorktreeBaseDirectory(value: TomlScalar | undefined): string | undefined {
+  const directory = typeof value === "string" ? value.trim() : "";
+  return directory && path.isAbsolute(directory) ? directory : undefined;
 }
 
 function readWorktreeStorage(

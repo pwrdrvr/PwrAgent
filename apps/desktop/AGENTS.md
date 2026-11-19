@@ -259,7 +259,8 @@ changing quit, shutdown, or `before-quit` handling, read
 
 Every worktree path comes from `computeWorktreePath`
 (`src/main/app-server/git-directory-service.ts`); add no other builder. Before
-changing worktree creation or handoff, read
+changing worktree creation, handoff, or where worktrees are stored (including
+the `[worktrees] base_directory` Worktree folder), read
 [docs/worktree-paths.md](docs/worktree-paths.md#worktree-path-computation).
 
 ## Release Notes

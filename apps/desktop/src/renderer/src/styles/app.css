@@ -14763,6 +14763,26 @@ a.button {
   flex: 1 1 auto;
 }
 
+.worktree-folder__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.worktree-folder__row .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-folder__row .button,
+.worktree-folder__row .settings-pathrow__chip {
+  flex: 0 0 auto;
+}
+
 .incoming-files-folder__browse {
   flex: 0 0 auto;
   min-height: 32px;

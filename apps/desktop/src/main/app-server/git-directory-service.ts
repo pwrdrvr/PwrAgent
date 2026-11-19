@@ -1,4 +1,4 @@
-import { mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rmdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -270,6 +270,7 @@ function worktreesRootFor(
   storage: DesktopWorktreeStorageLocation,
   options?: {
     backend?: AppServerBackendKind;
+    baseDirectory?: string;
     codexHome?: string;
     homeDir?: string;
   },
@@ -282,8 +283,23 @@ function worktreesRootFor(
   }
 
   return storage === "user-home"
-    ? userHomeWorktreesRoot(options?.homeDir)
+    ? userHomeWorktreesRoot(options?.baseDirectory ?? options?.homeDir)
     : path.join(repoRoot, ".worktrees");
+}
+
+/**
+ * The operator's worktree folder is used as given, never created: with an
+ * external drive unmounted, `mkdir -p /Volumes/<drive>/...` would silently
+ * put worktrees on the startup disk. Only `.pwragent/worktrees` beneath an
+ * existing folder is created.
+ */
+async function assertWorktreeBaseDirectoryAvailable(baseDirectory: string): Promise<void> {
+  const info = await stat(baseDirectory).catch(() => undefined);
+  if (!info?.isDirectory()) {
+    throw new Error(
+      `Worktree folder ${baseDirectory} is not available. Connect the drive or choose another folder in Settings → Worktrees.`,
+    );
+  }
 }
 
 function codexHomeWorktreesRoot(options: {
@@ -337,19 +353,26 @@ async function removeWorktreeAndPrune(params: {
 
 export async function computeWorktreePath(params: {
   backend?: AppServerBackendKind;
+  /** Operator-chosen folder that replaces the home folder for `user-home`. */
+  baseDirectory?: string;
   codexHome?: string;
   repoRoot: string;
   storage: DesktopWorktreeStorageLocation;
   homeDir?: string;
   timestamp?: number;
 }): Promise<string> {
+  const baseDirectory = params.baseDirectory?.trim() || undefined;
   const root = worktreesRootFor(params.repoRoot, params.storage, {
     backend: params.backend,
+    baseDirectory,
     codexHome: params.codexHome,
     homeDir: params.homeDir,
   });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
   const baseTimestamp = params.timestamp ?? Date.now();
+  if (baseDirectory && root === userHomeWorktreesRoot(baseDirectory)) {
+    await assertWorktreeBaseDirectoryAvailable(baseDirectory);
+  }
   await mkdir(root, { recursive: true });
 
   for (
@@ -879,6 +902,8 @@ type GitDirectoryServiceOptions = {
   resolveWorktreeStorage?: () =>
     | DesktopWorktreeStorageLocation
     | Promise<DesktopWorktreeStorageLocation>;
+  /** Folder that replaces the home folder for `user-home` worktrees. */
+  resolveWorktreeBaseDirectory?: () => string | undefined | Promise<string | undefined>;
   homeDir?: string;
 };
 
@@ -898,6 +923,7 @@ export class GitDirectoryService {
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly runGitCommand: GitCommandRunner;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
+  private readonly resolveBaseDirectory: () => Promise<string | undefined>;
   private readonly homeDir: string;
 
   constructor(options: GitDirectoryServiceOptions | number = {}) {
@@ -917,6 +943,8 @@ export class GitDirectoryService {
     const resolveStorage = normalized.resolveWorktreeStorage;
     this.resolveStorage = async () =>
       (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
+    const resolveBaseDirectory = normalized.resolveWorktreeBaseDirectory;
+    this.resolveBaseDirectory = async () => await resolveBaseDirectory?.();
   }
 
   async inspectWorkspaceGit(cwd: string): Promise<GitWorkspaceInspection> {
@@ -1308,6 +1336,7 @@ export class GitDirectoryService {
       codexHome: this.codexHome,
       repoRoot,
       storage: await this.resolveStorage(),
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
     });
   }
@@ -1537,6 +1566,7 @@ export class GitDirectoryService {
           codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
           repoRoot,
           storage,
+          baseDirectory: await this.resolveBaseDirectory(),
           homeDir: this.homeDir,
         });
         if (strictBranchCheckout) {
@@ -1597,6 +1627,7 @@ export class GitDirectoryService {
       codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
       repoRoot,
       storage,
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
     });
     await mkdir(path.dirname(worktreePath), { recursive: true });

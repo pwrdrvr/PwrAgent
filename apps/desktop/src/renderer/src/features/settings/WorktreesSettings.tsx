@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
@@ -27,7 +28,7 @@ const STORAGE_OPTIONS: Array<{
   },
   {
     description:
-      "Outside the repository under ~/.pwragent/worktrees/<hash>/<project-folder>.",
+      "Outside the repository, in .pwragent/worktrees/<hash>/<project-folder> under the worktree folder.",
     label: "User home",
     value: "user-home",
   },
@@ -78,6 +79,16 @@ export function WorktreesSettings(props: {
             }}
           />
 
+          {storage.value === "user-home" ? (
+            <WorktreeFolderField
+              baseDirectory={props.snapshot.worktrees.baseDirectory}
+              available={props.snapshot.worktrees.baseDirectoryAvailable}
+              disabled={props.saving}
+              desktopApi={props.desktopApi}
+              onWriteConfig={props.onWriteConfig}
+            />
+          ) : null}
+
           <SettingsField
             label="Effective path"
             sub="Computed from your strategy and the active project."
@@ -99,5 +110,77 @@ export function WorktreesSettings(props: {
         desktopApi={props.desktopApi}
       />
     </SettingsSectionStack>
+  );
+}
+
+function WorktreeFolderField(props: {
+  baseDirectory?: string;
+  available?: boolean;
+  disabled: boolean;
+  desktopApi?: DesktopApi;
+  onWriteConfig?: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+}) {
+  const [error, setError] = useState<string>();
+  const pick = props.desktopApi?.pickDirectoryFromDisk;
+  const write = props.onWriteConfig;
+  const save = async (baseDirectory: string | null) => {
+    if (!write) return;
+    setError(undefined);
+    if (!await write({ worktrees: { baseDirectory } })) {
+      setError("The worktree folder could not be saved. Try again.");
+    }
+  };
+  const unavailable = props.baseDirectory !== undefined && props.available === false;
+
+  return (
+    <SettingsField
+      label="Worktree folder"
+      sub="Put worktrees on a drive with more room. Existing worktrees stay where they are."
+      help="Codex threads keep using Codex's own worktree folder."
+      error={error ?? (unavailable
+        ? `${props.baseDirectory} is not available. Connect the drive or choose another folder; new worktrees cannot be created until then.`
+        : undefined)}
+      control={
+        <div className="worktree-folder__row">
+          <code
+            aria-label="Worktree folder"
+            aria-readonly="true"
+            className="settings-input settings-input--readonly"
+          >
+            {props.baseDirectory ?? "Home folder"}
+          </code>
+          {props.baseDirectory ? (
+            <span
+              className={`settings-pathrow__chip ${unavailable ? "settings-pathrow__chip--err" : "settings-pathrow__chip--ok"}`}
+            >
+              {unavailable ? "Not available" : "Available"}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="button button--secondary"
+            disabled={props.disabled || !pick || !write}
+            onClick={() => {
+              void (async () => {
+                const picked = await pick?.();
+                if (picked && !picked.canceled) await save(picked.path);
+              })();
+            }}
+          >
+            Choose…
+          </button>
+          {props.baseDirectory ? (
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={props.disabled || !write}
+              onClick={() => void save(null)}
+            >
+              Use home folder
+            </button>
+          ) : null}
+        </div>
+      }
+    />
   );
 }

@@ -131,6 +131,8 @@ type WorkspaceHandoffServiceOptions = {
   resolveWorktreeStorage?: () =>
     | DesktopWorktreeStorageLocation
     | Promise<DesktopWorktreeStorageLocation>;
+  /** Folder that replaces the home folder for `user-home` worktrees. */
+  resolveWorktreeBaseDirectory?: () => string | undefined | Promise<string | undefined>;
   homeDir?: string;
 };
 
@@ -350,6 +352,7 @@ async function applyVerifyAndDropStash(
 export class GitWorkspaceHandoffService {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
+  private readonly resolveBaseDirectory: () => Promise<string | undefined>;
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly homeDir: string | undefined;
 
@@ -359,6 +362,8 @@ export class GitWorkspaceHandoffService {
     const resolveStorage = options.resolveWorktreeStorage;
     this.resolveStorage = async () =>
       (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
+    const resolveBaseDirectory = options.resolveWorktreeBaseDirectory;
+    this.resolveBaseDirectory = async () => await resolveBaseDirectory?.();
     this.gitEnv = options.gitEnv;
     this.homeDir = options.homeDir;
   }
@@ -420,7 +425,8 @@ export class GitWorkspaceHandoffService {
       } else if (params.sourceWorkMode === "worktree") {
         targetPath = await computeWorktreePath({
           backend: params.backend, repoRoot: repositoryPath,
-          storage: await this.resolveStorage(), homeDir: this.homeDir, timestamp: params.now,
+          storage: await this.resolveStorage(), baseDirectory: await this.resolveBaseDirectory(),
+          homeDir: this.homeDir, timestamp: params.now,
         });
         try {
           await runGit(repositoryPath, ["worktree", "add", "--detach", targetPath, "HEAD"], this.gitEnv);
@@ -576,6 +582,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -657,6 +664,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -724,6 +732,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -872,6 +881,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage: await this.resolveStorage(),
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -933,6 +943,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage: await this.resolveStorage(),
+      baseDirectory: await this.resolveBaseDirectory(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });

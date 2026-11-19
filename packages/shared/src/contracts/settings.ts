@@ -1799,6 +1799,13 @@ export type DesktopSettingsSnapshot = {
     hibernate?: DesktopCheckoutHibernationPolicy;
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
+    /**
+     * Folder that replaces the home folder for `user-home` worktrees, which
+     * then live in `<baseDirectory>/.pwragent/worktrees`. Absent: home folder.
+     */
+    baseDirectory?: string;
+    /** False when `baseDirectory` is missing, such as an unplugged drive. */
+    baseDirectoryAvailable?: boolean;
   };
 };
 
@@ -2113,6 +2120,8 @@ export type DesktopSettingsConfigPatch = {
     archive?: Partial<DesktopThreadArchivePolicy>;
     hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
+    /** An absolute folder for `user-home` worktrees; null returns to the home folder. */
+    baseDirectory?: string | null;
   };
 };
 

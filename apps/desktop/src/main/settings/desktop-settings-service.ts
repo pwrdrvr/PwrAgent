@@ -1863,7 +1863,7 @@ export class DesktopSettingsService {
         agentTools: this.resolveForgeAgentToolSettings(config.git?.agentTools),
       },
       worktrees: {
-        ...this.resolveWorktrees(config.worktrees?.storage),
+        ...this.resolveWorktrees(config.worktrees?.storage, config.worktrees?.baseDirectory),
         archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
         hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate),
       },
@@ -2166,6 +2166,11 @@ export class DesktopSettingsService {
     const storage = this.configStore.read("worktrees").storage;
     return this.resolveWorktrees(storage)
       .storage.value;
+  }
+
+  /** The operator's worktree folder, replacing the home folder for `user-home`. */
+  resolveWorktreeBaseDirectory(): string | undefined {
+    return this.configStore.read("worktrees").baseDirectory?.trim() || undefined;
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
@@ -4959,9 +4964,12 @@ export class DesktopSettingsService {
 
   private resolveWorktrees(
     configValue: DesktopWorktreeStorageLocation | undefined,
+    baseDirectoryValue?: string,
   ): {
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
+    baseDirectory?: string;
+    baseDirectoryAvailable?: boolean;
   } {
     const envValue = readEnvWorktreeStorage(this.env);
     const resolved: DesktopSettingsValue<DesktopWorktreeStorageLocation> =
@@ -4976,12 +4984,16 @@ export class DesktopSettingsService {
             source: configValue === undefined ? "default" : "config",
             error: envValue.error,
           };
+    const baseDirectory = baseDirectoryValue?.trim() || undefined;
     return {
       storage: resolved,
       effectivePath:
         resolved.value === "user-home"
-          ? toForwardSlashes(userHomeWorktreesRoot())
+          ? toForwardSlashes(userHomeWorktreesRoot(baseDirectory))
           : ".worktrees",
+      ...(baseDirectory
+        ? { baseDirectory, baseDirectoryAvailable: isExistingDirectory(baseDirectory) }
+        : {}),
     };
   }
 
@@ -5149,4 +5161,12 @@ function parseCodexModelProviderKeys(value: string | undefined): Record<string, 
 
 function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {
   return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
+}
+
+function isExistingDirectory(target: string): boolean {
+  try {
+    return statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
 }
