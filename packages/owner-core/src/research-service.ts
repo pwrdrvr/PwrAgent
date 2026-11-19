@@ -8,6 +8,7 @@ import {
   type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage, type ResearchChange, type ResearchChanges,
   type ResearchChangesCursor, type ResearchBoardRange, type ResearchBoardPage,
   RESEARCH_PROFILE_RUNS_PAGE, type ResearchProfileRunsQuery, type ResearchProfileRunsPage, type ResearchProfileRun,
+  RESEARCH_WORKER_TIME_REACHED, researchTurnElapsed, researchTurnLimitNote, researchWorkerTimeReachedAt, researchWorkerTimeUsed, type ResearchBoundsCommand,
 } from "@pwragent/shared/research";
 import { armResearchDeadline } from "./research-deadline";
 import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunNeedsAdoption, researchRunHeldBy, type ResearchOwnerIdentity } from "./research-ownership";
@@ -17,6 +18,7 @@ export const RESEARCH_SNAPSHOT_RUN_LIMIT = 50;
 
 /** An operator request expires if the coordinator has not started it within five minutes. */
 export const RESEARCH_REQUEST_TTL_MS = 5 * 60_000;
+const MINUTE = 60_000;
 import type { ResearchStorage } from "./research-storage";
 
 export type ResearchExecutionContext = ResearchActor & { kind: "agent"; turnId: string; callId: string };
@@ -58,6 +60,10 @@ export class ResearchService {
   private readonly starts = new Map<string, { signature: string; promise: Promise<ResearchRunHeader> }>();
   private readonly assignments = new Map<string, { signature: string; promise: Promise<ResearchAssignmentReceipt> }>();
   private readonly deadlines = new Map<string, () => void>();
+  /** Run ID to the per-worker time limit timer of each running worker, by approach, with when it is due. */
+  private readonly turnLimits = new Map<string, Map<string, { at: number; cancel: () => void }>>();
+  /** Run ID to the timer for when its workers' time reaches the operator's total. */
+  private readonly workerTimeLimits = new Map<string, { at: number; cancel: () => void }>();
   /** Run ID to the approaches whose start is unresolved. */
   private readonly pendingStarts = new Map<string, Set<string>>();
   /** Run ID to the revision deliveries whose send is unresolved, each with the queue events seen meanwhile. */
@@ -76,7 +82,7 @@ export class ResearchService {
 
   initialize(): void {
     for (const run of this.storage.activeRuns()) {
-      if (run.ownerId === this.ports.ownerId) this.scheduleDeadline(run);
+      if (run.ownerId === this.ports.ownerId) { this.scheduleDeadline(run); this.armBounds(run.id); }
       else if (this.ports.isOwnerAlive(run)) continue;
       // A Harness run's bridge ended with its process, so the run did too. A native run did not: its
       // threads and board are intact, and this process holds it from here.
@@ -102,15 +108,39 @@ export class ResearchService {
     for (const delivery of started) {
       this.append(this.requireHeader(run.id), `adopted-delivery:${delivery.id}:${this.ports.ownerId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: "ended" } });
     }
+    // A cut-off turn counted until now. A worker already past its per-worker limit is stopped for it, not offered for resume.
+    const limited = this.stopCutOffPastTurnLimit(run.id);
     const current = this.requireHeader(run.id);
-    if (current.status === "running") this.scheduleDeadline(current);
+    if (current.status === "running") {
+      this.scheduleDeadline(current);
+      if (limited) this.finishExploration(current);
+    }
     else if (current.status === "stopping" && !this.stops.has(run.id)) {
       // The stop was under way when the process ended. Finish it.
       const stopping = this.performStop(run.id, this.operator(run));
       this.stops.set(run.id, stopping);
       void stopping.finally(() => { if (this.stops.get(run.id) === stopping) this.stops.delete(run.id); }).catch(this.ports.onError);
     }
-    return current;
+    // Exhausting the run, or finishing its stop, appended after `current` was read.
+    return this.requireHeader(run.id);
+  }
+
+  /**
+   * Record each cut-off worker whose turn has reached the operator's per-worker limit as stopped for that reason.
+   * Its clock does not run while it waits, so this is checked only when a turn is cut off or the limit changes.
+   */
+  private stopCutOffPastTurnLimit(id: string): boolean {
+    let run = this.requireHeader(id);
+    const minutes = run.turnMinutes;
+    if (minutes === undefined || run.status !== "running") return false;
+    let stopped = false;
+    for (const approach of this.storage.approaches(id, { interrupted: true })) {
+      if (researchTurnElapsed(approach, this.now()) < minutes * MINUTE) continue;
+      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped", note: researchTurnLimitNote(minutes) });
+      run = this.requireHeader(id);
+      stopped = true;
+    }
+    return stopped;
   }
 
   /** The run as this process may record on it, taking over an open run whose process is gone. */
@@ -182,7 +212,8 @@ export class ResearchService {
     if (this.intents.delete(JSON.stringify([thread.backend, thread.threadId]))) this.ports.changed({ backend: thread.backend, threadId: thread.threadId });
   }
   summaries(thread: ResearchThread) {
-    return this.storage.summaries(thread).map((run) => ({ id: run.id, objective: run.objective.slice(0, 200), status: run.status, deadlineAt: run.deadlineAt, workerLimit: run.workerLimit, activeWorkers: run.activeWorkers }));
+    return this.storage.summaries(thread).map((run) => ({ id: run.id, objective: run.objective.slice(0, 200), status: run.status, deadlineAt: run.deadlineAt, workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
+      ...(run.turnMinutes !== undefined ? { turnMinutes: run.turnMinutes } : {}), ...(run.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: run.totalWorkerMinutes } : {}) }));
   }
 
   /** Replays the whole journal. For recovery and tests: no command, observer or view reads this way. */
@@ -412,13 +443,15 @@ export class ResearchService {
     const intent = this.intents.get(intentKey);
     if (request.intentId || intent) {
       if (!intent || request.intentId !== intent.id || this.now() >= intent.expiresAt) throw new Error("Research request expired or was replaced. Submit a fresh request from the Research panel.");
-      if (request.objective !== intent.request.objective || request.approaches.length !== intent.request.workers || request.minutes !== intent.request.minutes || request.workspaceMode !== intent.request.workspaceMode) throw new Error("Research must use the exact objective, worker count, deadline and workspace choice the operator requested");
+      if (request.objective !== intent.request.objective || request.approaches.length !== intent.request.workers || request.minutes !== intent.request.minutes
+        || request.turnMinutes !== intent.request.turnMinutes || request.totalWorkerMinutes !== intent.request.totalWorkerMinutes || request.workspaceMode !== intent.request.workspaceMode) throw new Error("Research must use the exact objective, worker count, time limits and workspace choice the operator requested");
     }
     const id = randomUUID();
     const approaches: ResearchApproach[] = request.approaches.map((a, index) => ({ title: a.title, task: a.task, id: `a${index + 1}`, state: "pending" }));
     this.storage.create(id, key, { seq: 1, commandId: "start", signature: JSON.stringify(request), at: this.now(), actor: context,
       data: { type: "created", objective: request.objective, coordinator: { backend: context.backend, threadId: context.threadId }, approaches, ownerId: this.ports.ownerId,
-        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, ...(request.minutes !== undefined ? { deadlineAt: this.now() + request.minutes * 60_000 } : {}), workspaceMode: request.workspaceMode } });
+        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, ...(request.minutes !== undefined ? { deadlineAt: this.now() + request.minutes * 60_000 } : {}),
+        ...(request.turnMinutes !== undefined ? { turnMinutes: request.turnMinutes } : {}), ...(request.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: request.totalWorkerMinutes } : {}), workspaceMode: request.workspaceMode } });
     if (intent) this.intents.delete(intentKey);
     this.ports.changed({ backend: context.backend, threadId: context.threadId, runId: id, revision: 1 });
     this.scheduleDeadline(this.requireHeader(id));
@@ -435,8 +468,12 @@ export class ResearchService {
 
   private async admitApproach(id: string, approach: ResearchApproach, context: ResearchExecutionContext): Promise<void> {
     const run = this.requireHeader(id);
-    if (!this.canAdmitApproach(run, approach)) {
-      this.append(run, `unadmitted:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "stopped" });
+    // An approach not yet started holds its slot only within the worker count: a lowered count starts no new worker.
+    const overCount = run.activeWorkers > run.workerLimit;
+    const admissible = this.canAdmitApproach(run, approach);
+    if (overCount || !admissible) {
+      this.append(run, `unadmitted:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "stopped",
+        ...(overCount && admissible ? { note: "Not started: the run already had as many workers as its worker count." } : {}) });
       this.settleItemCancellation(id, approach.id);
       return;
     }
@@ -477,7 +514,7 @@ export class ResearchService {
   async update(id: string, requestId: string, command: ResearchCommand, actor: ResearchActor): Promise<ResearchRunHeader> {
     this.requireOpen();
     if (command?.action === "work") { await this.work(id, requestId, command, actor); return this.requireHeader(id); }
-    if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish", "resume"].includes(command.action)) throw new Error("Unknown research command");
+    if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish", "resume", "bounds"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
     const member = this.memberHeader(id, actor);
     if (member.harness && !["review", "stop", "finish"].includes(command.action)) throw new Error("Harness records are immutable source observations");
@@ -488,6 +525,11 @@ export class ResearchService {
     if (duplicate) {
       if (duplicate.signature !== signature || !sameResearchThread(duplicate.actor, actor) || duplicate.actor.kind !== actor.kind) throw new Error("Research command key was reused");
       return run;
+    }
+    if (command.action === "bounds") {
+      // A run's bounds are the operator's. The coordinator proposes work within them and cannot change them.
+      if (actor.kind !== "operator") throw new Error("Only the operator can change a run's bounds");
+      return this.changeBounds(run, requestId, signature, command, actor);
     }
     const coordinator = actor.kind === "operator" || sameResearchThread(actor, run.coordinator);
     if ((command.action === "review" || command.action === "stop" || command.action === "finish") && !coordinator) throw new Error("Only the coordinator or operator may review or stop a run");
@@ -588,6 +630,40 @@ export class ResearchService {
     return this.requireHeader(id);
   }
 
+  /**
+   * The operator's new bounds for a running run, in one journal event. A lowered worker count stops nobody;
+   * a time limit counts from the run's start. A time limit or total already passed is refused: Stop ends a run.
+   */
+  private changeBounds(run: ResearchRunHeader, requestId: string, signature: string, command: ResearchBoundsCommand, actor: ResearchActor): ResearchRunHeader {
+    if (!this.canDispatch(run)) throw new Error("Only a running run's bounds can be changed");
+    if (command.workers === undefined && command.minutes === undefined && command.turnMinutes === undefined && command.totalWorkerMinutes === undefined) throw new Error("Choose a bound to change");
+    if (command.workers !== undefined && (!Number.isInteger(command.workers) || command.workers < 1 || command.workers > RESEARCH_MAX_WORKERS)) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} workers`);
+    for (const value of [command.minutes, command.turnMinutes, command.totalWorkerMinutes]) {
+      if (value !== null && !validResearchMinutes(value)) throw new Error("A research limit is a whole number of minutes, at least 1. Choose No limit to remove it.");
+    }
+    const now = this.now();
+    const choose = (value: number | null | undefined, current: number | undefined) => value === undefined ? current : value ?? undefined;
+    const deadlineAt = command.minutes === undefined ? run.deadlineAt : command.minutes === null ? undefined : run.createdAt + command.minutes * MINUTE;
+    const turnMinutes = choose(command.turnMinutes, run.turnMinutes);
+    const totalWorkerMinutes = choose(command.totalWorkerMinutes, run.totalWorkerMinutes);
+    const workerLimit = command.workers ?? run.workerLimit;
+    if (deadlineAt !== undefined && deadlineAt !== run.deadlineAt && now >= deadlineAt) throw new Error(`That time limit has already passed: the run started ${minutesText(now - run.createdAt)} ago. Choose a longer limit, or stop the run.`);
+    if (totalWorkerMinutes !== undefined && totalWorkerMinutes !== run.totalWorkerMinutes) {
+      const used = researchWorkerTimeUsed(this.storage.workerTime(run.id), now);
+      if (used >= totalWorkerMinutes * MINUTE) throw new Error(`Workers have already used ${minutesText(used)}. Choose a larger total worker time, or stop the run.`);
+    }
+    if (workerLimit === run.workerLimit && deadlineAt === run.deadlineAt && turnMinutes === run.turnMinutes && totalWorkerMinutes === run.totalWorkerMinutes) return run;
+    this.append(run, requestId, actor, { type: "bounds", workerLimit, ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+      ...(turnMinutes !== undefined ? { turnMinutes } : {}), ...(totalWorkerMinutes !== undefined ? { totalWorkerMinutes } : {}) }, signature);
+    if (deadlineAt !== run.deadlineAt) {
+      this.deadlines.get(run.id)?.();
+      this.deadlines.delete(run.id);
+      this.scheduleDeadline(this.requireHeader(run.id));
+    }
+    if (turnMinutes !== run.turnMinutes && this.stopCutOffPastTurnLimit(run.id)) this.finishExploration(this.requireHeader(run.id));
+    return this.requireHeader(run.id);
+  }
+
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRunHeader> {
     const member = this.memberHeader(id, actor);
     if (member.harness) {
@@ -669,28 +745,28 @@ export class ResearchService {
     }
   }
 
-  private async stopWorker(id: string, approachId: string, actor: ResearchActor): Promise<void> {
+  private async stopWorker(id: string, approachId: string, actor: ResearchActor, note?: string): Promise<void> {
     const approach = this.requireApproach(id, approachId);
     if (!approach.worker?.turnId) return;
     const worker = approach.worker;
     const key = JSON.stringify([id, approachId, worker.turnId]);
     let pending = this.workerStops.get(key);
     if (!pending) {
-      pending = Promise.resolve().then(() => this.performWorkerStop(id, approachId, actor, worker));
+      pending = Promise.resolve().then(() => this.performWorkerStop(id, approachId, actor, worker, note));
       this.workerStops.set(key, pending);
     }
     try { await pending; }
     finally { if (this.workerStops.get(key) === pending) this.workerStops.delete(key); }
   }
 
-  private async performWorkerStop(id: string, approachId: string, actor: ResearchActor, worker: NonNullable<ResearchApproach["worker"]>): Promise<void> {
+  private async performWorkerStop(id: string, approachId: string, actor: ResearchActor, worker: NonNullable<ResearchApproach["worker"]>, note?: string): Promise<void> {
     try {
       const before = this.requireApproach(id, approachId);
       if (before.worker?.turnId !== worker.turnId || ["ended", "stopped", "failed"].includes(before.state)) return;
       await this.ports.stop(worker);
       const current = this.requireHeader(id);
       if (this.requireApproach(id, approachId).worker?.turnId !== worker.turnId) return;
-      this.append(current, `stopped:${approachId}:${worker.turnId}`, actor, { type: "worker", approachId, state: "stopped" });
+      this.append(current, `stopped:${approachId}:${worker.turnId}`, actor, { type: "worker", approachId, state: "stopped", ...(note ? { note } : {}) });
       this.settleItemCancellation(id, approachId);
     } catch (error) {
       const current = this.requireHeader(id);
@@ -760,11 +836,14 @@ export class ResearchService {
       if (run.ownerId !== this.ports.ownerId) continue;
       const approach = this.storage.approaches(run.id, { worker: thread })[0];
       if (!approach || approach.worker?.turnId === turnId) continue;
+      // A worker that held no slot takes one now. It may only below the worker count; one already holding a slot keeps it.
+      const newcomer = !researchApproachOccupiesSlot(approach);
       this.append(run, `observed-start:${approach.id}:${turnId}`, this.operator(run), {
         type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId },
       });
       this.forgetQueuedResume(run.id, approach.id);
-      if (!this.canAdmitApproach(this.requireHeader(run.id), approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
+      const current = this.requireHeader(run.id);
+      if ((newcomer && current.activeWorkers > current.workerLimit) || !this.canAdmitApproach(current, approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
         if (!this.closed) this.finishStopping(this.requireHeader(run.id));
       }));
     }
@@ -804,6 +883,10 @@ export class ResearchService {
     for (const sending of this.pendingDeliveries.values()) for (const events of sending.values()) events.clear();
     for (const cancel of this.deadlines.values()) cancel();
     this.deadlines.clear();
+    for (const timers of this.turnLimits.values()) for (const timer of timers.values()) timer.cancel();
+    this.turnLimits.clear();
+    for (const timer of this.workerTimeLimits.values()) timer.cancel();
+    this.workerTimeLimits.clear();
     for (const run of this.storage.activeRuns()) {
       // Quitting ends a Harness run with its bridge. A native run stays open for the next launch to take over.
       if (run.ownerId === this.ports.ownerId && run.harness) this.append(run, `shutdown:${this.ports.ownerId}`, this.operator(run), {
@@ -930,11 +1013,88 @@ export class ResearchService {
 
   private scheduleDeadline(run: ResearchRunHeader): void {
     const callback = () => { void this.stop(run.id, this.operator(run), "deadline", "Research deadline reached").catch(this.ports.onError); };
-    const schedule = this.ports.schedule ?? ((fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return () => clearTimeout(timer); });
     const deadlineAt = run.deadlineAt;
     // No time limit, no timer: the run ends when the operator stops or finishes it.
     if (deadlineAt === undefined) return;
-    armResearchDeadline(deadlineAt, this.now, schedule, callback, (cancel) => this.deadlines.set(run.id, cancel));
+    armResearchDeadline(deadlineAt, this.now, this.schedule, callback, (cancel) => this.deadlines.set(run.id, cancel));
+  }
+  private readonly schedule = (fn: () => void, delay: number): (() => void) => {
+    if (this.ports.schedule) return this.ports.schedule(fn, delay);
+    const timer = setTimeout(fn, delay);
+    timer.unref();
+    return () => clearTimeout(timer);
+  };
+
+  /**
+   * Arm, move or cancel the timers for the per-worker time limit and total worker time, after an event that can
+   * change what they wait for: the named approaches' turn timers, or every one, and the run's worker time. Only
+   * a running run this process holds has them, and only for a bound the operator set. Timers write nothing
+   * until they fire, and a fired timer acts only if its bound is still reached.
+   */
+  private armBounds(id: string, approachIds?: readonly string[]): void {
+    if (this.closed) return;
+    const run = this.requireHeader(id);
+    const live = run.status === "running" && run.ownerId === this.ports.ownerId;
+    const turns = this.turnLimits.get(id) ?? new Map<string, { at: number; cancel: () => void }>();
+    if (!live || run.turnMinutes === undefined) {
+      for (const timer of turns.values()) timer.cancel();
+      this.turnLimits.delete(id);
+    } else {
+      const minutes = run.turnMinutes;
+      const approaches = approachIds ? approachIds.flatMap((approachId) => { const approach = this.approach(id, approachId); return approach ? [approach] : []; })
+        : this.storage.approaches(id, { occupying: true });
+      if (!approachIds) for (const [approachId, timer] of turns) if (!approaches.some((approach) => approach.id === approachId)) { timer.cancel(); turns.delete(approachId); }
+      for (const approach of approaches) {
+        // Only a running turn has a clock. A worker cut off, waiting or unaccounted for has none.
+        const at = approach.state === "running" && approach.turnSince !== undefined ? approach.turnSince + minutes * MINUTE - (approach.turnMs ?? 0) : undefined;
+        const held = turns.get(approach.id);
+        if (held?.at === at) continue;
+        held?.cancel();
+        turns.delete(approach.id);
+        if (at === undefined) continue;
+        const timer = { at, cancel: () => {} };
+        turns.set(approach.id, timer);
+        armResearchDeadline(at, this.now, this.schedule, () => this.turnLimitReached(id, approach.id, at), (cancel) => { timer.cancel = cancel; });
+      }
+      if (turns.size) this.turnLimits.set(id, turns);
+      else this.turnLimits.delete(id);
+    }
+    const held = this.workerTimeLimits.get(id);
+    const at = live && run.totalWorkerMinutes !== undefined ? researchWorkerTimeReachedAt(this.storage.workerTime(id), run.totalWorkerMinutes * MINUTE, this.now()) : undefined;
+    if (held?.at === at) return;
+    held?.cancel();
+    this.workerTimeLimits.delete(id);
+    if (at === undefined) return;
+    const timer = { at, cancel: () => {} };
+    this.workerTimeLimits.set(id, timer);
+    armResearchDeadline(at, this.now, this.schedule, () => this.workerTimeReached(id, at), (cancel) => { timer.cancel = cancel; });
+  }
+
+  /** A worker's turn reached the per-worker limit: stop that worker, say why, and let the run go on. */
+  private turnLimitReached(id: string, approachId: string, at: number): void {
+    const turns = this.turnLimits.get(id);
+    if (turns?.get(approachId)?.at === at) turns.delete(approachId);
+    if (this.closed) return;
+    const run = this.storage.header(id);
+    if (!run || run.status !== "running" || run.ownerId !== this.ports.ownerId || run.turnMinutes === undefined) return;
+    const approach = this.approach(id, approachId);
+    if (!approach || approach.state !== "running" || researchTurnElapsed(approach, this.now()) < run.turnMinutes * MINUTE) return;
+    void this.stopWorker(id, approachId, this.operator(run), researchTurnLimitNote(run.turnMinutes)).then(() => {
+      if (this.closed) return;
+      const current = this.requireHeader(id);
+      if (current.status === "running") this.finishExploration(current);
+      else this.finishStopping(current);
+    }).catch(this.ports.onError);
+  }
+
+  /** The workers' turns reached the operator's total: end the run as a deadline does. */
+  private workerTimeReached(id: string, at: number): void {
+    if (this.workerTimeLimits.get(id)?.at === at) this.workerTimeLimits.delete(id);
+    if (this.closed) return;
+    const run = this.storage.header(id);
+    if (!run || run.status !== "running" || run.ownerId !== this.ports.ownerId || run.totalWorkerMinutes === undefined) return;
+    if (researchWorkerTimeUsed(this.storage.workerTime(id), this.now()) < run.totalWorkerMinutes * MINUTE) { this.armBounds(id, []); return; }
+    void this.stop(id, this.operator(run), "deadline", RESEARCH_WORKER_TIME_REACHED).catch(this.ports.onError);
   }
 
   /** Appends at `run.revision`, which must be the journal's current revision, and tells the run's members. */
@@ -942,7 +1102,13 @@ export class ResearchService {
     // Contribution limits cannot block receipts or cancellation settlement.
     if (run.revision >= RESEARCH_MAX_EVENTS && !["status", "worker", "delivery", "delivery_failed", "adopted"].includes(data.type)
       && !(data.type === "item_work" && ["cancel_requested", "cancelled"].includes(data.work.state))) throw new Error("Research event limit reached; finish this run before starting another");
-    if (this.storage.append(run.id, run.revision, { seq: run.revision + 1, commandId, signature, at: this.now(), actor, data })) this.publish(run.id, run.revision + 1);
+    if (!this.storage.append(run.id, run.revision, { seq: run.revision + 1, commandId, signature, at: this.now(), actor, data })) return;
+    this.publish(run.id, run.revision + 1);
+    // A run with no per-worker limit or total worker time has no timers to move.
+    if (data.type !== "bounds" && run.turnMinutes === undefined && run.totalWorkerMinutes === undefined) return;
+    if (data.type === "worker") this.armBounds(run.id, [data.approachId]);
+    else if (data.type === "adopted" || data.type === "resumed") this.armBounds(run.id, data.approachIds);
+    else if (data.type === "bounds" || data.type === "status") this.armBounds(run.id);
   }
   private publish(id: string, revision: number): void { for (const thread of this.storage.members(id)) this.ports.changed({ backend: thread.backend, threadId: thread.threadId, runId: id, revision }); }
   private requireOpen(): void {
@@ -952,7 +1118,6 @@ export class ResearchService {
   private canDispatch(run: ResearchRunHeader): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && !researchDeadlinePassed(run, this.now()); }
   private canAdmitApproach(run: ResearchRunHeader, approach: Pick<ResearchApproach, "id" | "itemId">): boolean {
     if (!this.canDispatch(run)) return false;
-    if (run.activeWorkers > run.workerLimit) return false;
     const selected = this.storage.readItem(run.id, approach.id);
     if (!selected || ["completed", "cancel_requested", "cancelled"].includes(selected.work.state)) return false;
     const item = this.storage.readItem(run.id, approach.itemId ?? approach.id);
@@ -972,6 +1137,8 @@ export class ResearchService {
 export function validateStartResearch(request: StartResearchRequest): void {
   boundedText(request.objective, "objective", 8000);
   if (!validResearchMinutes(request.minutes)) throw new Error("A research time limit is a whole number of minutes, at least 1. Leave it out for no limit.");
+  if (!validResearchMinutes(request.turnMinutes)) throw new Error("A per-worker time limit is a whole number of minutes, at least 1. Leave it out for no limit.");
+  if (!validResearchMinutes(request.totalWorkerMinutes)) throw new Error("A total worker time is a whole number of minutes, at least 1. Leave it out for no limit.");
   if (!["new_worktree", "none"].includes(request.workspaceMode)) throw new Error("Choose isolated worktrees or scratch workspaces");
   if (!Array.isArray(request.approaches) || request.approaches.length < 1 || request.approaches.length > RESEARCH_MAX_WORKERS) throw new Error(`Research needs 1–${RESEARCH_MAX_WORKERS} workers`);
   const titles = new Set<string>();
@@ -991,6 +1158,8 @@ function validatePaths(paths: string[]): void {
   if (!Array.isArray(paths) || paths.length > 4 || paths.some((p) => typeof p !== "string" || p.length > 300 || !p || p.startsWith("/") || /^[a-z]:/i.test(p) || p.includes("\\") || p.split("/").some((s) => !s || s === "." || s === "..") || /[\u0000-\u001f]/.test(p))) throw new Error("Evidence paths must be up to four safe workspace-relative paths");
 }
 function message(error: unknown): string { return (error instanceof Error ? error.message : String(error)).slice(0, 2000); }
+/** Whole minutes, rounded down, for a refusal that says how much time has gone. */
+function minutesText(ms: number): string { const minutes = Math.floor(ms / MINUTE); return minutes === 1 ? "1 minute" : `${minutes} minutes`; }
 function researchWorkerPrompt(id: string, objective: string, approach: ResearchApproach): string {
   return `Participate in research run ${id}, approach ${approach.id}: ${approach.title}.\nObjective: ${objective}\nAssignment: ${approach.task}\nUse research_read to inspect the shared board. Use research_update to post typed findings under approachId=${approach.id}, cite evidence paths relative to your workspace, and link other findings explicitly. Record counterexamples and dead ends. Submit a concise candidate with action=submit. Findings are proposals, not verified facts. The coordinator reviews submissions and may request revision. Do not start additional workers, change the objective, or claim formal verification. Stop when the run stops or its deadline is reached.`;
 }

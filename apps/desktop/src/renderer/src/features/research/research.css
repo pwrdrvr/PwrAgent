@@ -56,6 +56,7 @@
 .research-meter { display: flex; gap: 3px; margin-top: 2px; }
 .research-meter i { flex: 1; height: 4px; border-radius: 2px; background: var(--border-strong); }
 .research-meter i.is-on { background: var(--accent); }
+.research-bounds { gap: 10px; padding: 10px; border: 1px solid var(--accent-border); border-radius: 6px; background: var(--bg-panel); }
 .research-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--danger-border); border-radius: 6px; background: var(--bg-panel); }
 .research-confirm p { color: var(--text-primary); font-size: 12px; line-height: 1.5; }
 

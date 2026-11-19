@@ -1,5 +1,5 @@
 import {
-  projectResearchRun, researchApproachOccupiesSlot, researchBoardPage, researchChangePage, researchEventPage, sameResearchThread, searchResearchItems, summarizeResearchRun,
+  projectResearchRun, researchApproachOccupiesSlot, researchWorkerTime, researchBoardPage, researchChangePage, researchEventPage, sameResearchThread, searchResearchItems, summarizeResearchRun,
   researchRunAttention, RESEARCH_RUN_ATTENTION_ORDER, type ResearchProfileRunsQuery, type ResearchRunAttention,
   type ResearchApproach, type ResearchBoardRange, type ResearchChangesCursor, type ResearchEvent, type ResearchEventRange, type ResearchRun, type ResearchRunHeader,
   type ResearchSearchQuery, type ResearchSubmission, type ResearchThread,
@@ -110,6 +110,7 @@ export class MemoryResearchStorage implements ResearchStorage {
   }
   search(id: string, query: ResearchSearchQuery) { const run = this.get(id)!; return searchResearchItems(id, run.items, run.revision, query); }
   findCommand(id: string, commandId: string) { return this.records.get(id)?.find((event) => event.commandId === commandId); }
+  workerTime(id: string) { return researchWorkerTime(this.get(id)?.approaches ?? []); }
   harnessRecord(id: string, seq: number) { return this.records.get(id)?.find((event) => event.data.type === "harness_observation" && event.provenance?.seq === seq); }
   create(id: string, key: string, event: ResearchEvent) {
     if (this.keys.has(key)) throw new Error("duplicate start");

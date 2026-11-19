@@ -100,7 +100,7 @@ function mapRun(input: { approaches: number; contributions: Array<{ owner: numbe
     id: record.id, approachId: "approachId" in record ? record.approachId : record.id, type, record, createdSeq, version: createdSeq, updatedAt: createdSeq, work: { state: "open" } }) as ResearchItem;
   const items = [...approaches.map((record, index) => item(record, "approach", index + 1)), ...findings.map((record, index) => item(record, "finding", 100 + index)),
     ...submissions.map((record, index) => item(record, "submission", 200 + index))];
-  const state = { revision: 1, status: "running" as const, activeWorkers: approaches.length, unreviewed: submissions.length, accepted: 0, findings: findings.length, candidates: submissions.length };
+  const state = { revision: 1, status: "running" as const, activeWorkers: approaches.length, workerLimit: approaches.length, unreviewed: submissions.length, accepted: 0, findings: findings.length, candidates: submissions.length };
   return { ...applyResearchChanges(emptyResearchRunStore("run"), { runId: "run", revision: 1, state, items, approaches: researchApproachLeaves({ items }), writable: false }), findings, candidates: submissions };
 }
 

@@ -1,5 +1,5 @@
 import {
-  applyResearchChanges, emptyResearchRunStore, researchRunStoreCursor, researchRunStoreSynced,
+  applyResearchChanges, emptyResearchRunStore, researchRunStoreCursor, researchRunStoreSynced, withResearchBounds,
   type ResearchChange, type ResearchChanges, type ResearchPendingRequest, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchSnapshot, type ResearchThread,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -187,9 +187,9 @@ export class ResearchSync {
   }
 }
 
-/** A run's summary with the state a delta carried. A run that has not ended has no reason. */
+/** A run's summary with the state a delta carried, bounds included. A run that has not ended has no reason. */
 function patchSummary(summary: ResearchRunSummary, state: ResearchRunState): ResearchRunSummary {
   const { reason: _reason, ...rest } = summary;
-  return { ...rest, revision: state.revision, status: state.status, ...(state.reason !== undefined ? { reason: state.reason } : {}),
-    activeWorkers: state.activeWorkers, unreviewed: state.unreviewed, accepted: state.accepted };
+  return withResearchBounds({ ...rest, revision: state.revision, status: state.status, ...(state.reason !== undefined ? { reason: state.reason } : {}),
+    activeWorkers: state.activeWorkers, unreviewed: state.unreviewed, accepted: state.accepted }, state);
 }

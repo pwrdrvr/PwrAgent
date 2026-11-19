@@ -1,4 +1,6 @@
 {
+  "research-turn-limit-stop": {"commits": 2, "note": "A worker's per-worker time limit passes: one commit records it stopped and why, then one marks the run exhausted because no worker is left and nothing was submitted.", "observedWalBytes": 45320, "rowsChanged": 4, "statements": 4},
+  "research-bounds-change": {"commits": 1, "note": "One operator change of a live run's bounds, all four at once: one commit records the bounds event.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "research-harness-import-64-members": {"commits": 5, "note": "Intent, admission, two source pages with their cursors (the first declares all 64 members), and the ended boundary; commits do not scale with members.", "observedWalBytes": 486192, "rowsChanged": 394, "statements": 394},
   "research-resume-workers": {"commits": 9, "note": "One operator resume of eight cut-off workers: one commit gives each its slot back, then one per worker records the turn its message started.", "observedWalBytes": 206000, "rowsChanged": 25, "statements": 33},
   "research-retained-review-and-finish": {"commits": 2, "note": "After a restart: one accepted decision and one completion on a retained run. No worker, bridge or model effect.", "observedWalBytes": 41200, "rowsChanged": 4, "statements": 4},

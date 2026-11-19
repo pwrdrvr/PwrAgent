@@ -10,7 +10,7 @@ import { RESEARCH_FINDING_KINDS, RESEARCH_WORK_STATES, type ResearchActor, type 
 export const RESEARCH_JOURNAL_COORDINATOR = { kind: "agent", backend: "codex", threadId: "coordinator" } as const satisfies ResearchActor;
 
 export const RESEARCH_JOURNAL_EVENT_KINDS = [
-  "finding", "submission", "review", "worker", "abandoned", "direction", "status", "delivery_failed", "delivery", "assignment", "item_work",
+  "finding", "submission", "review", "worker", "abandoned", "direction", "status", "delivery_failed", "delivery", "assignment", "item_work", "bounds",
 ] as const satisfies readonly Exclude<ResearchEventData["type"], "created">[];
 
 export type ResearchJournalStep = { kind: typeof RESEARCH_JOURNAL_EVENT_KINDS[number]; pick: number; other: number; variant: number; flag: boolean };
@@ -69,6 +69,9 @@ export function nextResearchEvent(run: ResearchRun, step: ResearchJournalStep): 
         ...(step.flag ? { queueEntryId: `queue-${step.other % 3}` } : {}), ...(step.variant % 2 ? { turnId: `turn-${step.other % 5}` } : {}) } }; break;
     case "assignment": data = { type: "assignment", itemId: item.id, task: text,
       approach: { id: `work-${seq}`, itemId: item.id, title: `Focus ${seq}`, task: text, state: "pending" } }; break;
+    // The operator's bounds as they now stand: each limit set, changed or removed.
+    case "bounds": data = { type: "bounds", workerLimit: 1 + step.variant % 64, ...(step.flag ? { deadlineAt: 100_000 + step.other % 50_000 } : {}),
+      ...(step.pick % 3 ? { turnMinutes: 1 + step.pick % 600 } : {}), ...(step.other % 3 ? { totalWorkerMinutes: 1 + step.other % 6000 } : {}) }; break;
     case "item_work": data = { type: "item_work", itemId: item.id, work: { state: RESEARCH_WORK_STATES[step.variant % RESEARCH_WORK_STATES.length]!, note: text,
       ...(step.flag ? { assignee: worker } : {}), ...(item.work.assignmentId ? { assignmentId: item.work.assignmentId } : {}) } }; break;
     default: data = { type: "finding", finding: { id: `f${seq}`, approachId: approach.id, kind: RESEARCH_FINDING_KINDS[step.variant % RESEARCH_FINDING_KINDS.length]!, text,

@@ -4,7 +4,7 @@ import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import type { ResearchEvent } from "@pwragent/shared";
 import {
-  emptyResearchDifferentialCoverage, expectResearchServicesAgree, researchDifferentialStepArb,
+  emptyResearchDifferentialCoverage, expectResearchServicesAgree, researchDifferentialBoundsStepArb, researchDifferentialStepArb,
 } from "../../../../../packages/owner-core/src/__tests__/fixtures/research-differential";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
@@ -29,7 +29,20 @@ describe("research service on the SQLite projections", () => {
       };
       await expectResearchServicesAgree(uuid, steps, new ResearchStore(db), journal, coverage);
     }), { numRuns: 25 });
-    for (const type of ["worker", "status", "finding", "submission", "review", "item_work", "delivery"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
+    for (const type of ["worker", "status", "finding", "submission", "review", "item_work", "delivery", "bounds"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
     expect(Object.keys(coverage.refusals).length).toBeGreaterThan(10);
+  });
+
+  it("agrees on the operator's bounds as the stored header reads them, and on what their timers enforce", async () => {
+    const coverage = emptyResearchDifferentialCoverage();
+    await fc.assert(fc.asyncProperty(fc.array(researchDifferentialBoundsStepArb, { size: "max", minLength: 15, maxLength: 40 }), async (steps) => {
+      db.raw.exec("DELETE FROM research_deliveries; DELETE FROM research_items; DELETE FROM research_workers; DELETE FROM research_events; DELETE FROM research_runs;");
+      const journal = (id: string) => {
+        const rows = db.raw.prepare("SELECT payload FROM research_events WHERE run_id = ? ORDER BY seq").all(id) as { payload: string }[];
+        return rows.length ? rows.map((row) => JSON.parse(row.payload) as ResearchEvent) : undefined;
+      };
+      await expectResearchServicesAgree(uuid, steps, new ResearchStore(db), journal, coverage);
+    }), { numRuns: 25 });
+    for (const type of ["bounds", "worker:turn-limit", "status:worker-time"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
   });
 });

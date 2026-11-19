@@ -112,14 +112,34 @@ provider reports. The one ID ignored is the registry's stand-in,
 `pending:<threadId>`, for a turn its provider has not named yet; an ACP turn
 keeps its own `pending:<session>:<time>` ID from start to end
 (`researchTurnIsPlaceholder`). The
-operator chooses how many workers run at once and whether the run has a time
-limit; a run has none unless they set one. The owner admits no more than that
-worker count and stops the run when a limit they set is reached. Completed
-workers free slots for explicit item assignments while the run is open. A
-research worker cannot create another research run or delegate additional
-managed workers through `handoff_task`.
+operator chooses how many workers run at once and which limits the run has: a
+time limit for the run, a per-worker time limit, and a total worker time. A run
+has none unless they set one, and an unset limit arms no timer and writes
+nothing. The owner admits no more than that worker count and stops the run when
+a limit they set is reached. Completed workers free slots for explicit item
+assignments while the run is open. A research worker cannot create another
+research run or delegate additional managed workers through `handoff_task`.
 
-The Research panel binds its exact objective, worker count, time limit and
+Every limit is counted on the wall clock. A worker's turn is timed from when it
+is seen running until it is recorded ended, failed or stopped; the approach
+record carries the running part's start, the time a restart cut off, and the
+worker's finished time, so no read replays the journal (`researchWorkerTime`).
+A turn cut off by a quit or crash counts until the next process takes the run
+over, because nobody saw it end, and a resumed worker continues that turn. The
+per-worker limit stops one worker with a note on its approach and the run goes
+on; a cut-off worker already past it at takeover is stopped for that reason,
+not offered for resume. Total worker time ends the run as a deadline does, with
+the reason `Total worker time reached`. Only the operator changes a running
+run's bounds, from its card: one `bounds` event holds all four as they now
+stand, and the header reads the latest one through a partial index. The time
+limit counts from the run's start; a limit or total already passed is refused.
+Lowering the worker count stops nobody holding a slot and starts nobody new
+until fewer than the new count hold one. A change is one commit (16,480 observed
+WAL bytes); a worker stopped at its limit writes its own stop instead of its
+turn's end, plus the run's exhaustion when it was the last. At twenty of each a
+day that is about 0.8 MB/day. Timers write nothing until they fire.
+
+The Research panel binds its exact objective, worker count, limits and
 workspace choice to an in-memory request before submitting it to the
 coordinator. That request is caller-scoped, single-use and expires after five
 minutes without admission. It is neither persisted nor federated. The owner's

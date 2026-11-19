@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, researchWorkerTime, researchWorkerTimeUsed, sameResearchThread, withResearchBounds, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,
@@ -13,7 +13,8 @@ export function researchRunView(header: Omit<ResearchRunHeader, "harness"> & { h
   if (store.runId !== header.id || !store.state || !researchRunStoreSynced(store)) return undefined;
   // A summary names only the Harness phase; the run's full source state arrives with its store.
   const { harness: _phase, ...run } = header;
-  return { ...run, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves };
+  // The store's state is the newer: a bound the operator removed is absent from it, so it must not fall back to the header's.
+  return withResearchBounds({ ...run, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves }, store.state);
 }
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
@@ -130,10 +131,28 @@ export function researchTimeLimitLabel(minutes: number | undefined): string {
   return minutes === undefined ? "no time limit" : `${formatResearchDuration(minutes)} limit`;
 }
 
+/** The operator's limits as the coordinator is told to pass them: each one set, and each one left out. */
+export type ResearchLimits = { minutes?: number; turnMinutes?: number; totalWorkerMinutes?: number };
+export function researchStartLimits(limits: ResearchLimits): string {
+  const part = (name: keyof ResearchLimits, none: string) => limits[name] === undefined ? `${none} (omit ${name})` : `${name}=${limits[name]}`;
+  return [part("minutes", "no time limit"), part("turnMinutes", "no per-worker time limit"), part("totalWorkerMinutes", "no total worker time")].join(", ");
+}
+
+/** A request's limits in words, naming the worker limits only when set: "no time limit · 45 min per worker". */
+export function researchLimitsLabel(limits: ResearchLimits): string {
+  return [researchTimeLimitLabel(limits.minutes), ...(limits.turnMinutes !== undefined ? [`${formatResearchDuration(limits.turnMinutes)} per worker`] : []),
+    ...(limits.totalWorkerMinutes !== undefined ? [`${formatResearchDuration(limits.totalWorkerMinutes)} of worker time`] : [])].join(" · ");
+}
+
+/** Whole minutes of worker time the run's turns have used at `now`, from the approaches the window holds. */
+export function researchWorkerMinutesUsed(run: Pick<ResearchRunView, "approaches">, now: number): number {
+  return Math.floor(researchWorkerTimeUsed(researchWorkerTime(run.approaches), now) / 60_000);
+}
+
 /** Remaining time for a live run, or when its time limit fell for a finished one. A run may have no limit. */
 export function researchTimeLeft(run: Pick<ResearchRun, "status" | "deadlineAt">, now: number): string {
   if (run.deadlineAt === undefined) return "No time limit";
-  const at = formatRunWhen(run.deadlineAt, now) === formatClock(run.deadlineAt) ? formatClock(run.deadlineAt) : `${formatRunWhen(run.deadlineAt, now)}, ${formatClock(run.deadlineAt)}`;
+  const at = formatRunMoment(run.deadlineAt, now);
   if (!isResearchRunLive(run)) return `Deadline ${at}`;
   const remaining = run.deadlineAt - now;
   if (remaining <= 0) return "Deadline passed";
@@ -146,6 +165,12 @@ export function formatRunWhen(at: number, now: number): string {
   const then = new Date(at), today = new Date(now);
   const sameDay = then.getFullYear() === today.getFullYear() && then.getMonth() === today.getMonth() && then.getDate() === today.getDate();
   return sameDay ? formatClock(at) : then.toLocaleDateString([], { month: "short", day: "numeric", ...(then.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }) });
+}
+
+/** A moment in a run: the clock time today, otherwise the date and the clock time. */
+export function formatRunMoment(at: number, now: number): string {
+  const when = formatRunWhen(at, now);
+  return when === formatClock(at) ? when : `${when}, ${formatClock(at)}`;
 }
 
 export function formatClock(at: number): string {

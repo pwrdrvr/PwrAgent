@@ -1,7 +1,7 @@
 import type {
   ResearchEvent, ResearchRun, ResearchThread, ResearchRunHeader, ResearchItem, ResearchSearchQuery, ResearchSearchPage, ResearchRunSummary,
   ResearchEventRange, ResearchEventPage, ResearchApproach, ResearchDelivery, ResearchBoardRange, ResearchBoardPage,
-  ResearchChangesCursor, ResearchChangePage, ResearchSubmission, ResearchProfileRunsQuery, ResearchProfileRun, ResearchRunAttention,
+  ResearchChangesCursor, ResearchChangePage, ResearchSubmission, ResearchProfileRunsQuery, ResearchProfileRun, ResearchRunAttention, ResearchWorkerTime,
 } from "@pwragent/shared/research";
 
 /**
@@ -49,6 +49,8 @@ export interface ResearchStorage {
   changes(id: string, sinceRevision?: number, after?: ResearchChangesCursor, limit?: number): ResearchChangePage | undefined;
   search(id: string, query: ResearchSearchQuery): ResearchSearchPage;
   findCommand(id: string, commandId: string): ResearchEvent | undefined;
+  /** The run's worker time: its approaches' finished turn time and the start of each turn running. One read of the run's approaches. */
+  workerTime(id: string): ResearchWorkerTime;
   /** The immutable receipt of one source record, read by its source sequence. */
   harnessRecord(id: string, seq: number): ResearchEvent | undefined;
   create(id: string, startKey: string, event: ResearchEvent): void;

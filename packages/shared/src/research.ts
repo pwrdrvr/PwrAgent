@@ -20,6 +20,15 @@ export type ResearchApproach = {
   itemId?: string;
   /** Durable capacity held by pending, queued or unresolved revision work. */
   revisionDeliveryIds?: string[];
+  /** When the part of the worker's turn now running started. Absent while no turn of this worker runs. */
+  turnSince?: number;
+  /**
+   * Time the worker's current turn ran before a restart cut it off, in milliseconds. A resumed worker
+   * continues the same turn, so this counts toward its per-worker time limit. Absent once the turn ends.
+   */
+  turnMs?: number;
+  /** Time every finished part of this worker's turns ran, in milliseconds: its share of the run's worker time. */
+  workedMs?: number;
 };
 export type ResearchFinding = {
   id: string;
@@ -46,6 +55,10 @@ export type StartResearchRequest = {
   approaches: Array<{ title: string; task: string }>;
   /** The operator's time limit for the run. Absent means none: the run goes on until it is stopped or finished. */
   minutes?: number;
+  /** The operator's per-worker time limit: a worker whose turn runs this many minutes is stopped. Absent means none. */
+  turnMinutes?: number;
+  /** The operator's total worker time: the run ends once its workers' turns add up to this many minutes. Absent means none. */
+  totalWorkerMinutes?: number;
   workspaceMode: "new_worktree" | "none";
 };
 export type PrepareResearchRequest = ResearchThread & Omit<StartResearchRequest, "approaches" | "intentId"> & { workers: number };
@@ -78,7 +91,7 @@ export type ResearchSearchHit = Pick<ResearchItem, "id" | "type" | "approachId" 
 };
 export type ResearchSearchPage = { runId: string; revision: number; total: number; items: ResearchSearchHit[]; nextCursor?: NonNullable<ResearchSearchQuery["cursor"]> };
 export type ResearchAssignRequest = { runId: string; itemId: string; expectedVersion: number; task: string };
-export type ResearchRunHeader = Pick<ResearchRun, "id" | "revision" | "objective" | "coordinator" | "ownerId" | "ownerPid" | "ownerStartedAt" | "createdAt" | "deadlineAt" | "workspaceMode" | "status" | "reason" | "workerLimit" | "activeWorkers" | "harness">;
+export type ResearchRunHeader = Pick<ResearchRun, "id" | "revision" | "objective" | "coordinator" | "ownerId" | "ownerPid" | "ownerStartedAt" | "createdAt" | "deadlineAt" | "workspaceMode" | "status" | "reason" | "workerLimit" | "activeWorkers" | "turnMinutes" | "totalWorkerMinutes" | "harness">;
 export type ResearchItemContext = { run: Pick<ResearchRunHeader, "id" | "revision" | "objective" | "coordinator" | "deadlineAt" | "workspaceMode" | "status" | "workerLimit" | "activeWorkers">; item: ResearchItem; approach?: ResearchApproach; assignment?: ResearchApproach };
 export type ResearchCommand =
   | ({ action: "finding" } & Omit<ResearchFinding, "id" | "author">)
@@ -90,13 +103,21 @@ export type ResearchCommand =
   | { action: "finish"; reason: string }
   /** Message cut-off workers to continue in their own threads: the named ones, or all of them. */
   | { action: "resume"; approachIds?: string[] }
+  | ResearchBoundsCommand
   | ResearchWorkCommand;
+/**
+ * The operator changes a running run's bounds. A field left out keeps its bound; null removes it. `minutes`
+ * counts from the run's start, as on the start form. Only the operator may send this.
+ */
+export type ResearchBoundsCommand = { action: "bounds"; workers?: number; minutes?: number | null; turnMinutes?: number | null; totalWorkerMinutes?: number | null };
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
 export type ResearchEventData =
   | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt?: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState;
     /** How many approaches the run may hold, when that is not the number it starts with: a Harness import starts with none and admits its source's members. */
-    workerLimit?: number }
+    workerLimit?: number; turnMinutes?: number; totalWorkerMinutes?: number }
+  /** The operator changed the run's bounds. It holds all of them as they now stand; a bound left out is none. */
+  | { type: "bounds"; workerLimit: number; deadlineAt?: number; turnMinutes?: number; totalWorkerMinutes?: number }
   | { type: "harness"; state: ResearchHarnessState }
   | { type: "harness_observation"; event: string; text: string }
   /** A Harness source named these members; each takes the next approach slot, within the run's worker limit. */
@@ -149,6 +170,10 @@ export type ResearchRun = {
   deliveries: ResearchDelivery[];
   workerLimit: number;
   activeWorkers: number;
+  /** The operator's per-worker time limit, in minutes. Absent when they set none. */
+  turnMinutes?: number;
+  /** The operator's total worker time, in minutes. Absent when they set none. */
+  totalWorkerMinutes?: number;
   items: ResearchItem[];
 };
 /** The operator's bound request, waiting for this thread to call research_start. Owner memory only. */
@@ -229,8 +254,12 @@ export type ResearchSnapshotRequest = ResearchThread & { runId?: string };
  * `revision`. Without one, the thread's pending request changed.
  */
 export type ResearchChange = ResearchThread & { runId?: string; revision?: number };
-/** The parts of a run that change after it starts, with the counts its card shows. */
-export type ResearchRunState = Pick<ResearchRun, "revision" | "status" | "reason" | "activeWorkers" | "harness"> & { unreviewed: number; accepted: number; findings: number; candidates: number };
+/**
+ * The parts of a run that change after it starts, with the counts its card shows. The bounds are here because
+ * the operator can change them on a live run; a bound left out has been removed or was never set.
+ */
+export type ResearchRunState = Pick<ResearchRun, "revision" | "status" | "reason" | "activeWorkers" | "harness" | "workerLimit" | "deadlineAt" | "turnMinutes" | "totalWorkerMinutes">
+  & { unreviewed: number; accepted: number; findings: number; candidates: number };
 /** One approach on the Map: how many contributions it has, and the IDs of its newest few, newest first. */
 export type ResearchApproachLeaves = { approachId: string; findings: number; candidates: number; leafIds: string[] };
 /** The last item a page of changes returned. Versions repeat when one event changes several items. */
@@ -295,9 +324,9 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   const initial = first.data;
   const run: ResearchRun = {
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
-    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...(initial.deadlineAt !== undefined ? { deadlineAt: initial.deadlineAt } : {}),
+    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...researchCreatedBounds(initial),
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
-    findings: [], submissions: [], events, deliveries: [], workerLimit: researchWorkerLimit(initial), activeWorkers: 0, items: [], harness: initial.harness,
+    findings: [], submissions: [], events, deliveries: [], activeWorkers: 0, items: [], harness: initial.harness,
   };
   const items = new Map<string, ResearchItem>();
   for (const item of applyResearchItemEvent((key) => items.get(key), first)) items.set(item.id, item);
@@ -308,13 +337,14 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     else if (data.type === "worker") {
       const approach = run.approaches.find((a) => a.id === data.approachId);
       if (!approach) throw new Error("Unknown research approach");
-      applyResearchWorkerState(approach, data);
+      applyResearchWorkerState(approach, data, event.at);
     } else if (data.type === "adopted") {
       Object.assign(run, { ownerId: data.ownerId, ownerPid: data.ownerPid, ownerStartedAt: data.ownerStartedAt });
-      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchCutOff(approach);
+      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchCutOff(approach, event.at);
     } else if (data.type === "resumed") {
-      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchWorkerState(approach, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
-    } else if (data.type === "assignment") run.approaches.push({ ...data.approach });
+      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchWorkerState(approach, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE }, event.at);
+    } else if (data.type === "bounds") applyResearchBounds(run, data);
+    else if (data.type === "assignment") run.approaches.push({ ...data.approach });
     else if (data.type === "members") run.approaches.push(...data.approaches.map((a) => ({ ...a })));
     else if (data.type === "finding") run.findings.push(data.finding);
     else if (data.type === "submission") run.submissions.push({ ...data.submission });
@@ -355,15 +385,85 @@ export function researchWorkerLimit(created: Pick<Extract<ResearchEventData, { t
   return created.workerLimit ?? created.approaches.length;
 }
 
+export type ResearchBounds = Pick<ResearchRun, "workerLimit" | "deadlineAt" | "turnMinutes" | "totalWorkerMinutes">;
+/** The bounds a run starts with, from its creation event. Replay and the indexed header both read them here. */
+export function researchCreatedBounds(created: Extract<ResearchEventData, { type: "created" }>): ResearchBounds {
+  return researchBoundsOf({ ...created, workerLimit: researchWorkerLimit(created) });
+}
+/** Just the bounds of a run or header, with no key for a bound that is not set. */
+export function researchBoundsOf(run: ResearchBounds): ResearchBounds {
+  return { workerLimit: run.workerLimit, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}),
+    ...(run.turnMinutes !== undefined ? { turnMinutes: run.turnMinutes } : {}), ...(run.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: run.totalWorkerMinutes } : {}) };
+}
+/** `target` with the bounds of `source`, removing any bound `source` does not set. */
+export function withResearchBounds<T extends ResearchBounds>(target: T, source: ResearchBounds): T {
+  const { deadlineAt: _deadlineAt, turnMinutes: _turnMinutes, totalWorkerMinutes: _totalWorkerMinutes, ...rest } = target;
+  return { ...rest, ...researchBoundsOf(source) } as T;
+}
+/** A run's bounds after the operator's latest change. Replay and the indexed header both apply it here. */
+export function applyResearchBounds<T extends ResearchBounds>(run: T, data: Extract<ResearchEventData, { type: "bounds" }>): T {
+  run.workerLimit = data.workerLimit;
+  for (const key of ["deadlineAt", "turnMinutes", "totalWorkerMinutes"] as const) {
+    if (data[key] === undefined) delete run[key];
+    else run[key] = data[key];
+  }
+  return run;
+}
+
 export const RESEARCH_CUT_OFF_NOTE = "PwrAgent closed during this worker's turn. Resume it to continue in the same thread.";
 export const RESEARCH_NEVER_STARTED_NOTE = "PwrAgent closed before this worker started. Assign the approach again to start it.";
 export const RESEARCH_RESUME_REQUESTED_NOTE = "Resume requested. Waiting for the worker's turn to start.";
+export const RESEARCH_WORKER_TIME_REACHED = "Total worker time reached";
+/** Why a worker stopped at the operator's per-worker time limit. */
+export function researchTurnLimitNote(minutes: number): string {
+  return `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.`;
+}
 
-/** A worker's recorded state. Any new state ends a cut-off, unless the event says the worker is still cut off. */
-function applyResearchWorkerState(approach: ResearchApproach, data: Pick<Extract<ResearchEventData, { type: "worker" }>, "state" | "worker" | "note" | "interrupted">): void {
+/**
+ * A worker's recorded state, at the time it was recorded. Any new state ends a cut-off, unless the event says
+ * the worker is still cut off. A worker's turn is timed on the wall clock: from when it is first seen running
+ * until it is recorded ended, failed or stopped. A cut-off does not end the turn; a resumed worker continues it.
+ */
+function applyResearchWorkerState(approach: ResearchApproach, data: Pick<Extract<ResearchEventData, { type: "worker" }>, "state" | "worker" | "note" | "interrupted">, at: number): void {
+  if (data.state === "running") approach.turnSince ??= at;
+  else if (["ended", "failed", "stopped"].includes(data.state)) closeResearchTurnPart(approach, at, Boolean(data.interrupted));
   Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
   if (data.interrupted) approach.interrupted = true;
   else delete approach.interrupted;
+}
+
+/** The running part of a worker's turn ends at `at`. A cut-off keeps the turn's time for its resume; any other end finishes the turn. */
+function closeResearchTurnPart(approach: ResearchApproach, at: number, cutOff: boolean): void {
+  const since = approach.turnSince;
+  const part = since === undefined ? 0 : Math.max(0, at - since);
+  delete approach.turnSince;
+  if (since !== undefined) approach.workedMs = (approach.workedMs ?? 0) + part;
+  if (cutOff) { if (since !== undefined || approach.turnMs !== undefined) approach.turnMs = (approach.turnMs ?? 0) + part; }
+  else delete approach.turnMs;
+}
+
+/** How long the worker's current turn has run at `now`, counting any time before a restart cut it off. */
+export function researchTurnElapsed(approach: Pick<ResearchApproach, "turnSince" | "turnMs">, now: number): number {
+  return (approach.turnMs ?? 0) + (approach.turnSince === undefined ? 0 : Math.max(0, now - approach.turnSince));
+}
+
+/** The run's worker time at `now`: every finished part of a turn, and each part still running. */
+export type ResearchWorkerTime = { closedMs: number; openSince: number[] };
+export function researchWorkerTime(approaches: ReadonlyArray<Pick<ResearchApproach, "workedMs" | "turnSince">>): ResearchWorkerTime {
+  return { closedMs: approaches.reduce((sum, approach) => sum + (approach.workedMs ?? 0), 0),
+    openSince: approaches.flatMap((approach) => approach.turnSince === undefined ? [] : [approach.turnSince]) };
+}
+export function researchWorkerTimeUsed(time: ResearchWorkerTime, now: number): number {
+  return time.closedMs + time.openSince.reduce((sum, since) => sum + Math.max(0, now - since), 0);
+}
+/**
+ * The first millisecond at which the run's worker time reaches `limitMs`, while the same turns run. Undefined
+ * when no turn runs and the limit is not reached: time no worker runs adds nothing.
+ */
+export function researchWorkerTimeReachedAt(time: ResearchWorkerTime, limitMs: number, now: number): number | undefined {
+  if (researchWorkerTimeUsed(time, now) >= limitMs) return now;
+  if (!time.openSince.length) return undefined;
+  return Math.ceil((limitMs - time.closedMs + time.openSince.reduce((sum, since) => sum + since, 0)) / time.openSince.length);
 }
 
 /**
@@ -381,7 +481,9 @@ export function researchApproachResumable(approach: ResearchApproach, read: (ite
 }
 
 /** The process holding the run ended mid-flight. A worker with a thread can be resumed in it; one that never started cannot. */
-function applyResearchCutOff(approach: ResearchApproach): void {
+function applyResearchCutOff(approach: ResearchApproach, at: number): void {
+  // Nobody saw the turn end while no process held the run, so it counts until the takeover.
+  closeResearchTurnPart(approach, at, Boolean(approach.worker));
   approach.state = "stopped";
   if (approach.worker) { approach.interrupted = true; approach.note = RESEARCH_CUT_OFF_NOTE; }
   else approach.note = RESEARCH_NEVER_STARTED_NOTE;
@@ -424,8 +526,8 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
       const item = require(id);
       if (item.type !== "approach") throw new Error("Research direction must name an approach");
       const record = { ...item.record };
-      if (data.type === "adopted") applyResearchCutOff(record);
-      else applyResearchWorkerState(record, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
+      if (data.type === "adopted") applyResearchCutOff(record, event.at);
+      else applyResearchWorkerState(record, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE }, event.at);
       return touch({ ...item, record });
     });
   }
@@ -433,7 +535,7 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
     const item = require(data.approachId);
     if (item.type !== "approach") throw new Error("Research direction must name an approach");
     const record = { ...item.record };
-    if (data.type === "worker") applyResearchWorkerState(record, data);
+    if (data.type === "worker") applyResearchWorkerState(record, data, event.at);
     else if (data.type === "direction") Object.assign(record, { title: data.title, task: data.task, note: data.reason, directionState: "active", overlapsApproachId: data.overlapsApproachId });
     else Object.assign(record, { note: data.reason, directionState: "abandoned" });
     const changes = [touch({ ...item, record })];
@@ -537,7 +639,7 @@ export function normalizeResearchChangesCursor(sinceRevision: number | undefined
 /** The in-memory oracle for a stored run state. */
 export function researchRunState(run: ResearchRun): ResearchRunState {
   return { revision: run.revision, status: run.status, ...(run.reason !== undefined ? { reason: run.reason } : {}), activeWorkers: run.activeWorkers,
-    ...(run.harness ? { harness: run.harness } : {}),
+    ...(run.harness ? { harness: run.harness } : {}), ...researchBoundsOf(run),
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     findings: run.findings.length, candidates: run.submissions.length };
 }
@@ -658,8 +760,8 @@ export function researchBoardPage(run: ResearchRun, range: ResearchBoardRange): 
 /** The in-memory oracle for a stored run summary. */
 export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
-    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}), workspaceMode: run.workspaceMode, status: run.status,
-    ...(run.reason !== undefined ? { reason: run.reason } : {}), workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
+    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, workspaceMode: run.workspaceMode, status: run.status,
+    ...(run.reason !== undefined ? { reason: run.reason } : {}), ...researchBoundsOf(run), activeWorkers: run.activeWorkers,
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     ...(run.harness ? { harness: researchHarnessPhase(run.harness) } : {}) };
 }
@@ -693,7 +795,7 @@ export const RESEARCH_MAX_WORKERS = 64;
 export const RESEARCH_MAX_MINUTES = 5_256_000;
 /** The longest one timer may wait (about 24 days). A longer delay overflows and fires at once, so long limits wait in steps. */
 export const RESEARCH_MAX_TIMER_MS = 2_147_483_647;
-/** The operator's time limit, when they set one: a whole number of minutes. */
+/** The operator's time limit, per-worker time limit or total worker time, when they set one: a whole number of minutes. */
 export function validResearchMinutes(minutes: unknown): minutes is number | undefined {
   return minutes === undefined || (typeof minutes === "number" && Number.isSafeInteger(minutes) && minutes >= 1 && minutes <= RESEARCH_MAX_MINUTES);
 }

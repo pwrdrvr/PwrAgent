@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ResearchActor, ResearchEvent, ResearchEventData } from "@pwragent/shared";
+import { researchTurnLimitNote, type ResearchActor, type ResearchEvent, type ResearchEventData } from "@pwragent/shared";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { StateDb } from "../../src/main/state/state-db";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
@@ -69,8 +69,12 @@ export function readResearchOwnerIdentity(homeRoot: string, processId: number): 
   throw new Error("The running owner's runtime marker was not found");
 }
 
-/** Invented, live research owned by the running app, so its controls are writable. Seed after launch, then reload. */
-export function seedLiveResearchRun(stateDbPath: string, owner: { ownerId: string; ownerPid: number; ownerStartedAt: number }, now = Date.now()): void {
+/**
+ * Invented, live research owned by the running app, so its controls are writable. Seed after launch, then reload.
+ * With `bounds`, the run also has a per-worker time limit and total worker time, and one worker stopped at its limit.
+ */
+export function seedLiveResearchRun(stateDbPath: string, owner: { ownerId: string; ownerPid: number; ownerStartedAt: number }, now = Date.now(),
+  bounds?: { turnMinutes: number; totalWorkerMinutes: number }): void {
   const db = StateDb.open(stateDbPath);
   const store = new ResearchStore(db);
   const coordinator: ResearchActor = { backend: "codex", threadId: "thread-smoke", kind: "agent" };
@@ -87,7 +91,7 @@ export function seedLiveResearchRun(stateDbPath: string, owner: { ownerId: strin
   };
   try {
     append({ type: "created", objective: LIVE_RESEARCH_OBJECTIVE, coordinator, ...owner,
-      deadlineAt: now + 22 * 60_000, workspaceMode: "new_worktree", approaches: [
+      deadlineAt: now + 22 * 60_000, ...(bounds ?? {}), workspaceMode: "new_worktree", approaches: [
         { id: "a1", title: "Bisect fixture setup", task: "Remove fixture setup steps until the failure disappears.", state: "pending" },
         { id: "a2", title: "Clock skew", task: "Check whether cache timestamps cross a second boundary during the test.", state: "pending" },
         { id: "a3", title: "Parallel workers", task: "Compare the failure rate with one worker and with four.", state: "pending" },
@@ -96,7 +100,9 @@ export function seedLiveResearchRun(stateDbPath: string, owner: { ownerId: strin
     append({ type: "worker", approachId: "a1", state: "running", worker: { backend: "codex", threadId: "thread-research-worker-1", turnId: "live-turn-1" } });
     append({ type: "worker", approachId: "a2", state: "ended", worker: { backend: "codex", threadId: "thread-research-worker-2", turnId: "live-turn-2" } });
     append({ type: "worker", approachId: "a3", state: "running", worker: { backend: "codex", threadId: "thread-research-worker-3", turnId: "live-turn-3" } });
-    append({ type: "worker", approachId: "a4", state: "ended" , note: "Worker finished after recording one trace." });
+    append(bounds ? { type: "worker", approachId: "a4", state: "running", worker: { backend: "codex", threadId: "thread-research-worker-4", turnId: "live-turn-4" } }
+      : { type: "worker", approachId: "a4", state: "ended" , note: "Worker finished after recording one trace." });
+    if (bounds) append({ type: "worker", approachId: "a4", state: "stopped", note: researchTurnLimitNote(bounds.turnMinutes) });
     append({ type: "finding", finding: { id: "f-setup", approachId: "a1", kind: "experiment", text: "The failure still reproduces with only the in-memory store fixture. The database and network fixtures are not needed.", paths: ["test/cache/invalidation.test.ts", "notes/setup-bisect.md"] } }, worker(1));
     append({ type: "finding", finding: { id: "f-clock", approachId: "a2", kind: "dead_end", text: "Freezing the clock does not change the failure rate across 200 runs.", paths: ["notes/clock-freeze.md"] } }, worker(2));
     append({ type: "abandoned", approachId: "a2", reason: "Clock skew is ruled out by the frozen-clock runs." });
