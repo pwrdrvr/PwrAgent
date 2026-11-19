@@ -33,7 +33,6 @@ type CleanupBoundary = {
   enqueueArchiveCleanup(intent: ArchiveCleanupIntent): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
   completeArchivedThreadCleanup(params: { backend: "codex"; threadId: string; archivedAt: number;
     codexRolloutMissing: boolean; messagingCleanup: { error?: string }; context: ArchiveCleanupContext }): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
-  findThreadForArchiveCleanup(params: { backend: "codex"; threadId: string; context: ArchiveCleanupContext }): Promise<{ thread: AppServerThreadSummary }>;
 };
 type RegistryInternals = {
   worktreeArchiveService: WorktreeArchiveService;
@@ -112,14 +111,16 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false, real?: { 
     acpWorktreeRepositoryResolver: async () => { effects.workspace += 1; return undefined; },
   });
   registries.push(registry);
-  const boundary = registryModules(registry).threadArchiveCoordinator as unknown as CleanupBoundary;
+  const coordinator = registryModules(registry).threadArchiveCoordinator;
+  const inventory = coordinator.cleanupInventory;
+  const boundary = coordinator as unknown as CleanupBoundary;
   const internals = registry as unknown as RegistryInternals;
   vi.spyOn(internals.claudeBackend, "listThreads").mockImplementation(async ({ archived }) => claude[archived ? "archived" : "active"]);
   let checkpoints = 0;
   const context: ArchiveCleanupContext = { batch: {}, assertCurrent() {}, checkpoint: async () => { checkpoints += 1; }, settleCheckpoint: async () => {} };
   const cleanup = async () => await boundary.completeArchivedThreadCleanup({ backend: "codex", threadId: "target", archivedAt: 1,
     codexRolloutMissing: false, messagingCleanup: {}, context });
-  return { registry, boundary, internals, client, transport, rows, claude, overlays, effects, inspected, archive, context, cleanup, snapshots,
+  return { registry, boundary, inventory, internals, client, transport, rows, claude, overlays, effects, inspected, archive, context, cleanup, snapshots,
     get removed() { return removed; }, get checkpoints() { return checkpoints; } };
 }
 
@@ -156,10 +157,10 @@ it("shares identities across candidate roots without reusing another root's enri
   try {
     run.rows.archived.push({ id: "second", cwd: "/fixture/second" });
     run.overlays.set("second", { backend: "codex", threadId: "second", extraLinkedDirectories: [worktree("/fixture/second")] });
-    const first = await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context });
+    const first = await run.inventory.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context });
     const pages = run.transport.listings.length;
     const discoveries = run.effects.git;
-    const second = await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context });
+    const second = await run.inventory.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context });
     expect(run.transport.listings).toHaveLength(pages);
     expect(run.effects.git).toBeGreaterThan(discoveries);
     expect(first.thread.id).toBe("target");
@@ -169,7 +170,7 @@ it("shares identities across candidate roots without reusing another root's enri
     // than every identity: the write names the thread it changed.
     const reads = vi.spyOn(run.client, "readArchiveCleanupThreadSummary");
     await run.registry.withThreadWorkspaceMutation({ backend: "codex", threadId: "second" }, async () => {});
-    await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context });
+    await run.inventory.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context });
     expect(reads).toHaveBeenCalledWith("second", expect.any(Function));
   } finally { await run.registry.close(); }
 });
@@ -315,12 +316,12 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
         run.overlays.set("external", { backend: "codex", threadId: "external", extraLinkedDirectories: [{ ...worktree(alias), path: repo, worktreeOwnership: "external" }] });
       }
       try {
-        await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context });
+        await run.inventory.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context });
         const baselineDiscoveries = run.effects.git;
         run.rows.active.push({ id: "noise-alias", cwd: unrelatedAlias }, { id: "noise-repeat", cwd: unrelatedAlias });
         run.rows.archived.push({ id: "noise-real", cwd: unrelated });
         run.context.batch = {};
-        await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context });
+        await run.inventory.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context });
         expect(run.effects.git).toBe(2 * baselineDiscoveries);
         for (const id of ["noise-alias", "noise-repeat", "noise-real"]) expect(run.inspected).toContain(`codex:${id}`);
         const result = await run.cleanup();

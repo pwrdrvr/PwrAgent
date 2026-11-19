@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { expect, expectTypeOf, it } from "vitest";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { ArchiveCleanupInventoryHost } from "../app-server/archive-cleanup-inventory";
 import type { RegistryHandlers } from "../app-server/backend-registry-handlers";
 import type { ForgeToolBridgeHost } from "../app-server/forge-tool-bridge";
 import type { ManagedReviewServiceHost } from "../app-server/managed-review-service";
@@ -17,6 +18,7 @@ import type { ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
 import type { ThreadWorkspaceServiceHost } from "../app-server/thread-workspace-service";
 
 type Hosts = {
+  ArchiveCleanupInventoryHost: ArchiveCleanupInventoryHost;
   CodexRuntimeSupervisorHost: CodexRuntimeSupervisorHost;
   ForgeToolBridgeHost: ForgeToolBridgeHost;
   ManagedReviewServiceHost: ManagedReviewServiceHost;
@@ -99,6 +101,7 @@ it("declares no operation separately in multiple module hosts", () => {
   }
   // Keep the type-level inventory above exhaustive as modules are extracted.
   const checkedHosts: Record<keyof Hosts, true> = {
+    ArchiveCleanupInventoryHost: true,
     CodexRuntimeSupervisorHost: true,
     ForgeToolBridgeHost: true,
     ManagedReviewServiceHost: true,
