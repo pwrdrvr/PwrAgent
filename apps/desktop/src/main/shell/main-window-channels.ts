@@ -20,6 +20,7 @@ import {
   KEYBINDINGS_CHANGED_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
+  AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
@@ -89,6 +90,9 @@ export function mainWindowEventChannels(
     // This machine's MCP connections. A viewer's launchpad and Settings read
     // its owner's, which this machine does not announce.
     ...(viewer ? [] : [MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL]),
+    // Whether this machine runs scheduled automations; a viewer's owner
+    // decides that for itself.
+    ...(viewer ? [] : [AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL]),
     SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
     WINDOW_OPEN_MAIN_VIEW_CHANNEL,
     WINDOW_OPEN_NEW_THREAD_CHANNEL,

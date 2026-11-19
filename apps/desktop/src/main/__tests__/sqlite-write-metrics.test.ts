@@ -3748,17 +3748,19 @@ describe("sqlite write metrics", () => {
     leases.acquire("messaging");
     leases.acquire("federation");
     leases.acquire("mcp_connections");
+    leases.acquire("background");
 
     const { writes } = await measureSqliteWrites(() => {
       for (let tick = 0; tick < 360; tick += 1) {
         leases.snapshot("messaging");
         leases.snapshot("federation");
         leases.snapshot("mcp_connections");
+        leases.snapshot("background");
       }
     });
 
     expectSqliteWriteBudget({
-      note: "one idle hour: PID-owned messaging, federation, and MCP connection leases",
+      note: "one idle hour: PID-owned messaging, federation, MCP connection, and background leases",
       scenario: "idle-hour-runtime-leases",
       writes,
     });
@@ -3974,6 +3976,8 @@ describe("sqlite write metrics", () => {
       leases.acquire("messaging");
       leases.acquire("federation");
       leases.acquire("mcp_connections");
+      leases.acquire("background");
+      leases.release("background");
       leases.release("mcp_connections");
       leases.release("federation");
       leases.release("messaging");
@@ -4002,6 +4006,7 @@ describe("sqlite write metrics", () => {
     owner.acquire("messaging");
     owner.acquire("federation");
     owner.acquire("mcp_connections");
+    owner.acquire("background");
     const challenger = new RuntimeLeaseManager({
       cwd: "/tmp/PwrAgnt-b",
       instanceId: "instance-b",
@@ -4016,10 +4021,12 @@ describe("sqlite write metrics", () => {
       challenger.acquire("messaging");
       challenger.acquire("federation");
       challenger.acquire("mcp_connections");
+      challenger.acquire("background");
       now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
       challenger.acquire("messaging");
       challenger.acquire("federation");
       challenger.acquire("mcp_connections");
+      challenger.acquire("background");
     });
 
     expectSqliteWriteBudget({

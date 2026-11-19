@@ -99,6 +99,14 @@ export type CreateAutomationRunInput = {
   source?: AutomationRunSourceMetadata;
   queuedAt?: number;
   queueEntryId?: string;
+  /**
+   * With a terminal `status`, the run is recorded finished in one insert. A
+   * skipped marker never passes through `pending`, so it cannot collide with
+   * the one pending scheduled run an automation may hold.
+   */
+  completedAt?: number;
+  errorMessage?: string;
+  skipReason?: AutomationRunSkipReason;
   now?: number;
 };
 

@@ -562,6 +562,10 @@ export const AUTOMATION_RUN_WINDOW_OPEN_CHANNEL = "automation-run:open-window";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";
 export const AUTOMATIONS_LOAD_ISSUES_CHANNEL = "automations:load-issues";
+export const AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL =
+  "automations:scheduling-status";
+export const AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL =
+  "automations:scheduling-status-changed";
 export const AUTOMATIONS_DRAFT_PROMPT_CHANNEL = "automations:draft-prompt";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window

@@ -37,6 +37,18 @@ export function useRuntimeIdentity(desktopApi?: DesktopApi): RuntimeIdentity | u
   return identity;
 }
 
+/** Names another instance that holds a profile lease: its directory and pid. */
+export function formatRuntimeLeaseHolder(
+  holder: { cwdHint?: string; processId?: number } | undefined,
+): string | undefined {
+  if (!holder) return undefined;
+  const label = [
+    holder.cwdHint,
+    holder.processId ? `pid ${holder.processId}` : undefined,
+  ].filter(Boolean).join(" - ");
+  return label || undefined;
+}
+
 export function formatRuntimePath(cwd: string): string {
   const segments = workspaceDisplaySegments(cwd);
   const worktreesIndex = segments.lastIndexOf(".worktrees");

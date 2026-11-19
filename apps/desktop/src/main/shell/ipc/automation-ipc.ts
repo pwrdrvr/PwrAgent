@@ -6,6 +6,7 @@ import type {
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   ListAutomationLoadIssuesResponse,
+  AutomationSchedulingStatus,
   AutomationMutationResponse,
   CreateAutomationRequest,
   ListAutomationRunsRequest,
@@ -29,6 +30,7 @@ import {
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_LOAD_ISSUES_CHANNEL,
+  AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL,
   AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL,
   AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL,
   AUTOMATIONS_REPLAY_INBOUND_CHANNEL,
@@ -62,6 +64,12 @@ export function registerAutomationIpcHandlers(): void {
     (): ListAutomationLoadIssuesResponse => ({
       issues: getDesktopAutomationService().getLoadIssues(),
     }),
+  );
+
+  ipcMain.removeHandler(AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL,
+    (): AutomationSchedulingStatus => getDesktopAutomationService().getSchedulingStatus(),
   );
 
   ipcMain.removeHandler(AUTOMATIONS_CREATE_CHANNEL);

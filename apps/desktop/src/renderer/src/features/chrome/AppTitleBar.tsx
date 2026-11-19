@@ -1,4 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
+import type { AutomationSchedulingStatus } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";
@@ -7,6 +8,7 @@ import { FederationRemoteBadge } from "./FederationRemoteBadge";
 import type { FederationThreadTarget } from "./federation-thread-targets";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
+import { AutomationsButton } from "./AutomationsButton";
 import { NewThreadButton } from "./NewThreadButton";
 import { PanelToggleButtons } from "./PanelToggleButtons";
 import { WindowControls } from "./WindowControls";
@@ -58,6 +60,7 @@ export function AppTitleBar(props: {
     voiceControl?: ReactNode;
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
+    automationsSchedulingStatus?: AutomationSchedulingStatus;
     threadSearchActive?: boolean;
     newThreadDirectoryLabel?: string;
     newThreadFederationTargets?: readonly FederationThreadTarget[];
@@ -111,15 +114,11 @@ export function AppTitleBar(props: {
               </button>
             ) : null}
             {isFederationWindow ? null : (
-            <button
-              type="button"
-              aria-label="Open automations"
-              aria-pressed={actions.automationsActive}
-              className={`sidebar__icon-button${actions.automationsActive ? " is-active" : ""}`}
+            <AutomationsButton
+              active={actions.automationsActive}
+              schedulingStatus={actions.automationsSchedulingStatus}
               onClick={actions.onOpenAutomations}
-            >
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
-            </button>
+            />
             )}
             {isFederationWindow ? null : (
             <button
