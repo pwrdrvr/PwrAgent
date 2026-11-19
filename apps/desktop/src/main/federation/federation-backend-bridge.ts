@@ -558,7 +558,7 @@ async function withExtendedReviewOwner<T>(
     return await request();
   } catch (error) {
     if (route === "extended" && hasFederationErrorCode(error, "method_not_found")) {
-      throw new Error(EXTENDED_REVIEW_UNSUPPORTED_MESSAGE);
+      throw new Error(EXTENDED_REVIEW_UNSUPPORTED_MESSAGE, { cause: error });
     }
     throw error;
   }

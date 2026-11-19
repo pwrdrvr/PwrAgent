@@ -19,6 +19,11 @@ import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import {
+  ClaudeCodeReviewCommandPreview,
+  ClaudeCodeReviewEffort,
+  ReviewPullRequestModeChoice,
+} from "./ReviewPullRequestSetControls";
+import {
   hasLinearPastedImages,
   readLinearPastedImagesResponse,
   requestLinearPastedImages,
@@ -28,7 +33,10 @@ import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
+  orderPullRequestSet,
+  PULL_REQUEST_SET_MAX,
   pullRequestRepositoryKey,
+  pullRequestSetLabel,
   reviewThreadForWorkspace,
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
@@ -191,7 +199,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
-import { resolveReviewRunMode } from "../../lib/review-run-mode";
+import { prefersClaudeCodeReview, resolveReviewRunMode } from "../../lib/review-run-mode";
 import { ReviewAutoFixSwitch } from "./ReviewAutoFixSwitch";
 import {
   orderReviewPullRequests,
@@ -260,6 +268,7 @@ import {
   listMentionedSkills,
 } from "../../lib/skill-mentions";
 import {
+  claudeCodeReviewCommand,
   type ClaudeCodeReviewLevel,
   formatReviewCommand,
   parseReviewCommand,
@@ -1154,6 +1163,60 @@ const REVIEW_TARGET_OPTIONS: Array<{
   },
 ];
 
+/** The targets Claude Code's `/code-review` takes, in its own words. */
+const CLAUDE_CODE_REVIEW_TARGET_OPTIONS: typeof REVIEW_TARGET_OPTIONS = [
+  {
+    target: "uncommittedChanges",
+    label: "Current changes",
+    description: "Claude Code's current diff",
+  },
+  {
+    target: "pullRequest",
+    label: "Attached PR",
+    description: "Review pull requests by number",
+  },
+  {
+    target: "branch",
+    label: "Branch",
+    description: "Review a branch's changes",
+  },
+  {
+    target: "path",
+    label: "Path",
+    description: "Review one file or folder",
+  },
+];
+
+const DEFAULT_CLAUDE_CODE_REVIEW_LEVEL: ClaudeCodeReviewLevel = "high";
+
+/**
+ * The `/code-review` commands a Claude Code review sends: one, or one per
+ * pull request reviewed separately. A problem is the builder's refusal.
+ */
+function claudeCodeReviewCommands(params: {
+  target: AppServerReviewTarget | undefined;
+  separately: boolean;
+  level: ClaudeCodeReviewLevel;
+  repository?: string;
+}): { commands: string[]; problem?: string } {
+  const { target } = params;
+  if (!target) return { commands: [] };
+  try {
+    const targets: AppServerReviewTarget[] = params.separately && target.type === "pullRequests"
+      ? target.pullRequests.map((member) => ({ type: "pullRequest", url: member.url }))
+      : [target];
+    return {
+      commands: targets.map((each) => claudeCodeReviewCommand({
+        target: each,
+        level: params.level,
+        ...(params.repository ? { repository: params.repository } : {}),
+      })),
+    };
+  } catch (error) {
+    return { commands: [], problem: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** The model a launchpad without one starts on, as its Model pill shows it. */
 export function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -1600,6 +1663,31 @@ function buildConfiguredReviewCommand(
     return undefined;
   }
   const cwd = config.workspaceCwd?.trim() || undefined;
+
+  if (config.target === "pullRequest" && config.pullRequestsTogether
+    && (config.pullRequestUrls?.length ?? 0) > 1) {
+    const pullRequests = config.pullRequestUrls!.map((url) => ({ url }));
+    return {
+      ...(cwd ? { cwd } : {}),
+      runMode: config.runMode,
+      target: { type: "pullRequests", pullRequests },
+      displayText: `Review ${pullRequestSetLabel(pullRequests)}`,
+    };
+  }
+
+  if (config.target === "branch" || config.target === "path") {
+    const value = (config.target === "branch" ? config.codeReviewBranch : config.codeReviewPath)?.trim();
+    return value
+      ? {
+          ...(cwd ? { cwd } : {}),
+          runMode: config.runMode,
+          target: config.target === "branch"
+            ? { type: "branch", branch: value }
+            : { type: "path", path: value },
+          displayText: config.target === "branch" ? `Review branch ${value}` : `Review ${value}`,
+        }
+      : undefined;
+  }
 
   if (config.target === "pullRequest") {
     // Several checked PRs are submitted one review at a time by
@@ -6265,6 +6353,39 @@ function useComposerController(props: ComposerProps) {
     && props.desktopApi?.createScheduledThreadAction,
   );
   const reviewPullRequestBatch = selectedReviewPullRequests.length > 1;
+  const reviewThreadOwnerSummary = props.backends?.find(
+    (candidate) => candidate.kind === props.thread?.source,
+  );
+  // A Claude thread reviews as Claude Code's /code-review unless the operator
+  // picked another reviewer or mode.
+  const claudeCodeReviewMode = prefersClaudeCodeReview({
+    ownerSummary: reviewThreadOwnerSummary,
+    requestedRunMode: reviewConfig?.runModeChosen ? reviewConfig.runMode : undefined,
+    reviewerChosen: Boolean(reviewConfig?.reviewer),
+    thread: props.thread,
+  });
+  // Together needs an owner that takes a combined target.
+  const reviewPullRequestSetSupported =
+    reviewThreadOwnerSummary?.capabilities.reviewPullRequestSet === true;
+  const reviewPullRequestsTogether = reviewPullRequestBatch
+    && reviewPullRequestSetSupported
+    && reviewConfig?.pullRequestsTogether === true;
+  const claudeCodeReviewLevel =
+    reviewConfig?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+  // A bare pull request number names the checkout's own repository's.
+  const reviewCodeReviewRepository = reviewDirectory?.gitStatus?.originRepository;
+  /**
+   * Checked pull requests in the order they are reviewed: list order, or a
+   * stack bottom first when they are reviewed together, which is the order
+   * the owner gives a managed reviewer and Claude Code's command names them.
+   */
+  const orderSelectedReviewPullRequestUrls = (urls: readonly string[], together: boolean): string[] => {
+    const wanted = new Set(urls);
+    const seen = new Set<string>();
+    const prs = orderReviewPullRequests(reviewPullRequestOptions.map((option) => option.pr))
+      .filter((pr) => wanted.has(pr.url) && !seen.has(pr.url) && Boolean(seen.add(pr.url)));
+    return (together ? orderPullRequestSet(prs, (pr) => pr).ordered : prs).map((pr) => pr.url);
+  };
   // What a local review would cover that this PR does not, so the two targets
   // never read as interchangeable when they are not.
   const selectedReviewPullRequestSync = selectedReviewPullRequest && props.thread
@@ -6280,7 +6401,9 @@ function useComposerController(props: ComposerProps) {
   // Only the targets the attached workspaces can actually run. An always-present row
   // that dead-ends on "no attached pull requests" is noise, and arrow-key
   // navigation has to walk the same list the operator can see.
-  const reviewTargetOptions = REVIEW_TARGET_OPTIONS.filter(
+  const reviewTargetOptions = (claudeCodeReviewMode
+    ? CLAUDE_CODE_REVIEW_TARGET_OPTIONS
+    : REVIEW_TARGET_OPTIONS).filter(
     (option) =>
       option.target !== "pullRequest" || reviewPullRequestOptions.length > 0,
   );
@@ -6322,11 +6445,26 @@ function useComposerController(props: ComposerProps) {
       return;
     }
     const target = reviewConfig?.target ?? "baseBranch";
-    const optionIndex = REVIEW_TARGET_OPTIONS.findIndex(
+    const optionIndex = (claudeCodeReviewMode
+      ? CLAUDE_CODE_REVIEW_TARGET_OPTIONS
+      : REVIEW_TARGET_OPTIONS).findIndex(
       (option) => option.target === target,
     );
     reviewOptionRefs.current[optionIndex === -1 ? 0 : optionIndex]?.focus();
-  }, [isReviewComposerOpen, reviewConfig?.target]);
+  }, [claudeCodeReviewMode, isReviewComposerOpen, reviewConfig?.target]);
+
+  // Each mode offers its own targets. A target the other mode offered moves
+  // to Current changes, which both take, rather than a hidden selection.
+  useEffect(() => {
+    const target = reviewConfig?.target;
+    if (!isReviewComposerOpen || !target) return;
+    const offered = (claudeCodeReviewMode
+      ? CLAUDE_CODE_REVIEW_TARGET_OPTIONS
+      : REVIEW_TARGET_OPTIONS).some((option) => option.target === target);
+    if (!offered) {
+      setReviewConfig((current) => current ? { ...current, target: "uncommittedChanges" } : current);
+    }
+  }, [claudeCodeReviewMode, isReviewComposerOpen, reviewConfig?.target]);
 
   useEffect(() => {
     if (!supportsReview && reviewConfig) {
@@ -7272,6 +7410,7 @@ function useComposerController(props: ComposerProps) {
     displayText: string;
     runMode?: ReviewRunMode;
     afterReview?: ReviewAfterAction;
+    codeReviewLevel?: ClaudeCodeReviewLevel;
     target: AppServerReviewTarget;
     reviewer?: ModelSettingsRecent;
   }, options?: {
@@ -7390,7 +7529,11 @@ function useComposerController(props: ComposerProps) {
     // closed by then, so reviewConfig is empty and would silently downgrade the
     // review to the thread's provider. Otherwise take the live panel state,
     // captured before it clears below.
-    const pickedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    // Claude Code reviews its own thread, so it names no reviewer.
+    const claudeCodeReview = reviewCommand.runMode === "claude-code-review";
+    const pickedReviewer = claudeCodeReview
+      ? undefined
+      : reviewCommand.reviewer ?? reviewConfig?.reviewer;
     // A thread whose provider cannot review sends the row's default reviewer;
     // omitting it would ask the thread's own provider to review.
     const submittedReviewer =
@@ -7421,7 +7564,9 @@ function useComposerController(props: ComposerProps) {
         ...(reviewCommand.runMode ? { runMode: reviewCommand.runMode } : {}),
         ...(reviewCommand.afterReview ? { afterReview: reviewCommand.afterReview } : {}),
         ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
-        ...(submittedReviewer
+        ...(claudeCodeReview
+          ? reviewCommand.codeReviewLevel ? { reasoningEffort: reviewCommand.codeReviewLevel } : {}
+          : submittedReviewer
           ? {
               reviewBackend: submittedReviewer.backend,
               ...(submittedModel ? { model: submittedModel } : {}),
@@ -7796,18 +7941,23 @@ function useComposerController(props: ComposerProps) {
     // A checked PR this project can no longer review (detached while the
     // panel was open) is dropped rather than failing the rest: the list no
     // longer draws it, so the operator could not uncheck it.
-    const pullRequestUrls = config?.target === "pullRequest"
+    const availableUrls = config?.target === "pullRequest"
       ? (config.pullRequestUrls ?? []).filter((url) => reviewPullRequestOptions.some((option) =>
         option.pr.url === url && option.workspaces.includes(config.workspaceCwd ?? "")
       ))
       : [];
-    if (config?.target === "pullRequest" && pullRequestUrls.length === 0) {
+    if (config?.target === "pullRequest" && availableUrls.length === 0) {
       setSendError("Choose an attached pull request.");
       return;
     }
-    const pullRequestBatch = pullRequestUrls.length > 1;
+    const pullRequestBatch = availableUrls.length > 1;
+    const pullRequestsTogether = pullRequestBatch && config?.pullRequestsTogether === true
+      && reviewPullRequestSetSupported;
+    const pullRequestUrls = orderSelectedReviewPullRequestUrls(availableUrls, pullRequestsTogether);
     const configuredReviewCommand = buildConfiguredReviewCommand(
-      config?.target === "pullRequest" ? { ...config, pullRequestUrls } : config,
+      config?.target === "pullRequest"
+        ? { ...config, pullRequestUrls, pullRequestsTogether }
+        : config,
     );
     if (!configuredReviewCommand) {
       return;
@@ -7816,7 +7966,9 @@ function useComposerController(props: ComposerProps) {
     // renders again. Resolve against the submitted config, not the old chips.
     const runModeDecision = props.thread ? resolveReviewRunMode({
       ownerSummary: reviewOwnerSummary,
+      pullRequestSet: pullRequestsTogether,
       requestedRunMode: config?.runModeChosen ? config.runMode : undefined,
+      reviewerChosen: Boolean(config?.reviewer),
       reviewerBackend: reviewerSelection.backend,
       reviewerSummary: reviewerSelection.summary,
       thread: props.thread,
@@ -7833,6 +7985,9 @@ function useComposerController(props: ComposerProps) {
       ...configuredReviewCommand,
       runMode: runModeDecision.explicitRunModeSupported
         ? runModeDecision.runMode : undefined,
+      ...(runModeDecision.runMode === "claude-code-review"
+        ? { codeReviewLevel: config?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+        : {}),
       // An owner that predates auto-fix gets no field, so it is never told a
       // choice it would ignore.
       // Fixes land in this one checkout, which is on at most one of a
@@ -7845,16 +8000,11 @@ function useComposerController(props: ComposerProps) {
           }
         : {}),
     };
-    if (pullRequestBatch) {
+    if (pullRequestBatch && !pullRequestsTogether) {
       // One review per pull request, in list order. The owner's queue starts
       // the first when the thread is free and runs each of the rest after the
       // one before it; each is pinned to its own published head when queued.
-      const batchUrls = new Set(pullRequestUrls);
-      const orderedUrls = orderReviewPullRequests(
-        reviewPullRequestOptions.map((option) => option.pr),
-      )
-        .map((pr) => pr.url)
-        .filter((url) => batchUrls.has(url));
+      const orderedUrls = pullRequestUrls;
       for (const [index, url] of orderedUrls.entries()) {
         const queued = await queueReviewCommand(
           {
@@ -7963,6 +8113,15 @@ function useComposerController(props: ComposerProps) {
         directory: props.directory,
         thread: props.thread,
       });
+    if (target === "branch") {
+      // Claude Code's Branch target starts on the checkout's own branch.
+      const branch = props.thread?.observedGitBranch ?? props.thread?.gitBranch;
+      return {
+        ...current,
+        target,
+        ...(current.codeReviewBranch === undefined && branch ? { codeReviewBranch: branch } : {}),
+      };
+    }
     if (target !== "pullRequest") {
       return { ...current, target };
     }
@@ -8013,7 +8172,9 @@ function useComposerController(props: ComposerProps) {
     if (
       (target === "commit" && !nextConfig.commit.trim()) ||
       (target === "custom" && !nextConfig.customInstructions.trim()) ||
-      (target === "pullRequest" && !nextConfig.pullRequestUrls?.length)
+      (target === "pullRequest" && !nextConfig.pullRequestUrls?.length) ||
+      (target === "branch" && !nextConfig.codeReviewBranch?.trim()) ||
+      (target === "path" && !nextConfig.codeReviewPath?.trim())
     ) {
       focusReviewDetail(target);
       return;
@@ -8769,6 +8930,7 @@ function useComposerController(props: ComposerProps) {
       displayText: string;
       runMode?: ReviewRunMode;
       afterReview?: ReviewAfterAction;
+      codeReviewLevel?: ClaudeCodeReviewLevel;
       target: AppServerReviewTarget;
       reviewer?: ModelSettingsRecent;
     },
@@ -8806,8 +8968,17 @@ function useComposerController(props: ComposerProps) {
       setSendError(undefined);
       return;
     }
+    const claudeCodeReview = reviewCommand.runMode === "claude-code-review";
     const enqueue = async (): Promise<void> => {
-      const text = formatReviewCommand(reviewCommand.target);
+      // A queued Claude Code review reads as the command it will send.
+      const text = claudeCodeReview
+        ? claudeCodeReviewCommands({
+            target: reviewCommand.target,
+            separately: false,
+            level: reviewCommand.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+            repository: reviewCodeReviewRepository,
+          }).commands[0] ?? formatReviewCommand(reviewCommand.target)
+        : formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
         throw new Error("Backend-owned review queuing is unavailable.");
       }
@@ -8828,8 +8999,11 @@ function useComposerController(props: ComposerProps) {
           ...(reviewCommand.afterReview ? { afterReview: reviewCommand.afterReview } : {}),
           cwd: reviewCommand.cwd,
           // Carry the picked reviewer through the queue so releasing it later
-          // does not silently fall back to the thread's own provider.
-          ...((reviewConfig?.reviewer || reviewerSelection.fallback)
+          // does not silently fall back to the thread's own provider. Claude
+          // Code reviews its own thread at the chosen effort.
+          ...(claudeCodeReview
+            ? reviewCommand.codeReviewLevel ? { reasoningEffort: reviewCommand.codeReviewLevel } : {}
+            : (reviewConfig?.reviewer || reviewerSelection.fallback)
             && reviewerSelection.backend
             ? {
                 reviewBackend: reviewerSelection.backend,
@@ -11878,7 +12052,9 @@ function useComposerController(props: ComposerProps) {
     const reviewRunModeDecision = props.thread
       ? resolveReviewRunMode({
           ownerSummary: reviewOwnerSummary,
+          pullRequestSet: reviewPullRequestsTogether,
           requestedRunMode: reviewConfig?.runModeChosen ? reviewConfig.runMode : undefined,
+          reviewerChosen: Boolean(reviewConfig?.reviewer),
           reviewerBackend: reviewerSelection.backend,
           reviewerSummary: reviewerSelection.summary,
           thread: props.thread,
@@ -13973,6 +14149,124 @@ function useComposerController(props: ComposerProps) {
     );
   }
 
+  /** "#1, #2 and #3", in the order the pull requests are reviewed. */
+  function joinReviewPullRequestNumbers(urls: readonly string[]): string {
+    const names = urls.map((url) => {
+      const pr = selectedReviewPullRequests.find((candidate) => candidate.url === url);
+      return pr ? `#${pr.number}` : url;
+    });
+    return names.length > 1
+      ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+      : names.join("");
+  }
+
+  /** What checking several pull requests will do, under the list. */
+  function reviewPullRequestSetNote(): string {
+    const together = reviewPullRequestsTogether;
+    const urls = orderSelectedReviewPullRequestUrls(
+      selectedReviewPullRequests.map((pr) => pr.url),
+      together,
+    );
+    const names = joinReviewPullRequestNumbers(urls);
+    if (claudeCodeReviewMode) {
+      return together
+        ? `Claude reads ${names} together when the review starts, and reports one set of findings.`
+        : `${urls.length} reviews run one after another, ${names}. Claude reads each pull request when its own review starts.`;
+    }
+    if (together) {
+      const stacked = orderPullRequestSet(selectedReviewPullRequests, (pr) => pr).stacked;
+      return `One reviewer reads ${names} together${stacked ? ", bottom of the stack first" : ""}. Each is pinned to its own published head. The findings land as one review.`;
+    }
+    return `${selectedReviewPullRequests.length} reviews, one per pull request, run one after another in this order. Each is pinned to its published head when you start.`;
+  }
+
+  function renderReviewPullRequestModeChoice(): ReactNode {
+    if (!reviewPullRequestBatch || !reviewPullRequestsMultiple || !reviewPullRequestSetSupported) {
+      return null;
+    }
+    const stacked = orderPullRequestSet(selectedReviewPullRequests, (pr) => pr).stacked;
+    const togetherUnavailableReason = selectedReviewPullRequests.length > PULL_REQUEST_SET_MAX
+      ? `A combined review takes at most ${PULL_REQUEST_SET_MAX} pull requests.`
+      : !claudeCodeReviewMode && reviewRunModeDecision.subagentDisabled
+        ? "No reviewer here can run a PwrAgent Sub Agent review."
+        : undefined;
+    return (
+      <ReviewPullRequestModeChoice
+        count={selectedReviewPullRequests.length}
+        together={reviewPullRequestsTogether}
+        togetherDescription={claudeCodeReviewMode
+          ? "One /code-review names every pull request"
+          : stacked
+            ? "Reviewed bottom first, because they form a stack"
+            : "One reviewer reads every diff together"}
+        {...(togetherUnavailableReason ? { togetherUnavailableReason } : {})}
+        onChange={(together) => {
+          setReviewConfig((current) => current ? { ...current, pullRequestsTogether: together } : current);
+          setSendError(undefined);
+        }}
+      />
+    );
+  }
+
+  /** Claude Code's Branch or Path target takes one line of text. */
+  function renderClaudeCodeReviewTargetField(): ReactNode {
+    const target = reviewConfig?.target;
+    if (!claudeCodeReviewMode || (target !== "branch" && target !== "path")) return null;
+    const branch = target === "branch";
+    return (
+      <label className="composer__review-field">
+        <span>{branch ? "Branch" : "File or folder"}</span>
+        <input
+          aria-label={branch ? "Branch to review" : "File or folder to review"}
+          className="composer__review-input"
+          placeholder={branch ? "feature/my-branch" : "src/review"}
+          spellCheck={false}
+          value={(branch ? reviewConfig?.codeReviewBranch : reviewConfig?.codeReviewPath) ?? ""}
+          onChange={(event) => {
+            const value = event.target.value;
+            setReviewConfig((current) => current
+              ? { ...current, ...(branch ? { codeReviewBranch: value } : { codeReviewPath: value }) }
+              : current);
+            setSendError(undefined);
+          }}
+        />
+      </label>
+    );
+  }
+
+  /** The exact text a Claude Code review sends, so the panel and the transcript agree. */
+  function renderClaudeCodeReviewCommandPreview(): ReactNode {
+    if (!claudeCodeReviewMode || !reviewConfig) return null;
+    const urls = orderSelectedReviewPullRequestUrls(
+      selectedReviewPullRequests.map((pr) => pr.url),
+      reviewPullRequestsTogether,
+    );
+    const configured = buildConfiguredReviewCommand(reviewConfig.target === "pullRequest"
+      ? { ...reviewConfig, pullRequestUrls: urls, pullRequestsTogether: urls.length > 1 }
+      : reviewConfig);
+    const preview = claudeCodeReviewCommands({
+      target: configured?.target,
+      separately: reviewPullRequestBatch && !reviewPullRequestsTogether,
+      level: claudeCodeReviewLevel,
+      repository: reviewCodeReviewRepository,
+    });
+    return <ClaudeCodeReviewCommandPreview commands={preview.commands} problem={preview.problem} />;
+  }
+
+  function changeReviewRunMode(runMode: ReviewRunMode): void {
+    setReviewConfig((current) => ({
+      ...(current ?? createReviewConfig({
+        directory: props.directory,
+        thread: props.thread,
+      })),
+      runMode,
+      runModeChosen: true,
+      // Claude Code reviews its own thread; a picked reviewer would override it.
+      ...(runMode === "claude-code-review" ? { reviewer: undefined } : {}),
+    }));
+    setSendError(undefined);
+  }
+
   function renderComposerReviewConfig(): ReactNode {
     return (
       <fieldset
@@ -14088,9 +14382,10 @@ function useComposerController(props: ComposerProps) {
                 }}
               />
             ) : null}
+            {renderReviewPullRequestModeChoice()}
             {reviewPullRequestBatch ? (
               <small className="composer__review-divergence">
-                {`${selectedReviewPullRequests.length} reviews, one per pull request, run one after another in this order. Each is pinned to its published head when you start.`}
+                {reviewPullRequestSetNote()}
               </small>
             ) : null}
             {selectedReviewPullRequest ? (
@@ -14099,7 +14394,9 @@ function useComposerController(props: ComposerProps) {
                 {selectedReviewPullRequest.headSha
                   ? ` at ${selectedReviewPullRequest.headSha.slice(0, 7)}`
                   : ""}
-                {". Refreshed and pinned to the published head when you start the review."}
+                {claudeCodeReviewMode
+                  ? ". Claude reads this pull request when the review starts."
+                  : ". Refreshed and pinned to the published head when you start the review."}
               </small>
             ) : reviewPullRequestBatch ? null : reviewPullRequests.length > 0 ? (
               <small>
@@ -14131,6 +14428,8 @@ function useComposerController(props: ComposerProps) {
             ) : null}
           </div>
         ) : null}
+
+        {renderClaudeCodeReviewTargetField()}
 
         {reviewConfig?.target === "baseBranch" ? (
           <div className="composer__review-field">
@@ -14205,7 +14504,7 @@ function useComposerController(props: ComposerProps) {
           <div className="composer__review-field composer__review-reviewer">
             <span>Reviewer</span>
             <div className="composer__review-reviewer-chips">
-              {reviewerOverridesSupported ? (
+              {reviewerOverridesSupported && !claudeCodeReviewMode ? (
                 <>
                   <ComposerDropdown
                     ariaLabel="Review provider"
@@ -14311,7 +14610,15 @@ function useComposerController(props: ComposerProps) {
                   ) : null}
                 </>
               ) : null}
-              {reviewerOverridesSupported ? (
+              {claudeCodeReviewMode ? (
+                <ClaudeCodeReviewEffort
+                  value={claudeCodeReviewLevel}
+                  onChange={(codeReviewLevel) => {
+                    setReviewConfig((current) => current ? { ...current, codeReviewLevel } : current);
+                  }}
+                />
+              ) : null}
+              {reviewerOverridesSupported || claudeCodeReviewMode ? (
                 <span
                   aria-hidden="true"
                   className="composer__review-reviewer-rule"
@@ -14319,19 +14626,10 @@ function useComposerController(props: ComposerProps) {
               ) : null}
               <ReviewLocationDropdown
                 decision={reviewRunModeDecision}
-                onChange={(runMode) => {
-                  setReviewConfig((current) => ({
-                    ...(current ?? createReviewConfig({
-                      directory: props.directory,
-                      thread: props.thread,
-                    })),
-                    runMode,
-                    runModeChosen: true,
-                  }));
-                  setSendError(undefined);
-                }}
+                onChange={changeReviewRunMode}
               />
             </div>
+            {renderClaudeCodeReviewCommandPreview()}
           </div>
         ) : null}
 
@@ -14375,21 +14673,24 @@ function useComposerController(props: ComposerProps) {
                   futureScheduledDraftSendAt,
                   scheduleNow,
                 )}`
-              : reviewPullRequestBatch
-                ? `Start ${selectedReviewPullRequests.length} reviews`
-                : "Start review"}
+              : reviewPullRequestsTogether
+                ? "Start combined review"
+                : reviewPullRequestBatch
+                  ? `Start ${selectedReviewPullRequests.length} reviews`
+                  : "Start review"}
           </button>
         </div>
         {reviewAutoFixSupported && reviewPullRequestBatch ? (
           <p className="composer__review-note">
-            Auto-fix is off while several pull requests are selected: fixes
-            land in this one checkout, which is on at most one of their
-            branches.
+            {reviewPullRequestsTogether
+              ? "Auto-fix is off for a combined review: its findings belong to different branches, and this checkout is on at most one of them."
+              : "Auto-fix is off while several pull requests are selected: fixes land in this one checkout, which is on at most one of their branches."}
           </p>
         ) : null}
         {reviewAutoFixSupported
           && reviewAutoFixChecked
           && !reviewPullRequestBatch
+          && !claudeCodeReviewMode
           && reviewerSelection.backend
           && reviewerSelection.backend !== props.thread?.source ? (
             <p className="composer__review-note">
