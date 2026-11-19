@@ -949,6 +949,9 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-monitor-workflow.ts` | Bound and conversation monitors, timer resources, topic observation, cleanup proposals and per-thread fanout; turn state and the detach pipeline stay with their existing owners |
 | `apps/desktop/src/main/messaging/core/messaging-monitor-context.ts` | Narrow store/backend/adapter ports, live turn-state and disposal reads, and seven lazy host ports |
 | `apps/desktop/src/main/messaging/core/messaging-monitor-helpers.ts` | Pure monitor preferences, topic identities/proposal formatting, navigation identities and permanent-target classification |
+| `apps/desktop/src/main/messaging/core/messaging-pending-request-workflow.ts` | Pending-request presentation reservations, approvals, questionnaires and async answer settlement; canonical turn and admission effects use their existing owners |
+| `apps/desktop/src/main/messaging/core/messaging-pending-request-context.ts` | Six store methods, three backend methods and 22 lazy host ports with original signatures, receivers and error boundaries |
+| `apps/desktop/src/main/messaging/core/messaging-pending-request-helpers.ts` | Approval response context and questionnaire answer encoding |
 | `apps/desktop/src/main/messaging/core/messaging-new-thread-workflow.ts` | Pre-thread backend selection, Start Card, launch options, sticky updates and permission/runtime gates; first-prompt admission remains in the inbound owner |
 | `apps/desktop/src/main/messaging/core/messaging-new-thread-context.ts` | Narrow new-thread store/backend collaborators and eleven lazy host ports; current stores, clocks, settings and optional methods are read at call time |
 | `apps/desktop/src/main/messaging/core/messaging-callback-handlers.ts` | Callback dispatch, approval identity, browse/help navigation, queue/status controls, risk confirmations, monitor actions and private replies |
