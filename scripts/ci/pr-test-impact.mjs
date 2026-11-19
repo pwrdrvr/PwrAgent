@@ -103,7 +103,7 @@ export function compareFailures(plan, report) {
   };
   const slices = report.slices.filter(({ platform }) => platform === "linux");
   const cases = slices.flatMap(({ kind, key, failures }) => failures.map((failure) => {
-    const outcome = !failure.file || (kind === "unit" && !failure.project)
+    const outcome = !failure.file || (kind === "unit" && typeof failure.project !== "string")
       ? "unknown"
       : plan[kind].mode === "full" || selected[kind].has(kind === "unit" ? testKey(failure) : failure.file)
         ? "covered" : "missed";
