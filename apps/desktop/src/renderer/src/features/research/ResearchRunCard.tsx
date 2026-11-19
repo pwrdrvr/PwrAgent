@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { RESEARCH_HARNESS_RECONCILABLE, researchHarnessEffectiveState } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
-import { formatClock, isResearchRunLive, plural, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
+import { formatClock, isResearchRunLive, plural, researchCutOffWorkers, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
-export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop, onFinish, onReconcile }: {
+export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop, onFinish, onReconcile, onResume }: {
   run: ResearchRunView; now: number; coordinator: boolean; writable: boolean; busy: boolean;
-  onStop: () => void; onFinish: () => void; onReconcile?: () => void;
+  onStop: () => void; onFinish: () => void; onReconcile?: () => void; onResume?: () => void;
 }) {
   const [confirmingStop, setConfirmingStop] = useState(false);
   const phase = researchRunPhase(run);
@@ -13,12 +13,14 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
   const live = isResearchRunLive(run);
   const harness = run.harness;
   // A run that ended without being finished can still be completed once a candidate is accepted:
-  // a settled Harness run, or a PwrAgent run that was interrupted (as every live run is when the app quits).
+  // a settled Harness run, or a PwrAgent run that was interrupted or ran out of workers.
   const finishableRetired = harness ? run.status !== "completed" && ["ended", "imported"].includes(harness.state)
     : ["interrupted", "exhausted"].includes(run.status) && run.accepted > 0;
   const controls = coordinator && writable && (live || finishableRetired);
   const finishBlocker = researchFinishBlocker(run);
   const outcome = researchHarnessOutcome(run);
+  // Quitting ends the turns in flight, never the run. Nothing restarts until the operator asks.
+  const cutOff = !harness && run.status === "running" ? researchCutOffWorkers(run).length : 0;
   // The owner refuses a reconcile it cannot do; offering it only where it can succeed keeps the action honest.
   const reconcile = onReconcile && coordinator && harness && harness.source !== "discovery" && RESEARCH_HARNESS_RECONCILABLE.includes(researchHarnessEffectiveState(run.status, harness))
     && (!live || writable) && run.status !== "completed" ? onReconcile : undefined;
@@ -43,6 +45,13 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       <strong>{outcome.title}</strong>
       <p className="research-muted">{outcome.body}</p>
       {reconcile && <span className="research-actions"><button type="button" className="research-button research-button--primary" disabled={busy} onClick={reconcile}>Reconcile from source</button></span>}
+    </div>}
+    {cutOff > 0 && <div className="research-callout" role="group" aria-label="Workers to resume">
+      <strong>{cutOff === 1 ? "1 worker was" : `${cutOff} workers were`} cut off when PwrAgent closed</strong>
+      <p className="research-muted">Their threads, findings and candidates are kept. Resuming sends each one a message to continue; nothing has been sent yet.</p>
+      {onResume && coordinator && writable && <span className="research-actions">
+        <button type="button" className="research-button research-button--primary" disabled={busy} onClick={onResume}>Resume {plural(cutOff, "worker")}</button>
+      </span>}
     </div>}
     {harness && !outcome && harness.state === "reconciling" && <p className="research-muted" role="status">{harness.note}</p>}
     {harness && !outcome && reconcile && <span className="research-actions">

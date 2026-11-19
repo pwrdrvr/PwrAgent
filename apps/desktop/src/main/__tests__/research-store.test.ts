@@ -373,7 +373,7 @@ describe("research journal storage", () => {
     await service.start(mutableRequest(), { ...actor, callId: "second-run" });
     const replacement = createService({ ownerId: "replacement", isOwnerAlive: () => false });
     const recovery = await measureSqliteWrites(async () => replacement.initialize());
-    expectSqliteWriteBudget({ scenario: "research-recovery", note: "A dead owner's active run becomes interrupted. No workers are started and no periodic recovery writes are introduced.", writes: recovery.writes });
+    expectSqliteWriteBudget({ scenario: "research-recovery", note: "At launch, a live run whose process is gone is taken over in one commit: the new holder and each cut-off worker. No workers are started and no periodic recovery writes are introduced.", writes: recovery.writes });
   });
 
   it("budgets admitted revision cancellation and settlement from exact provider evidence", async () => {

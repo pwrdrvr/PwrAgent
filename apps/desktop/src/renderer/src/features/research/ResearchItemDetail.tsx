@@ -54,6 +54,16 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Progress could not be saved"); }
     finally { setBusy(false); }
   }
+  async function resume() {
+    if (!context || !api.updateResearch) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await api.updateResearch({ backend, threadId, runId, requestId: crypto.randomUUID(), command: { action: "resume", approachIds: [context.item.id] } });
+      setRefresh((value) => value + 1);
+      setNotice("Resume sent. The worker takes its slot back when its turn starts.");
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "The worker could not be resumed"); }
+    finally { setBusy(false); }
+  }
   async function assign() {
     if (!context || !task.trim() || !api.submitThreadReply) return;
     setBusy(true); setError(""); setNotice("");
@@ -104,6 +114,9 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
       {item.type === "approach" && item.record.worker && <ResearchThreadButton thread={item.record.worker} title="Open worker thread" />}
       {"author" in record && record.author && <ResearchThreadButton thread={record.author} title="Open source thread" />}
+      {item.type === "approach" && item.record.interrupted && assignable && run.status === "running" && api.updateResearch && <div className="research-actions">
+        <button type="button" className="research-button" disabled={busy} onClick={() => { void resume(); }}>Resume worker</button>
+      </div>}
       {context.assignment && <div className="research-node research-node--static">
         <span className="research-node__meta">{RESEARCH_FOCUSED_CHILD_PREFIX}{researchLabel(context.assignment.state)}</span>
         {" "}{context.assignment.task}

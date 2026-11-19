@@ -52,7 +52,8 @@ export function researchRunPhase(run: ResearchPhaseInput): ResearchPhase {
     if (run.activeWorkers > 0) return { label: "Running", tone: "live" };
     if (run.unreviewed) return { label: "Awaiting review", tone: "attention" };
     if (run.accepted) return { label: "Ready to finish", tone: "attention" };
-    return { label: "Running", tone: "live" };
+    // Open, with nobody working: workers cut off by a restart wait to be resumed, or none has started yet.
+    return { label: "No workers running", tone: "attention" };
   }
   switch (run.status) {
     case "stopping": return { label: "Stopping", tone: "live" };
@@ -430,8 +431,14 @@ export function researchMapBranches(run: Pick<ResearchRunView, "approaches" | "i
 }
 
 /** The state an approach's chip shows. An abandoned direction reads "Abandoned", whatever state its worker is in. */
-export function researchApproachStateLabel(approach: Pick<ResearchApproach, "state" | "directionState">): string {
-  return researchLabel(approach.directionState === "abandoned" ? "abandoned" : approach.state);
+export function researchApproachStateLabel(approach: Pick<ResearchApproach, "state" | "directionState" | "interrupted">): string {
+  if (approach.directionState === "abandoned") return researchLabel("abandoned");
+  return approach.interrupted ? "Cut off" : researchLabel(approach.state);
+}
+
+/** The workers whose turn ended with the PwrAgent process that held the run. Each can be resumed in its own thread. */
+export function researchCutOffWorkers(run: Pick<ResearchRunView, "items">): ResearchApproach[] {
+  return [...run.items.values()].flatMap((item) => item.type === "approach" && item.record.interrupted ? [item.record] : []);
 }
 
 /** What the Map puts before the title of a branch nested under the item it investigates. */

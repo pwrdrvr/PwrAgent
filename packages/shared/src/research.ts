@@ -12,6 +12,8 @@ export type ResearchApproach = {
   state: "pending" | "starting" | "running" | "ended" | "failed" | "stopped" | "unknown";
   worker?: ResearchThread & { turnId?: string };
   note?: string;
+  /** Its turn was cut off when the process holding the run ended. The worker thread is intact and can be resumed. */
+  interrupted?: true;
   directionState?: "active" | "abandoned";
   overlapsApproachId?: string;
   /** An item-focused child assignment; its source evidence remains immutable. */
@@ -86,6 +88,8 @@ export type ResearchCommand =
   | { action: "direction"; approachId: string; title: string; task: string; reason: string; overlapsApproachId?: string }
   | { action: "stop"; reason: string }
   | { action: "finish"; reason: string }
+  /** Message cut-off workers to continue in their own threads: the named ones, or all of them. */
+  | { action: "resume"; approachIds?: string[] }
   | ResearchWorkCommand;
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
@@ -93,7 +97,11 @@ export type ResearchEventData =
   | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt?: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
   | { type: "harness"; state: ResearchHarnessState }
   | { type: "harness_observation"; event: string; text: string }
-  | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string }
+  | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string; interrupted?: true }
+  /** A later process took over a live run whose process ended. The approaches named were mid-flight and ended with it. */
+  | { type: "adopted"; ownerId: string; ownerPid: number; ownerStartedAt?: number; approachIds: string[] }
+  /** The operator or coordinator asked the named cut-off workers to continue. Each holds its slot again from here. */
+  | { type: "resumed"; approachIds: string[] }
   | { type: "finding"; finding: ResearchFinding }
   | { type: "submission"; submission: ResearchSubmission }
   | { type: "review"; submissionId: string; decision: "accepted" | "revision_requested" | "rejected"; reason: string }
@@ -178,7 +186,8 @@ export function researchRunAttention(run: Pick<ResearchRunSummary, "status" | "a
       case "imported": case "stopped": return "retained";
     }
   }
-  if (run.status === "running") return run.activeWorkers === 0 && (run.unreviewed || run.accepted) ? "needs_you" : "live";
+  // A running run with nobody working waits on the operator: to review, to finish, or to resume cut-off workers.
+  if (run.status === "running") return run.activeWorkers === 0 ? "needs_you" : "live";
   return run.status === "stopping" ? "live" : "retained";
 }
 
@@ -295,7 +304,12 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     else if (data.type === "worker") {
       const approach = run.approaches.find((a) => a.id === data.approachId);
       if (!approach) throw new Error("Unknown research approach");
-      Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
+      applyResearchWorkerState(approach, data);
+    } else if (data.type === "adopted") {
+      Object.assign(run, { ownerId: data.ownerId, ownerPid: data.ownerPid, ownerStartedAt: data.ownerStartedAt });
+      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchCutOff(approach);
+    } else if (data.type === "resumed") {
+      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchWorkerState(approach, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
     } else if (data.type === "assignment") run.approaches.push({ ...data.approach });
     else if (data.type === "finding") run.findings.push(data.finding);
     else if (data.type === "submission") run.submissions.push({ ...data.submission });
@@ -331,6 +345,24 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   return run;
 }
 
+export const RESEARCH_CUT_OFF_NOTE = "PwrAgent closed during this worker's turn. Resume it to continue in the same thread.";
+export const RESEARCH_NEVER_STARTED_NOTE = "PwrAgent closed before this worker started. Assign the approach again to start it.";
+export const RESEARCH_RESUME_REQUESTED_NOTE = "Resume requested. Waiting for the worker's turn to start.";
+
+/** A worker's recorded state. Any new state ends a cut-off, unless the event says the worker is still cut off. */
+function applyResearchWorkerState(approach: ResearchApproach, data: Pick<Extract<ResearchEventData, { type: "worker" }>, "state" | "worker" | "note" | "interrupted">): void {
+  Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
+  if (data.interrupted) approach.interrupted = true;
+  else delete approach.interrupted;
+}
+
+/** The process holding the run ended mid-flight. A worker with a thread can be resumed in it; one that never started cannot. */
+function applyResearchCutOff(approach: ResearchApproach): void {
+  approach.state = "stopped";
+  if (approach.worker) { approach.interrupted = true; approach.note = RESEARCH_CUT_OFF_NOTE; }
+  else approach.note = RESEARCH_NEVER_STARTED_NOTE;
+}
+
 /** The same deterministic projection is used by replay and atomic SQLite appends. */
 export function applyResearchItemEvent(read: (id: string) => ResearchItem | undefined, event: ResearchEvent): ResearchItem[] {
   const data = event.data;
@@ -363,11 +395,21 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
     if (item.type !== "submission") throw new Error("Research review must name a submission");
     return [touch({ ...item, record: { ...item.record, review: { decision: data.decision, reason: data.reason, actor: event.actor } } })];
   }
+  if (data.type === "adopted" || data.type === "resumed") {
+    return data.approachIds.map((id) => {
+      const item = require(id);
+      if (item.type !== "approach") throw new Error("Research direction must name an approach");
+      const record = { ...item.record };
+      if (data.type === "adopted") applyResearchCutOff(record);
+      else applyResearchWorkerState(record, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
+      return touch({ ...item, record });
+    });
+  }
   if (data.type === "worker" || data.type === "direction" || data.type === "abandoned") {
     const item = require(data.approachId);
     if (item.type !== "approach") throw new Error("Research direction must name an approach");
     const record = { ...item.record };
-    if (data.type === "worker") Object.assign(record, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
+    if (data.type === "worker") applyResearchWorkerState(record, data);
     else if (data.type === "direction") Object.assign(record, { title: data.title, task: data.task, note: data.reason, directionState: "active", overlapsApproachId: data.overlapsApproachId });
     else Object.assign(record, { note: data.reason, directionState: "abandoned" });
     const changes = [touch({ ...item, record })];

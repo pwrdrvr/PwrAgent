@@ -145,6 +145,7 @@ function ResearchWindowRun({ api, listed }: { api: DesktopApi; listed: ResearchP
         <ResearchRunCard run={run} now={now} coordinator writable={writable} busy={actions.busy}
           onStop={() => { void actions.update({ action: "stop", reason: "Stopped by the operator" }); }}
           onFinish={() => { void actions.update({ action: "finish", reason: "Completed after operator review" }); }}
+          onResume={() => { void actions.update({ action: "resume" }); }}
           onReconcile={api.reconcileResearchHarness ? () => { void actions.reconcile(); } : undefined} />
         <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={run.unreviewed} onChoose={(next) => { setView(next); setFilter(""); }} />
         <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">

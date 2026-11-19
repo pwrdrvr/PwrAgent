@@ -230,6 +230,44 @@ describe("Research panel", () => {
     expect(screen.queryByText("Awaiting review")).not.toBeInTheDocument();
   });
 
+  it("shows workers cut off by a restart and resumes them only when asked", async () => {
+    // The run as the next launch leaves it: still running, held by the new process, both workers cut off.
+    const records: ResearchEvent[] = [];
+    const add = (data: ResearchEvent["data"]) => records.push({ seq: records.length + 1, commandId: `e${records.length}`, signature: "test", at: 1000, actor, data });
+    add({ type: "created", objective: "Investigate queue ordering", coordinator: actor, ownerId: "earlier-process", ownerPid: 1, workspaceMode: "none", approaches: [
+      { id: "a1", title: "Events", task: "Trace ordering", state: "running", worker: { backend: "codex", threadId: "worker-1", turnId: "turn-1" } },
+      { id: "a2", title: "Receipts", task: "Trace receipts", state: "running", worker: { backend: "codex", threadId: "worker-2", turnId: "turn-2" } }] });
+    add({ type: "adopted", ownerId: "owner", ownerPid: 2, approachIds: ["a1", "a2"] });
+    const data: OwnerState = { runs: [projectResearchRun("run", records)], writableRunIds: ["run"] };
+    const { api, mocks } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    const callout = await screen.findByRole("group", { name: "Workers to resume" });
+    expect(callout).toHaveTextContent("2 workers were cut off when PwrAgent closed");
+    const summary = screen.getByRole("region", { name: "Research run summary" });
+    expect(summary).toHaveTextContent("No workers running");
+    expect(summary).toHaveTextContent("No time limit");
+    expect(summary).toHaveTextContent("0 of 2");
+    expect(screen.getAllByText("Cut off")).toHaveLength(2);
+    // Opening the run sent nothing to a worker.
+    expect(mocks.updateResearch).not.toHaveBeenCalled();
+    expect(mocks.submitThreadReply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Resume 2 workers" }));
+    await waitFor(() => expect(mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({ runId: "run", command: { action: "resume" } })));
+    expect(await screen.findByText("Resume sent. Each worker takes its slot back when its turn starts.")).toBeInTheDocument();
+  });
+
+  it("does not offer to resume workers on a run another process holds", async () => {
+    const records: ResearchEvent[] = [];
+    const add = (data: ResearchEvent["data"]) => records.push({ seq: records.length + 1, commandId: `e${records.length}`, signature: "test", at: 1000, actor, data });
+    add({ type: "created", objective: "Investigate queue ordering", coordinator: actor, ownerId: "earlier-process", ownerPid: 1, workspaceMode: "none", approaches: [
+      { id: "a1", title: "Events", task: "Trace ordering", state: "running", worker: { backend: "codex", threadId: "worker-1", turnId: "turn-1" } }] });
+    add({ type: "adopted", ownerId: "another-process", ownerPid: 2, approachIds: ["a1"] });
+    const { api } = apiFor({ runs: [projectResearchRun("run", records)], writableRunIds: [] });
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    expect(await screen.findByRole("group", { name: "Workers to resume" })).toHaveTextContent("1 worker was cut off when PwrAgent closed");
+    expect(screen.queryByRole("button", { name: /^Resume/ })).not.toBeInTheDocument();
+  });
+
   it("confirms before stopping every worker", async () => {
     const data = snapshot();
     data.runs[0]!.deadlineAt = Date.now() + 600_000;

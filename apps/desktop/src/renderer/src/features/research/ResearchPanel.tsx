@@ -145,6 +145,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
       <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
+        onResume={() => { void update({ action: "resume" }); }}
         onReconcile={api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
       <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount} onChoose={chooseView} />
       <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">

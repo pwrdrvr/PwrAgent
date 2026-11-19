@@ -491,8 +491,11 @@ describe("research lifecycle model", () => {
     const restarted = fixture({ ownerId: "replacement" }, storage);
     restarted.service.initialize();
     const retained = await restarted.service.start(request, context);
-    expect(retained.status).toBe("interrupted");
+    // The run outlives its process: the replacement holds it, and starts nothing by itself.
+    expect(retained.status).toBe("running");
+    expect(retained.ownerId).toBe("replacement");
     expect(restarted.ports.spawn).not.toHaveBeenCalled();
+    expect(restarted.ports.notify).not.toHaveBeenCalled();
     await expect(restarted.service.start({ ...request, objective: "different" }, context)).rejects.toThrow();
   });
 
@@ -578,7 +581,11 @@ describe("research lifecycle model", () => {
         return candidate.ownerId === marker.ownerId && candidate.ownerPid === marker.ownerPid && candidate.ownerStartedAt === marker.ownerStartedAt;
       } }, storage);
       viewer.service.initialize();
-      expect(viewer.service.read(run.id, context).status).toBe(changed === "none" ? "running" : "interrupted");
+      // A live holder keeps its run. A gone one's run is taken over, still running, with nothing restarted.
+      const seen = viewer.service.read(run.id, context);
+      expect(seen.status).toBe("running");
+      expect(seen.ownerId).toBe(changed === "none" ? owner.ownerId : "viewer");
+      expect(seen.approaches.every((approach) => changed === "none" ? approach.state === "running" : approach.state === "stopped" && approach.interrupted)).toBe(true);
       expect(viewer.ports.spawn).not.toHaveBeenCalled();
       service.close();
       viewer.service.close();

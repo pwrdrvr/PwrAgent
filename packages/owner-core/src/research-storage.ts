@@ -35,7 +35,7 @@ export interface ResearchStorage {
   isActiveWorker(thread: ResearchThread): boolean;
   readItem(id: string, itemId: string): ResearchItem | undefined;
   /** Approaches in creation order: those the thread works on, or those holding a worker slot. */
-  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true }): ResearchApproach[];
+  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true } | { interrupted: true }): ResearchApproach[];
   /** Items whose work is assigned, claimed, in progress or blocked, in creation order. */
   underwayItems(id: string): ResearchItem[];
   /** Whether the run has a submission, or one with this review decision. */

@@ -1,4 +1,5 @@
 {
+  "research-resume-workers": {"commits": 1, "note": "One operator resume of eight cut-off workers: one commit gives each its slot back. Each worker's turn start is the existing per-turn observation.", "observedWalBytes": 32960, "rowsChanged": 9, "statements": 9},
   "research-retained-review-and-finish": {"commits": 2, "note": "After a restart: one accepted decision and one completion on a retained run. No worker, bridge or model effect.", "observedWalBytes": 41200, "rowsChanged": 4, "statements": 4},
   "research-harness-check": {"commits": 0, "note": "A bridge capability check sends hello only and records nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-reconcile": {"commits": 3, "note": "Reconcile intent, one seven-record source page with its cursor, and the settled outcome. Read-only; no execute or cancel.", "observedWalBytes": 131840, "rowsChanged": 20, "statements": 20},
@@ -33,7 +34,7 @@
   "research-item-focused-reads": {"commits": 0, "note": "Fifty direct item/context reads and indexed searches. No journal replay, repair writes or polling commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-revision-cancel-settled": {"commits": 2, "note": "An exact provider terminal event settles the unknown delivery and the run. Duplicate terminal events do not write.", "observedWalBytes": 53560, "rowsChanged": 5, "statements": 5},
   "research-revision-cancel-unknown": {"commits": 7, "note": "Stop admission, retain the exact newly admitted revision turn before cancellation, record its unknown receipt, and cancel three initial worker turns.", "observedWalBytes": 168920, "rowsChanged": 15, "statements": 15},
-  "research-recovery": {"commits": 1, "note": "A dead owner's active run becomes interrupted. No workers are started and no periodic recovery writes are introduced.", "observedWalBytes": 32960, "rowsChanged": 2, "statements": 2},
+  "research-recovery": {"commits": 1, "note": "At launch, a live run whose process is gone is taken over in one commit: the new holder and each cut-off worker. No workers are started and no periodic recovery writes are introduced.", "observedWalBytes": 32960, "rowsChanged": 4, "statements": 4},
   "research-exhausted": {"commits": 2, "note": "The last worker ends without a candidate: retain its terminal event and the honest exhausted outcome.", "observedWalBytes": 45320, "rowsChanged": 4, "statements": 4},
   "research-worker-terminal": {"commits": 1, "note": "One exact provider terminal event for an assigned worker; duplicate and unrelated terminal events do not write.", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
   "research-prepare": {"commits": 0, "note": "Bind the operator's exact limits in memory before the coordinator receives the request. No execution or SQLite writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},

@@ -162,25 +162,39 @@ and duplicate deliveries write nothing. Worker start/end events, explicit
 research operations and run boundaries write; streamed tokens do not. The
 checked-in SQLite budgets cover those boundaries. Recovery validates the
 owner's PID, runtime instance ID and start time against the existing profile
-marker. A dead owner becomes interrupted without replaying model work; a
-different live process retains authority.
+marker. A different live process retains authority.
 
-Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. A
-run's own process always may. A restart is a new process, so a later one may
-too once the run is no longer running or stopping and the process that started
-it is gone: the operator and coordinating thread are the same, and nobody else
-could record on it. That covers reviewing candidates, finishing the run and
-reconciling a Harness source. A run that ended as interrupted or exhausted,
-as every live run does when PwrAgent quits, can be completed once a candidate
-is accepted; that appends the outcome and stops nothing. Work that needs a
-live run (assigning, revision delivery, stopping workers or a bridge) stays
-with the process that holds it. A live run of a dead process is not held by
-anyone until recovery at the next launch retires it. Snapshots, change pages
-and the run list report `writable` by the same function, reading liveness once
-per distinct owner. A review plus a finish on a retained run is two commits
-(41,200 observed WAL bytes), on operator action only: about 0.82 MB/day at
-twenty a day. Older journals without a process
-start time cannot prove live ownership and become interrupted. Revision
+A native run outlives its process. Quitting or crashing ends the worker turns
+in flight and nothing else: `close` writes nothing for a native run, and the
+next process to launch, or to record on the run, takes it over with one
+`adopted` event. That event names the new holder and each worker that was
+mid-flight; a worker with a thread becomes stopped and `interrupted`, and no
+model work is replayed. The run stays running, and any time limit keeps
+counting on the wall clock, so a limit that passed while nobody held the run
+ends it at launch. `resume` is an operator or coordinator command: one
+`resumed` event returns each named worker's slot, then each is messaged in its
+own thread and is running again when its turn is seen to start. A turn the
+operator starts in a worker's thread resumes it the same way. A run with
+workers waiting to be resumed is not exhausted. Taking a run over is one commit
+per live run per launch (32,960 observed WAL bytes) and a resume is one commit
+per operator action (32,960 bytes): about 0.5 MB/day at ten of each. A Harness
+run still becomes interrupted when its process ends, because its bridge ended
+with it.
+
+Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. The
+process holding a run always may. A restart is a new process, so a later one
+may once the holder is gone: the operator and coordinating thread are the
+same, and nobody else could record on it. That covers reviewing candidates,
+assigning, resuming, stopping and finishing a native run, and reviewing,
+finishing or reconciling a retained Harness one. A live Harness run of a dead
+process is not held by anyone until recovery at the next launch retires it. A
+run that ended as interrupted or exhausted can be completed once a candidate
+is accepted; that appends the outcome and stops nothing. Snapshots, change
+pages and the run list report `writable` by the same function, reading
+liveness once per distinct owner. A review plus a finish on a retained run is
+two commits (41,200 observed WAL bytes), on operator action only: about 0.82
+MB/day at twenty a day. Older journals without a process
+start time cannot prove live ownership and are treated as a gone holder. Revision
 queue receipts identify exactly which pending sends a
 run may cancel. An unknown cancellation outcome keeps the run stopping.
 Synthetic pending turn notifications do not establish worker identity. A

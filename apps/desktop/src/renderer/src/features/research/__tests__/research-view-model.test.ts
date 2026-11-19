@@ -52,8 +52,9 @@ describe("research run phase", () => {
 
   it("does not call a fully reviewed run, or one with a revision in flight, awaiting review", () => {
     // Both were "Awaiting review" on main: it checked only that every worker had ended and any candidate existed.
+    // Nobody is working and nothing waits for review: the run is open, and says that no worker is running.
     const reviewed = phaseRun({ status: "running", approaches: [{ state: "ended", revisionPending: false }], decisions: ["rejected"] });
-    expect(researchRunPhase(researchPhaseInput(reviewed)).label).toBe("Running");
+    expect(researchRunPhase(researchPhaseInput(reviewed))).toEqual({ label: "No workers running", tone: "attention" });
     const revising = phaseRun({ status: "running", approaches: [{ state: "ended", revisionPending: true }], decisions: [undefined] });
     expect(researchRunPhase(researchPhaseInput(revising)).label).toBe("Running");
   });
