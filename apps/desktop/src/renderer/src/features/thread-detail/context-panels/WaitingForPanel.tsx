@@ -30,7 +30,7 @@ import {
 import { describeCiOutcomes } from "../../pr-status/PrStatusCard";
 import { formatWatchTime } from "../../pr-watches/PullRequestWatchList";
 import { isCiWatch, readWatchRunAttempt } from "../../pr-watches/useThreadPrWatchIndicators";
-import type { ThreadPendingWakesController } from "../../thread-pending-wakes/useThreadPendingWakes";
+import { readFollowUpsSuspended, type ThreadPendingWakesController } from "../../thread-pending-wakes/useThreadPendingWakes";
 import type { ContextTabId } from "./context-tab";
 
 type WaitingForPanelProps = {
@@ -139,10 +139,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
   const notice = readHoldNotice(props.thread, wakes);
-  // The list flag holds with no follow-up waiting; an owner that predates it
-  // marks only its waiting rows.
-  const followUpsSuspended = state.followUpsSuspended
-    || wakes.some((wake) => wake.kind === "scheduled_action" && wake.followUpSuspended);
+  const followUpsSuspended = readFollowUpsSuspended(state);
   // A peer sends a held wake-up only through its project's release.
   const canSendHeld = (wake: ThreadPendingWake): boolean => wake.held?.kind === "project_paused"
     && Boolean(props.onSendHeldNow)
