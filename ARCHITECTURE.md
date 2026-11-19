@@ -177,7 +177,7 @@ own thread and is running again when its turn is seen to start. A turn the
 operator starts in a worker's thread resumes it the same way. A run with
 workers waiting to be resumed is not exhausted. Taking a run over is one commit
 per live run per launch (32,960 observed WAL bytes) and a resume is one commit
-per operator action (32,960 bytes): about 0.5 MB/day at ten of each. A Harness
+per operator action (32,960 bytes): about 0.66 MB/day at ten of each. A Harness
 run still becomes interrupted when its process ends, because its bridge ended
 with it.
 
