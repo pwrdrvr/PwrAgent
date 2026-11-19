@@ -8,7 +8,9 @@ import type {
   AutomationLoadIssue,
   AutomationOutputActionDefinition,
   AutomationOutputActionResult,
+  AutomationPauseReason,
   AutomationRunArtifact,
+  AutomationRunFailureReason,
   AutomationRunOutputDecision,
   AutomationRunOwner,
   AutomationRunSkipReason,
@@ -42,6 +44,12 @@ export type AutomationRecord = {
   outputActions: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
+  runTimeoutMs?: number;
+  dailyRunLimit?: number;
+  /** Set while PwrAgent holds the automation paused; cleared by any status change. */
+  pausedReason?: AutomationPauseReason;
+  /** When PwrAgent paused it; names the pause's skipped-trigger marker. */
+  pausedAt?: number;
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
@@ -65,6 +73,8 @@ export type CreateAutomationInput = {
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
+  runTimeoutMs?: number | null;
+  dailyRunLimit?: number | null;
   status?: AutomationStatus;
   nextRunAt?: number;
   now?: number;
@@ -84,10 +94,23 @@ export type UpdateAutomationInput = {
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
+  /** Null clears the timeout. */
+  runTimeoutMs?: number | null;
+  /** Null clears the limit. */
+  dailyRunLimit?: number | null;
   status?: AutomationStatus;
   nextRunAt?: number | null;
   now?: number;
 };
+
+/**
+ * The answer to asking for a new run. `refused`: the automation has a daily
+ * run limit and had already started that many runs in the rolling 24 hours,
+ * so no run was created.
+ */
+export type AutomationRunAdmission =
+  | { status: "admitted"; run: AutomationRunSummary }
+  | { status: "refused"; reason: "daily_limit"; runsInWindow: number; limit: number };
 
 export type CreateAutomationRunInput = {
   id?: string;
@@ -107,6 +130,8 @@ export type CreateAutomationRunInput = {
   completedAt?: number;
   errorMessage?: string;
   skipReason?: AutomationRunSkipReason;
+  /** With a terminal `status`: how many triggers a skipped marker stands for. */
+  coalescedCount?: number;
   now?: number;
 };
 
@@ -176,7 +201,26 @@ export interface AutomationStorage {
     includeDeleted?: boolean;
   }): AutomationRecord[];
   listEnabledDueAutomations(now: number): AutomationRecord[];
+  /** Paused automations PwrAgent paused at their daily run limit. */
+  listDailyLimitPausedAutomations(): AutomationRecord[];
+  /**
+   * Pause an enabled automation at its daily run limit, keeping its schedule
+   * so later triggers can be recorded as skipped. `paused` is false when it
+   * was not enabled, so only one caller raises the pause's card.
+   */
+  pauseAutomationForDailyLimit(id: string, now: number): {
+    automation: AutomationRecord;
+    paused: boolean;
+  } | undefined;
   createRun(input: CreateAutomationRunInput): AutomationRunSummary | undefined;
+  /**
+   * Create a run only if the automation's daily run limit allows it. The
+   * count and the insert share one write transaction, so two instances on a
+   * profile cannot both take the last slot. Undefined: no such automation.
+   */
+  admitRun(input: CreateAutomationRunInput): AutomationRunAdmission | undefined;
+  /** Runs created at or after `sinceMs` that started or will start a turn. */
+  countRunsSince(params: { automationId: string; sinceMs: number }): number;
   coalescePendingScheduledRun(params: {
     automationId: string;
     scheduledWindows: AutomationRunWindow[];
@@ -214,6 +258,7 @@ export interface AutomationStorage {
     completedAt?: number;
     errorMessage?: string;
     skipReason?: AutomationRunSkipReason;
+    failureReason?: AutomationRunFailureReason;
     coalescedCount?: number;
     now?: number;
   }): AutomationRunSummary | undefined;
@@ -221,6 +266,8 @@ export interface AutomationStorage {
     runId: string;
     coalescedCount: number;
     errorMessage: string;
+    /** The marker's skip reason. Defaults to `rate_limited`. */
+    skipReason?: AutomationRunSkipReason;
     now: number;
   }): AutomationRunSummary | undefined;
   getRun(runId: string): AutomationRunSummary | undefined;

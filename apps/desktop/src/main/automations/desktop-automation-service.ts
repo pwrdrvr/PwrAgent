@@ -41,6 +41,7 @@ import type {
   MessagingInboundEvent,
 } from "@pwragent/messaging-interface";
 import {
+  AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS,
   automationSuppressesBindingBroadcast,
   finalTurnOutputText,
   validateAutomationScheduleDefinition,
@@ -251,6 +252,8 @@ export class DesktopAutomationService {
       setTimer: options.scheduler?.setTimer,
       clearTimer: options.scheduler?.clearTimer,
       releaseDeadOwnerRuns: () => this.releaseDeadOwnerRuns({ reschedule: false }),
+      onDailyLimitReached: (params) => this.reportDailyLimitPause(params),
+      onRunTimedOut: (run) => this.reportTimedOutRun(run),
     });
     this.inspectionBus = new AutomationInspectionBus(options.store, {
       readRunArtifact: (runId) => this.readRunArtifactSnapshot(runId),
@@ -475,12 +478,17 @@ export class DesktopAutomationService {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const todayMs = startOfToday.getTime();
+    const now = this.options.now?.() ?? Date.now();
     return {
       automations: automations.map((automation) =>
         toAutomationDetail(
           automation,
           this.options.store.getLatestRunForAutomation(automation.id),
           this.sumRunCostSince(automation.id, todayMs),
+          this.options.store.countRunsSince({
+            automationId: automation.id,
+            sinceMs: now - AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS,
+          }),
         ),
       ),
     };
@@ -697,6 +705,8 @@ export class DesktopAutomationService {
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       maxRunsPerHour: request.maxRunsPerHour,
+      runTimeoutMs: request.runTimeoutMs,
+      dailyRunLimit: request.dailyRunLimit,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
         request.nextRunAt ??
@@ -763,6 +773,8 @@ export class DesktopAutomationService {
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       maxRunsPerHour: request.maxRunsPerHour,
+      runTimeoutMs: request.runTimeoutMs,
+      dailyRunLimit: request.dailyRunLimit,
       status:
         request.enabled === undefined
           ? undefined
@@ -1005,6 +1017,17 @@ export class DesktopAutomationService {
       return false;
     }
     for (const match of matches) {
+      if (match.automation.status === "paused") {
+        // Held at its daily run limit: the message is recorded, not run.
+        const skipped = this.scheduler.recordSkipWhilePaused(match.automation, {
+          trigger: "inbound_message",
+          source: match.source,
+        });
+        if (skipped) {
+          await this.publishSkippedRunUpdate(match.automation, skipped);
+        }
+        continue;
+      }
       await this.scheduler.runFromInboundEvent({
         automation: match.automation,
         source: match.source,
@@ -1041,7 +1064,76 @@ export class DesktopAutomationService {
     if (this.options.runtime?.disabled) {
       return [];
     }
-    return this.options.store.listEnabledInboundAutomations();
+    // An automation the daily run limit paused still matches, so a message
+    // that arrives while it is paused is recorded as skipped, not dropped.
+    return [
+      ...this.options.store.listEnabledInboundAutomations(),
+      ...this.options.store.listDailyLimitPausedAutomations().filter((automation) =>
+        automation.triggers.some((trigger) => trigger.kind === "inbound_message")),
+    ];
+  }
+
+  /**
+   * The daily run limit paused an automation. The skipped run's update
+   * refreshes the Agent thread, whose strip above the composer shows the
+   * pause with a Resume action.
+   */
+  private async reportDailyLimitPause(params: {
+    automation: AutomationRecord;
+    limit: number;
+    runsInWindow: number;
+    skippedRunId: string;
+  }): Promise<void> {
+    automationServiceLog.info("automation paused at its daily run limit", {
+      automationId: params.automation.id,
+      automationName: params.automation.name,
+      dailyRunLimit: params.limit,
+      runsInWindow: params.runsInWindow,
+    });
+    const skipped = this.options.store.getRun(params.skippedRunId);
+    if (skipped) {
+      await this.publishSkippedRunUpdate(params.automation, skipped);
+    }
+    this.notifyAutomationsChanged();
+  }
+
+  private async publishSkippedRunUpdate(
+    automation: AutomationRecord,
+    run: AutomationRunSummary,
+  ): Promise<void> {
+    await this.options.registry.publishLocalEvent({
+      backend: automation.backend,
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          threadId: automation.threadId,
+          automationId: automation.id,
+          automationName: automation.name,
+          errorMessage: run.errorMessage,
+          runId: run.id,
+          status: run.status,
+          suppressBindingBroadcast: automationSuppressesBindingBroadcast(automation),
+        },
+      },
+    });
+    await this.notifyThreadAutomationsUpdated(automation);
+  }
+
+  /** A timed-out run is reported as any failed run is: artifact, actions, card. */
+  private async reportTimedOutRun(run: AutomationRunSummary): Promise<void> {
+    const automation = this.options.store.getAutomation(run.automationId, {
+      includeDeleted: true,
+    });
+    if (!automation) return;
+    this.flushPendingRunTranscriptEvents(run.id);
+    this.flushPendingRunUsage(run.id);
+    await this.publishAutomationRunUpdate({
+      backend: automation.backend,
+      runId: run.id,
+      status: "failed",
+      threadId: automation.threadId,
+      errorMessage: run.errorMessage,
+    });
   }
 
   buildThreadSummaries() {
@@ -1624,7 +1716,9 @@ export class DesktopAutomationService {
           // load; the explicit `schedule` guard is belt-and-suspenders so a
           // schedule-less record can never reach computeNextAutomationRunAt and
           // abort the whole startup reconcile.
-          .filter((automation) => automation.status === "enabled" && automation.schedule)
+          .filter((automation) =>
+            (automation.status === "enabled" || automation.pausedReason === "daily_run_limit")
+            && automation.schedule)
           .map((automation) => [
             automation.id,
             computeNextAutomationRunAt(automation.schedule!, now),
@@ -1876,6 +1970,7 @@ function toAutomationDetail(
   record: AutomationRecord,
   latestRun?: AutomationRunSummary,
   costTodayMicros?: number,
+  runsInLast24Hours?: number,
 ): AutomationDetail {
   const latestRunAt = latestRun ? automationRunActivityAt(latestRun) : undefined;
   const useLatestRun =
@@ -1900,10 +1995,17 @@ function toAutomationDetail(
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     maxRunsPerHour: record.maxRunsPerHour,
+    ...(record.runTimeoutMs !== undefined ? { runTimeoutMs: record.runTimeoutMs } : {}),
+    ...(record.dailyRunLimit !== undefined ? { dailyRunLimit: record.dailyRunLimit } : {}),
+    ...(runsInLast24Hours !== undefined ? { runsInLast24Hours } : {}),
+    ...(record.pausedReason !== undefined ? { pausedReason: record.pausedReason } : {}),
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
     ...(useLatestRun ? { lastRunId: latestRun.id } : {}),
+    ...(useLatestRun && latestRun.failureReason
+      ? { lastRunFailureReason: latestRun.failureReason }
+      : {}),
     updatedAt: record.updatedAt,
     createdAt: record.createdAt,
     deletedAt: record.deletedAt,

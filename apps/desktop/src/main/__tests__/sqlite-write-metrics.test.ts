@@ -22,6 +22,7 @@ import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environm
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../storage/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
+import { AutomationScheduler } from "../automations/automation-scheduler";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
@@ -2944,6 +2945,57 @@ describe("sqlite write metrics", () => {
       note:
         "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",
       scenario: "thread-spend-alert-boundary",
+      writes,
+    });
+  });
+
+  it("bounds writes for triggers the daily run limit skips while it holds an automation paused", async () => {
+    const automationStore = new AutomationStore(stateDb);
+    automationStore.createAutomation({
+      id: "automation-daily-limit",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Busy channel",
+      taskPrompt: "Answer",
+      schedule: { kind: "interval", every: 1, unit: "hours", anchorAt: 0 },
+      dailyRunLimit: 1,
+      now: 0,
+    });
+    automationStore.createRun({ id: "admitted", automationId: "automation-daily-limit", trigger: "manual", now: 0 });
+    automationStore.markRunTerminal({ runId: "admitted", status: "completed", now: 1 });
+    let now = 10;
+    const timers: Array<() => void> = [];
+    const scheduler = new AutomationScheduler({
+      store: automationStore,
+      runner: { async submitRun() { throw new Error("no run may start"); } },
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        timers.push(callback);
+        return 0;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      // The refused trigger pauses the automation and writes its marker.
+      await scheduler.runNow("automation-daily-limit", now);
+      const paused = automationStore.getAutomation("automation-daily-limit")!;
+      // A flood inside one flush window only grows the count in memory.
+      for (let index = 0; index < 100; index += 1) {
+        now += 100;
+        scheduler.recordSkipWhilePaused(paused, { trigger: "inbound_message", now });
+      }
+      // The window's timer writes the count once.
+      for (const fire of timers.splice(0)) fire();
+      now += 60_000;
+      scheduler.recordSkipWhilePaused(paused, { trigger: "inbound_message", now });
+    });
+    expect(automationStore.getRun(
+      `automation-daily-limit:automation-daily-limit:10`,
+    )?.coalescedCount).toBe(102);
+    expectSqliteWriteBudget({
+      scenario: "automation-daily-limit-skips",
+      note: "One pause at the daily run limit, then 101 skipped triggers: the pause, the first skip and one count write per minute. A channel flooding a paused automation costs at most one commit a minute (~1,440 commits, ~47 MB/day at the measured ~33 KB a commit), and nothing while no trigger arrives.",
       writes,
     });
   });

@@ -435,6 +435,66 @@ describe("AutomationEditor", () => {
     );
   });
 
+  it("edits the run timeout and daily run limit beside the last 24 hours' count", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const automation: AutomationDetail = {
+      backend: "codex",
+      threadId: "thread-1",
+      id: "auto-limits",
+      name: "Triage",
+      status: "paused",
+      pausedReason: "daily_run_limit",
+      triggers: [
+        {
+          id: "schedule",
+          kind: "schedule",
+          schedule: { kind: "interval", every: 1, unit: "hours" },
+        },
+      ],
+      schedule: { kind: "interval", every: 1, unit: "hours" },
+      scheduleSummary: "Every hour",
+      backlogPolicy: "coalesce",
+      runTimeoutMs: 30 * 60 * 1000,
+      dailyRunLimit: 10,
+      runsInLast24Hours: 10,
+      updatedAt: 1,
+      createdAt: 1,
+      taskPrompt: "Triage the queue.",
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    };
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: {} }))}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const timeoutField = screen.getByLabelText("Run timeout");
+    const limitField = screen.getByLabelText("Daily run limit");
+    expect(timeoutField).toHaveTextContent("30 min");
+    expect(limitField).toHaveTextContent("10 runs");
+    expect(screen.getByTestId("automation-daily-run-count")).toHaveTextContent(
+      "10 of 10 runs in the last 24 hours · paused at its daily run limit",
+    );
+
+    chooseSelectOption(timeoutField, "No timeout");
+    chooseSelectOption(limitField, "25 runs");
+    expect(screen.getByTestId("automation-daily-run-count")).toHaveTextContent(
+      "10 of 25 runs in the last 24 hours",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    // "No timeout" clears the saved timeout rather than leaving it in place.
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ runTimeoutMs: null, dailyRunLimit: 25 }),
+      }),
+    );
+  });
+
   it("re-saves a coalescing window that is not a whole number of seconds", async () => {
     const onSubmit = vi.fn(async () => undefined);
     const automation: AutomationDetail = {
