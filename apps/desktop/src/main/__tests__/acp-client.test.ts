@@ -12,6 +12,7 @@ import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { StateDb } from "../state/state-db";
+import { createAcpPromptSettlement } from "./fixtures/acp-prompt-settlement";
 import {
   openInMemoryStateDb,
   removeTempStateDbDir,
@@ -4318,13 +4319,22 @@ describe("AcpAgentClient", () => {
       "session/prompt": promptResponse.promise,
     });
     const errors: unknown[] = [];
+    const settlement = createAcpPromptSettlement();
+    const earlyTerminalUpdate = createDeferred<void>();
     const client = new AcpAgentClient({
       backendId: "acp:test-agent",
       store,
       transport,
       now: () => 1000,
-      onPromptError: ({ error }) => {
-        errors.push(error);
+      onSessionUpdate(event) {
+        settlement.callbacks.onSessionUpdate?.(event);
+        if (event.update.kind === "turn_finished" && event.replay.threadStatus === "active") {
+          earlyTerminalUpdate.resolve();
+        }
+      },
+      onPromptError(event) {
+        errors.push(event.error);
+        settlement.callbacks.onPromptError?.(event);
       },
     });
 
@@ -4333,25 +4343,30 @@ describe("AcpAgentClient", () => {
       cwd: "/repo",
       executionMode: "default",
     });
-    client.startPrompt({
+    let settled = false;
+    const finished = settlement.finish(client, {
       sessionId: session.sessionId,
       prompt: "Inspect this",
-      turnId: "turn-1",
-    });
-    transport.emitSessionUpdate(session.sessionId, {
-      kind: "turn_finished",
-      outputText: "Finished from the terminal update.",
-    });
-    promptResponse.resolve({ stopReason: "end_turn" });
-
-    await new Promise((resolve) => setImmediate(resolve));
-    await vi.waitFor(() => {
-      expect(store.getSession("acp:test-agent", session.sessionId)?.status).toBe(
-        "idle",
-      );
-    });
-    expect(errors).toEqual([]);
-    expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
+    }).then(() => { settled = true; });
+    try {
+      const terminal = Promise.race([earlyTerminalUpdate.promise, finished]);
+      transport.emitSessionUpdate(session.sessionId, {
+        kind: "turn_finished",
+        outputText: "Finished from the terminal update.",
+      });
+      await terminal;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(client.hasActiveTurns()).toBe(true);
+      expect(settled).toBe(false);
+      promptResponse.resolve({ stopReason: "end_turn" });
+      await finished;
+      expect(store.getSession("acp:test-agent", session.sessionId)?.status).toBe("idle");
+      expect(errors).toEqual([]);
+      expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
+    } finally {
+      promptResponse.resolve({ stopReason: "end_turn" });
+      await client.dispose();
+    }
   });
 
   it("fails a turn when a terminal update is not followed by a prompt response", async () => {
