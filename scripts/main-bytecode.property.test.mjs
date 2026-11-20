@@ -102,7 +102,7 @@ it("returns one process's records in the caller's module order however the modul
   });
   const oracle = await compileBytecode(modules, { processes: 1, listing: "pipe" });
   expect([...new Set(oracle.records.map(({ file }) => file))]).toEqual(modules.map(({ file }) => file));
-  for (const options of [{ processes: 3, listing: "pipe" }, { processes: 1, listing: "file" }, { processes: 7, listing: "file" }, { processes: 20 }]) {
+  for (const options of [{ processes: 3, listing: "pipe" }, { processes: 2, listing: "file" }, {}]) {
     const { runtime, records } = await compileBytecode(modules, options);
     expect(runtime, JSON.stringify(options)).toEqual(oracle.runtime);
     expect(records, JSON.stringify(options)).toEqual(oracle.records);

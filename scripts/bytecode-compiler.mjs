@@ -45,14 +45,27 @@ async function compilerChild() {
 // compiles alone, so its records do not depend on the modules beside it, and
 // the modules are split across processes by source size.
 export async function compileBytecode(modules, options = {}) {
-  const count = Math.max(1, Math.min(options.processes ?? availableParallelism(), modules.length));
+  // V8 flushes the listing after every line. Into a pipe, each flush wakes
+  // this process to read a few bytes. Linux takes the same writes into a
+  // file more cheaply, so the listing goes there and is read once the
+  // compiler exits. macOS writes a file this way far more slowly than a pipe.
+  const listing = options.listing ?? (process.platform === "linux" ? "file" : "pipe");
+  // This one process reads every pipe, and beyond two it is the limit.
+  const processes = options.processes ?? (listing === "file" ? availableParallelism() : Math.min(2, availableParallelism()));
+  const count = Math.max(1, Math.min(processes, modules.length));
   const shards = Array.from({ length: count }, () => ({ size: 0, modules: [] }));
   for (const module of [...modules].sort((a, b) => b.code.length - a.code.length)) {
     const shard = shards.reduce((least, candidate) => candidate.size < least.size ? candidate : least);
     shard.size += module.code.length;
     shard.modules.push(module);
   }
-  const results = await Promise.all(shards.map((shard) => compileShard(shard.modules, options)));
+  // A failure in one process stops the others.
+  const failure = new AbortController();
+  const results = await Promise.all(shards.map((shard) => compileShard(shard.modules, { ...options, listing, signal: failure.signal })))
+    .catch((error) => {
+      failure.abort();
+      throw error;
+    });
   const key = ({ file, variant }) => JSON.stringify([file, variant]);
   const byModule = new Map();
   for (const record of results.flatMap((result) => result.records)) {
@@ -64,21 +77,28 @@ export async function compileBytecode(modules, options = {}) {
 }
 
 async function compileShard(modules, options) {
-  // V8 flushes the listing after every line. Into a pipe, each flush wakes
-  // this process to read a few bytes. Linux takes the same writes into a
-  // file more cheaply, so the listing goes there and is read once the
-  // compiler exits. macOS writes a file this way far more slowly than a pipe.
-  const directory = (options.listing ?? (process.platform === "linux" ? "file" : "pipe")) === "file"
-    ? mkdtempSync(join(tmpdir(), "bytecode-listing-")) : undefined;
-  const listing = directory && join(directory, "listing.txt");
+  const directory = options.listing === "file" ? mkdtempSync(join(tmpdir(), "bytecode-listing-")) : undefined;
+  try {
+    return await compileInto(directory && join(directory, "listing.txt"), modules, options);
+  } finally {
+    if (directory) rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function compileInto(listing, modules, options) {
   const sink = listing ? openSync(listing, "w") : "pipe";
-  const child = spawn(options.executable ?? process.execPath, [
-    "--no-lazy", "--experimental-vm-modules", fileURLToPath(import.meta.url), "--compile",
-  ], {
-    env: { ...process.env, ...options.env },
-    stdio: ["pipe", sink, "pipe"],
-  });
-  if (listing) closeSync(sink);
+  let child;
+  try {
+    child = spawn(options.executable ?? process.execPath, [
+      "--no-lazy", "--experimental-vm-modules", fileURLToPath(import.meta.url), "--compile",
+    ], {
+      env: { ...process.env, ...options.env },
+      stdio: ["pipe", sink, "pipe"],
+      signal: options.signal,
+    });
+  } finally {
+    if (listing) closeSync(sink);
+  }
   const finished = once(child, "close");
   let diagnostics = "";
   child.stderr.on("data", (chunk) => { diagnostics = (diagnostics + chunk).slice(-4000); });
@@ -125,7 +145,6 @@ async function compileShard(modules, options) {
     return { runtime, records };
   } finally {
     if (child.exitCode === null) child.kill();
-    if (directory) rmSync(directory, { recursive: true, force: true });
   }
 }
 
