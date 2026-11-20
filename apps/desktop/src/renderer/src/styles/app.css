@@ -11838,6 +11838,16 @@ a.button {
   white-space: nowrap;
 }
 
+/* Read by assistive tech, not drawn. */
+.thread-search-result__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .thread-search-result__confidence-dot {
   flex: none;
   box-sizing: border-box;

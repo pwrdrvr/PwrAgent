@@ -19,10 +19,13 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 
 // Counts renders: the title bar and every result card call this hook once
 // per render.
-const providerChipNeeded = vi.hoisted(() => vi.fn(() => false));
-vi.mock("../../navigation/provider-chip-visibility", () => ({
-  useProviderChipNeeded: providerChipNeeded,
-}));
+// It wraps the real hook, so the provider chip still renders.
+const providerChipNeeded = vi.hoisted(() => vi.fn());
+vi.mock("../../navigation/provider-chip-visibility", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../navigation/provider-chip-visibility")>();
+  providerChipNeeded.mockImplementation(actual.useProviderChipNeeded);
+  return { ...actual, useProviderChipNeeded: providerChipNeeded };
+});
 
 function searchResult(overrides: Partial<ThreadSearchResult> & { threadId: string }): ThreadSearchResult {
   return {
@@ -112,13 +115,39 @@ describe("ThreadSearchPanel result times", () => {
     expect(result).toMatchObject({ createdAt: 10, updatedAt: 20 });
   });
 
-  it("names the confidence band on the match reason", async () => {
+  it("names the confidence band in the tooltip and in the card's name", async () => {
     const searchThreads = vi.fn(async () => searchResponse([
       searchResult({ threadId: "one", confidence: "high" }),
     ]));
     render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
     await runSearch();
     expect(screen.getByText("Message content")).toHaveAttribute("data-tooltip", "High confidence");
+    // The tooltip needs a pointer; the name does not.
+    expect(screen.getByRole("button", { name: /Message content, high confidence/ }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps the age label true while the results stay open", async () => {
+    const now = Date.UTC(2026, 10, 20, 12);
+    vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "one", updatedAt: now - 14 * 60_000 }),
+    ]));
+    const view = render(
+      <ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />,
+    );
+    await runSearch();
+    providerChipNeeded.mockClear();
+    expect(document.querySelector(".thread-search-result__time")).toHaveTextContent("14m");
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(document.querySelector(".thread-search-result__time")).toHaveTextContent("17m");
+    // Only the label rendered, not the card or the title bar.
+    expect(providerChipNeeded).not.toHaveBeenCalled();
+    // The timer stops with the last label.
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -195,6 +224,16 @@ describe("ThreadSearchPanel arrow keys", () => {
     expect(second).toHaveFocus();
     fireEvent.keyDown(second, { key: "ArrowUp" });
     fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(input).toHaveFocus();
+  });
+
+  it("leaves the arrows to an IME while it is composing", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([searchResult({ threadId: "first" })]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    const input = screen.getByLabelText("Search threads");
+    input.focus();
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
     expect(input).toHaveFocus();
   });
 });

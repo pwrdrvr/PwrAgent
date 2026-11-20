@@ -227,6 +227,43 @@ export function highlightSnippet(text: string, query: string): ReactNode[] {
     );
 }
 
+// One timer for every age label on screen, running only while one is.
+const minuteListeners = new Set<() => void>();
+let minuteTimer: number | undefined;
+let minute = 0;
+
+function subscribeToMinutes(listener: () => void): () => void {
+  minuteListeners.add(listener);
+  minuteTimer ??= window.setInterval(() => {
+    minute += 1;
+    for (const notify of minuteListeners) notify();
+  }, 60_000);
+  return () => {
+    minuteListeners.delete(listener);
+    if (minuteListeners.size === 0 && minuteTimer !== undefined) {
+      window.clearInterval(minuteTimer);
+      minuteTimer = undefined;
+    }
+  };
+}
+
+/**
+ * The sidebar row's age label; hover gives the date with its year. The cards
+ * are memoized, so the label renders itself once a minute to stay true while
+ * the results stay open.
+ */
+function ThreadSearchResultTime(props: { timestamp: number }): ReactElement {
+  useSyncExternalStore(subscribeToMinutes, () => minute);
+  return (
+    <span
+      className="thread-search-result__time tooltip-target"
+      data-tooltip={formatFullTimestamp(props.timestamp)}
+    >
+      {formatRelativeTime(props.timestamp)}
+    </span>
+  );
+}
+
 const CONFIDENCE_LABELS: Record<ThreadSearchResult["confidence"], string> = {
   high: "High confidence",
   medium: "Medium confidence",
@@ -323,21 +360,18 @@ const ThreadSearchResultItem = memo(function ThreadSearchResultItem(props: {
           ) : null}
         </span>
         <span className="thread-search-result__side">
-          {timestamp !== undefined ? (
-            // The sidebar row's age label; hover gives the date with its year.
-            <span
-              className="thread-search-result__time tooltip-target"
-              data-tooltip={formatFullTimestamp(timestamp)}
-            >
-              {formatRelativeTime(timestamp)}
-            </span>
-          ) : null}
+          {timestamp !== undefined ? <ThreadSearchResultTime timestamp={timestamp} /> : null}
           <span
             className={`thread-search-result__reason thread-search-result__reason--${result.confidence} tooltip-target`}
             data-tooltip={CONFIDENCE_LABELS[result.confidence]}
           >
             <span className="thread-search-result__confidence-dot" aria-hidden />
             {describeMatchReason(result.matchReasons[0]?.kind)}
+            {/* The tooltip opens for a pointer only; this puts the band in
+                the card's name for a keyboard or a screen reader. */}
+            <span className="thread-search-result__sr">
+              {`, ${CONFIDENCE_LABELS[result.confidence].toLowerCase()}`}
+            </span>
           </span>
           {remoteViewerFederation ? (
             // Holds the corner the sibling Remote viewer button covers: the
@@ -426,7 +460,9 @@ export function describeRemoteInstances(
 }
 
 /** A result's last activity as the search returned it. */
-function resultTimestamp(result: ThreadSearchResult): number | undefined {
+function resultTimestamp(
+  result: Pick<ThreadSearchResult, "updatedAt" | "createdAt">,
+): number | undefined {
   return result.updatedAt ?? result.createdAt;
 }
 
@@ -440,7 +476,7 @@ export function orderThreadSearchResults<
 >(results: readonly Result[], sort: ThreadSearchSort): readonly Result[] {
   if (sort === "relevance") return results;
   return results.toSorted((left, right) =>
-    (right.updatedAt ?? right.createdAt ?? 0) - (left.updatedAt ?? left.createdAt ?? 0));
+    (resultTimestamp(right) ?? 0) - (resultTimestamp(left) ?? 0));
 }
 
 function stoppedResponse(response: ThreadSearchResponse): ThreadSearchResponse {
@@ -672,7 +708,8 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
       // fires after typing). Scoped to the panel rather than a window listener
       // so it won't also dismiss an overlay (e.g. the sidebar quick-search).
       onKeyDown={(event) => {
-        if (event.defaultPrevented) return;
+        // An IME takes the arrows to walk its candidates while composing.
+        if (event.defaultPrevented || event.nativeEvent.isComposing) return;
         if (event.key === "Escape" && props.onClose) {
           event.preventDefault();
           props.onClose();
