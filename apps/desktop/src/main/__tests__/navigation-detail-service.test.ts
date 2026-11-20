@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import { CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
+  AppServerBackendKind,
   NavigationDirectoryGitStatus,
   NavigationThreadSummary,
   PrSummary,
@@ -15,9 +16,11 @@ import type {
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import * as backendRegistry from "../app-server/backend-registry";
 import * as navigationDetail from "../app-server/navigation-detail-service";
+import { readThreadSubAgentPanel } from "../app-server/thread-display";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
 import { buildThreadPendingWakes, type PendingWakeThread, type ThreadPendingWakeReaders } from "../app-server/thread-pending-wakes";
+import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 
 const mocks = vi.hoisted(() => ({
   /** The selected thread's stored cards, as the store's card reads see them. */
@@ -53,7 +56,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     getThreadSubAgents: async ({ monitorIds }: { monitorIds: readonly string[] }) =>
       mocks.cards.filter((card) => monitorIds.includes(card.monitorId)),
     listActiveThreadPrStatusWatches: mocks.listActiveThreadPrStatusWatches,
-    listActiveThreadSubAgents: async () => mocks.cards.filter((card) =>
+    listActiveThreadSubAgents: async () => mocks.newestFirst(mocks.cards).filter((card) =>
       card.completedAt === undefined || card.status === "failed" || card.status === "failure"),
     readThreadSubAgentRevision: async () => {
       // Any card change moves it, as each write moves the store's counter.
@@ -154,8 +157,11 @@ describe("NavigationDetailService", () => {
     vi.restoreAllMocks();
   });
 
-  async function selectedWithSubAgents(gitStatus?: NavigationDirectoryGitStatus) {
-    const selected = { ...thread("selected"), executionMode: "full-access" as const };
+  async function selectedWithSubAgents({ gitStatus, backend = "codex" }: {
+    gitStatus?: NavigationDirectoryGitStatus;
+    backend?: AppServerBackendKind;
+  } = {}) {
+    const selected = { ...thread("selected"), source: backend, executionMode: "full-access" as const };
     if (gitStatus) selected.linkedDirectories = ["primary", "secondary", "tools"].map((name) => ({
       id: name, kind: "local", label: name, path: `/repo/${name}`,
     }));
@@ -172,7 +178,7 @@ describe("NavigationDetailService", () => {
       readSelectedWorkspaceGitStatus: async () => gitStatus,
       mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => mocks.newestFirst(cards),
     } as unknown as DesktopBackendRegistry);
-    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
+    const request = { protocol: 2 as const, ref: { backend, threadId: selected.id } };
     const detail = await service.readSelectedDetail({ ...request, includeWorkspaceConfiguration: true }, { includePendingWakes: true });
     expect(detail.thread?.executionMode).toBe(selected.executionMode);
     expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
@@ -206,6 +212,88 @@ describe("NavigationDetailService", () => {
     ), { numRuns: 40, examples: [[258, 500, "💡"]] });
   });
 
+  async function checkClaudeFailureTransition(count: number, failureDelay: number) {
+    const worker: ThreadSubAgentSummary = { ...liveMonitor, monitorId: "claude-native:long-running", backend: "claude" };
+    const earlierFailures = failedMonitors(count, "Earlier failure").map((card) => ({
+      ...card, monitorId: `claude-native:${card.monitorId}`, backend: "claude" as const,
+    }));
+    mocks.cards = [worker, ...earlierFailures];
+    const { detail: running } = await selectedWithSubAgents({ backend: "claude" });
+    expect(running.thread?.activeSubAgents?.[0]).toMatchObject({ monitorId: worker.monitorId, status: "running" });
+
+    const failedAt = count + failureDelay;
+    mocks.cards[0] = { ...worker, status: "failure", completedAt: failedAt, updatedAt: failedAt };
+    // Updating an old card's accounting does not make its failure new.
+    earlierFailures.at(-1)!.updatedAt = failedAt + 1;
+    const { detail: failed } = await selectedWithSubAgents({ backend: "claude" });
+    expect(failed.thread?.activeSubAgents).toHaveLength(32);
+    expect(failed.thread?.activeSubAgents?.[0]).toMatchObject({ monitorId: worker.monitorId, status: "failure" });
+  }
+
+  it("ranks Claude failure alerts by completion after a running worker fails", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 32, max: 55 }), fc.integer({ min: 1, max: 100 }),
+      checkClaudeFailureTransition), { numRuns: 25 });
+  });
+
+  it("shows a long-running Claude worker that fails after 32 later-started workers", async () => {
+    await checkClaudeFailureTransition(32, 1);
+  });
+
+  async function checkLiveWorkerAtResponseBoundary(headroom: number, taskUnit: string) {
+    const worker = { ...liveMonitor, task: taskUnit.repeat(512), monitorThreadId: "worker-thread", monitorTurnId: "worker-turn" };
+    mocks.cards = [worker, ...failedMonitors(1, "Old alert")];
+    const status = { currentBranch: "main", recentCommits: [{ sha: "12345678", shortSha: "1234567", subject: "" }] };
+    const { detail } = await selectedWithSubAgents({ gitStatus: status });
+    const core = { ...detail, thread: { ...detail.thread, activeSubAgents: [] } };
+    const coreBytes = Buffer.byteLength(JSON.stringify(core));
+    status.recentCommits[0]!.subject = "a".repeat(Math.floor((NAVIGATION_QUERY_MAX_RESULT_BYTES - coreBytes - headroom) / 3));
+    const { detail: nearLimit } = await selectedWithSubAgents({ gitStatus: status });
+    const shown = nearLimit.thread?.activeSubAgents?.[0];
+    expect(shown).toMatchObject({ monitorId: worker.monitorId, monitorThreadId: worker.monitorThreadId, monitorTurnId: worker.monitorTurnId });
+    expect(shown?.task.startsWith(taskUnit)).toBe(true);
+    expect(shown?.task.endsWith("…")).toBe(true);
+  }
+
+  it("preserves live stop controls when workspace metadata leaves little room for escaped or multibyte labels", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 750, max: 900 }), fc.constantFrom("💡", "\"\\\n", "\0"),
+      checkLiveWorkerAtResponseBoundary), { numRuns: 25 });
+  });
+
+  it("shortens an escaped live label before admitting a short failed alert", async () => {
+    await checkLiveWorkerAtResponseBoundary(750, "\"\\\n");
+  });
+
+  it.each([-1, 0, 1])("advertises an omitted native worker only while the Sub-agents panel can display it (%i ms at the cutoff)", async (ageDelta) => {
+    const now = 1_800_100_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const completedAt = now - CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS + ageDelta;
+    const native: ThreadSubAgentSummary = {
+      monitorId: "claude-native:finished", backend: "claude", task: "Native task", status: "failure",
+      createdAt: completedAt - 1, completedAt, updatedAt: now,
+    };
+    mocks.cards = [...failedMonitors(32, "Newer failure").map((card) => ({ ...card,
+      createdAt: now - 1000, completedAt: now - 500, updatedAt: now - 500,
+    })), native];
+    const { detail, request } = await selectedWithSubAgents({ backend: "claude" });
+    expect(detail.thread?.activeSubAgentsIncomplete).toBe(true);
+    expect(detail.thread?.activeSubAgents?.some((row) => row.monitorId === native.monitorId)).toBe(false);
+
+    const stored = mockSubAgentReads(() => ({
+      ...request.ref, executionMode: "full-access", extraLinkedDirectories: [], subAgents: mocks.cards,
+    }));
+    const panel = await readThreadSubAgentPanel({
+      demand: { resource: "subagents", subAgentLens: "harness" }, now, storedRevision: 0,
+      live: { monitorIds: [], cards: [] },
+      reader: {
+        counts: (read) => stored.readThreadSubAgentLensCounts({ ...request.ref, ...read }),
+        page: (read) => stored.listThreadSubAgentLensPage({ ...request.ref, ...read }),
+      },
+    });
+    const nativeVisible = panel.subAgents.some((card) => card.monitorId === native.monitorId);
+    expect(nativeVisible).toBe(ageDelta >= 0);
+    expect(detail.thread?.activeSubAgentsMoreInPanel).toBe(nativeVisible ? true : undefined);
+  });
+
   it("opens a thread with 981 completed gates and 141 failed monitors while preserving paged tasks", async () => {
     const failed = failedMonitors(141, "💡".repeat(300));
     const gates: ThreadSubAgentSummary[] = Array.from({ length: 981 }, (_, index) => ({
@@ -220,7 +308,7 @@ describe("NavigationDetailService", () => {
       baseBranchDetails: baseBranches.map((name) => ({ name, lastCommitAt: 1_800_000_000 })),
     };
     mocks.cards = [liveMonitor, ...failed, ...gates];
-    const { service, detail, request } = await selectedWithSubAgents(gitStatus);
+    const { service, detail, request } = await selectedWithSubAgents({ gitStatus });
     expect(detail.workspaceDirectories?.map((directory) => directory.gitStatus)).toEqual([gitStatus, gitStatus, gitStatus]);
     expect(detail.thread?.activeSubAgents).toContainEqual(expect.objectContaining(liveMonitor));
     const latestFailure = detail.thread?.activeSubAgents?.find((card) => card.monitorId === failed.at(-1)?.monitorId);

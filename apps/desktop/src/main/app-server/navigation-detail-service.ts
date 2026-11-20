@@ -14,6 +14,7 @@ import type {
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import {
+  isThreadSubAgentVisibleInPanel,
   NAVIGATION_DETAIL_COLLECTION_NAMES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -63,29 +64,69 @@ function isFailedSubAgent(agent: ThreadActiveSubAgent): boolean {
   return agent.status === "failed" || agent.status === "failure";
 }
 
-/** Keep stop controls for live work ahead of historical failures. The full
- * task and every other card remain available from the paged Sub-agents panel. */
+function compareComposerSubAgents(left: ThreadSubAgentSummary, right: ThreadSubAgentSummary): number {
+  const leftFailed = isFailedSubAgent(left);
+  const rightFailed = isFailedSubAgent(right);
+  return leftFailed && rightFailed
+    ? (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt)
+    : Number(leftFailed) - Number(rightFailed);
+}
+
+/** The remaining JSON string content bytes, after accounting for its quotes. */
+function fitSubAgentTask(task: string, maxBytes: number): string {
+  const ellipsis = "…";
+  let remaining = maxBytes - (responseBytes(ellipsis) - 2);
+  if (remaining < 0) return "";
+  let prefix = "";
+  for (const character of task) {
+    remaining -= responseBytes(character) - 2;
+    if (remaining < 0) break;
+    prefix += character;
+  }
+  return `${prefix}${ellipsis}`;
+}
+
+/** Keep stop controls for live work ahead of the newest failed work. */
 function boundActiveSubAgents(cards: readonly ThreadSubAgentSummary[], maxBytes: number): {
   rows: ThreadActiveSubAgent[];
   addedBytes: number;
   incomplete: boolean;
+  moreInPanel: boolean;
 } {
-  const projected = projectActiveThreadSubAgents(cards).sort((left, right) =>
-    Number(isFailedSubAgent(left)) - Number(isFailedSubAgent(right)));
+  const projected = projectActiveThreadSubAgents(cards.toSorted(compareComposerSubAgents));
   const rows: ThreadActiveSubAgent[] = [];
   let addedBytes = 0;
+  let omittedLive = false;
   for (const row of projected) {
-    if (rows.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS) break;
+    const failed = isFailedSubAgent(row);
+    if (rows.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS || (failed && omittedLive)) break;
     const task = row.task.length > ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS
       ? `${row.task.slice(0, ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`
       : row.task;
     const preview = { ...row, task };
-    const size = responseBytes(preview) + Number(rows.length > 0);
-    if (addedBytes + size > maxBytes) continue;
+    const separatorBytes = Number(rows.length > 0);
+    const available = maxBytes - addedBytes - separatorBytes;
+    let size = responseBytes(preview);
+    if (size > available) {
+      if (failed) continue;
+      const withoutTask = responseBytes({ ...preview, task: "" });
+      if (withoutTask > available) {
+        omittedLive = true;
+        continue;
+      }
+      preview.task = fitSubAgentTask(task, available - withoutTask);
+      size = responseBytes(preview);
+    }
     rows.push(preview);
-    addedBytes += size;
+    addedBytes += size + separatorBytes;
   }
-  return { rows, addedBytes, incomplete: rows.length < projected.length };
+  const incomplete = rows.length < projected.length;
+  if (!incomplete) return { rows, addedBytes, incomplete, moreInPanel: false };
+  const shownIds = new Set(rows.map((row) => row.monitorId));
+  const omittedIds = new Set(projected.filter((row) => !shownIds.has(row.monitorId)).map((row) => row.monitorId));
+  const now = Date.now();
+  const moreInPanel = cards.some((card) => omittedIds.has(card.monitorId) && isThreadSubAgentVisibleInPanel(card, now));
+  return { rows, addedBytes, incomplete, moreInPanel };
 }
 
 type QueueCursor = {
@@ -443,6 +484,7 @@ export class NavigationDetailService {
       const active = boundActiveSubAgents(composerCards, Math.min(ACTIVE_SUB_AGENT_PREVIEW_BYTES - 2, previewBytes));
       configuration.activeSubAgents = active.rows;
       if (active.incomplete) configuration.activeSubAgentsIncomplete = true;
+      if (active.moreInPanel) configuration.activeSubAgentsMoreInPanel = true;
       if (pendingWakes) {
         const wakes = boundThreadPendingWakes(pendingWakes, previewBytes - active.addedBytes + 2);
         configuration.pendingWakes = wakes.wakes;

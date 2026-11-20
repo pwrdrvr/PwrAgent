@@ -78,7 +78,8 @@ export function ActiveSubAgentsStrip(props: {
       isFailedSubAgent(subAgent) && !dismissedFailures.has(subAgent.monitorId),
   );
   const visible = [...running, ...blocked, ...failed];
-  const moreInPanel = props.thread?.activeSubAgentsIncomplete
+  const previewIncomplete = props.thread?.activeSubAgentsIncomplete;
+  const moreInPanel = props.thread?.activeSubAgentsMoreInPanel
     ? <span className="live-strip__note">More in Sub-agents</span>
     : null;
 
@@ -218,12 +219,12 @@ export function ActiveSubAgentsStrip(props: {
             never swept up by it. */}
         {failed.length > 1 ? (
           <button
-            aria-label={moreInPanel ? `Dismiss ${failed.length} shown failures` : `Dismiss all ${failed.length} failed sub-agents`}
+            aria-label={previewIncomplete ? `Dismiss ${failed.length} shown failures` : `Dismiss all ${failed.length} failed sub-agents`}
             className="live-strip__item-action live-strip__dismiss-all"
             type="button"
             onClick={dismissAllFailures}
           >
-            {moreInPanel ? "Dismiss shown" : "Dismiss all"}
+            {previewIncomplete ? "Dismiss shown" : "Dismiss all"}
           </button>
         ) : null}
       </div>
@@ -236,9 +237,9 @@ export function ActiveSubAgentsStrip(props: {
             // A Codex worker goes by the name the rail and sidebar show; its
             // task is a placeholder unless Codex titled the thread, and the
             // placeholder carries the id the name falls back to.
-            const label = isCodexNativeSubAgent(subAgent)
+            const label = (isCodexNativeSubAgent(subAgent)
               ? subAgent.agentName ?? subAgent.task
-              : subAgent.task;
+              : subAgent.task) || subAgent.monitorId;
             const canStop =
               (subAgent.status === "pending"
                 || subAgent.status === "running"

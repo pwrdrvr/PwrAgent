@@ -229,9 +229,11 @@ describe("ActiveSubAgentsStrip", () => {
         buildSubAgent({ monitorId: "failed-a", status: "failed" }),
         buildSubAgent({ monitorId: "failed-b", status: "failure" }),
       ];
-      render(<ActiveSubAgentsStrip thread={{
-        ...buildThread([]), activeSubAgents: failures, activeSubAgentsIncomplete: true,
-      }} />);
+      const preview = { ...buildThread([]), activeSubAgents: failures, activeSubAgentsIncomplete: true as const };
+      const { rerender } = render(<ActiveSubAgentsStrip thread={preview} />);
+      expect(screen.queryByText("More in Sub-agents")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Dismiss 2 shown failures" })).toBeInTheDocument();
+      rerender(<ActiveSubAgentsStrip thread={{ ...preview, activeSubAgentsMoreInPanel: true }} />);
       expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Dismiss 2 shown failures" }));
       expect(screen.queryByRole("button", { name: "Failed sub-agents, 2" })).not.toBeInTheDocument();
