@@ -1039,6 +1039,8 @@ function threadSummariesEqual(
     threadLocksEqual(left.lock, right.lock) &&
     subAgentsEqual(left.subAgents, right.subAgents) &&
     subAgentsEqual(left.activeSubAgents, right.activeSubAgents) &&
+    left.activeSubAgentsIncomplete === right.activeSubAgentsIncomplete &&
+    left.activeSubAgentsMoreInPanel === right.activeSubAgentsMoreInPanel &&
     permissionTransitionLogsEqual(
       left.permissionTransitionLog,
       right.permissionTransitionLog
