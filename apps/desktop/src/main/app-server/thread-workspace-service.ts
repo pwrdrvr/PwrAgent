@@ -458,6 +458,11 @@ export class ThreadWorkspaceService {
         threadId: request.threadId,
       });
     }
+    if (request.backend === "codex") {
+      // Let a previously dispatched sync finish before reading ownership or
+      // replacing the CWD. The workspace mutation blocks new background syncs.
+      await this.pendingCodexWorkspaceCwdSyncs.get(request.threadId)?.promise;
+    }
 
     const thread = await this.host().findThreadForWorkspaceHandoff({
       backend: request.backend,
@@ -1302,6 +1307,11 @@ export class ThreadWorkspaceService {
     threads: AppServerThreadSummary[];
   }): void {
     for (const thread of params.threads) {
+      // A handoff's own ownership scan can still list the previous provider
+      // CWD. The handoff will publish its destination once Git has finished.
+      if (this.workspaceMutations.has(buildThreadIdentityKey("codex", thread.id))) {
+        continue;
+      }
       // Codex already told us it cannot open this thread. Retrying the
       // workspace write on every `thread/list` produced one warning per list
       // per thread forever; the missing-thread audit owns the outcome now.

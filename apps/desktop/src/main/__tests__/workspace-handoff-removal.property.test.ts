@@ -16,6 +16,7 @@ async function checkHandoffRemoval(
   direction: "worktree-to-worktree" | "worktree-to-local" = "worktree-to-worktree",
   lateWorkspace?: OtherThreadWorkspace,
   strategy?: "new-branch" | "move-branch",
+  inventory: "paged" | "aggregate" = "paged",
 ) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-shared-handoff-")));
   try {
@@ -54,7 +55,17 @@ async function checkHandoffRemoval(
       source: "codex", id: `other-${index}`, title: "Other thread", titleSource: "explicit", updatedAt: 2,
       projectKey: workspacePaths[workspace], linkedDirectories: [],
     }))];
-    const codexClient = Object.assign(new MockBackendClient({ threads: active }), {
+    const codexClient = new MockBackendClient({
+      // The provider can still list the previous CWD after an acknowledged move.
+      // In an aggregate read the workspace overlay must remain authoritative.
+      threads: inventory === "aggregate" ? [{
+        ...moving,
+        projectKey: repositoryPath,
+        linkedDirectories: [{ id: "local", kind: "local", label: "repo", path: repositoryPath }],
+      }, ...active.slice(1)] : active,
+      archivedThreads: [],
+    });
+    if (inventory === "paged") Object.assign(codexClient, {
       listArchiveCleanupThreadsPage: async ({ archived }: { archived: boolean }) => ({ threads: archived ? [] : active }),
     });
     const overlayStore = createOverlayStoreMock();
@@ -104,6 +115,10 @@ async function checkHandoffRemoval(
         }
       } else {
         expect(await readFile(path.join(result.targetPath, "tracked.txt"), "utf8")).toMatch(/^working tree\r?\n$/);
+        expect(await readFile(path.join(result.targetPath, "untracked.txt"), "utf8")).toMatch(/^untracked\r?\n$/);
+        if (strategy === "move-branch") {
+          expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("source-branch");
+        }
       }
       const worktrees = await git(repositoryPath, ["worktree", "list", "--porcelain"]);
       expect(worktrees.split("\n").includes(`worktree ${sourcePath.replaceAll("\\", "/")}`)).toBe(shared);
@@ -124,6 +139,10 @@ describe("workspace handoff source removal", () => {
     await checkHandoffRemoval(["source", "source"]);
   });
 
+  it("returns a sole owner's named worktree to Local when its provider listing still shows the old checkout", async () => {
+    await checkHandoffRemoval([], "worktree-to-local", undefined, "move-branch", "aggregate");
+  });
+
   it.each(["source", "unrelated"] as const)("checks a late thread in the %s workspace at removal", async (workspace) => {
     await checkHandoffRemoval([], "worktree-to-worktree", workspace);
   });
@@ -140,7 +159,8 @@ describe("workspace handoff source removal", () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom<OtherThreadWorkspace>("source", "descendant", "unrelated"), { maxLength: 4 }),
       fc.constantFrom("worktree-to-worktree" as const, "worktree-to-local" as const),
-      async (workspaces, direction) => await checkHandoffRemoval(workspaces, direction),
+      fc.constantFrom("paged" as const, "aggregate" as const),
+      async (workspaces, direction, inventory) => await checkHandoffRemoval(workspaces, direction, undefined, undefined, inventory),
     ), { numRuns: 12 });
   }, 30_000);
 });
