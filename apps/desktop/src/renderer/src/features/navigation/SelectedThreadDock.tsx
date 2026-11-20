@@ -38,7 +38,7 @@ type DockState = {
   directoryKey: string | undefined;
   /**
    * Whether the arrow can say which way the thread is. It cannot when the
-   * thread has no row and what would hold it is in view, or is not listed.
+   * lens lists neither the thread nor anything that holds it.
    */
   directed: boolean;
 };
@@ -138,17 +138,22 @@ function measure(
   const holder = rows.length === 0 ? holderOf(region, holders) : undefined;
   const extents = holder ? [extentOf(holder)] : rows.map(extentOf);
   const nearTop = extents.some((extent) => extent.top < view.top + STICKY_REACH_PX);
-  const bandTop = nearTop
+  // Where a top dock sits: under whatever is stuck to the top of the list.
+  const stuckTop = nearTop
     ? stuckBandTop(
       view.top,
       [...lane.querySelectorAll(STICKY_HEADER)].map(extentOf),
       [...lane.querySelectorAll(STICKY_DIVIDER)].map(extentOf),
     )
     : view.top;
+  // What counts as in view. A row under the stuck header is not. A project's
+  // section is: the header stuck there is its own, or it has scrolled past.
+  const bandTop = holder?.classList.contains("directory-row") ? view.top : stuckTop;
   const placement = selectedThreadDockPlacement(extents, { top: bandTop, bottom: view.bottom });
-  // A row in view speaks for itself. A holder in view does not: the thread
-  // is inside it, unseen, so the dock rests at the bottom and points nowhere.
-  if (!placement && rows.length > 0) {
+  // A row in view speaks for itself, and so does what holds a hidden row: a
+  // closed project that holds the open thread draws its header selected.
+  // Only a thread the lens lists nowhere docks with nothing out of view.
+  if (!placement && (rows.length > 0 || holder)) {
     return undefined;
   }
   const edge = placement?.edge ?? "bottom";
@@ -159,7 +164,7 @@ function measure(
     state: {
       edge,
       // The headers above a row that is out of view below are not in its way.
-      top: (edge === "top" ? bandTop : view.top) - regionBox.top,
+      top: (edge === "top" ? stuckTop : view.top) - regionBox.top,
       bottom: regionBox.bottom - view.bottom,
       gutter: lane.offsetWidth - lane.clientWidth,
       directoryKey: (row ?? holder)?.closest<HTMLElement>("[data-thread-directory-key]")
@@ -188,7 +193,8 @@ function sameDock(a: DockState | undefined, b: DockState | undefined): boolean {
  *
  * A thread with no row in the list docks too: one inside a collapsed parent
  * or a closed project, or one the lens does not list. It then stands in for
- * whatever would hold the row, and a click opens that and scrolls to it.
+ * whatever would hold the row once that has scrolled out, and a click opens
+ * it and scrolls to the row.
  *
  * It is a compact card, not a second `ThreadRow`: the row's chips are
  * controls, and a copy of them over the list would be a second place to
@@ -264,9 +270,10 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   }
   const project = props.projectLabel(dock.directoryKey);
   const title = props.thread.title;
+  // No `aria-label`: the card's own text names it (title, time, project), and
+  // a label that leaves any of it out fails WCAG 2.5.3 Label in Name.
   return (
     <button
-      aria-label={`Scroll to selected thread: ${title}${project ? `, in ${project}` : ""}`}
       className={`selected-thread-dock selected-thread-dock--${dock.edge}`}
       data-edge={dock.edge}
       data-testid="selected-thread-dock"

@@ -143,9 +143,9 @@ describe("SelectedThreadDock", () => {
 
   it("names the thread and the project its row sits under", () => {
     renderDock(mountList(900));
-    expect(dock()?.getAttribute("aria-label")).toBe(
-      "Scroll to selected thread: Investigate the wake flake, in Project pwragent",
-    );
+    // Its text is its name. An `aria-label` that left the time or project out
+    // failed axe's label-content-name-mismatch in the a11y E2E.
+    expect(dock()?.hasAttribute("aria-label")).toBe(false);
     expect(dock()?.querySelector(".thread-row__title")?.textContent).toBe("Investigate the wake flake");
     expect(dock()?.querySelector(".selected-thread-dock__project")?.textContent).toBe("Project pwragent");
   });
@@ -209,11 +209,32 @@ describe("SelectedThreadDock", () => {
       expect(dock()?.querySelector(".selected-thread-dock__project")?.textContent).toBe("Project pwragent");
     });
 
-    it("rests at the bottom and points nowhere while what holds it is in view", () => {
+    it("stays away while the parent that holds it is in view", () => {
       // The parent's row is in view at y=300, collapsed over the thread.
       renderDock(mountList(900, { hidden: true }), "open", { ancestorThreadKeys: ["other"] });
-      expect(dock()?.dataset.edge).toBe("bottom");
-      expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
+      expect(dock()).toBeNull();
+    });
+
+    it("stays away while its closed project is in view, even stuck to the top", () => {
+      // A closed project is one header tall. Stuck at the list's top, the
+      // header must not count as covering its own section: the dock once
+      // sat at the top over the next projects' headers.
+      const region = mountList(900, { hidden: true });
+      place(region.querySelector("[data-header='pwrgit']")!, -200, 30);
+      place(region.querySelector("[data-header='pwragent']")!, 100, 30);
+      place(region.querySelector("[data-directory-key='pwragent']")!, 100, 30);
+      renderDock(region, "open", { directoryKeys: ["pwragent"] });
+      expect(dock()).toBeNull();
+    });
+
+    it("sits under the stuck header of the project being read when its own has scrolled past", () => {
+      const region = mountList(900, { hidden: true });
+      place(region.querySelector("[data-header='pwragent']")!, -300, 30);
+      place(region.querySelector("[data-directory-key='pwragent']")!, -300, 30);
+      renderDock(region, "open", { directoryKeys: ["pwragent"] });
+      expect(dock()?.dataset.edge).toBe("top");
+      // PwrGit's header is stuck at the top, 30px tall.
+      expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("30px");
     });
 
     it("stands in for its project when no parent has a row", () => {

@@ -374,8 +374,8 @@ test("thread title reveals a linked child hidden by collapsed directory sections
 });
 
 test("the selected thread docks at the list's edge when its row scrolls away", async () => {
-  // A short window, so eleven rows overflow the list by more than one row.
-  const { app, fixture } = await launchThreadTitleRevealApp({ width: 1280, height: 620 });
+  // A short window, so eleven rows overflow the list by several rows.
+  const { app, fixture } = await launchThreadTitleRevealApp({ width: 1280, height: 460 });
 
   try {
     const threadBrowser = app.window.getByRole("region", {
@@ -406,6 +406,9 @@ test("the selected thread docks at the list's edge when its row scrolls away", a
     // The project, since the row's own header is not what is on screen.
     await expect(dock).toContainText("RevealFixture");
     await expect(selectedRow).not.toBeInViewport({ ratio: 0.9 });
+    // The dock slides in over 140ms; measure where it comes to rest.
+    await dock.evaluate((element) =>
+      Promise.all(element.getAnimations().map((animation) => animation.finished)));
     const [dockBox, scrollBox] = await Promise.all([
       dock.boundingBox(),
       scrollRegion.boundingBox(),
@@ -439,22 +442,40 @@ test("the selected thread docks at the list's edge when its row scrolls away", a
     await expect(dock).toHaveAttribute("data-edge", "bottom");
     await expect(dock).toContainText("Parent thread with child link");
 
-    // A thread with no row at all still docks: close the project that
-    // holds it, and the dock opens the project again on click.
+    // A thread with no row docks for what holds it. Collapse the parent's
+    // sub-threads, open the child from the parent's transcript, and scroll
+    // the parent out: the dock stands in, and a click brings the child back.
     await threadBrowser.getByRole("tab", { name: "Directories" }).click();
-    const directorySummary = threadBrowser
-      .locator(".directory-row__summary")
-      .filter({ hasText: "RevealFixture" });
-    await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
-    await directorySummary.click();
-    await expect(directorySummary).toHaveAttribute("aria-expanded", "false");
-    await expect(lastRow).toHaveCount(0);
+    await threadBrowser
+      .getByRole("button", { name: "Collapse sub-threads for Parent thread with child link" })
+      .click();
+    await expect(
+      threadBrowser.getByRole("button", {
+        name: "Expand sub-threads for Parent thread with child link",
+      }),
+    ).toBeVisible();
+    await app.window
+      .getByRole("button", { name: "Open thread Hidden linked child thread" })
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "Hidden linked child thread" }),
+    ).toBeVisible();
+    const parentRow = threadBrowser
+      .locator(".thread-row-shell")
+      .filter({ hasText: "Parent thread with child link" })
+      .first()
+      .locator(".thread-row")
+      .first();
+    await scrollLaneOf(parentRow, "start");
     await expect(dock).toBeVisible();
-    await expect(dock).toContainText("Parent thread with child link");
+    await expect(dock).toHaveAttribute("data-edge", "bottom");
+    await expect(dock).toContainText("Hidden linked child thread");
     await expect(dock).toContainText("RevealFixture");
     await dock.click();
-    await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
-    await expect(lastRow).toBeInViewport({ ratio: 1 });
+    const childRow = threadBrowser
+      .locator(".thread-row.is-selected")
+      .filter({ hasText: "Hidden linked child thread" });
+    await expect(childRow).toBeInViewport({ ratio: 1 });
     await expect(dock).toHaveCount(0);
   } finally {
     await app.close();
