@@ -2,10 +2,11 @@ import type { McpConnectionKind } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { endedLocalSessionRestart } from "../mcp-connections/mcp-connection-gateway-service";
 
-const KINDS: McpConnectionKind[] = ["remote", "pwrsnap", "pwrgit", "sandboxer", "stdio"];
+const RELAY_KINDS = ["pwrsnap", "pwrgit"] as const;
+const KINDS: McpConnectionKind[] = ["remote", ...RELAY_KINDS, "sandboxer", "stdio"];
+const REFERENCE_OPERATION = "tools/call";
 // Every request a bridge can send for a grant, plus shapes it never sends.
-const OPERATIONS: unknown[] = [
-  "tools/call",
+const OTHER_OPERATIONS: unknown[] = [
   "gateway/tools/call",
   "tools/list",
   "gateway/tools/list",
@@ -27,22 +28,26 @@ const OPERATIONS: unknown[] = [
  * start), the request is not a delegated Job Monitor's (an app that predates
  * prompt-free relays still asks, and nobody is watching), and the app answers.
  */
-function expected(kind: McpConnectionKind, _operation: unknown, delegated: boolean, listening: boolean) {
+function expected(kind: McpConnectionKind, delegated: boolean, listening: boolean) {
   const relay = kind === "pwrsnap" || kind === "pwrgit";
   if (!relay || delegated) return { outcome: "ended", probes: 0 };
   return { outcome: listening ? "restart" : "app_closed", probes: 1 };
 }
 
 describe("reopening an ended local session", () => {
-  const cases = KINDS.flatMap((kind) => OPERATIONS.flatMap((operation) =>
-    [false, true].flatMap((delegated) => [false, true].map((listening) => ({ kind, operation, delegated, listening })))));
+  const kindCases = KINDS.flatMap((kind) => [false, true].flatMap((delegated) =>
+    [false, true].map((listening) => ({ kind, operation: REFERENCE_OPERATION, delegated, listening }))));
+  // An eligible relay reopens for any operation. Check the other request
+  // shapes here, where an operation filter would incorrectly block a restart.
+  const operationCases = RELAY_KINDS.flatMap((kind) => OTHER_OPERATIONS.map((operation) =>
+    ({ kind, operation, delegated: false, listening: true })));
 
-  it.each(cases)(
+  it.each([...kindCases, ...operationCases])(
     "$kind $operation (delegated $delegated, app listening $listening)",
     async ({ kind, operation, delegated, listening }) => {
       const isAppListening = vi.fn(async () => listening);
       const outcome = await endedLocalSessionRestart({ kind, operation, delegated, isAppListening });
-      const want = expected(kind, operation, delegated, listening);
+      const want = expected(kind, delegated, listening);
       expect(outcome).toBe(want.outcome);
       // The probe opens a connection to the app, so only a restartable
       // request may make it.

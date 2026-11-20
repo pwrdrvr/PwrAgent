@@ -75,8 +75,12 @@ async function createFixture(managed: boolean | "claude" = false) {
   roots.push(tempDir);
   const claudeStore = new ClaudeSessionStore(path.join(root, "claude"));
   const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory,
-    extraWorkspaces: Array<typeof directory> = [], extra: { worktreeArchiveService?: WorktreeArchiveService } = {}) => {
-    const db = StateDb.open(dbPath);
+    extraWorkspaces: Array<typeof directory> = [],
+    { stateDatabasePath = dbPath, ...extra }: {
+      worktreeArchiveService?: WorktreeArchiveService;
+      stateDatabasePath?: string;
+    } = {}) => {
+    const db = StateDb.open(stateDatabasePath);
     databases.push(db);
     const store = new SqliteOverlayStore(db);
     const client = new CodexAppServerClient({ directoryResolver: async (cwd) =>
@@ -1555,7 +1559,7 @@ describe("archive cleanup and finished helper threads", () => {
   // Rule: a PwrAgent monitor worker runs in its parent's checkout. Once every
   // card that names it has ended, it no longer uses that checkout. A running
   // card, or a provider-native sub-agent (the provider's own thread), still does.
-  it("releases a checkout from a monitor worker only when all of its cards are finished monitor cards", async () => {
+  it("marks and releases a monitor worker only when all of its cards are finished monitor cards", async () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.record({ native: fc.boolean(), finished: fc.boolean() }), { maxLength: 3 }),
       async (cards) => {
@@ -1564,49 +1568,37 @@ describe("archive cleanup and finished helper threads", () => {
           { id: "old-target", cwd: fixture.worktree, source: "cli" },
           { id: "worker", cwd: fixture.worktree, source: "cli" },
         ];
-        const instance = fixture.reopen();
-        await instance.store.upsertThreadSubAgents({ backend: "codex", threadId: "old-target", subAgents: cards.map((card, index) => ({
+        const input: Parameters<SqliteOverlayStore["upsertThreadSubAgents"]>[0] = { backend: "codex", threadId: "old-target", subAgents: cards.map((card, index) => ({
           monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
           status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
           ...(card.finished ? { completedAt: 2 } : {}),
-        })) });
-
-        const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
-
-        const released = cards.length > 0 && cards.every((card) => !card.native && card.finished);
-        expect(result.cleanup[0]?.removedWorktree).toBe(released);
-        expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId)).toEqual(released ? [] : ["worker"]);
-      },
-    ), { numRuns: 10, examples: [[[{ native: false, finished: true }]], [[{ native: false, finished: true }, { native: true, finished: true }]]] });
-  }, 120_000);
-
-  // Rule: Thread maintenance decides sharing from the same candidate list.
-  // A finished monitor worker must be marked there, or it keeps its parent's
-  // checkout from hibernating.
-  it("marks a maintenance candidate a finished monitor worker only when all of its cards are finished monitor cards", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.record({ native: fc.boolean(), finished: fc.boolean() }), { maxLength: 3 }),
-      async (cards) => {
-        const fixture = await createFixture();
-        ArchiveWorktreeTransport.threads = [
-          { id: "parent", cwd: fixture.worktree, source: "cli" },
-          { id: "worker", cwd: fixture.worktree, source: "cli" },
-        ];
-        const instance = fixture.reopen();
-        await instance.store.upsertThreadSubAgents({ backend: "codex", threadId: "parent", subAgents: cards.map((card, index) => ({
-          monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
-          status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
-          ...(card.finished ? { completedAt: 2 } : {}),
-        })) });
-
-        const candidates = await instance.registry.listAutoArchiveCandidates();
+        })) };
 
         const finished = cards.length > 0 && cards.every((card) => !card.native && card.finished);
+        // Thread maintenance needs the same classification for hibernation.
+        const inspector = fixture.reopen();
+        await inspector.store.upsertThreadSubAgents(input);
+        const candidates = await inspector.registry.listAutoArchiveCandidates();
         const flag = (id: string) => candidates.find((candidate) => candidate.thread.id === id)?.finishedMonitorWorker === true;
         expect(flag("worker")).toBe(finished);
-        expect(flag("parent")).toBe(false);
+        expect(flag("old-target")).toBe(false);
+        await inspector.registry.close();
+
+        // Reuse Git setup, but seed a fresh database so startup reconciliation
+        // cannot retire the other registry's unfinished cards.
+        const archiver = fixture.reopen(fixture.directory, false, undefined, [], {
+          stateDatabasePath: path.join(fixture.root, "archive-state.db"),
+        });
+        await archiver.store.upsertThreadSubAgents(input);
+        const result = await archiver.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+        expect(result.cleanup[0]?.removedWorktree).toBe(finished);
+        expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId)).toEqual(finished ? [] : ["worker"]);
       },
-    ), { numRuns: 8, examples: [[[{ native: false, finished: true }]]] });
+    ), { numRuns: 10, examples: [
+      [[{ native: false, finished: true }]],
+      [[{ native: false, finished: true }, { native: true, finished: true }]],
+      [[{ native: false, finished: false }]],
+    ] });
   }, 120_000);
 
   // Rule: Thread maintenance can remove an archived checkout over the

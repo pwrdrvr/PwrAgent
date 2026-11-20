@@ -12,11 +12,8 @@ afterEach(() => {
 });
 
 describe("sidebar-resize-signal", () => {
-  it("starts inactive", () => {
+  it("starts inactive and reflects both resize transitions", () => {
     expect(isSidebarResizing()).toBe(false);
-  });
-
-  it("reflects the active flag through isSidebarResizing()", () => {
     setSidebarResizing(true);
     expect(isSidebarResizing()).toBe(true);
     setSidebarResizing(false);

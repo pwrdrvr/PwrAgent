@@ -6,35 +6,17 @@ import {
 } from "../codex-app-server/protocol-compatibility";
 
 describe("Codex App Server protocol compatibility", () => {
-  it.each([
-    [undefined, false], ["unknown", false], ["0.163.0", false],
-    ["0.164.0", true], ["0.164.0-pwragent.1", true], ["1.0.0", true],
-  ])("gates delegation attribution for %s", (version, supported) => {
-    expect(resolveCodexProtocolCompatibility(version).supportsTurnAncestry).toBe(supported);
-  });
-
-  it.each([
-    [undefined, false],
-    ["0.152.0", false],
-    ["0.153.0", true],
-    ["0.153.4-pwragent.1", true],
-  ])("gates automatic review for %s", (version, supported) => {
-    expect(resolveCodexProtocolCompatibility(version).supportsAutoReview).toBe(supported);
-  });
-
-  it.each([
-    [undefined, false],
-    ["0.144.0", false],
-    ["0.153.0", true],
-    ["codex-cli 0.159.2", true],
-  ])("gates thread revert for %s", (version, supported) => {
-    expect(resolveCodexProtocolCompatibility(version).supportsThreadRevert).toBe(supported);
-  });
-
-  it.each([
+  const capabilityCases: Array<{
+    version: string | undefined;
+    features?: Partial<ReturnType<typeof resolveCodexProtocolCompatibility>>;
+    exact?: boolean;
+    generatedModelList?: boolean;
+  }> = [
     {
       version: undefined,
-      expected: {
+      generatedModelList: false,
+      exact: true,
+      features: {
         supportsAutoReview: false,
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: true,
@@ -46,7 +28,8 @@ describe("Codex App Server protocol compatibility", () => {
     },
     {
       version: "codex-cli 0.136.0",
-      expected: {
+      exact: true,
+      features: {
         supportsAutoReview: false,
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: true,
@@ -58,7 +41,8 @@ describe("Codex App Server protocol compatibility", () => {
     },
     {
       version: "codex-cli 0.137.0",
-      expected: {
+      exact: true,
+      features: {
         supportsAutoReview: false,
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: false,
@@ -70,7 +54,8 @@ describe("Codex App Server protocol compatibility", () => {
     },
     {
       version: "codex-cli 0.141.0",
-      expected: {
+      exact: true,
+      features: {
         supportsAutoReview: false,
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
@@ -82,7 +67,9 @@ describe("Codex App Server protocol compatibility", () => {
     },
     {
       version: "codex-cli 0.143.0",
-      expected: {
+      generatedModelList: false,
+      exact: true,
+      features: {
         supportsAutoReview: false,
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
@@ -94,7 +81,9 @@ describe("Codex App Server protocol compatibility", () => {
     },
     {
       version: "codex-cli 0.144.0",
-      expected: {
+      generatedModelList: true,
+      exact: true,
+      features: {
         supportsAutoReview: false,
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
@@ -104,21 +93,31 @@ describe("Codex App Server protocol compatibility", () => {
         supportsTurnAncestry: false,
       },
     },
-  ])("negotiates the wire features for $version", ({ version, expected }) => {
-    expect(resolveCodexProtocolCompatibility(version)).toEqual(expected);
-  });
+    { version: "unknown", features: { supportsTurnAncestry: false } },
+    { version: "0.144.0", features: { supportsThreadRevert: false } },
+    { version: "0.152.0", features: { supportsAutoReview: false } },
+    { version: "0.153.0", features: { supportsAutoReview: true, supportsThreadRevert: true } },
+    { version: "0.153.4-pwragent.1", features: { supportsAutoReview: true } },
+    { version: "codex-cli 0.159.2", features: { supportsThreadRevert: true } },
+    { version: "0.163.0", features: { supportsTurnAncestry: false } },
+    { version: "0.164.0", features: { supportsTurnAncestry: true } },
+    { version: "0.164.0-pwragent.1", features: { supportsTurnAncestry: true } },
+    { version: "1.0.0", features: { supportsTurnAncestry: true } },
+    { version: "codex-cli 1.0.0", generatedModelList: true },
+  ];
 
-  it.each([
-    { version: undefined, expected: false },
-    { version: "codex-cli 0.143.0", expected: false },
-    { version: "codex-cli 0.144.0", expected: true },
-    { version: "codex-cli 1.0.0", expected: true },
-  ])(
-    "selects generated model/list fields for $version",
-    ({ version, expected }) => {
-      expect(usesGeneratedCodexModelListResponse(version)).toBe(expected);
-    },
-  );
+  it.each(capabilityCases)("negotiates the protocol capabilities for $version", ({
+    version, features, exact, generatedModelList,
+  }) => {
+    if (features) {
+      const compatibility = resolveCodexProtocolCompatibility(version);
+      if (exact) expect(compatibility).toEqual(features);
+      else expect(compatibility).toMatchObject(features);
+    }
+    if (generatedModelList !== undefined) {
+      expect(usesGeneratedCodexModelListResponse(version)).toBe(generatedModelList);
+    }
+  });
 
   it.each([
     {

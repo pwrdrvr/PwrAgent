@@ -17,6 +17,17 @@ afterEach(() => {
 });
 
 describe("explicit Git runtime selection", () => {
+  it("caches an absolute executable instead of a PATH command", async () => {
+    const env = { ...process.env };
+
+    const first = await resolveGitExecutable(env);
+    const second = await resolveGitExecutable(env);
+
+    expect(path.isAbsolute(first)).toBe(true);
+    expect(second).toBe(first);
+    expect(path.basename(first).toLowerCase()).toMatch(/^git(?:\.exe)?$/);
+  });
+
   it("uses the configured executable and lets the environment override it", async () => {
     setGitCommandResolver(() => process.execPath);
     expect(await resolveGitExecutable({})).toBe(process.execPath);
