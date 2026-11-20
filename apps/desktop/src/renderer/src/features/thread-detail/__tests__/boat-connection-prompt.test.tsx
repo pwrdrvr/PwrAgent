@@ -76,7 +76,10 @@ describe("BoatConnectionPrompt", () => {
   });
 
   it("says a rejected key needs reconnecting instead of offering the switch", async () => {
-    renderTile(listing(boat({ state: "reauthorization_required" })), { onOpenSettings: () => undefined });
+    renderTile(
+      listing(boat({ configured: false, state: "reauthorization_required" })),
+      { onOpenSettings: () => undefined },
+    );
     expect(await screen.findByText("Boat rejected the stored key · reconnect in Settings")).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
@@ -148,6 +151,12 @@ describe("BoatSetupDetail", () => {
     fireEvent.keyDown(screen.getByLabelText("Boat API key"), { key: "Enter" });
     expect(await screen.findByRole("alert")).toHaveTextContent("Boat rejected that API key");
     expect(screen.getByRole("button", { name: "Connect Boat" })).toBeEnabled();
+  });
+
+  it("says the stored key was rejected, beside the field for a new one", () => {
+    renderDetail(vi.fn(), boat({ configured: false, state: "reauthorization_required" }));
+    expect(screen.getByText(/Boat rejected the stored key/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
   });
 
   it("shows the account, not a key field, once connected", () => {

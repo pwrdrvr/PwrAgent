@@ -4,12 +4,18 @@ import { BOAT_API_URL, redactBoatApiKeys } from "@pwragent/shared/contracts/mcp-
 /**
  * The one place a Boat API key is attached to a request.
  *
- * The key is read for each request and never kept, so a disconnect or a new
- * key applies to the next call. Every request goes to Boat's fixed API
- * address and refuses redirects, so the bearer header cannot follow one to
- * another host. Every error this throws has had anything shaped like a Boat
- * key removed, because its message can reach an agent.
+ * The key is read for each request, so a disconnect or a new key applies to
+ * the next call. Every request goes to Boat's fixed API address and refuses
+ * redirects, so the bearer header cannot follow one to another host. Every
+ * error this throws has had anything shaped like a Boat key removed, because
+ * its message can reach an agent.
+ *
+ * `redact` removes the exact keys this process has sent. Tool results carry
+ * file contents and command output, where a pattern would also rewrite
+ * ordinary text such as `box_shadow_radius`.
  */
+
+const KEY_REMOVED = "[Boat key removed]";
 
 const REQUEST_TIMEOUT_MS = 60_000;
 const ERROR_TEXT_LIMIT = 400;
@@ -53,7 +59,17 @@ export type BoatApiOptions = {
 };
 
 export class BoatApi {
+  /** Every key sent since launch, in memory only, for `redact`. */
+  private readonly sentKeys = new Set<string>();
+
   constructor(private readonly options: BoatApiOptions) {}
+
+  /** `text` without any key this process has sent to Boat. */
+  redact(text: string): string {
+    let redacted = text;
+    for (const key of this.sentKeys) redacted = redacted.replaceAll(key, KEY_REMOVED);
+    return redacted;
+  }
 
   /** Uses the stored key. */
   async request(request: BoatApiRequest): Promise<Record<string, unknown>> {
@@ -73,6 +89,7 @@ export class BoatApi {
     request: BoatApiRequest,
     stored = false,
   ): Promise<Record<string, unknown>> {
+    this.sentKeys.add(key);
     for (let attempt = 0; ; attempt += 1) {
       const answer = await this.send(key, request);
       if (answer.ok) return answer.body;

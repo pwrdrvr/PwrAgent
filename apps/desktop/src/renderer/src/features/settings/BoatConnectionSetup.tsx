@@ -108,8 +108,8 @@ export function BoatSetupDetail(props: {
   const errorId = useId();
   const hintId = useId();
   const connect = props.desktopApi?.connectBoat;
-  const needsKey = !props.connection.configured
-    || props.connection.state === "reauthorization_required";
+  const rejected = props.connection.state === "reauthorization_required";
+  const needsKey = !props.connection.configured || rejected;
   const links = (
     <div className="settings-sandboxer-links">
       <BoatLink desktopApi={props.desktopApi} label="What is Boat?" target="home" onNotice={props.onNotice} />
@@ -172,7 +172,7 @@ export function BoatSetupDetail(props: {
         </p>
         {links}
       </div>
-      {props.connection.configured ? (
+      {rejected ? (
         <p className="settings-mcp-row__error">
           Boat rejected the stored key. Paste a new one to reconnect.
         </p>

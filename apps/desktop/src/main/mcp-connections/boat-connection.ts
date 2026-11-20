@@ -91,6 +91,9 @@ export class BoatConnection {
   /** Concurrent reads share one check. `refresh` skips the cache. */
   async readStatus(refresh = false): Promise<BoatStatus> {
     const now = this.options.now?.() ?? Date.now();
+    // An asked-for refresh checks the key again: one refused request must
+    // not hold Boat off until a new key is pasted.
+    if (refresh) this.rejected = false;
     if (!refresh && this.cached && now - this.cached.at < STATUS_CACHE_MS) return this.cached.value;
     if (this.pending) return await this.pending;
     const pending = this.probe().then((value) => {
@@ -124,8 +127,11 @@ export class BoatConnection {
       if (error instanceof BoatApiError && error.kind === "rejected") {
         throw new Error("Boat rejected that API key. Check that it was copied whole and has not expired.");
       }
+      if (error instanceof BoatApiError && error.code === "api_key_action_forbidden") {
+        throw new Error("That Boat API key is not allowed to read account limits, which PwrAgent uses to check it. Create a key that can.");
+      }
       if (error instanceof BoatApiError && error.kind === "failed") {
-        throw new Error("Boat refused that API key for a status read. Create the key with the account.read action.");
+        throw new Error(`Boat could not check that key (${error.code ?? error.status ?? "error"}). Try again.`);
       }
       // A full plan or an outage says nothing against the key itself.
       if (!(error instanceof BoatApiError) || error.kind === "unavailable") {

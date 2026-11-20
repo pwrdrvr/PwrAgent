@@ -19,6 +19,8 @@ import { BOAT_TOOLS, BoatTools, type BoatToolRole } from "../mcp-connections/boa
 
 const KEY = "boat_live_0123456789abcdefSECRET";
 const ACCOUNT_EMAIL = "operator@example.test";
+/** Shaped like a key to a pattern, and not one. */
+const ORDINARY_TEXT = "box_shadow_blur_radius boat_registration_number";
 
 type Sent = BoatApiRequest;
 
@@ -32,6 +34,8 @@ function fakeBoat() {
     ip: "203.0.113.7", sshEndpoint: `ssh://${KEY}@host`, cost: { since: "t", seconds: 1, dollars: 0.01 },
   });
   const api = {
+    // What `BoatApi.redact` does for the key it sent.
+    redact: (text: string): string => text.replaceAll(KEY, "[Boat key removed]"),
     request: async (request: Sent): Promise<Record<string, unknown>> => {
       sent.push(request);
       const [root, id, action] = request.path;
@@ -52,7 +56,7 @@ function fakeBoat() {
         return { ok: true, port: 3000, url: `https://${id}-3000.on.boat.dev/?_token=t`, access: "private", isProtected: true };
       }
       if (action === "commands") return { ok: true, success: true, exitCode: 0, stdout: `leak ${KEY}`, stderr: "", timedOut: false };
-      if (action === "files") return { ok: true, path: "/x", encoding: "utf8", size: 1, content: `token=${KEY}`, files: [], truncated: false };
+      if (action === "files") return { ok: true, path: "/x", encoding: "utf8", size: 1, content: `token=${KEY} ${ORDINARY_TEXT}`, files: [], truncated: false };
       if (request.method === "DELETE") sandboxes.delete(id);
       return { ok: true, status: "ok", sandbox: describe(id) };
     },
@@ -147,6 +151,8 @@ describe("PwrAgent's Boat tools", () => {
           // Nothing an agent reads carries the key or who the account is.
           expect(text).not.toContain(KEY);
           expect(text).not.toContain(ACCOUNT_EMAIL);
+          // What a file holds is returned as it is.
+          if (tool === "read_file" && !result.isError) expect(text).toContain(ORDINARY_TEXT);
           for (const request of boat.sent.slice(before)) {
             const body = request.body ?? {};
             // A port is never public, by any route.

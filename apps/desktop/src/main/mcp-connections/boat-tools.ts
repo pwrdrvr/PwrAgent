@@ -26,7 +26,8 @@ import { BoatApiError, type BoatApi, type BoatApiRequest } from "./boat-api";
  *   refused, not clamped, so the agent knows what it did not get.
  * - Every sandbox id must be one this thread created or forked. PwrAgent's
  *   own cleanup session may only stop and delete, and only such ids.
- * - No result or error contains anything shaped like a Boat API key.
+ * - No result or error contains a Boat API key PwrAgent has used, and no
+ *   error contains anything shaped like one.
  */
 
 export const BOAT_SERVER_INSTRUCTIONS = [
@@ -43,7 +44,7 @@ export type BoatToolRole = "thread" | "cleanup" | "none";
 export type BoatOwnedSandbox = { sandboxId: string; name?: string };
 
 export type BoatToolsContext = {
-  api: Pick<BoatApi, "request">;
+  api: Pick<BoatApi, "request" | "redact">;
   policy: () => BoatSandboxPolicy;
   /**
    * `thread` is an agent's session. `cleanup` is PwrAgent releasing a
@@ -172,7 +173,9 @@ export class BoatTools {
   async call(name: string, args: Args | undefined, signal?: AbortSignal): Promise<CallToolResult> {
     try {
       const result = await this.dispatch(name, args ?? {}, signal);
-      const text = redactBoatApiKeys(JSON.stringify(result));
+      // Exact keys only: a result holds file contents and command output,
+      // which a pattern would also rewrite.
+      const text = this.context.api.redact(JSON.stringify(result));
       return {
         content: [{ type: "text", text }],
         structuredContent: JSON.parse(text) as Record<string, unknown>,
@@ -182,7 +185,10 @@ export class BoatTools {
       const message = error instanceof Refusal || error instanceof BoatApiError
         ? error.message
         : "PwrAgent's Boat server failed while handling this call.";
-      return { isError: true, content: [{ type: "text", text: redactBoatApiKeys(message) }] };
+      return {
+        isError: true,
+        content: [{ type: "text", text: redactBoatApiKeys(this.context.api.redact(message)) }],
+      };
     }
   }
 
@@ -209,20 +215,20 @@ export class BoatTools {
           method: "POST", path: ["sandboxes"], body,
           headers: { "idempotency-key": this.idempotencyKey() },
         });
-        return { sandbox: this.adopt(answer.sandbox) };
+        return { sandbox: await this.adopt(answer.sandbox, send) };
       }
       case "list_sandboxes": {
         const ids = [...this.context.ownedSandboxIds()].slice(0, LIST_LIMIT);
-        const sandboxes: unknown[] = [];
-        for (const sandboxId of ids) {
+        const described = await Promise.all(ids.map(async (sandboxId) => {
           try {
-            sandboxes.push(describeSandbox((await send({ method: "GET", path: ["sandboxes", sandboxId] })).sandbox));
+            return describeSandbox((await send({ method: "GET", path: ["sandboxes", sandboxId] })).sandbox);
           } catch (error) {
             if (!(error instanceof BoatApiError) || error.kind !== "not_found") throw error;
             this.context.forgetOwned(sandboxId);
+            return undefined;
           }
-        }
-        return { sandboxes };
+        }));
+        return { sandboxes: described.filter((sandbox) => sandbox !== undefined) };
       }
       case "get_sandbox": {
         const sandboxId = this.owned(args);
@@ -347,7 +353,7 @@ export class BoatTools {
         const forked = answer.sandbox && typeof answer.sandbox === "object"
           ? answer.sandbox
           : { id: answer.id };
-        return { sandbox: this.adopt(forked) };
+        return { sandbox: await this.adopt(forked, send) };
       }
       case "delete_sandbox": {
         const sandboxId = this.owned(args);
@@ -432,8 +438,15 @@ export class BoatTools {
     return value * 60;
   }
 
-  /** Records a new sandbox against the thread before the agent hears of it. */
-  private adopt(sandbox: unknown): Record<string, unknown> {
+  /**
+   * Records a new sandbox against the thread before the agent hears of it.
+   * A sandbox that could not be recorded is out of every tool's reach, PR
+   * cleanup included, so it is deleted at once instead of left to bill.
+   */
+  private async adopt(
+    sandbox: unknown,
+    send: (request: Omit<BoatApiRequest, "signal">) => Promise<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
     const described = describeSandbox(sandbox);
     const sandboxId = described.id;
     if (typeof sandboxId !== "string" || !SANDBOX_ID_PATTERN.test(sandboxId)) {
@@ -443,6 +456,15 @@ export class BoatTools {
       sandboxId,
       ...(typeof described.name === "string" && described.name ? { name: described.name.slice(0, 200) } : {}),
     });
+    if (!this.context.ownedSandboxIds().has(sandboxId)) {
+      const deleted = await send({
+        method: "DELETE", path: ["sandboxes", sandboxId],
+        headers: { "x-ascii-confirm-delete": sandboxId },
+      }).then(() => true, () => false);
+      throw new Refusal(deleted
+        ? "PwrAgent could not record the new sandbox for this thread, so it deleted it. Nothing is running."
+        : `PwrAgent could not record or delete the new sandbox ${sandboxId}. Tell the operator to delete it in the Boat dashboard.`);
+    }
     return described;
   }
 

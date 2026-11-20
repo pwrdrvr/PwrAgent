@@ -58,6 +58,12 @@ function fakeBoat(acceptedKey = KEY) {
         sandbox: { id, name: `box-${id}`, state: "ready", type: "small", sshEndpoint: `ssh://${KEY}@host` },
       });
     }
+    if (segments[2] === "files") {
+      return answer(200, {
+        ok: true, path: "/app/theme.css", encoding: "utf8", size: 64,
+        content: `box_shadow_blur_radius: 4px; /* ${KEY} */`,
+      });
+    }
     if (segments[2] === "host") {
       return answer(200, {
         ok: true, port: 3000, access: "private", isProtected: true,
@@ -179,6 +185,12 @@ describe("Boat through the MCP gateway", () => {
     const hosted = await call("thread-a", "host_port", { sandboxId: "bx_0", port: 3000, public: true });
     expect(hosted.isError).not.toBe(true);
     expect(boat.sent.at(-1)?.body).toMatchObject({ public: false });
+
+    // A file comes back as written, less the key PwrAgent itself sent.
+    const file = await call("thread-a", "read_file", { sandboxId: "bx_0", path: "/app/theme.css" });
+    expect(JSON.stringify(file)).toContain("box_shadow_blur_radius: 4px;");
+    expect(JSON.stringify(file)).toContain("[Boat key removed]");
+    expect(JSON.stringify(file)).not.toContain(KEY);
 
     // Another thread cannot reach it, and Boat is never asked.
     const before = boat.sent.length;
