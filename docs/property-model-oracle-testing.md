@@ -141,7 +141,7 @@ against the pre-fix code:
 ## How to write them
 
 - **Name the file `<module>.property.test.ts`** in the `__tests__` directory
-  that `vitest.workspace.ts` already includes for that code:
+  that `vitest.workspace.mts` already includes for that code:
   - `apps/desktop/src/main/__tests__/` (project `desktop-main`);
   - `apps/desktop/src/renderer/src/**/__tests__/`, as `.test.ts` for pure
     logic (`desktop-renderer-node`, no DOM). Use `.test.tsx` only when the

@@ -1,7 +1,7 @@
 # Linux unit-test allocation
 
 The Linux CI unit job runs four parallel lanes with a ten-minute test-step
-deadline. Only this job uses `vitest.linux-ci.ts`, which extends the shared
+deadline. Only this job uses `vitest.linux-ci.mts`, which extends the shared
 workspace configuration with `scripts/ci/linux-unit-sequencer.mjs`.
 Desktop-main and desktop-renderer are allocated independently using measured
 costs. Desktop-main retains its fork pool and per-file isolation. Worker counts,
@@ -122,7 +122,7 @@ Do not collect timings from only one lane or use local macOS/Windows timings.
 For a local allocation inventory, use:
 
 ```sh
-pnpm exec vitest list --config vitest.workspace.ts --filesOnly --json
+pnpm exec vitest list --config vitest.workspace.mts --filesOnly --json
 ```
 
 The sequencer property tests enforce complete partitioning, deterministic
