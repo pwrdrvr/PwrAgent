@@ -1,4 +1,4 @@
-import type { DirectorySummaryKind, NavigationDirectorySummary, NavigationThreadSummary } from "./contracts/navigation";
+import type { DirectorySummaryKind, NavigationDirectoryGitStatus, NavigationDirectorySummary, NavigationThreadSummary } from "./contracts/navigation";
 import type { LinkedDirectorySummary } from "./contracts/normalized-app-server";
 import { classifyDirectory, orderByHomePreference } from "./directory-navigation";
 import { isToolManagedWorktreePath } from "./worktree-paths";
@@ -16,6 +16,7 @@ export type ProjectIdentity = ProjectRepositoryIdentity & {
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  checkoutPaths?: readonly string[];
 };
 
 type PeerDirectory = ProjectIdentity & {
@@ -30,10 +31,10 @@ type PeerDirectory = ProjectIdentity & {
  * uses to file a remote thread under a local project group
  * (`findRemoteHomeDirectoryIndex`).
  */
-export function directoryIdentityNames(directory: { label: string; path?: string; kind?: string }): string[] {
-  const basename = directory.path?.split(/[\\/]/).filter(Boolean).pop();
+export function directoryIdentityNames(directory: { label: string; path?: string; kind?: string; checkoutPaths?: readonly string[] }): string[] {
+  const basenames = [directory.path, ...directory.checkoutPaths ?? []].map((path) => path?.split(/[\\/]/).filter(Boolean).pop() ?? "");
   return [...new Set(
-    [directory.label, basename ?? ""]
+    [directory.label, ...basenames]
       .map((name) => name.trim().toLowerCase())
       .filter(Boolean),
   )];
@@ -68,42 +69,51 @@ export function findPeerCounterpartDirectory<T extends PeerDirectory>(
       directory.kind === "directory"
       && directory.localAvailability !== "unconfigured",
   );
+  const localNames = directoryIdentityNames(local);
+  const choose = (matches: readonly T[]): T | undefined => {
+    if (matches.length <= 1) return matches[0];
+    for (const name of localNames) {
+      const named = matches.filter((directory) => directory.label.trim().toLowerCase() === name);
+      if (named.length === 1) return named[0];
+    }
+    const grouped = matches.filter((directory) => directory.checkoutPaths?.length);
+    return grouped.length === 1 ? grouped[0] : undefined;
+  };
   const localRepository = local.repositoryKey?.toLowerCase();
   if (localRepository) {
-    const byRepository = candidates.find(
+    const byRepository = candidates.filter(
       (directory) => directory.repositoryKey?.toLowerCase() === localRepository,
     );
-    if (byRepository) {
-      return byRepository;
+    if (byRepository.length) {
+      return choose(byRepository);
     }
   }
   const localRepositories = repositoryIdentities(local);
   if (localRepositories.length) {
-    const byRemote = candidates.find((directory) =>
+    const byRemote = candidates.filter((directory) =>
       repositoryIdentities(directory).some((repository) => localRepositories.includes(repository)),
     );
-    if (byRemote) {
-      return byRemote;
+    if (byRemote.length) {
+      return choose(byRemote);
     }
   }
   const nameCandidates = localRepositories.length
     ? candidates.filter((directory) => repositoryIdentities(directory).length === 0)
     : candidates;
-  const localNames = directoryIdentityNames(local);
   // A label match beats a basename match, so a peer that has both "PwrAgnt"
   // the project and some other checkout whose folder happens to be named
   // "pwragnt" lands on the project.
   for (const name of localNames) {
-    const byLabel = nameCandidates.find(
+    const byLabel = nameCandidates.filter(
       (directory) => directory.label.trim().toLowerCase() === name,
     );
-    if (byLabel) {
-      return byLabel;
+    if (byLabel.length) {
+      return choose(byLabel);
     }
   }
-  return nameCandidates.find((directory) =>
+  return choose(nameCandidates.filter((directory) =>
     directoryIdentityNames(directory).some((name) => localNames.includes(name)),
-  );
+  ));
 }
 
 function repositoryIdentities(directory: ProjectIdentity): string[] {
@@ -127,12 +137,21 @@ function repositoryIdentities(directory: ProjectIdentity): string[] {
  */
 export function findRemoteHomeDirectoryIndex(
   directories: ReadonlyArray<RemoteHomeCandidate>,
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey" | "checkoutProject">,
 ): number | undefined {
   // Scratch folder names are per-thread identities, not project identities.
   // Match the containing workspace by kind before considering any raw names.
   const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
   const home = linkedByHomePreference[0];
+  if (home && thread.checkoutProject) {
+    const match = findPeerCounterpartDirectory({ ...home, kind: "directory" }, directories.flatMap((directory, index) =>
+      directory.kind === "directory" ? [{
+        ...directory, kind: directory.kind, index,
+        repositoryKey: directory.gitStatus?.originRepository ?? directory.repositoryKey,
+        repositoryKeys: directory.gitStatus?.remoteRepositories ?? directory.repositoryKeys,
+      }] : []));
+    return match?.index;
+  }
   if (home && classifyDirectory(home).kind === "workspace") {
     const index = directories.findIndex((directory) => directory.kind === "workspace");
     return index === -1 ? undefined : index;
@@ -170,10 +189,12 @@ export function findRemoteHomeDirectoryIndex(
 }
 
 /** A local directory row a remote thread can be filed under. */
-export type RemoteHomeCandidate = {
+export type RemoteHomeCandidate = ProjectRepositoryIdentity & {
   key: string;
   label: string;
   path?: string;
+  checkoutPaths?: readonly string[];
+  gitStatus?: Pick<NavigationDirectoryGitStatus, "originRepository" | "remoteRepositories">;
   kind?: DirectorySummaryKind;
   localAvailability?: "unconfigured";
 };
@@ -185,7 +206,7 @@ export type RemoteHomeCandidate = {
  * peer's starting thread, so the thread lands where it started.
  */
 export function remoteThreadPlaceholderDirectory(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey" | "checkoutProject">,
 ): NavigationDirectorySummary | undefined {
   const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
   if (!home) {
@@ -243,8 +264,12 @@ function compareHomeCandidates(a: RemoteHomeCandidate, b: RemoteHomeCandidate, n
 
 /** A remote thread's linked directories, home first. */
 function remoteLinkedDirectoriesByHomePreference(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey" | "checkoutProject">,
 ): LinkedDirectorySummary[] {
+  if (thread.checkoutProject) {
+    const { key, label, repositoryKey } = thread.checkoutProject;
+    return [{ id: key, label, path: key.slice("directory:".length), kind: "local", repositoryKey }];
+  }
   const linkedDirectories = thread.linkedDirectories ?? [];
   const projectKey = thread.projectKey;
   const primaryProjectDirectory = projectKey

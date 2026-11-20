@@ -223,6 +223,22 @@ describe("ActiveSubAgentsStrip", () => {
       );
       expect(screen.getByText("2")).toBeInTheDocument();
     });
+
+    it("labels a partial preview and dismisses only the shown failures", () => {
+      const failures = [
+        buildSubAgent({ monitorId: "failed-a", status: "failed" }),
+        buildSubAgent({ monitorId: "failed-b", status: "failure" }),
+      ];
+      const preview = { ...buildThread([]), activeSubAgents: failures, activeSubAgentsIncomplete: true as const };
+      const { rerender } = render(<ActiveSubAgentsStrip thread={preview} />);
+      expect(screen.queryByText("More in Sub-agents")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Dismiss 2 shown failures" })).toBeInTheDocument();
+      rerender(<ActiveSubAgentsStrip thread={{ ...preview, activeSubAgentsMoreInPanel: true }} />);
+      expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss 2 shown failures" }));
+      expect(screen.queryByRole("button", { name: "Failed sub-agents, 2" })).not.toBeInTheDocument();
+      expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
+    });
   });
 
   describe("disclosure", () => {
@@ -359,6 +375,31 @@ describe("ActiveSubAgentsStrip", () => {
   });
 
   describe("failed sub-agents", () => {
+    it.each([
+      { capabilities: [] },
+      { capabilities: ["turn_control"] },
+      { capabilities: ["sub_agent_failure_dismissal"] },
+    ] as const)(
+      "omits remote dismissal when the owner lacks permission or support ($capabilities)",
+      ({ capabilities }) => {
+        const dismissFailedSubAgents = vi.fn();
+        const thread: NavigationThreadSummary = {
+          ...buildThread([
+            buildSubAgent({ monitorId: "first", status: "failed" }),
+            buildSubAgent({ monitorId: "second", status: "failure" }),
+          ]),
+          federation: {
+            instanceLabel: "Owner",
+            ref: { backend: "codex", threadId: "parent-thread", target: { scope: "remote", instanceId: "owner" } },
+            capabilities: [...capabilities],
+          },
+        };
+        render(<ActiveSubAgentsStrip desktopApi={{ dismissFailedSubAgents }} thread={thread} />);
+        expect(screen.getByRole("button", { name: "Failed sub-agents, 2" })).toBeVisible();
+        expect(screen.queryAllByRole("button", { name: /^Dismiss/ })).toHaveLength(0);
+      },
+    );
+
     it("does not call itself Active when nothing is running", () => {
       // Regression: a thread with 13 failures and nothing running rendered
       // "ACTIVE SUB-AGENTS 13", which is just false.
@@ -433,8 +474,10 @@ describe("ActiveSubAgentsStrip", () => {
     });
 
     it("offers a bulk dismiss once more than one failure is showing", () => {
-      const { container, rerender } = render(
+      const desktopApi = { dismissFailedSubAgents: vi.fn() };
+      const { rerender } = render(
         <ActiveSubAgentsStrip
+          desktopApi={desktopApi}
           thread={buildThread([
             buildSubAgent({ monitorId: "a", status: "failed" }),
           ])}
@@ -445,6 +488,7 @@ describe("ActiveSubAgentsStrip", () => {
 
       rerender(
         <ActiveSubAgentsStrip
+          desktopApi={desktopApi}
           thread={buildThread(
             Array.from({ length: 13 }, (_unused, index) =>
               buildSubAgent({
@@ -456,15 +500,21 @@ describe("ActiveSubAgentsStrip", () => {
           )}
         />,
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "Dismiss all 13 failed sub-agents" }),
-      );
-      expect(container).toBeEmptyDOMElement();
+      expect(screen.getByRole("button", { name: "Dismiss all 13 failed sub-agents" })).toBeEnabled();
     });
 
-    it("never sweeps up a running sub-agent in the bulk dismiss", () => {
-      render(
+    it("requests dismissal for the displayed failures without including running sub-agents", async () => {
+      const dismissFailedSubAgents = vi.fn(async () => ({ dismissedCount: 2 }));
+      const refresh = vi.fn(async () => {
+        view.rerender(<ActiveSubAgentsStrip
+          desktopApi={{ dismissFailedSubAgents }}
+          thread={buildThread([buildSubAgent({ monitorId: "run", task: "Still going" })])}
+        />);
+      });
+      const view = render(
         <ActiveSubAgentsStrip
+          desktopApi={{ dismissFailedSubAgents }}
+          onRefreshNavigation={refresh}
           thread={buildThread([
             buildSubAgent({ monitorId: "run", task: "Still going" }),
             buildSubAgent({ monitorId: "x", status: "failed" }),
@@ -477,20 +527,32 @@ describe("ActiveSubAgentsStrip", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Dismiss all 2 failed sub-agents" }),
       );
-      expect(screen.getByText("Still going")).toBeInTheDocument();
+      await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+      expect(dismissFailedSubAgents).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "parent-thread", attempts: [
+          { monitorId: "x", attemptId: "1800000000000" },
+          { monitorId: "y", attemptId: "1800000000000" },
+        ],
+      });
+      expect(screen.getByText("Still going")).toBeVisible();
       expect(screen.queryByText("Failed")).toBeNull();
     });
 
-    it("removes a failed row once dismissed, and the strip with it", () => {
-      const { container } = render(
+    it("keeps a failed row visible and enables retry when the owner rejects dismissal", async () => {
+      const dismissFailedSubAgents = vi.fn().mockRejectedValue(new Error("Peer disconnected"));
+      render(
         <ActiveSubAgentsStrip
+          desktopApi={{ dismissFailedSubAgents }}
           thread={buildThread([
             buildSubAgent({ monitorId: "broken", status: "failed" }),
           ])}
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: /^Dismiss failed sub-agent:/ }));
-      expect(container).toBeEmptyDOMElement();
+      const button = screen.getByRole("button", { name: /^Dismiss failed sub-agent:/ });
+      fireEvent.click(button);
+      expect(button).toBeDisabled();
+      expect(await screen.findByRole("alert")).toHaveTextContent("Couldn’t dismiss failed sub-agents.");
+      expect(button).toBeEnabled();
     });
   });
 

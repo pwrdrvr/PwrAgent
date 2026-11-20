@@ -273,6 +273,29 @@ it("retains live Token Miser subagents while the authoritative collection refres
   unmount();
 });
 
+it("refreshes the remote composer on a dismissal and retains loaded history", async () => {
+  let listener!: (event: AgentEvent) => void;
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const failed = { monitorId: "failed", task: "Deploy", status: "failure" as const, createdAt: 1, updatedAt: 2 };
+  const collections = [{ name: "subAgents" as const, count: 1, revision: "history" }];
+  const initial = detail("initial");
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce({ ...initial, collections, thread: { ...initial.thread!, activeSubAgents: [failed] } })
+    .mockResolvedValueOnce({ ...initial, collectionPage: { name: "subAgents", revision: "history",
+      complete: true, values: { subAgents: [failed] } } })
+    .mockResolvedValue({ ...initial, revision: "dismissed", collections, thread: { ...initial.thread!, activeSubAgents: [] } });
+  const api: DesktopApi = { getNavigationSelectedDetail: read,
+    onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const view = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref, federationTarget: target }));
+  try {
+    await waitFor(() => expect(view.result.current.state?.detail?.thread?.subAgents).toEqual([failed]));
+    act(() => listener({ backend: "codex", federationTarget: target,
+      notification: { method: "thread/subAgentFailures/dismissed", params: { threadId: ref.threadId } } }));
+    await waitFor(() => expect(view.result.current.state?.detail?.thread?.activeSubAgents).toEqual([]));
+    expect(view.result.current.state?.detail?.thread?.subAgents).toEqual([failed]);
+    expect(read).toHaveBeenCalledTimes(3);
+  } finally { view.unmount(); }
+});
 
 it("revalidates a canonical baseline without trusting event-patched configuration", async () => {
   let listener!: (event: AgentEvent) => void;

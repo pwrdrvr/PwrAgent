@@ -94,6 +94,8 @@ export const FEDERATION_CAPABILITIES = [
    * A viewer offers no pause without it.
    */
   "turn_queue_pause",
+  /** The owner accepts attempt-qualified sub-agent dismissals under turn_control. */
+  "sub_agent_failure_dismissal",
   /**
    * The owner accepts `THREAD_DISPLAY_MAX_ACCOUNTING_TURNS` turns in one
    * accounting display read and `THREAD_DISPLAY_MAX_PAGE_ROWS` rows in one

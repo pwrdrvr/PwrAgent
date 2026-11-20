@@ -169,6 +169,7 @@ export type FederationInstanceProjectSummary = {
   label: string;
   kind: DirectorySummaryKind;
   path?: string;
+  checkoutPaths?: string[];
   /**
    * The checkout's origin as `host/owner/repo`, and its other fetch
    * remotes. One project can have a different name on each machine;

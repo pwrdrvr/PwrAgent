@@ -96,6 +96,8 @@ import type {
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared";
+import { NAVIGATION_SET_PROJECT_CHECKOUT_GROUP_CHANNEL } from "../shared/ipc";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
@@ -167,6 +169,8 @@ import type {
   ForkThreadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  DismissFailedSubAgentsRequest,
+  DismissFailedSubAgentsResponse,
   StopSubAgentRequest,
   StopSubAgentResponse,
   ListAutomationReplayCandidatesRequest,
@@ -779,6 +783,7 @@ import {
   CODEX_MCP_SERVER_LOGIN_CHANNEL,
   CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_LAUNCHPAD_CREATION_CHANNEL,
@@ -2742,6 +2747,10 @@ const desktopApi = Object.freeze({
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>
     await ipcRenderer.invoke(AGENT_INTERRUPT_TURN_CHANNEL, request),
+  dismissFailedSubAgents: async (
+    request: DismissFailedSubAgentsRequest,
+  ): Promise<DismissFailedSubAgentsResponse> =>
+    await ipcRenderer.invoke(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL, request),
   stopSubAgent: async (
     request: StopSubAgentRequest,
   ): Promise<StopSubAgentResponse> =>
@@ -2924,6 +2933,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, request),
   removeNavigationDirectory: async (request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, request),
+  setProjectCheckoutGroup: async (request: SetProjectCheckoutGroupRequest): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_PROJECT_CHECKOUT_GROUP_CHANNEL, request),
   getNavigationLaunchpadConfig: async (
     request: NavigationLaunchpadConfigRequest,
     consumerId?: string,

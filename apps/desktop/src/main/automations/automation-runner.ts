@@ -19,6 +19,11 @@ export type AutomationRunner = {
     priorRuns?: AutomationPriorRunContext[];
     run: AutomationRunSummary;
   }): Promise<AutomationRunStartResult>;
+  /** Stop a started run's turn, as the operator's Stop would. */
+  interruptRun?(params: {
+    automation: AutomationRecord;
+    run: AutomationRunSummary;
+  }): Promise<void>;
 };
 
 /**
@@ -64,6 +69,11 @@ export type HeadlessAutomationLauncher = {
     threadId: string;
     turnId: string;
   }>;
+  interruptTurn(params: {
+    backend: AutomationRecord["backend"];
+    threadId: string;
+    turnId: string;
+  }): Promise<unknown>;
 };
 
 export class HeadlessAutomationRunner implements AutomationRunner {
@@ -121,5 +131,19 @@ export class HeadlessAutomationRunner implements AutomationRunner {
       queueEntryId: result.queueEntryId,
       turnId: result.turnId,
     };
+  }
+
+  async interruptRun(params: {
+    automation: AutomationRecord;
+    run: AutomationRunSummary;
+  }): Promise<void> {
+    const threadId = params.run.backendThreadId;
+    const turnId = params.run.backendTurnId;
+    if (!threadId || !turnId) return;
+    await this.launcher.interruptTurn({
+      backend: params.automation.backend,
+      threadId,
+      turnId,
+    });
   }
 }

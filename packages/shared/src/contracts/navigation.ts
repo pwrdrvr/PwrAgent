@@ -129,6 +129,8 @@ export type NavigationLaunchpadAgent = Pick<
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
+  checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
   gitWorkingStateFetchedAt?: number;
   /** See `NavigationRow.homeProject`. */
@@ -315,6 +317,10 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   subAgents?: ThreadSubAgentSummary[];
   /** Owner-projected composer rows, independent of lazily loaded sub-agent history. */
   activeSubAgents?: ThreadActiveSubAgent[];
+  /** The composer preview omitted some eligible rows. */
+  activeSubAgentsIncomplete?: true;
+  /** At least one omitted composer row is available in the paged Sub-agents panel. */
+  activeSubAgentsMoreInPanel?: true;
   /**
    * Owner-projected active PR watches, on selected detail only, like
    * `activeSubAgents`. Never written to the navigation store.
@@ -427,7 +433,7 @@ export type TokenMiserSubAgentAccounting = {
 
 export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
   | "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
-  | "agentName"
+  | "agentName" | "attemptId"
 >;
 
 export type ThreadSubAgentSummary = {
@@ -435,6 +441,8 @@ export type ThreadSubAgentSummary = {
   causalMessagingSource?: import("./normalized-app-server").MessagingCausalSourceRef;
   causalMessagingAmbiguous?: boolean;
   monitorId: string;
+  /** Set by producers that reuse a monitor ID for multiple attempts. */
+  attemptId?: string;
   task: string;
   status: ThreadSubAgentStatus;
   createdAt: number;
@@ -1494,11 +1502,33 @@ export type NavigationDirectoryGitStatus = {
   statusUnavailableReason?: string;
 };
 
+export type ProjectCheckoutGroup = {
+  preferredPath: string;
+  paths: string[];
+  repositoryKey?: string;
+};
+
+export type SetProjectCheckoutGroupRequest = {
+  /** The checkout by which the editor opened the group. */
+  projectPath: string;
+  /** The group as shown when the editor opened, empty for an ungrouped checkout. */
+  previousPaths: string[];
+  group: ProjectCheckoutGroup;
+};
+
+export type NavigationCheckoutProject = {
+  key: string;
+  label: string;
+  repositoryKey?: string;
+};
+
 export type NavigationDirectorySummary = {
   key: string;
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  /** Explicitly grouped checkout roots. The row path is the preferred checkout. */
+  checkoutPaths?: string[];
   /**
    * The row was derived from a mounted remote thread, but this viewer has not
    * registered a matching local checkout yet. The Directories lens keeps the
@@ -2259,6 +2289,7 @@ export type NavigationRow = {
   hasAgentCommands?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
+  checkoutProject?: NavigationCheckoutProject;
   linkedDirectories: LinkedDirectorySummary[];
   linkedDirectoriesTruncated?: boolean;
   gitBranch?: string;
@@ -2324,6 +2355,9 @@ export type NavigationDirectoryRow = {
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  checkoutPaths?: string[];
+  /** Star Map geometry only. Configured groups for this origin with no visible threads on this owner. */
+  emptyCheckoutGroupCount?: number;
   /**
    * Cross-machine repository identity for this row: the directory's
    * `remote.origin.url` as `host/owner/repo`, from
@@ -3917,7 +3951,11 @@ export type RemoveNavigationDirectoryRequest = {
   archiveThreads?: boolean;
   federationTarget?: FederationTarget;
 };
-export type RemoveNavigationDirectoryResponse = { directoryKey: string; cleanup?: ArchiveThreadCleanupResult[] };
+export type RemoveNavigationDirectoryResponse = {
+  directoryKey: string;
+  cleanup?: ArchiveThreadCleanupResult[];
+  registrationRetained?: true;
+};
 
 /** Resolve complete directory membership on its owner; never accept a renderer row allowlist. */
 export type MarkNavigationDirectorySeenRequest = {

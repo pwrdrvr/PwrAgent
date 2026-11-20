@@ -115,6 +115,38 @@ a headless turn at once (`runNow` in `automation-scheduler.ts`). It does not
 enter the assigned thread's FIFO, does not wait for that thread's active turn,
 and does not change the recurring schedule's next automatic run.
 
+## Run Timeout and Daily Run Limit
+
+Each automation can set a run timeout and a daily run limit in the editor's
+Limits group. Both are unset by default, which keeps the behavior above.
+
+- **Run timeout.** The scheduler arms a timer when a run starts. When it
+  fires on a run still `running`, the run becomes `failed` with
+  `failureReason: "timed_out"` first, and then its turn is interrupted. The
+  turn's own end, arriving later, finds the run settled: it cannot reopen it
+  or start a second successor in the lane. The run is reported as any failed
+  run is, so the Agent thread's strip shows it as "Timed out".
+- **Daily run limit.** Runs started in any rolling 24 hours, counted from the
+  run rows (every run but a `skipped` one), as the hourly inbound limit is.
+  `admitRun` in `packages/sqlite-storage/src/automation-store.ts` counts and
+  inserts in one `IMMEDIATE` transaction, so the limit holds at admission,
+  including for two instances on one profile. A run stamped later than now,
+  which a clock set back leaves behind, still counts. A refused trigger
+  pauses the automation with `pausedReason: "daily_run_limit"`, and the Agent
+  thread's strip shows the pause with a Resume action. Only the operator
+  resumes it.
+
+While the limit holds an automation paused, its schedule still fires and its
+inbound triggers still match. Each such trigger is recorded on one `skipped`
+run per pause, with `skipReason: "daily_limit"` and a growing count. The
+count is rewritten at most once a minute, so a flooding channel cannot flood
+the database. Pruning keeps the runs the limit still counts ahead of skipped
+ones.
+
+The fields are additive in the automation payload. A build that predates them
+ignores them: it runs the automation with no timeout or limit, reads a limit
+pause as an ordinary pause, and shows a timed-out run as failed.
+
 ## Run History
 
 Automation runs are persisted in the profile SQLite state database and capped

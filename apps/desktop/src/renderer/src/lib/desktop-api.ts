@@ -60,6 +60,7 @@ import type {
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared";
 import { useEffect, useState } from "react";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../shared/federation-receiving-folder";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
@@ -221,6 +222,8 @@ import type {
   RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  DismissFailedSubAgentsRequest,
+  DismissFailedSubAgentsResponse,
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
@@ -1317,6 +1320,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
+  dismissFailedSubAgents?: (
+    request: DismissFailedSubAgentsRequest,
+  ) => Promise<DismissFailedSubAgentsResponse>;
   stopSubAgent?: (
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
@@ -1411,6 +1417,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   releaseNavigationAttentionView?: (request: NavigationAttentionViewReleaseRequest) => Promise<void>;
   markNavigationDirectorySeen?: (request: MarkNavigationDirectorySeenRequest) => Promise<MarkNavigationDirectorySeenResponse>;
   removeNavigationDirectory?: (request: RemoveNavigationDirectoryRequest) => Promise<RemoveNavigationDirectoryResponse>;
+  setProjectCheckoutGroup?: (request: SetProjectCheckoutGroupRequest) => Promise<void>;
   getNavigationLaunchpadConfig?: (
     request: NavigationLaunchpadConfigRequest,
     consumerId?: string,

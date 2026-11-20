@@ -94,6 +94,24 @@ it("preserves requested history pages across coalesced live updates and isolates
   unmount();
 });
 
+it("keeps using the history cursor after a composer-only dismissal", async () => {
+  const h = harness();
+  h.readThread.mockResolvedValueOnce(page("first", "revision:20")).mockResolvedValueOnce(page("second"));
+  const view = renderHook(() => useThreadDisplayResource({ desktopApi: h.api, thread: thread(), resource: "subagents" }));
+  try {
+    await waitFor(() => expect(view.result.current.data?.nextCursor).toBe("revision:20"));
+    vi.useFakeTimers();
+    h.emit({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/subAgentFailures/dismissed", params: { threadId: "thread" },
+    } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_050); });
+    expect(h.readThread).toHaveBeenCalledTimes(1);
+    await act(async () => { await view.result.current.loadMore(); });
+    expect(h.readThread.mock.calls[1]?.[0].display?.cursor).toBe("revision:20");
+    expect(view.result.current.data?.subAgents?.map((agent) => agent.monitorId)).toEqual(["first", "second"]);
+  } finally { view.unmount(); }
+});
+
 it("refreshes snapshot-only peers on a changed navigation version without duplicating the initial read", async () => {
   const h = harness();
   const { result, rerender, unmount } = renderHook(({ updatedAt }) => useThreadDisplayResource({ desktopApi: h.api, thread: thread(false, updatedAt), resource: "subagents" }), { initialProps: { updatedAt: 1 } });

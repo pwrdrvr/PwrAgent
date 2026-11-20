@@ -181,6 +181,7 @@ import type {
   StartThreadResponse,
   SteerTurnResponse,
   StopCodexEnvironmentActionResponse,
+  DismissFailedSubAgentsResponse,
   StopSubAgentResponse,
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
@@ -324,6 +325,7 @@ import {
   type StartTurnResponse,
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
+  type DismissFailedSubAgentsRequest,
   type StopSubAgentRequest,
   type TrustCodexProjectRequest,
   type UpdateSubthreadOrderRequest,
@@ -688,6 +690,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_directory_set_events",
   "turn_queue_reorder",
   "turn_queue_pause",
+  "sub_agent_failure_dismissal",
   "turn_assistant_reply",
   "project_forge_automation",
   "thread_mcp_connections",
@@ -840,8 +843,8 @@ export function federationEventClassForMethod(
   if (method === "thread/scheduledAction/updated") {
     return "scheduled_actions";
   }
-  if (method === "thread/operatorQuestions/changed") {
-    // Dismissed-question state is readable with thread_detail access.
+  if (method === "thread/operatorQuestions/changed" || method === "thread/subAgentFailures/dismissed") {
+    // Dismissal state is readable with thread_detail access.
     return "transcript";
   }
   if (
@@ -8382,6 +8385,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: InterruptTurnRequest,
     ): Promise<InterruptTurnResponse> {
       return await getDesktopBackendRegistry().interruptTurn(request);
+    },
+    async dismissFailedSubAgents(
+      request: DismissFailedSubAgentsRequest,
+    ): Promise<DismissFailedSubAgentsResponse> {
+      return await getDesktopBackendRegistry().dismissFailedSubAgents(request);
     },
     async stopSubAgent(
       request: StopSubAgentRequest,

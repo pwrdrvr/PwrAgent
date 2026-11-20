@@ -32,7 +32,7 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
-import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
+import { PROJECT_CHECKOUT_GROUPS_META_KEY, sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, navigationLaunchpadProviderKey, sortSubthreadSummaries } from "@pwragent/shared";
 import {
   isDefaultProjectForgeAutomation,
@@ -71,6 +71,8 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
+  ProjectCheckoutGroup,
+  SetProjectCheckoutGroupRequest,
   PrSummary,
   PrAutoDispatchBudgetConfig,
   PrAutoDispatchBudgetStatus,
@@ -102,6 +104,7 @@ import type {
   StarMapWorkspaceState,
   ThreadQuestionnaireActivity,
   SubAgentLens,
+  FailedSubAgentAttempt,
   ThreadRewindRecord,
   ThreadSubAgentSummary,
   TokenMiserGateAccountingTotals,
@@ -1154,7 +1157,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
       });
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
-      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });
+      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots,
+      checkoutGroups: this.readProjectCheckoutGroups() });
     return { threads, directories };
   }
 
@@ -1460,6 +1464,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       launchpadDefaults,
       launchpadsByKey,
       directoryOverlayByKey,
+      checkoutGroups: this.readProjectCheckoutGroups(),
       automationsByThreadKey: params.automationsByThreadKey,
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
@@ -4486,7 +4491,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return result;
   }
 
-  /** Unfinished cards and failures, from a partial index that gate cards never enter. */
+  async dismissFailedThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    attempts: readonly FailedSubAgentAttempt[];
+  }): Promise<number> {
+    if (params.attempts.length === 0) return 0;
+    // As with detail reads, bring any legacy cards into the table first.
+    return this.subAgentTable.dismissFailures(this.subAgentStorageKey(params), params.attempts);
+  }
+
+  /** Unfinished cards and undismissed failures, from the attention index. */
   async listActiveThreadSubAgents(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -6057,6 +6072,46 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return params.move
       ? (pinnedRanks[params.move.key] ? { [params.move.key]: pinnedRanks[params.move.key]! } : {})
       : pinnedRanks;
+  }
+
+  private readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
+    const payload = this.stateDb.getMeta(PROJECT_CHECKOUT_GROUPS_META_KEY);
+    if (!payload) return [];
+    // Every navigation read passes through here; an unreadable row must not
+    // take Directories down with it. The next save replaces it.
+    let groups: unknown;
+    try {
+      groups = JSON.parse(payload);
+    } catch {
+      return [];
+    }
+    return Array.isArray(groups) ? groups.filter((group): group is ProjectCheckoutGroup =>
+      typeof group?.preferredPath === "string"
+      && Array.isArray(group.paths)
+      && group.paths.every((path: unknown) => typeof path === "string")) : [];
+  }
+
+  /** The filesystem was checked before this write. Check group membership again inside the transaction. */
+  setProjectCheckoutGroup({ projectPath, previousPaths, group }: SetProjectCheckoutGroupRequest): boolean {
+    return this.stateDb.raw.transaction(() => {
+      const groups = this.readProjectCheckoutGroups();
+      const current = groups.find((candidate) => candidate.paths.includes(projectPath));
+      if ((current && current.preferredPath !== projectPath)
+        || previousPaths.length !== (current?.paths.length ?? 0)
+        || previousPaths.some((path) => !current?.paths.includes(path))) {
+        throw new Error("The project checkouts changed. Reopen the editor and try again.");
+      }
+      const otherGroups = groups.filter((candidate) => candidate !== current);
+      if (otherGroups.some((candidate) => candidate.paths.some((path) => group.paths.includes(path)))) {
+        throw new Error("A checkout is already grouped with another project.");
+      }
+      const next = group.paths.length > 1 ? group : undefined;
+      if (current?.preferredPath === next?.preferredPath && current?.repositoryKey === next?.repositoryKey
+        && (!current || current.paths.length === group.paths.length
+          && current.paths.every((path) => group.paths.includes(path)))) return false;
+      this.stateDb.setMeta(PROJECT_CHECKOUT_GROUPS_META_KEY, JSON.stringify(next ? [...otherGroups, next] : otherGroups));
+      return true;
+    }).immediate();
   }
 
   async setDirectoryThreadsCollapsed(params: {
@@ -12748,6 +12803,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadSubAgent"
   | "listThreadSubAgents"
   | "listActiveThreadSubAgents"
+  | "dismissFailedThreadSubAgents"
   | "listArchiveActiveSubAgentThreadIds"
   | "readThreadSubAgentRevision"
   | "listThreadSubAgentsByMonitorIdPrefix"

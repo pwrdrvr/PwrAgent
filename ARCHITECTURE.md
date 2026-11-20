@@ -504,6 +504,9 @@ The generated ownership, reference, restart and snapshot model lives in
   independent pages and counts over their full history. Cursors are tied to a
   resource revision. A stale cursor requires a refresh; an open panel refreshes
   the number of pages the operator has already requested.
+- The owning instance records composer dismissals for the failed attempts
+  the viewer selected. A composer-only invalidation refreshes selected detail.
+  Sub-agent history retains its cards, results, and pagination revision.
 - A pricing row includes its displayed gate children and decision details.
   Transcript text and expanded panel details retain their content; a row-count
   limit is not a hard byte limit on an individual message or row.

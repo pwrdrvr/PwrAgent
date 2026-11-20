@@ -53,6 +53,11 @@ import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
 import { formatAutomationRelative } from "./automation-format";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
+import {
+  AutomationRunLimitsFields,
+  limitSelectValue,
+  parseLimitSelectValue,
+} from "./AutomationRunLimitsFields";
 import { ProjectPicker } from "../composer/ProjectPicker";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
 import { ModelDropdown } from "../composer/ModelDropdown";
@@ -254,6 +259,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [enabled, setEnabled] = useState(initialAutomation?.status !== "paused");
   const [backlogPolicy, setBacklogPolicy] = useState<AutomationBacklogPolicy>(
     initialAutomation?.backlogPolicy ?? "coalesce",
+  );
+  const [runTimeoutMs, setRunTimeoutMs] = useState(
+    limitSelectValue(initialAutomation?.runTimeoutMs),
+  );
+  const [dailyRunLimit, setDailyRunLimit] = useState(
+    limitSelectValue(initialAutomation?.dailyRunLimit),
   );
   const [threadKey, setThreadKey] = useState(initialThreadKey);
   const [chosenAgentOption, setChosenAgentOption] = useState<AgentThreadOption>();
@@ -1659,10 +1670,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
           automationId: props.mode.automation.id,
           ...assignment,
           backlogPolicy,
+          dailyRunLimit: parseLimitSelectValue(dailyRunLimit),
           enabled,
           executionProfile,
           gate: gate.gate,
           priorRunLookback: priorRunLookback ?? null,
+          runTimeoutMs: parseLimitSelectValue(runTimeoutMs),
           ...(triggerKind === "inbound_message"
             ? {
                 inboundCoalesceWindowMs: parseCoalesceWindowMs(
@@ -1690,15 +1703,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
       return;
     }
 
+    const createDailyRunLimit = parseLimitSelectValue(dailyRunLimit);
+    const createRunTimeoutMs = parseLimitSelectValue(runTimeoutMs);
     await props.onSubmit({
       kind: "create",
       request: {
         ...assignment,
         backlogPolicy,
+        ...(createDailyRunLimit !== null ? { dailyRunLimit: createDailyRunLimit } : {}),
         enabled,
         executionProfile,
         gate: gate.gate,
         ...(priorRunLookback ? { priorRunLookback } : {}),
+        ...(createRunTimeoutMs !== null ? { runTimeoutMs: createRunTimeoutMs } : {}),
         ...(triggerKind === "inbound_message"
           ? {
               inboundCoalesceWindowMs: parseCoalesceWindowMs(
@@ -2570,6 +2587,21 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 often and raise the urgency.&rdquo;
               </p>
             ) : null}
+
+            <AutomationRunLimitsFields
+              dailyRunLimit={dailyRunLimit}
+              pausedAtDailyLimit={initialAutomation?.pausedReason === "daily_run_limit"}
+              runTimeoutMs={runTimeoutMs}
+              runsInLast24Hours={initialAutomation?.runsInLast24Hours}
+              onDailyRunLimitChange={(value) => {
+                setDailyRunLimit(value);
+                setValidationError(undefined);
+              }}
+              onRunTimeoutChange={(value) => {
+                setRunTimeoutMs(value);
+                setValidationError(undefined);
+              }}
+            />
 
             <details className="automation-advanced">
               <summary className="automation-advanced__summary">

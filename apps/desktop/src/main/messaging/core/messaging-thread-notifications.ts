@@ -71,7 +71,9 @@ export function automationRunFailureNotice(params: {
   const name = params.automationName?.trim();
   const label = params.failureReason === "interrupted"
     ? "Automation interrupted"
-    : "Automation failed";
+    : params.failureReason === "timed_out"
+      ? "Automation timed out"
+      : "Automation failed";
   const heading = name ? `${label}: ${threadNotificationSnippet(name, 80)}` : label;
   const error = threadNotificationSnippet(params.errorMessage ?? "");
   if (error) return `${heading} · ${error}`;

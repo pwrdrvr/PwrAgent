@@ -399,6 +399,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
   });
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
+  const { refresh: refreshSelectedDetail } = selectedDetail;
+  const refreshSubAgentDetail = useCallback(async () => {
+    await Promise.all([refreshSelectedDetail(), props.onRefreshNavigation?.()]);
+  }, [refreshSelectedDetail, props.onRefreshNavigation]);
   // The queue term also covers an inactive card: `useIndependentQueueProjection`
   // is passed no thread when `props.active === false`, and reports `loading`
   // for a selection key it holds no state for.
@@ -2120,8 +2124,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <div className="star-map-chat-card__band">
           <MemoizedActiveSubAgentsStrip
             desktopApi={desktopApi}
-            onRefreshNavigation={props.onRefreshNavigation}
-            thread={thread}
+            onRefreshNavigation={refreshSubAgentDetail}
+            thread={selectedConfiguration ?? thread}
           />
           <MemoizedActiveDecisionBatchesStrip desktopApi={desktopApi} thread={thread} />
 
