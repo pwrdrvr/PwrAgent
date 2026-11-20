@@ -91,6 +91,7 @@ type WorktreeArchiveServiceOptions = {
 
 export const MAX_WORKTREE_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_WORKTREE_SNAPSHOT_FILES = 10_000;
+const SNAPSHOT_COMMIT_SUBJECT_PREFIX = "Snapshot worktree for ";
 
 /** The checkout changed after its snapshot was written; it was kept. */
 export class SnapshotTreeMismatchError extends Error {
@@ -885,7 +886,7 @@ export class WorktreeArchiveService {
         return params.worktree.head;
       }
       const message = [
-        `Snapshot worktree for ${params.backend}:${params.threadId}`,
+        `${SNAPSHOT_COMMIT_SUBJECT_PREFIX}${params.backend}:${params.threadId}`,
         "",
         `Worktree: ${params.worktreePath}`,
         params.worktree.branch ? `Branch: ${params.worktree.branch}` : undefined,
@@ -939,6 +940,7 @@ export class WorktreeArchiveService {
 
 export const worktreeArchiveInternals = {
   parseWorktreeList,
+  snapshotCommitSubjectPrefix: SNAPSHOT_COMMIT_SUBJECT_PREFIX,
   snapshotIdForPath,
   snapshotRefForBackend,
 };

@@ -141,16 +141,16 @@ export class WorktreeRecoveryService {
       }
       mark("check-path", "done");
 
+      const ownPath = await comparablePath(worktreePath);
       const checkpoint = params.skipCheckpoint
         ? undefined
-        : await this.resolveCheckpoint(repositoryPath, worktreePath, params);
+        : await this.resolveCheckpoint(repositoryPath, new Set([worktreePath, ownPath]), params);
       mark(
         "find-checkpoint",
         checkpoint ? "done" : "skipped",
         checkpoint ? undefined : params.skipCheckpoint ? "Skipped on request." : "No checkpoint was saved.",
       );
 
-      const ownPath = await comparablePath(worktreePath);
       const recorded = await this.listRecords(repositoryPath);
       const ownRecord = (await Promise.all(recorded.map(async (record) => ({
         record, same: (await comparablePath(record.path)) === ownPath,
@@ -304,9 +304,9 @@ export class WorktreeRecoveryService {
 
   private async resolveCheckpoint(
     repositoryPath: string,
-    worktreePath: string,
+    worktreePaths: ReadonlySet<string>,
     params: RecreateWorktreeParams,
-  ): Promise<{ ref: string; commit: string; base?: string } | undefined> {
+  ): Promise<{ ref: string; commit: string; base: string } | undefined> {
     if (params.checkpoint) {
       const commit = await this.resolveCommit(repositoryPath, params.checkpoint.snapshotRef);
       if (commit !== params.checkpoint.snapshotCommit) {
@@ -318,19 +318,40 @@ export class WorktreeRecoveryService {
       }
       // Clean snapshots pin the saved HEAD itself. Dirty snapshots add a
       // commit on top of it. Older records may only have the snapshot commit.
-      const base = params.checkpoint.sourceHead ?? await this.resolveCommit(repositoryPath, `${commit}^1`);
+      const base = params.checkpoint.sourceHead ?? await this.inferCheckpointBase(repositoryPath, commit, worktreePaths);
       return { ref: params.checkpoint.snapshotRef, commit, base };
     }
     // A checkpoint written by an archive whose record was lost is still
     // found by the deterministic ref the archive names after the path.
-    for (const candidate of new Set([worktreePath, await comparablePath(worktreePath)])) {
+    for (const candidate of worktreePaths) {
       const ref = worktreeArchiveInternals.snapshotRefForBackend(params.backend, candidate);
       const commit = await this.resolveCommit(repositoryPath, ref);
       if (commit) {
-        return { ref, commit, base: await this.resolveCommit(repositoryPath, `${commit}^1`) };
+        return { ref, commit, base: await this.inferCheckpointBase(repositoryPath, commit, worktreePaths) };
       }
     }
     return undefined;
+  }
+
+  private async inferCheckpointBase(repositoryPath: string, commit: string, worktreePaths: ReadonlySet<string>): Promise<string> {
+    const { stdout } = await this.git(repositoryPath, ["show", "-s", "--no-notes", "--no-show-signature", "--format=%P%x00%B", commit, "--"]);
+    const [parent, message = ""] = stdout.trimEnd().split("\0", 2);
+    const subjectEnd = message.indexOf("\n");
+    const subjectPrefix = worktreeArchiveInternals.snapshotCommitSubjectPrefix;
+    if (!parent || parent.includes(" ") || subjectEnd === -1 || !message.startsWith(subjectPrefix)) return commit;
+    if (!message.slice(subjectPrefix.length, subjectEnd).includes(":")) return commit;
+
+    // A synthetic snapshot names this checkout and its single parent. Keep
+    // the pinned commit intact when those fields do not identify saved edits.
+    const body = message.slice(subjectEnd + 1);
+    for (const worktreePath of worktreePaths) {
+      const worktreeLine = `Worktree: ${worktreePath}\n`;
+      if (!body.startsWith(worktreeLine)) continue;
+      const details = body.slice(worktreeLine.length);
+      const source = details.startsWith("Branch: ") ? details.slice(details.indexOf("\n") + 1) : details;
+      if (source === `Source HEAD: ${parent}`) return parent;
+    }
+    return commit;
   }
 
   private async applyCheckpoint(

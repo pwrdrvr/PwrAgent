@@ -133,6 +133,38 @@ describe("WorktreeRecoveryService", () => {
     expect(await readFile(path.join(worktreePath, "deliver.ts"), "utf8")).toBe("export const delay = 300;\n");
   });
 
+  describe.each(["ref only", "record without source HEAD"] as const)("checkpoint from %s", (provenance) => {
+    // Git's HEAD and status before hibernating are the recovery oracle.
+    it.each(["clean", "dirty", "dirty detached", "lookalike"] as const)("recreates the saved HEAD and state of a %s checkout", async (state) => {
+      const file = path.join(worktreePath, "deliver.ts");
+      await writeFile(file, "export const delay = 2;\n");
+      const message = state === "lookalike"
+        ? `Snapshot worktree for codex:t1\nWorktree: ${worktreePath}\nSource HEAD: ${"0".repeat(40)}`
+        : "Change the delay";
+      await git(worktreePath, ["commit", "-am", message]);
+      if (state === "dirty detached") await git(worktreePath, ["switch", "--detach"]);
+      const dirty = state === "dirty" || state === "dirty detached";
+      if (dirty) await writeFile(file, "export const delay = 300;\n");
+      const head = await git(worktreePath, ["rev-parse", "HEAD"]);
+      const status = await git(worktreePath, ["status", "--porcelain=v2"]);
+      const contents = await readFile(file, "utf8");
+      const request = { backend: "codex" as const, threadId: "t1", repositoryPath: repoPath, worktreePath };
+      const { snapshotRef, snapshotCommit } = await new WorktreeArchiveService().hibernate({
+        ...request, capSnapshotBytes: 1024, beforeRemove: async () => () => {},
+      });
+      await git(repoPath, ["branch", "-D", "fix/retry-backoff"]);
+
+      const checkpoint = provenance === "ref only" ? undefined : { snapshotRef, snapshotCommit };
+      await expect(service.recreate({ ...request, checkpoint, detached: true })).resolves.toMatchObject({
+        status: "recreated", checkpoint: { snapshotCommit, restored: true, changedFileCount: dirty ? 1 : 0 },
+      });
+      expect(await git(worktreePath, ["rev-parse", "HEAD"])).toBe(head);
+      expect(await git(worktreePath, ["status", "--porcelain=v2"])).toBe(status);
+      expect(await readFile(file, "utf8")).toBe(contents);
+      expect(await git(repoPath, ["rev-parse", snapshotRef])).toBe(snapshotCommit);
+    });
+  });
+
   it("refuses a path something now occupies and changes nothing", async () => {
     await deleteOutsideGit();
     await mkdir(worktreePath, { recursive: true });
