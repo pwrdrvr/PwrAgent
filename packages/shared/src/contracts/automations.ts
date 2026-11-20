@@ -68,6 +68,70 @@ export function resolveAutomationRunsPerHour(
   return Math.max(1, Math.floor(maxRunsPerHour));
 }
 
+/**
+ * Operator-selectable daily run limits: runs an automation may start in any
+ * rolling 24 hours. Unset (the default) is unlimited. The largest option stays
+ * below the store's per-automation run history, so the count the limit is
+ * checked against is never pruned away.
+ */
+export const AUTOMATION_DAILY_RUN_LIMIT_OPTIONS = [5, 10, 25, 50, 100] as const;
+
+/** Upper bound on a daily run limit; see {@link AUTOMATION_DAILY_RUN_LIMIT_OPTIONS}. */
+export const AUTOMATION_MAX_DAILY_RUN_LIMIT = 100;
+
+/** The rolling window a daily run limit counts over. */
+export const AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve a stored or requested daily run limit: a whole number of runs from 1
+ * to {@link AUTOMATION_MAX_DAILY_RUN_LIMIT}, or `undefined` for no limit.
+ * Non-positive and non-finite values mean no limit; a positive fraction
+ * rounds up to 1 so it never becomes a limit that admits nothing by accident.
+ */
+export function resolveAutomationDailyRunLimit(
+  value: number | null | undefined,
+): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return Math.min(AUTOMATION_MAX_DAILY_RUN_LIMIT, Math.max(1, Math.ceil(value)));
+}
+
+/** Operator-selectable run timeouts, in milliseconds. Unset is no timeout. */
+export const AUTOMATION_RUN_TIMEOUT_OPTIONS_MS = [
+  5 * 60 * 1000,
+  15 * 60 * 1000,
+  30 * 60 * 1000,
+  60 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+  4 * 60 * 60 * 1000,
+] as const;
+
+const MIN_AUTOMATION_RUN_TIMEOUT_MS = 60 * 1000;
+const MAX_AUTOMATION_RUN_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve a stored or requested run timeout: milliseconds from one minute to
+ * one day, or `undefined` for no timeout.
+ */
+export function resolveAutomationRunTimeoutMs(
+  value: number | null | undefined,
+): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return Math.min(
+    MAX_AUTOMATION_RUN_TIMEOUT_MS,
+    Math.max(MIN_AUTOMATION_RUN_TIMEOUT_MS, Math.round(value)),
+  );
+}
+
+/**
+ * Why an automation is paused, when PwrAgent rather than the operator paused
+ * it. `daily_run_limit`: a trigger arrived after the automation had started
+ * its daily run limit's worth of runs in the last 24 hours. The status stays
+ * `paused`, which every build understands; the reason is extra detail.
+ */
+export type AutomationPauseReason = "daily_run_limit";
+
 export const AUTOMATION_STATUSES = ["enabled", "paused", "deleted"] as const;
 
 export type AutomationStatus = (typeof AUTOMATION_STATUSES)[number];
@@ -1095,6 +1159,22 @@ export type AutomationDetail = AutomationListItemSummary & {
    * default; null is unlimited. See {@link resolveAutomationRunsPerHour}.
    */
   maxRunsPerHour?: number | null;
+  /**
+   * Longest a run may take, from its start, before PwrAgent interrupts its
+   * turn and fails it as timed out. Absent: no timeout.
+   */
+  runTimeoutMs?: number;
+  /**
+   * Runs the automation may start in any rolling 24 hours. A trigger past it
+   * pauses the automation. Absent: no limit.
+   */
+  dailyRunLimit?: number;
+  /** Runs started in the last 24 hours, counted from run history at read time. */
+  runsInLast24Hours?: number;
+  /** Set while PwrAgent, not the operator, holds the automation paused. */
+  pausedReason?: AutomationPauseReason;
+  /** The failure reason of the run behind lastRunStatus, when it has one. */
+  lastRunFailureReason?: AutomationRunFailureReason;
   createdAt: number;
   deletedAt?: number;
 };
@@ -1119,18 +1199,20 @@ export type AutomationRunWindow = {
  * Why a run was recorded as `skipped` without starting a headless turn. Used to
  * tell the two inbound-skip kinds apart structurally (rather than by matching
  * display copy): `lane_busy` is a drop_missed busy-lane drop; `rate_limited` is
- * an hourly-cap throttle drop.
+ * an hourly-cap throttle drop; `daily_limit` is a trigger that arrived after
+ * the daily run limit paused the automation.
  */
-export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
+export type AutomationRunSkipReason = "lane_busy" | "rate_limited" | "daily_limit";
 
 /**
  * Why a `failed` run failed, when PwrAgent rather than the provider ended it.
  * `interrupted`: the process that owned the run stopped before the run
  * reached an outcome, and a later launch reported the loss. It is a reason on
  * `failed`, not a status of its own, so builds that predate it still read the
- * run.
+ * run. `timed_out`: the run passed its automation's run timeout, and PwrAgent
+ * interrupted its turn.
  */
-export type AutomationRunFailureReason = "interrupted";
+export type AutomationRunFailureReason = "interrupted" | "timed_out";
 
 /**
  * The process that created a run: the identity its profile runtime marker
@@ -1348,6 +1430,8 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
+  runTimeoutMs?: number | null;
+  dailyRunLimit?: number | null;
   enabled?: boolean;
   nextRunAt?: number;
 };
@@ -1367,6 +1451,10 @@ export type UpdateAutomationRequest = {
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
+  /** Null clears the timeout. */
+  runTimeoutMs?: number | null;
+  /** Null clears the limit. */
+  dailyRunLimit?: number | null;
   enabled?: boolean;
   nextRunAt?: number | null;
 };

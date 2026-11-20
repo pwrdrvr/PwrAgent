@@ -12,6 +12,7 @@ import {
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
+import type { CreateAutomationRunInput } from "@pwragent/owner-core/automation-storage";
 import {
   computeNextAutomationRunAt,
   collectDueAutomationWindows,
@@ -39,6 +40,21 @@ export type AutomationSchedulerOptions = {
    * run starts the next one in its lane, as with a turn that finishes.
    */
   releaseDeadOwnerRuns?: () => string[];
+  /**
+   * A trigger found the automation at its daily run limit, and the scheduler
+   * paused it. Called once per pause, after the skipped trigger is recorded.
+   */
+  onDailyLimitReached?: (params: {
+    automation: AutomationRecord;
+    limit: number;
+    runsInWindow: number;
+    skippedRunId: string;
+  }) => Promise<void> | void;
+  /**
+   * A run passed its timeout and was failed as `timed_out`, and its turn was
+   * asked to stop. Reports it the way any failed run is reported.
+   */
+  onRunTimedOut?: (run: AutomationRunSummary) => Promise<void> | void;
 };
 
 type InboundCoalesceWindow = {
@@ -72,6 +88,37 @@ export function throttleSkipMessage(droppedCount: number): string {
   return `The automation hit its hourly run limit; ${droppedCount} inbound ${noun} dropped this hour.`;
 }
 
+// Triggers that arrive while the daily run limit holds an automation paused
+// coalesce onto one skipped run per pause, named by the pause's time, so a
+// busy trigger cannot flood the run history while the operator is away.
+const DAILY_LIMIT_MARKER_PREFIX = "automation-daily-limit:";
+/**
+ * The marker's count is rewritten at most this often. The first skip of a
+ * pause is written at once; later ones wait in memory. A channel flooding a
+ * paused automation then costs at most one commit a minute (~47 MB/day at
+ * the measured ~33 KB a commit) instead of one per message. A crash loses
+ * only the count of the last minute's skips.
+ */
+export const DAILY_LIMIT_MARKER_FLUSH_MS = 60 * 1000;
+
+function dailyLimitMarkerId(automationId: string, pausedAt: number): string {
+  return `${DAILY_LIMIT_MARKER_PREFIX}${automationId}:${pausedAt}`;
+}
+
+export function dailyLimitSkipMessage(limit: number | undefined, skippedCount: number): string {
+  const runs = limit === undefined ? "its daily run limit" : `its daily run limit of ${limit}`;
+  const noun = skippedCount === 1 ? "trigger" : "triggers";
+  return `The automation reached ${runs} in the last 24 hours and was paused; ${skippedCount} ${noun} skipped.`;
+}
+
+export function runTimeoutMessage(timeoutMs: number): string {
+  const minutes = Math.round(timeoutMs / 60_000);
+  const span = minutes % 60 === 0
+    ? `${minutes / 60} ${minutes === 60 ? "hour" : "hours"}`
+    : `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  return `Timed out: the run passed its ${span} limit and was stopped.`;
+}
+
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -85,6 +132,14 @@ export class AutomationScheduler {
    * before its async submission so one durable run never launches twice.
    */
   private readonly startingPendingRunIds = new Set<string>();
+  /** Skip counts waiting for their marker's next write, by marker run id. */
+  private readonly pendingSkipCounts = new Map<string, {
+    count: number;
+    limit: number | undefined;
+    timer?: ReturnType<typeof setTimeout>;
+  }>();
+  /** Timeout timers of runs this process started, by run id. */
+  private readonly runTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -109,6 +164,13 @@ export class AutomationScheduler {
       this.clearTimer(open.timer);
     }
     this.coalesceWindows.clear();
+    for (const timer of this.runTimeouts.values()) {
+      this.clearTimer(timer);
+    }
+    this.runTimeouts.clear();
+    for (const markerId of [...this.pendingSkipCounts.keys()]) {
+      this.flushSkipCount(markerId, this.now());
+    }
   }
 
   /**
@@ -165,6 +227,14 @@ export class AutomationScheduler {
           logFailure("automation schedule evaluation failed", error, automation.id);
         }
       }
+      for (const automation of this.options.store.listDailyLimitPausedAutomations()) {
+        if (automation.nextRunAt === undefined || automation.nextRunAt > now) continue;
+        try {
+          this.skipScheduleWhilePaused(automation, now);
+        } catch (error) {
+          logFailure("automation schedule evaluation failed", error, automation.id);
+        }
+      }
     } catch (error) {
       logFailure("automation schedule evaluation failed", error);
     } finally {
@@ -179,7 +249,7 @@ export class AutomationScheduler {
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return undefined;
     const active = this.options.store.findActiveRunForAutomation(automationId);
-    const run = this.options.store.createRun({
+    const run = await this.admitRun(automation, {
       automationId,
       trigger: "manual",
       scheduledWindows: [],
@@ -216,7 +286,7 @@ export class AutomationScheduler {
     const now = params.now ?? this.now();
     const automation = params.automation;
     const active = this.options.store.findActiveRunForAutomation(automation.id);
-    const run = this.options.store.createRun({
+    const run = await this.admitRun(automation, {
       automationId: automation.id,
       trigger: "manual",
       scheduledWindows: [],
@@ -293,14 +363,14 @@ export class AutomationScheduler {
       return undefined;
     }
     const active = this.options.store.findActiveRunForAutomation(params.automation.id);
-    const createInboundRun = () =>
-      this.options.store.createRun({
-        automationId: params.automation.id,
-        trigger: "inbound_message",
-        scheduledWindows: [],
-        source: params.source,
-        now,
-      });
+    const inboundRun: CreateAutomationRunInput = {
+      automationId: params.automation.id,
+      trigger: "inbound_message",
+      scheduledWindows: [],
+      source: params.source,
+      now,
+    };
+    const createInboundRun = () => this.options.store.createRun(inboundRun);
 
     // drop_missed + busy lane records a visible skipped run but starts no
     // headless turn, so it must NOT count toward the rate.
@@ -324,7 +394,7 @@ export class AutomationScheduler {
       return undefined;
     }
 
-    const run = createInboundRun();
+    const run = await this.admitRun(params.automation, inboundRun);
     if (!run) return undefined;
 
     if (active) {
@@ -365,9 +435,18 @@ export class AutomationScheduler {
     this.coalesceWindows.delete(automationId);
     if (!open || open.sources.length === 0) return;
     const automation = this.options.store.getAutomation(automationId);
-    if (!automation || automation.status !== "enabled") return;
+    if (!automation) return;
     const [primary, ...rest] = open.sources;
     if (!primary) return;
+    if (automation.pausedReason === "daily_run_limit") {
+      // Batched while the daily run limit paused the automation: each message
+      // is recorded as skipped, not dropped.
+      for (const source of open.sources) {
+        this.recordSkipWhilePaused(automation, { trigger: "inbound_message", source });
+      }
+      return;
+    }
+    if (automation.status !== "enabled") return;
     const source: AutomationRunSourceMetadata =
       rest.length > 0
         ? {
@@ -499,6 +578,10 @@ export class AutomationScheduler {
       return;
     }
     if (params.status === "failed" || params.status === "cancelled") {
+      this.clearRunTimeout(params.automationRunId);
+      // Already ended (a timeout, or the other of two terminal reports): the
+      // process that ended it already started the lane's next run.
+      if (currentRun && isTerminalRunStatus(currentRun.status)) return;
       this.options.store.markRunTerminal({
         runId: params.automationRunId,
         status: params.status === "failed" ? "failed" : "cancelled",
@@ -510,6 +593,8 @@ export class AutomationScheduler {
       return;
     }
     if (params.status === "terminal") {
+      this.clearRunTimeout(params.automationRunId);
+      if (currentRun && isTerminalRunStatus(currentRun.status)) return;
       const terminalStatus = classifyTerminalStatus(params.terminalStatus);
       this.options.store.markRunTerminal({
         runId: params.automationRunId,
@@ -581,7 +666,7 @@ export class AutomationScheduler {
           now,
         });
       } else if (this.options.store.findActiveRunForAutomation(automation.id)) {
-        const run = this.options.store.createRun({
+        const run = await this.admitRun(automation, {
           automationId: automation.id,
           trigger: "scheduled",
           scheduledFor: windows[0]?.scheduledFor,
@@ -612,7 +697,7 @@ export class AutomationScheduler {
     windows: AutomationRunWindow[];
     now: number;
   }): Promise<AutomationRunSubmissionResult | undefined> {
-    const run = this.options.store.createRun({
+    const run = await this.admitRun(params.automation, {
       automationId: params.automation.id,
       trigger: "scheduled",
       scheduledFor: params.windows[0]?.scheduledFor,
@@ -680,7 +765,7 @@ export class AutomationScheduler {
         priorRuns: this.collectPriorRunContext(params.automation, run.id, params.now),
         run,
       });
-      this.options.store.markRunStarted({
+      const started = this.options.store.markRunStarted({
         runId: params.runId,
         backendThreadId: result.backendThreadId,
         backendTurnId: result.turnId,
@@ -688,6 +773,11 @@ export class AutomationScheduler {
         startedAt: params.now,
         now: params.now,
       });
+      // A turn can end before its submission is acknowledged; a run that is
+      // already settled needs no timeout.
+      if (started?.status === "running") {
+        this.armRunTimeout(params.automation, params.runId);
+      }
       automationSchedulerLog.info("automation run submitted", {
         automationId: params.automation.id,
         automationName: params.automation.name,
@@ -823,6 +913,199 @@ export class AutomationScheduler {
     return gateResult;
   }
 
+  /**
+   * Ask the store for a run. A refusal means the automation is at its daily
+   * run limit: the trigger is recorded as skipped, the automation is paused,
+   * and no run is returned.
+   */
+  private async admitRun(
+    automation: AutomationRecord,
+    input: CreateAutomationRunInput,
+  ): Promise<AutomationRunSummary | undefined> {
+    const admission = this.options.store.admitRun(input);
+    if (!admission) return undefined;
+    if (admission.status === "admitted") return admission.run;
+    const now = input.now ?? this.now();
+    automationSchedulerLog.info("automation run refused by its daily run limit", {
+      automationId: automation.id,
+      automationName: automation.name,
+      dailyRunLimit: admission.limit,
+      runsInWindow: admission.runsInWindow,
+      trigger: input.trigger,
+    });
+    const pause = this.options.store.pauseAutomationForDailyLimit(automation.id, now);
+    const current = pause?.automation ?? automation;
+    const skipped = this.recordSkipWhilePaused(current, {
+      trigger: input.trigger,
+      source: input.source,
+      scheduledWindows: input.scheduledWindows,
+      now,
+    });
+    if (pause?.paused && skipped) {
+      await this.options.onDailyLimitReached?.({
+        automation: current,
+        limit: admission.limit,
+        runsInWindow: admission.runsInWindow,
+        skippedRunId: skipped.id,
+      });
+    }
+    return undefined;
+  }
+
+  /**
+   * Record a trigger that arrived while the daily run limit holds the
+   * automation paused. Every such trigger of one pause shares one skipped run,
+   * whose count grows.
+   */
+  recordSkipWhilePaused(
+    automation: AutomationRecord,
+    params: {
+      trigger: CreateAutomationRunInput["trigger"];
+      source?: AutomationRunSourceMetadata;
+      scheduledWindows?: AutomationRunWindow[];
+      now?: number;
+    },
+  ): AutomationRunSummary | undefined {
+    const now = params.now ?? this.now();
+    const markerId = dailyLimitMarkerId(automation.id, automation.pausedAt ?? now);
+    const existing = this.options.store.getRun(markerId);
+    if (existing) {
+      const pending = this.pendingSkipCounts.get(markerId);
+      const count = (pending?.count ?? existing.coalescedCount ?? 1) + 1;
+      const writtenAt = existing.completedAt ?? now;
+      if (Math.abs(now - writtenAt) >= DAILY_LIMIT_MARKER_FLUSH_MS) {
+        if (pending?.timer) this.clearTimer(pending.timer);
+        this.pendingSkipCounts.set(markerId, { count, limit: automation.dailyRunLimit });
+        return this.flushSkipCount(markerId, now) ?? existing;
+      }
+      const timer = pending?.timer ?? this.setTimer(() => {
+        this.flushSkipCount(markerId, this.now());
+      }, Math.max(0, writtenAt + DAILY_LIMIT_MARKER_FLUSH_MS - now));
+      timer.unref?.();
+      this.pendingSkipCounts.set(markerId, { count, limit: automation.dailyRunLimit, timer });
+      return existing;
+    }
+    return this.options.store.createRun({
+      id: markerId,
+      automationId: automation.id,
+      trigger: params.trigger,
+      status: "skipped",
+      skipReason: "daily_limit",
+      source: params.source,
+      scheduledWindows: params.scheduledWindows?.slice(0, 1) ?? [],
+      completedAt: now,
+      coalescedCount: 1,
+      errorMessage: dailyLimitSkipMessage(automation.dailyRunLimit, 1),
+      now,
+    });
+  }
+
+  private flushSkipCount(markerId: string, now: number): AutomationRunSummary | undefined {
+    const pending = this.pendingSkipCounts.get(markerId);
+    if (!pending) return undefined;
+    this.pendingSkipCounts.delete(markerId);
+    if (pending.timer) this.clearTimer(pending.timer);
+    return this.options.store.coalesceRateLimitedRun({
+      runId: markerId,
+      coalescedCount: pending.count,
+      errorMessage: dailyLimitSkipMessage(pending.limit, pending.count),
+      skipReason: "daily_limit",
+      now,
+    });
+  }
+
+  /** A paused automation's schedule still fires: each due window is a skip. */
+  private skipScheduleWhilePaused(automation: AutomationRecord, now: number): void {
+    if (!automation.schedule) {
+      this.options.store.updateAutomation(automation.id, { nextRunAt: null, now });
+      return;
+    }
+    const windows = collectDueAutomationWindows({
+      schedule: automation.schedule,
+      firstDueAt: Math.max(automation.nextRunAt ?? now, this.sessionStartedAt),
+      through: now,
+    });
+    if (windows.length > 0) {
+      this.recordSkipWhilePaused(automation, {
+        trigger: "scheduled",
+        scheduledWindows: windows,
+        now,
+      });
+    }
+    this.options.store.updateAutomation(automation.id, {
+      nextRunAt: computeNextAutomationRunAt(automation.schedule, now),
+      now,
+    });
+  }
+
+  private armRunTimeout(automation: AutomationRecord, runId: string): void {
+    const timeoutMs = automation.runTimeoutMs;
+    if (timeoutMs === undefined) return;
+    this.clearRunTimeout(runId);
+    const timer = this.setTimer(() => {
+      this.runTimeouts.delete(runId);
+      void this.timeOutRun(runId, timeoutMs).catch((error: unknown) => {
+        automationSchedulerLog.warn("automation run timeout failed", {
+          automationId: automation.id,
+          error: error instanceof Error ? error.message : String(error),
+          runId,
+        });
+      });
+    }, timeoutMs);
+    timer.unref?.();
+    this.runTimeouts.set(runId, timer);
+  }
+
+  private clearRunTimeout(runId: string): void {
+    const timer = this.runTimeouts.get(runId);
+    if (!timer) return;
+    this.clearTimer(timer);
+    this.runTimeouts.delete(runId);
+  }
+
+  /**
+   * Fail a run that passed its timeout, then stop its turn. The run is failed
+   * first, so the turn's own end, when it arrives, finds it settled and
+   * cannot report it again or start a second successor.
+   */
+  private async timeOutRun(runId: string, timeoutMs: number): Promise<void> {
+    const run = this.options.store.getRun(runId);
+    if (run?.status !== "running") return;
+    const now = this.now();
+    const failed = this.options.store.markRunTerminal({
+      runId,
+      status: "failed",
+      failureReason: "timed_out",
+      errorMessage: runTimeoutMessage(timeoutMs),
+      completedAt: now,
+      now,
+    });
+    if (failed?.status !== "failed" || failed.failureReason !== "timed_out") return;
+    const automation = this.options.store.getAutomation(run.automationId, {
+      includeDeleted: true,
+    });
+    automationSchedulerLog.info("automation run timed out", {
+      automationId: run.automationId,
+      automationName: automation?.name,
+      runId,
+      timeoutMs,
+      turnId: run.backendTurnId,
+    });
+    if (automation) {
+      try {
+        await this.options.runner.interruptRun?.({ automation, run: failed });
+      } catch (error) {
+        automationSchedulerLog.warn("automation run timeout could not stop its turn", {
+          automationId: run.automationId,
+          error: error instanceof Error ? error.message : String(error),
+          runId,
+        });
+      }
+    }
+    await this.options.onRunTimedOut?.(failed);
+    await this.startNextPendingRun(run.automationId, now);
+  }
+
   /** Starts a lane's next run after this process ended its running run. */
   async startNextQueuedRun(automationId: string): Promise<void> {
     await this.startNextPendingRun(automationId, this.now());
@@ -869,7 +1152,9 @@ export class AutomationScheduler {
     }
     const nextRunAt = this.options.store
       .listAutomations()
-      .filter((automation) => automation.status === "enabled")
+      .filter((automation) =>
+        automation.status === "enabled"
+        || automation.pausedReason === "daily_run_limit")
       .map((automation) => automation.nextRunAt)
       .filter((value): value is number => value !== undefined)
       .sort((left, right) => left - right)[0];
@@ -899,6 +1184,13 @@ export class AutomationScheduler {
     }
     clearTimeout(timer);
   }
+}
+
+function isTerminalRunStatus(status: AutomationRunStatus): boolean {
+  return status === "completed"
+    || status === "failed"
+    || status === "cancelled"
+    || status === "skipped";
 }
 
 function classifyTerminalStatus(

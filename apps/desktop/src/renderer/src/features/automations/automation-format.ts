@@ -49,12 +49,16 @@ export function formatAutomationStatus(status: AutomationStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-/** A run a restart ended is a failed run that reads "interrupted" in history. */
+/**
+ * A run a restart ended is a failed run that reads "interrupted" in history,
+ * and one its timeout ended reads "timed out".
+ */
 export function formatRunStatus(
   status: AutomationRunStatus,
   failureReason?: AutomationRunFailureReason,
 ): string {
   if (status === "failed" && failureReason === "interrupted") return "interrupted";
+  if (status === "failed" && failureReason === "timed_out") return "timed out";
   return status.replace("_", " ");
 }
 
