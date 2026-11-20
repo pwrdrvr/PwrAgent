@@ -349,6 +349,7 @@ export type BackendClient = {
   readTurnRoot?(params: { threadId: string; turnId: string }): Promise<string | undefined>;
   startTurn(params: {
     threadId: string;
+    agentMemoryContext?: string;
     parentTurnId?: string;
     rootTurnId?: string;
     input: AppServerTurnInputItem[];

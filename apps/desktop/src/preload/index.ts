@@ -1,3 +1,5 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
+import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailActiveBatches, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
@@ -3025,6 +3027,8 @@ const desktopApi = Object.freeze({
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_PIN_CHANNEL, request),
+  accessAgentMemory: async (request: AgentMemoryRequest): Promise<AgentMemoryResult> =>
+    await ipcRenderer.invoke(AGENT_MEMORY_CHANNEL, request),
   setThreadAgent: async (
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> =>

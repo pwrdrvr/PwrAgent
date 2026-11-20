@@ -1,3 +1,4 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
 import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
@@ -8428,6 +8429,9 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetAcpSessionRuntimeOptionRequest,
     ): Promise<SetAcpSessionRuntimeOptionResponse> {
       return await getDesktopBackendRegistry().setAcpSessionRuntimeOption(request);
+    },
+    async accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
+      return await getDesktopBackendRegistry().accessAgentMemorySettings(request);
     },
     async setThreadAgent(request: SetThreadAgentRequest): Promise<SetThreadAgentResponse> {
       const backend = request.backend ?? "codex";

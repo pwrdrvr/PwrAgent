@@ -11,6 +11,7 @@ import type {
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
 import { buildPendingTurnId, formatWebSearchLabel } from "@pwragent/shared";
+import { stripAgentMemoryChunk } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
@@ -520,8 +521,16 @@ export class AcpSessionReplayNormalizer {
     const isAssistantTextUpdate =
       kind === "agent_message_chunk" || kind === "agent_thought_chunk";
 
-    if (isAssistantTextUpdate) {
+    if (isAssistantTextUpdate || kind === "turn_started" || kind === "turn_completed" || kind === "turn_finished") {
       this.insideAgentInstructionBlock = false;
+      if (this.pendingAgentMemoryChunk && !this.agentMemoryChunk?.insideBlock) {
+        const pending = this.pendingAgentMemoryChunk;
+        this.appendUserMessageText(pending.update, pending.createdAt, this.agentMemoryChunk?.pending ?? "");
+      }
+      this.pendingAgentMemoryChunk = undefined;
+      this.agentMemoryChunk = undefined;
+    }
+    if (isAssistantTextUpdate) {
       // Consecutive ACP text chunks form one live bubble, but text after a tool
       // call should become a new bubble instead of overwriting earlier text.
       const text =
@@ -711,6 +720,8 @@ export class AcpSessionReplayNormalizer {
 
   /** An echoed Agent instruction block opened in an earlier user chunk. */
   private insideAgentInstructionBlock = false;
+  private agentMemoryChunk?: { insideBlock: boolean; pending: string };
+  private pendingAgentMemoryChunk?: { update: AcpSessionUpdate; createdAt: number };
 
   private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
     // PwrAgent prepends the finished managed-review artifact to the next
@@ -726,7 +737,13 @@ export class AcpSessionReplayNormalizer {
         "",
     ), this.insideAgentInstructionBlock);
     this.insideAgentInstructionBlock = stripped.insideBlock;
-    const text = stripped.text;
+    const memory = stripAgentMemoryChunk(stripped.text, this.agentMemoryChunk, true);
+    this.agentMemoryChunk = { insideBlock: memory.insideBlock, pending: memory.pending };
+    this.pendingAgentMemoryChunk = memory.pending ? { update, createdAt } : undefined;
+    this.appendUserMessageText(update, createdAt, memory.text);
+  }
+
+  private appendUserMessageText(update: AcpSessionUpdate, createdAt: number, text: string): void {
     if (!text) {
       return;
     }

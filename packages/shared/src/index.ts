@@ -54,6 +54,7 @@ export * from "./contracts/subagent-transcript";
 export * from "./contracts/tool-output-incidents";
 export * from "./contracts/thread-link";
 export * from "./contracts/thread-tools";
+export * from "./contracts/agent-memory";
 export * from "./contracts/thread-todos";
 export * from "./contracts/thread-reviews";
 export * from "./thread-todo-feed";

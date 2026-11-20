@@ -1,3 +1,4 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
 import { expandNavigationRemoteOwner } from "@pwragent/shared";
@@ -1707,6 +1708,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   sendThreadPrAutoDispatchNow?: (
     request: SendThreadPrAutoDispatchNowRequest,
   ) => Promise<SendThreadPrAutoDispatchNowResponse>;
+  accessAgentMemory?: (request: AgentMemoryRequest) => Promise<AgentMemoryResult>;
   setThreadAgent?: (
     request: SetThreadAgentRequest
   ) => Promise<SetThreadAgentResponse>;
