@@ -4,7 +4,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 
 type LoadState =
   | { status: "idle" | "loading" }
-  | { status: "loaded"; content: string }
+  | { status: "loaded"; content: string; threadWorkspace?: boolean }
   | { status: "error"; error: string };
 
 /** Retain pending and successful reads; retry failures after transport changes. */
@@ -86,7 +86,11 @@ async function readFile(
     const response = await reader(request);
     return response.error || response.content === undefined
       ? { status: "error", error: response.error ?? "File could not be read." }
-      : { status: "loaded", content: response.content };
+      : {
+        status: "loaded",
+        content: response.content,
+        ...(response.threadWorkspace ? { threadWorkspace: true } : {}),
+      };
   } catch (error) {
     return { status: "error", error: error instanceof Error ? error.message : "File could not be read." };
   }

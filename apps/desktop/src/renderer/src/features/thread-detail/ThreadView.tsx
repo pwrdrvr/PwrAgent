@@ -229,6 +229,7 @@ import {
   WorkspaceRecoveryNotice,
   type WorkspaceRecoveryOutcome,
 } from "../workspace-recovery/MissingWorktreeCard";
+import { ArchivedThreadCard } from "../workspace-recovery/ArchivedThreadCard";
 import { HibernatedCheckoutCard } from "../workspace-recovery/HibernatedCheckoutCard";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
@@ -1081,6 +1082,10 @@ export type ThreadViewProps = {
   onRecreateThreadWorktree?: (
     request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
   ) => Promise<RecreateThreadWorktreeResponse>;
+  /** The owner reports the selected thread archived; its card replaces the composer. */
+  selectedThreadArchived?: boolean;
+  /** Restores the selected archived thread. Absent when this window cannot. */
+  onRestoreArchivedThread?: () => Promise<void>;
   /** Restore now, or Keep it awake, for the selected thread's hibernated checkout. */
   onSetThreadCheckoutHibernation?: (
     change: { restore?: boolean; keepAwake?: boolean },
@@ -4665,7 +4670,12 @@ function useWorkspaceRecovery({ props, selectedThread, selectedThreadKey, thread
   const workspaceRecoveryOutcome = workspaceRecovery && workspaceRecovery.threadKey === selectedThreadKey
     ? workspaceRecovery.outcome
     : undefined;
-  const missingWorkspace = threadView && !workspaceRecoveryOutcome
+  // An archived thread's worktree is gone by design: restoring the thread
+  // brings it back, so the archived card stands in for the missing one.
+  const archivedThread = threadView && props.selectedThreadArchived === true
+    ? selectedThread
+    : undefined;
+  const missingWorkspace = threadView && !workspaceRecoveryOutcome && !archivedThread
     ? selectedThread?.workspaceMissing
     : undefined;
   const missingWorkspaceOwnerStatus = selectedThread?.federation?.peerStatus;
@@ -4674,8 +4684,15 @@ function useWorkspaceRecovery({ props, selectedThread, selectedThreadKey, thread
     ? selectedThread?.workspaceHibernated
     : undefined;
   const missingWorkspaceTurnActive = Boolean(props.activeTurnId);
-  const composerReplacedByRecovery = Boolean(missingWorkspace) && !missingWorkspaceTurnActive;
-  const workspaceRecoverySlot = missingWorkspace && selectedThread && selectedThreadKey ? (
+  const composerReplacedByRecovery = Boolean(archivedThread ?? missingWorkspace) && !missingWorkspaceTurnActive;
+  const workspaceRecoverySlot = archivedThread && selectedThreadKey ? (
+    <ArchivedThreadCard
+      key={selectedThreadKey}
+      thread={archivedThread}
+      ownerLabel={archivedThread.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
+      onRestore={props.onRestoreArchivedThread}
+    />
+  ) : missingWorkspace && selectedThread && selectedThreadKey ? (
     <MissingWorktreeCard
       key={`${selectedThreadKey}:${missingWorkspace.worktreePath}`}
       missing={missingWorkspace}

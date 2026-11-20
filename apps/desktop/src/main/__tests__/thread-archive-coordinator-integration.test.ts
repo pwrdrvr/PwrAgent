@@ -1983,6 +1983,8 @@ describe("DesktopBackendRegistry", () => {
       snapshotCommit: "abc123",
       snapshot,
       allowDetachedFallback: true,
+      // Back on its branch when free; detached at the saved HEAD otherwise.
+      restoreSourceCheckout: true,
     });
     expect(response).toMatchObject({
       backend: "codex",

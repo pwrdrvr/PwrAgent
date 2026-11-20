@@ -629,7 +629,7 @@ export function GeneralSettings(props: {
             checked={htmlPreviewRunScripts.value}
             disabled={props.saving}
             label="Run scripts in HTML previews"
-            sub="Pages open with their scripts running. Off, a page opens without them, and Run Scripts turns them on for that page. Either way, a previewed page cannot reach the network."
+            sub="Pages open with their scripts running. Off, only a page in the thread's own folders or its agent's scratchpad does; any other opens without them, and Run Scripts turns them on for that page. Either way, a previewed page cannot reach the network."
             source={sourceBadge(htmlPreviewRunScripts)}
             onChange={(next) => {
               return props.onHtmlPreviewRunScriptsChange(next);

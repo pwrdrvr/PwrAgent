@@ -34,6 +34,29 @@ function cssDataUrl(css: string): string {
   return `data:text/css;base64,${btoa(css)}`;
 }
 
+describe("prepareHtmlPreviewDocument scripts", () => {
+  it("reports a page that draws with scripts, and only such a page", () => {
+    const pages: Array<[string, boolean]> = [
+      ["<p>Static</p>", false],
+      ['<a href="#top">Top</a><style>p { color: red; }</style>', false],
+      ["<script>document.body.append('drawn')</script>", true],
+      ['<script src="app.js"></script>', true],
+      ['<img src="logo.png" onload="ready()">', true],
+      ['<button ONCLICK="go()">Go</button>', true],
+      ['<svg><circle onmouseover="hi()" r="4"/></svg>', true],
+      ["<noscript>Turn on scripts</noscript><p>Text</p>", false],
+      ['<script type="application/json">{"rows":[]}</script><table></table>', false],
+      ['<script type="application/ld+json">{}</script>', false],
+      ['<script type="text/template"><li></li></script>', false],
+      ['<script type="module">import "./app.js"</script>', true],
+      ['<script type=" Text/JavaScript ">draw()</script>', true],
+    ];
+    for (const [html, expected] of pages) {
+      expect(prepareHtmlPreviewDocument(html, NO_RESOURCES, {}).hasScripts, html).toBe(expected);
+    }
+  });
+});
+
 describe("collectHtmlPreviewRefs", () => {
   it("lists every local file the page loads, and nothing it does not", () => {
     const refs = collectHtmlPreviewRefs(`<!doctype html>
