@@ -11,6 +11,8 @@ import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
+import { getOwnerHostServices } from "../owner-host";
+import { assertOwnerCodexModelSelection } from "../owner-runtime-policy";
 import {
   navigationLaunchpadProviderKey,
   isRemoteLaunchpadStorageKey,
@@ -67,6 +69,7 @@ import {
   type ScheduledThreadActionMutationResponse,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
+  type BackendLaunchpadOptions,
   type BackendSummary,
   type ListBackendsRequest,
   type ListBackendsResponse,
@@ -214,6 +217,7 @@ export interface ThreadDirectoryServiceHost extends Pick<RegistryHostPorts,
   readonly localFilePrivateStorageRoots: readonly string[];
   readonly pendingEnvironmentLaunchStore: PendingEnvironmentLaunchStore;
   readonly pendingStartedThreads: ReadonlyMap<string, AppServerThreadSummary>;
+  projectOutpostLaunchpadSettings<T extends NavigationLaunchpadDefaults>(settings: T, options?: BackendLaunchpadOptions): T;
   readonly resolveCodexFastAllowedFn: () => boolean;
   readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   readonly resolveProviderModelDefaultsFn: () => Record<
@@ -1453,10 +1457,26 @@ export class ThreadDirectoryService {
       sourceInstanceId?: FederationInstanceId;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    const policy = getOwnerHostServices().runtimePolicy;
+    let proxyDraft: NavigationLaunchpadDraft | undefined;
+    if (policy?.codexOpenAiProviderEnabled === false) {
+      const draft = request.launchpad ?? await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      if (draft?.backend === "codex") {
+        assertOwnerCodexModelSelection(policy, { backend: draft.backend, model: request.launchpad?.model, collaborationMode: request.collaborationMode });
+        const projected = projectNavigationLaunchpadProviderSettings(draft);
+        if (request.launchpad) assertOwnerCodexModelSelection(policy, projected);
+        proxyDraft = projected;
+        // Keep the original draft for reset and rollback. Only the execution
+        // uses the projected provider settings.
+        request = { ...request, launchpad: draft };
+      }
+    }
     const prepare = async (operation?: LaunchpadCreationOperation) => {
+      const proxyLaunchpad = proxyDraft && await this.admitProxyLaunchpad(proxyDraft, request.collaborationMode?.settings?.model);
+      operation?.check();
       const input = await options?.resolveInput?.();
       operation?.check();
-      return await this.runMaterializeDirectoryLaunchpad(input ? { ...request, input } : request, options, operation);
+      return await this.runMaterializeDirectoryLaunchpad(input ? { ...request, input } : request, options, operation, proxyLaunchpad);
     };
     if (!request.operationId) return await prepare();
     return await this.launchpadCreationOperations.run(request, options?.sourceInstanceId, async (operation) => {
@@ -1496,10 +1516,13 @@ export class ThreadDirectoryService {
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
     operation?: LaunchpadCreationOperation,
+    proxyLaunchpad?: NavigationLaunchpadDraft,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     operation?.check();
+    const materialize = (request: MaterializeDirectoryLaunchpadRequest) =>
+      listingDiagnostics.trace("workflow", { query: "first-send" }, () => this.materializeLaunchpadDraftPrepared(request, options, operation, proxyLaunchpad));
     if (!request.releaseLaunchpadOnSubmit) {
-      return await this.materializeLaunchpadDraft(request, options, operation);
+      return await materialize(request);
     }
     const launchpad =
       request.launchpad ??
@@ -1517,7 +1540,7 @@ export class ThreadDirectoryService {
       directoryKey: launchpad.directoryKey,
     });
     try {
-      return await this.materializeLaunchpadDraft({ ...request, launchpad }, options, operation);
+      return await materialize({ ...request, launchpad });
     } catch (error) {
       // No thread exists, so the draft is still the operator's only copy of
       // the message. Put it back, unless they have already started another.
@@ -1545,21 +1568,35 @@ export class ThreadDirectoryService {
     });
   }
 
-  private async materializeLaunchpadDraft(
-    request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & {
-      sourceInstanceId?: FederationInstanceId;
-    },
-    operation?: LaunchpadCreationOperation,
-  ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    return await listingDiagnostics.trace("workflow", { query: "first-send" }, () => this.materializeLaunchpadDraftPrepared(request, options, operation));
+  private async admitProxyLaunchpad(draft: NavigationLaunchpadDraft, collaborationModel?: string): Promise<NavigationLaunchpadDraft> {
+    const projected = navigationLaunchpadProviderKey(draft) === "codex"
+      ? this.host().projectOutpostLaunchpadSettings(draft, await this.host().getBackendLaunchpadOptions("codex", "thread-admission") ?? {})
+      : draft;
+    const selected = await this.resolveLaunchpadProviderModel(projected);
+    const settings = await this.host().admitNewThreadModelSettings("codex", selected);
+    const provider = providerPickerValue("codex", settings.model);
+    if (collaborationModel && providerPickerValue("codex", collaborationModel) !== provider) {
+      throw new Error(`Choose a collaboration model from ${provider}, the provider selected for this launch.`);
+    }
+    return applyNavigationLaunchpadProviderSettingsPatch(selected, settings);
   }
 
-  private async materializeLaunchpadDraftPrepared(
+  private async resolveLaunchpadProviderModel(draft: NavigationLaunchpadDraft): Promise<NavigationLaunchpadDraft> {
+    if (draft.backend !== "codex" || !draft.codexModelProviderId) return draft;
+    if (!draft.model) {
+      const settings = await this.host().resolveModelSettings("codex", draft, "launchpad-defaults");
+      draft = applyNavigationLaunchpadProviderSettingsPatch(draft, settings);
+    }
+    if (!draft.model || providerPickerValue("codex", draft.model) !== navigationLaunchpadProviderKey(draft)) {
+      throw new Error(`No model is available for ${draft.codexModelProviderId}. Choose a model for this provider before starting a thread.`);
+    }
+    return draft;
+  }
+
+  private async resolveMaterializedLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
-    operation?: LaunchpadCreationOperation,
-  ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    sourceInstanceId?: FederationInstanceId,
+  ): Promise<NavigationLaunchpadDraft> {
     const draft =
       request.launchpad ??
       (await this.context.stores.launchpads.getDirectoryLaunchpad({
@@ -1568,21 +1605,18 @@ export class ThreadDirectoryService {
     if (!draft) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
-    let projectedDraft = projectNavigationLaunchpadProviderSettings(draft);
-    if (projectedDraft.backend === "codex" && projectedDraft.codexModelProviderId) {
-      if (!projectedDraft.model) {
-        const settings = await this.host().resolveModelSettings("codex", projectedDraft, "launchpad-defaults");
-        projectedDraft = applyNavigationLaunchpadProviderSettingsPatch(projectedDraft, settings);
-      }
-      if (!projectedDraft.model
-        || providerPickerValue("codex", projectedDraft.model) !== navigationLaunchpadProviderKey(projectedDraft)) {
-        throw new Error(`No model is available for ${projectedDraft.codexModelProviderId}. Choose a model for this provider before starting a thread.`);
-      }
-    }
+    const projectedDraft = await this.resolveLaunchpadProviderModel(projectNavigationLaunchpadProviderSettings(draft));
     await this.host().admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
-    let launchpad = options?.sourceInstanceId
-      ? await this.resolveRemoteLaunchpadModelSettings(draft)
-      : projectedDraft;
+    return sourceInstanceId ? await this.resolveRemoteLaunchpadModelSettings(draft) : projectedDraft;
+  }
+
+  private async materializeLaunchpadDraftPrepared(
+    request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
+    operation?: LaunchpadCreationOperation,
+    proxyLaunchpad?: NavigationLaunchpadDraft,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    let launchpad = proxyLaunchpad ?? await this.resolveMaterializedLaunchpad(request, options?.sourceInstanceId);
     operation?.update({ backend: launchpad.backend, projectPath: launchpad.directoryPath, title: request.input?.find((item) => item.type === "text")?.text ?? launchpad.prompt });
     operation?.check();
     if (
@@ -2228,6 +2262,9 @@ export class ThreadDirectoryService {
             fastMode: undefined,
             acpRuntime: undefined,
           });
+    // A policy fallback is a launch choice. Keep the saved OpenAI preset
+    // available if the operator enables OpenAI again.
+    if (backend.codexOpenAiProviderEnabled === false && navigationLaunchpadProviderKey(backendDefaults) === "codex") return backendDefaults;
     if (storedExecutionMode === undefined) {
       backendDefaults.executionMode = resolveDefaultLaunchpadExecutionMode(
         providerKey,

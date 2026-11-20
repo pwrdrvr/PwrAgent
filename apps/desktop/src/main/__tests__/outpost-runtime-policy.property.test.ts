@@ -15,6 +15,28 @@ it("the Outpost host enables Codex only, independent of inherited provider envir
     expect(createOutpostRuntimePolicy({ PWRAGENT_HEADLESS_BACKENDS: value }).enabledBackends).toEqual(["codex"]);
   }));
 });
+
+it("only the operator's OpenAI setting restricts explicit models, including collaboration models", () => {
+  fc.assert(fc.property(
+    fc.constantFrom(undefined, "", "on", " OFF "), fc.string({ minLength: 1 }),
+    fc.constantFrom("openai", "unqualified", "proxy"), fc.boolean(),
+    (value, suffix, provider, collaboration) => {
+      const host = createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_OPENAI_PROVIDER: value });
+      const name = `gpt-${suffix}`;
+      const model = provider === "unqualified" ? name : `@${provider}/${name}`;
+      const request = { backend: "codex" as const, ...(collaboration
+        ? { collaborationMode: { mode: "plan" as const, settings: { model } } } : { model }) };
+      expect(host.enabledBackends).toEqual(["codex"]);
+      if (value?.trim().toLowerCase() === "off" && provider !== "proxy") {
+        expect(() => assertOwnerExecutionPolicy(host, request)).toThrow(/OpenAI.*disabled/i);
+      } else {
+        expect(() => assertOwnerExecutionPolicy(host, request)).not.toThrow();
+      }
+      expect(() => assertOwnerExecutionPolicy(undefined, request)).not.toThrow();
+    },
+  ));
+  expect(() => createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_OPENAI_PROVIDER: "typo" })).toThrow(/must be on or off/);
+});
 it("rejects every unsafe explicit provider, mode, approval or sandbox combination before admission", () => {
   fc.assert(fc.property(
     fc.constantFrom("ask", "never"), fc.constantFrom("codex", "claude"), fc.constantFrom(undefined, "default", "auto", "full-access"),
