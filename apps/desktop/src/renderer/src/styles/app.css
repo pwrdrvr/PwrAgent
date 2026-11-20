@@ -36982,9 +36982,9 @@ div.composer-error-row__toggle {
 
    A header pins at the scroller's content edge, 12px under the scrollport's
    top, where the top fade has already thinned out. Its ::before is the
-   surface behind it: nothing at rest, and while stuck the transcript's own
-   background from the scrollport's top edge down to a closing rule, so the
-   body scrolls under the header instead of through it. */
+   surface behind it, the transcript's own background, so the body scrolls
+   under the header and never through it. While stuck the surface also
+   reaches up to the scrollport's top edge and closes with a rule. */
 .transcript-list__items {
   --transcript-pin-step: 28px;
 }
@@ -37039,9 +37039,25 @@ div.composer-error-row__toggle {
 .transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
   content: "";
   position: absolute;
-  inset: 0 -4px;
+  /* Opaque always, not only while stuck. The surface is the transcript's own
+     background, so at rest it cannot be seen; it reaches 4px up to close the
+     gap under the level pinned above. Painting it from the stuck query alone
+     left a header with no surface, and text running through its label,
+     wherever that query does not apply. */
+  inset: -4px -4px 0;
   z-index: -1;
+  background: var(--bg-app);
   pointer-events: none;
+}
+
+/* A warning row's tint is translucent over the transcript, so an opaque
+   surface inside it would show as a patch. Its detail rows stay in flow. */
+.transcript-list__items .transcript-activity--warning .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row {
+  position: static;
+}
+
+.transcript-list__items .transcript-activity--warning .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
+  content: none;
 }
 
 @container scroll-state(stuck: top) {
@@ -37050,7 +37066,6 @@ div.composer-error-row__toggle {
   .transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
     top: -12px;
     bottom: -3px;
-    background: var(--bg-app);
     box-shadow: 0 1px 0 var(--border-subtle);
   }
 }

@@ -125,6 +125,24 @@ test("open transcript work fits the pane and stays one click from closed", async
       const group = await geometry(page, groupToggle);
       expect(group.top).toBeGreaterThanOrEqual(0);
       expect(group.bottom).toBeLessThanOrEqual(pinned.top + 1);
+      // The pinned headers are opaque: the card passes under them, and no
+      // text shows through the label.
+      for (const header of [
+        ".transcript-work-phase-group__header",
+        '.transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row',
+      ]) {
+        const surface = await transcript.locator(header).first().evaluate((element) => {
+          const style = getComputedStyle(element, "::before");
+          const box = element.getBoundingClientRect();
+          const probe = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+          return {
+            background: style.backgroundColor,
+            hitsHeader: probe !== null && element.contains(probe),
+          };
+        });
+        expect(surface.background).toMatch(/^rgb\(/);
+        expect(surface.hitsHeader).toBe(true);
+      }
       if (depth === 0.5) {
         await screenshot(page, "02-pinned-mid-card");
       }

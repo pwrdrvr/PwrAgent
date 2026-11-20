@@ -64,18 +64,30 @@ describe("transcript pinned headers contract", () => {
       .toMatch(/--transcript-pin-detail:\s*var\(--transcript-pin-step\)/);
   });
 
-  it("paints a pinned header's surface only while it is stuck, from the scrollport's top edge", () => {
-    // At rest a surface would cover the row above; the header pins at the
-    // scroller's content edge, so the stuck surface reaches up over the
-    // scroller's top padding.
+  it("gives a pinned header an opaque surface whether or not the stuck query applies", () => {
+    // The surface was once painted only inside `scroll-state(stuck: top)`.
+    // Where that query does not apply the header had none, and the body's
+    // text ran through its label. The transcript's own background is
+    // invisible at rest, so it is unconditional.
+    const surface = firstCssRuleBody(`${GROUP_HEADER}::before,\n${ACTIVITY_HEADER}::before,\n${DETAIL_ROW}::before`)
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(surface).toMatch(/background:\s*var\(--bg-app\)/);
+    expect(surface).toMatch(/z-index:\s*-1/);
+
+    // Stuck, it also reaches the scrollport's top edge: the header pins at
+    // the scroller's content edge, under its top padding.
     const padTop = ruleBody(".transcript-list__items").match(/padding:\s*(\d+px)/)?.[1];
     const stuck = appCss.match(
       /@container scroll-state\(stuck: top\) \{\s*\.transcript-list__items \.transcript-work-phase-group[^{]*\{([^}]*)\}/,
     )?.[1] ?? "";
     expect(stuck).toMatch(new RegExp(`top:\\s*-${padTop};`));
-    expect(stuck).toMatch(/background:\s*var\(--bg-app\)/);
-    expect(firstCssRuleBody(`${GROUP_HEADER}::before,\n${ACTIVITY_HEADER}::before,\n${DETAIL_ROW}::before`))
-      .not.toMatch(/background/);
+    expect(stuck).toMatch(/box-shadow/);
+  });
+
+  it("keeps the opaque surface out of translucent warning rows", () => {
+    const row = '.transcript-list__items .transcript-activity--warning .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row';
+    expect(ruleBody(row)).toMatch(/position:\s*static/);
+    expect(ruleBody(`${row}::before`)).toMatch(/content:\s*none/);
   });
 
   it("cuts a command card to the scrollport less the headers pinned above it", () => {
