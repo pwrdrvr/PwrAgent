@@ -224,18 +224,33 @@ describe("ActiveSubAgentsStrip", () => {
       expect(screen.getByText("2")).toBeInTheDocument();
     });
 
-    it("labels a partial preview and dismisses only the shown failures", () => {
+    it("labels a partial preview and dismisses only the shown failures", async () => {
       const failures = [
-        buildSubAgent({ monitorId: "failed-a", status: "failed" }),
-        buildSubAgent({ monitorId: "failed-b", status: "failure" }),
+        buildSubAgent({ monitorId: "failed-a", attemptId: "attempt-a", status: "failed" }),
+        buildSubAgent({ monitorId: "failed-b", attemptId: "attempt-b", status: "failure" }),
       ];
       const preview = { ...buildThread([]), activeSubAgents: failures, activeSubAgentsIncomplete: true as const };
-      const { rerender } = render(<ActiveSubAgentsStrip thread={preview} />);
+      const dismissFailedSubAgents = vi.fn(async () => ({ dismissedCount: 2 }));
+      const refresh = vi.fn(async () => undefined);
+      const stripProps = { desktopApi: { dismissFailedSubAgents }, onRefreshNavigation: refresh };
+      const { rerender } = render(<ActiveSubAgentsStrip {...stripProps} thread={preview} />);
       expect(screen.queryByText("More in Sub-agents")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Dismiss 2 shown failures" })).toBeInTheDocument();
-      rerender(<ActiveSubAgentsStrip thread={{ ...preview, activeSubAgentsMoreInPanel: true }} />);
+      expect(screen.getByRole("button", { name: "Dismiss 2 shown failures" })).toBeEnabled();
+      const previewWithMore = { ...preview, activeSubAgentsMoreInPanel: true as const };
+      rerender(<ActiveSubAgentsStrip {...stripProps} thread={previewWithMore} />);
       expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Dismiss 2 shown failures" }));
+      await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+      expect(dismissFailedSubAgents).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex",
+        threadId: preview.id,
+        attempts: [
+          { monitorId: "failed-a", attemptId: "attempt-a" },
+          { monitorId: "failed-b", attemptId: "attempt-b" },
+        ],
+      });
+      expect(screen.getByRole("button", { name: "Failed sub-agents, 2" })).toBeVisible();
+      rerender(<ActiveSubAgentsStrip {...stripProps} thread={{ ...previewWithMore, activeSubAgents: [] }} />);
       expect(screen.queryByRole("button", { name: "Failed sub-agents, 2" })).not.toBeInTheDocument();
       expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
     });
