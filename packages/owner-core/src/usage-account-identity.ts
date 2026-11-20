@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { BackendAccountSummary } from "@pwragent/shared";
+import type { BackendAccountSummary } from "@pwragent/shared/contracts/backend";
 
 /** Never use a generic provider label, profile path, or credential as identity. */
 export function usageAccountKey(

@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, describe, expect, it } from "vitest";
 import { DetachPullRequestWarning } from "../DetachPullRequestWarning";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";

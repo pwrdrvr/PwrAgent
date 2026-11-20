@@ -7,7 +7,7 @@ import {
   AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW,
   AGENT_FOLLOW_UP_MIN_DELAY_MS,
   type ScheduleFollowUpToolResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { SCHEDULER_OWNER_CONFIRMATION_GRACE_MS } from "../scheduled-actions/scheduled-thread-action-service";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

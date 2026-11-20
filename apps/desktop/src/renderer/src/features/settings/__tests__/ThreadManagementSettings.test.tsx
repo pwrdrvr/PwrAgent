@@ -13,7 +13,7 @@ import type {
   ListThreadMigrationSourcesResponse,
   StartThreadMigrationResponse,
   ThreadMigrationSourceProjectGroup,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadManagementSettings } from "../ThreadManagementSettings";
 

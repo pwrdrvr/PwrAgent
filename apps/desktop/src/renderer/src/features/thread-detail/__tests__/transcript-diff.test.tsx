@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { AppServerThreadFileDiffRef } from "@pwragent/shared";
+import type { AppServerThreadFileDiffRef } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptDiff } from "../TranscriptDiff";
 

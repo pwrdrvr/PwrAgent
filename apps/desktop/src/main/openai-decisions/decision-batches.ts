@@ -1,4 +1,4 @@
-import { DECISIONS_OPERATOR_STOP_CODE } from "@pwragent/shared";
+import { DECISIONS_OPERATOR_STOP_CODE } from "@pwragent/shared/decisions-rail";
 import {
   looksLikeCredentialText,
   type RegisteredDecisionProvider,

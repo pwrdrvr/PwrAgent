@@ -11,7 +11,7 @@ import {
   type DesktopGitCandidateSource,
   type DesktopGitDiscoveryCandidate,
   type DesktopGitDiscoverySnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { buildCommandDiscoveryCandidate } from "./command-discovery";
 
 const XCODE_LICENSE_COMMAND = "sudo xcodebuild -license";

@@ -1,10 +1,10 @@
+import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerTurnInputItem,
   AutomationGateRunResult,
   AutomationPriorRunContext,
   AutomationRunSourceMetadata,
   AutomationRunSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
 /** Longest prior-run summary/detail line injected into a prompt. */

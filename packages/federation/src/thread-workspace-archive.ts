@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { unzipSync, zipSync } from "fflate";
 import * as tar from "tar";
-import type { ThreadHandoffPackage } from "@pwragent/shared";
+import type { ThreadHandoffPackage } from "@pwragent/shared/contracts/thread-instance-handoff";
 import { decodeHandoffBytes, THREAD_HANDOFF_MAX_BYTES, validateHandoffRelativePath } from "./thread-handoff-package";
 
 type WorkspaceArchive = NonNullable<ThreadHandoffPackage["workspace"]>;

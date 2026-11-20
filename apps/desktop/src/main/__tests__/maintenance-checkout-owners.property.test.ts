@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ThreadMaintenanceKeptThread } from "@pwragent/shared";
+import type { ThreadMaintenanceKeptThread } from "@pwragent/shared/thread-maintenance";
 import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "../app-server/maintenance-checkout-owners";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 

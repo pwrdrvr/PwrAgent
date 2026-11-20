@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { ThreadDependency } from "@pwragent/shared";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { assertMergeNotHeld, blockingMergeDependencies, resolveMergePullRequest } from "../app-server/thread-dependency-merge-hold";
 
 // Oracle: a merge is held exactly when an active (waiting or ready) wait with

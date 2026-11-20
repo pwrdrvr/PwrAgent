@@ -1,8 +1,5 @@
-import type {
-  NavigationThreadSummary,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
-import { isThreadSubAgentVisibleInPanel } from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { isThreadSubAgentVisibleInPanel } from "@pwragent/shared/subagent-visibility";
 
 export type UseSubAgentsResult = {
   subAgents: ThreadSubAgentSummary[];

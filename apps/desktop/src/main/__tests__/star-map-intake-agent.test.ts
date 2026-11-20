@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
-import type { PwrAgentFederationRequest } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import type { PwrAgentFederationRequest } from "@pwragent/shared/contracts/federation-tools";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import {
   ASK_OPERATOR_TO_PICK_PROJECT_TOOL,

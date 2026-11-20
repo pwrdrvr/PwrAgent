@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ThreadMaintenanceArchivedCheckout, ThreadMaintenanceScan, ThreadMaintenanceWorkspace } from "@pwragent/shared";
+import type {
+  ThreadMaintenanceArchivedCheckout,
+  ThreadMaintenanceScan,
+  ThreadMaintenanceWorkspace,
+} from "@pwragent/shared/thread-maintenance";
 import { buildApplyRequest, defaultSelection } from "../thread-maintenance-selection";
 
 const NOW = new Date(2026, 10, 11, 9, 0).getTime();

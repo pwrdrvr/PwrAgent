@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { OpenAIDecisionsError, OpenAIDecisionsService } from "../openai-decisions/openai-decisions-service";
 import { OpenAIDecisionStore } from "../storage/openai-decision-store";
 import type { StateDb } from "../state/state-db";

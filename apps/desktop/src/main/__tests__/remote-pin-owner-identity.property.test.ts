@@ -1,7 +1,11 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type FederationRemoteTarget, type NavigationSnapshot,
-  type NavigationThreadSummary, type RemoteThreadPin } from "@pwragent/shared";
+import { buildFederatedThreadRef, type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import {
+  type NavigationSnapshot,
+  type NavigationThreadSummary,
+  type RemoteThreadPin,
+} from "@pwragent/shared/contracts/navigation";
 import { RemoteThreadSummaryCache, type RemoteThreadSummaryPeer } from "../federation/remote-thread-summary-cache";
 import { loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 

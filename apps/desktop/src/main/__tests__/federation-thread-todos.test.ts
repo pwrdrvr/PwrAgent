@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FederationRemoteTarget, ThreadTodo, ThreadReview } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import { FederatedThreadTodoService, FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS,
   registerFederationThreadTodoHandlers, type ThreadTodoRemoteRequest } from "../federation/federation-thread-todos";
 import { FederationRouter } from "../federation/federation-router";

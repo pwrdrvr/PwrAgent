@@ -9,7 +9,7 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   FEDERATION_TRANSPORT_VERSION,
   type FederationProtocolEnvelope,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   buildFederationGatewayAcceptedMessage,
   buildFederationGatewayChallengeMessage,
@@ -796,7 +796,7 @@ describe("federation transport", () => {
     const futureCapabilities = [
       "thread_navigation",
       "capability_from_the_future",
-    ] as unknown as import("@pwragent/shared").FederationCapability[];
+    ] as unknown as import("@pwragent/shared/contracts/federation").FederationCapability[];
     const client = await connectFederationClient({
       url,
       mode: "enroll",

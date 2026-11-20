@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterAll, expect, it, vi } from "vitest";
-import type { DesktopSettingsSecretName } from "@pwragent/shared";
+import type { DesktopSettingsSecretName } from "@pwragent/shared/contracts/settings";
 import { createFileKeyEncryption, HEADLESS_SECRET_KEY_FILENAME } from "../headless/file-key-encryption";
 import { SecretCiphertextError, tagSecretEncryption } from "../settings/secret-encryption-envelope";
 import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";

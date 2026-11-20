@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationDirectoryRow } from "@pwragent/shared";
+import type { NavigationDirectoryRow } from "@pwragent/shared/contracts/navigation";
 
 const generateStructuredObject = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn();

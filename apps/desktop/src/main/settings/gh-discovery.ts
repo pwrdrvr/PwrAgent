@@ -4,7 +4,7 @@ import type {
   DesktopGhCandidateSource,
   DesktopGhDiscoveryCandidate,
   DesktopGhDiscoverySnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { GH_COMMAND_ENV } from "./desktop-settings-env";
 import {
   buildCommandDiscoveryCandidate,

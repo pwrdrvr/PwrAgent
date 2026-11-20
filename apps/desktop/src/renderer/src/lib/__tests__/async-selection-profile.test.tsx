@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useNavigationSelectedDetail } from "../useNavigationSelectedDetail";
 import { useThreadSessionState } from "../useThreadSessionState";

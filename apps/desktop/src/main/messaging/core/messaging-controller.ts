@@ -27,14 +27,44 @@ import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
-import { asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import { asPlainRecord, assistantItemIdForBackendEvent, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { automatedWorkStartedLabel, automationRunFailureNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { MessagingBrowseWorkflow } from "./messaging-browse-workflow";
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
-import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, isAppServerBackendKind, readProviderResponseBlockNotification, describeProviderResponseBlock } from "@pwragent/shared";
-import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, FederationTarget, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import {
+  readProviderResponseBlockNotification,
+  describeProviderResponseBlock,
+} from "@pwragent/shared/provider-response-block";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  ThreadIncomingWorkSummary,
+  AppServerBackendKind,
+  AppServerPendingRequestNotification,
+  AppServerThreadMessageOrigin,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  AutomationMessagingConversationSnapshot,
+  AutomationRunSourceMetadata,
+  AutomationRunOutputDecision,
+} from "@pwragent/shared/contracts/automations";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type {
+  PwrAgentMessagingBoundThreadSummary,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared/contracts/messaging-tools";
+import type {
+  NavigationSelectedDetailRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
@@ -4875,24 +4905,6 @@ function describeDeliveryCheckReason(reason: MessagingReplyReceiptReason): strin
     default:
       return "Its delivery could not be confirmed.";
   }
-}
-
-function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {
-  if (
-    event.notification.method !== "item/started"
-    && event.notification.method !== "item/completed"
-  ) {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { id?: unknown; itemId?: unknown; item_id?: unknown };
-  }).item;
-  for (const value of [item?.id, item?.itemId, item?.item_id]) {
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return undefined;
 }
 
 function selectAssistantImagesForCapability(

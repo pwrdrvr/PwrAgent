@@ -1,4 +1,4 @@
-import type { ThreadOverlayState } from "@pwragent/shared";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { describe, expect, it } from "vitest";
 import { CodexEnvironmentLiveOutput } from "../state/codex-environment-live-output";
 

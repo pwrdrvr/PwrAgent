@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "./useBackendSummaries";
 

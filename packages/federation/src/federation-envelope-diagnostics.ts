@@ -1,4 +1,4 @@
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { createHash } from "node:crypto";
 
 export type FederationEnvelopeLogFields = Record<string, string | undefined>;

@@ -9,9 +9,10 @@ import type {
   AppServerThreadStatus,
   AppServerThreadTurnStatus,
   AppServerTranscriptPhase,
-} from "@pwragent/shared";
-import { buildPendingTurnId, formatWebSearchLabel } from "@pwragent/shared";
-import { stripAgentMemoryChunk } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
+import { formatWebSearchLabel } from "@pwragent/shared/command-action-labels";
+import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {

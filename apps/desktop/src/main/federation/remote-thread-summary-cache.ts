@@ -1,27 +1,27 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type {
-  AgentEvent,
-  CelestialIconId,
   FederationCapability,
-  FederationJumpSearchProgress,
-  FederationJumpSearchRequest,
-  FederationJumpSearchResponse,
   FederationPeerSummary,
   FederationRemoteTarget,
   FederationThreadSelection,
   FederatedThreadRef,
+} from "@pwragent/shared/contracts/federation";
+import type {
+  FederationJumpSearchProgress,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
   NavigationSnapshot,
   NavigationThreadSummary,
   RemoteThreadPin,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   navigationInvalidationMayChangeMembership,
   navigationWorkingStatePath,
-  parseThreadIdentityKey,
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  rankThreadJumpMatches,
-  sortThreadJumpMatches,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-query-events";
+import { parseThreadIdentityKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { rankThreadJumpMatches, sortThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import type { PinnedNavigationReadState } from "./federation-collection-client";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { compactNavigationSearchResult } from "./navigation-search-result";

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReadMarkdownFileRequest } from "@pwragent/shared";
+import type { ReadMarkdownFileRequest } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type LoadState =

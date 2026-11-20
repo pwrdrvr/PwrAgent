@@ -3,11 +3,11 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
-  type FederationPeerSummary,
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type FederationPeerSummary } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 

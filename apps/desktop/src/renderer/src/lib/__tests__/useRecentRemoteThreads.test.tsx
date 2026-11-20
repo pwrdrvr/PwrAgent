@@ -1,6 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerReadThreadResponse, FederationPeerSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationPeerSummary } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useRecentRemoteThreads } from "../useRecentRemoteThreads";
 import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";

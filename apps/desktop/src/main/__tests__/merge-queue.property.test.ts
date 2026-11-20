@@ -3,12 +3,12 @@ import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
-  type AppServerTurnInputItem,
   type PrMergeQueueRemovalReason,
   type PrMergeQueueState,
   type PrMergeQueueStatus,
   type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 import type { ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";

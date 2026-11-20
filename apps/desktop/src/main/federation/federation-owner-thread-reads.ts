@@ -4,7 +4,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadMessage,
   AppServerThreadReplay,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
 import { findAssistantMessageForText } from "../messaging/find-assistant-reply-message";

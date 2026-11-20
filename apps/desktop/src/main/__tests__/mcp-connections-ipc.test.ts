@@ -5,7 +5,7 @@ import type {
   McpConnectionStatus,
   PwrSnapConnectionStatus,
   ReadPwrSnapConnectionStatusRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 
 const federationTarget = {
   scope: "remote" as const,

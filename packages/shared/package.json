@@ -5,14 +5,7 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./pull-request-review": "./src/pull-request-review.ts",
-    "./review-command": "./src/review-command.ts",
-    "./review-output": "./src/review-output.ts",
-    "./tool-activity": "./src/tool-activity.ts",
-    "./native-voice-action": "./src/native-voice-action.ts",
-    "./openai-decisions": "./src/openai-decisions.ts",
-    "./research": "./src/research.ts"
+    "./*": "./src/*.ts"
   },
   "scripts": {
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"

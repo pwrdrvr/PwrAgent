@@ -1,9 +1,9 @@
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { buildOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
+import type { ComposerDraftSnapshotRecord } from "@pwragent/shared/contracts/composer-drafts";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";

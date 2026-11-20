@@ -4,7 +4,7 @@ import type {
   ProjectHeldWakeup,
   ResolveProjectHeldWakeupsRequest,
   ResolveProjectHeldWakeupsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { formatForgeAutomationTime } from "./forge-automation-view";
 

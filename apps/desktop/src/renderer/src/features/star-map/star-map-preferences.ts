@@ -1,4 +1,5 @@
-import type { PrSummary, StarMapWorkspaceLayout } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { StarMapWorkspaceLayout } from "@pwragent/shared/contracts/star-map";
 
 /**
  * Per-operator view preferences for the Star Map. These are viewing

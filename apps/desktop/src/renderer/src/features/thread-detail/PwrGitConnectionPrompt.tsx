@@ -2,9 +2,9 @@ import { useMemo } from "react";
 import {
   PWRGIT_MCP_CONNECTION_ID,
   withMcpConnection,
-  type AppServerBackendKind,
   type PwrGitConnectionStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import pwrGitIcon from "../../assets/pwrgit/pwrgit-app-icon.png";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {

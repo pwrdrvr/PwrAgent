@@ -1,15 +1,13 @@
 import { createHash } from "node:crypto";
 import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
 import { describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   NavigationQueryRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  NAVIGATION_QUERY_MAX_RESULT_BYTES,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import {
   NavigationQueryError,
   NavigationQueryStore,

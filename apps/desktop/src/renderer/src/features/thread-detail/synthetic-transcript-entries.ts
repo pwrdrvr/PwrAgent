@@ -1,4 +1,4 @@
-import type { AppServerThreadEntry } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Inserts PwrAgent-owned rows (permission and channel transitions,

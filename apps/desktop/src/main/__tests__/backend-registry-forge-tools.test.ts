@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
+  type ForgeAgentToolPolicy,
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
   type AppServerMcpElicitationRequestNotification,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
-  type ForgeAgentToolPolicy,
   type ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { ForgeToolBridge } from "../app-server/forge-tool-bridge";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

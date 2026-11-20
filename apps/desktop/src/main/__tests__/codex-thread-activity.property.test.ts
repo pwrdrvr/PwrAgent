@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadStatus, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AppServerThreadStatus,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   codexThreadHasActiveTurn,
   activeCodexOperation,

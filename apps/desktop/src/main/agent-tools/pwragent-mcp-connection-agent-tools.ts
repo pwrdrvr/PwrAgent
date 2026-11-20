@@ -3,12 +3,12 @@ import type {
   PwrAgentMcpConnectionRequest,
   PwrAgentMcpConnectionResponse,
   PwrAgentMcpConnectionToolArgs,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connection-tools";
 import {
   isPwrAgentMcpConnectionAction,
   PWRAGENT_MCP_CONNECTION_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connection-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

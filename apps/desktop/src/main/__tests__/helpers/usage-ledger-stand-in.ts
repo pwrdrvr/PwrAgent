@@ -1,4 +1,5 @@
-import type { ThreadSubAgentSummary, ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { ThreadUsageLedger } from "../../app-server/thread-usage-ledger";
 import { registryContextStandIn } from "./registry-context-stand-in";
 

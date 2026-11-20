@@ -1,4 +1,4 @@
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "../../state/state-db";
 import { ThreadSearchStore } from "../../storage/thread-search-store";
 

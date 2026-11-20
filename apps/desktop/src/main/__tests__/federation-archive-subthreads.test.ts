@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { NavigationQueryPage, NavigationThreadSummary, RemoteThreadPin, UpdateSubthreadOrderRequest,
-  UpdateSubthreadOrderResponse } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import type {
+  NavigationQueryPage,
+  NavigationThreadSummary,
+  RemoteThreadPin,
+  UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse,
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { DesktopFederationRuntime, initializeDesktopFederationRuntime, disposeDesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";

@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AppServerThreadEntry } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { ClaudeSessionStore, type ClaudeSession } from "../claude/claude-session-store";
 
 const id = "e3333333-3333-4333-8333-333333333333";

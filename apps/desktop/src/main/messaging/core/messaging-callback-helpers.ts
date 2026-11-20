@@ -1,9 +1,37 @@
 import { type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
-import { codexSpeedOptions } from "@pwragent/shared";
+import { codexSpeedOptions } from "@pwragent/shared/codex-speed";
 import { isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 
-import { applyNavigationLaunchpadProviderSettingsPatch, buildFederatedThreadRef, isAcpBackendId, isAppServerBackendKind, parseThreadIdentityKey } from "@pwragent/shared";
-import type { AppServerBackendKind, CodexEnvironmentOption, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendModelOption, BackendSummary, DesktopAuthorizedContact, DesktopMessagingFullAccessWarningGlobalPolicy, FederatedThreadRef, LaunchpadWorkMode, MessagingToolUpdateMode, NavigationLaunchpadConfiguration, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
+  isAcpBackendId,
+  isAppServerBackendKind,
+  parseThreadIdentityKey,
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type {
+  AppServerBackendKind,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CodexEnvironmentOption,
+  LaunchpadWorkMode,
+  NavigationLaunchpadConfiguration,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  BackendAcpRuntimeOptionSource,
+  BackendAcpSessionRuntimeState,
+  BackendModelOption,
+  BackendSummary,
+} from "@pwragent/shared/contracts/backend";
+import type {
+  DesktopAuthorizedContact,
+  DesktopMessagingFullAccessWarningGlobalPolicy,
+} from "@pwragent/shared/contracts/settings";
+import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingDefaultAgentScope, MessagingInboundCallbackEvent, MessagingJsonValue, MessagingManagedTopicRecord, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { directoryForProjectSelection as legacyDirectoryForProjectSelection } from "./messaging-resume-browser.js";

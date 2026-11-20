@@ -3,10 +3,12 @@ import {
   findSharedSkillNames,
   isSharedSkillName,
   withSkillOrigins,
+  type SkillOriginDirectory,
+} from "@pwragent/shared/skill-origin";
+import {
   type AppServerListSkillsResponse,
   type AppServerSkillSummary,
-  type SkillOriginDirectory,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   MessagingBindingRecord,
   MessagingCapabilityProfile,

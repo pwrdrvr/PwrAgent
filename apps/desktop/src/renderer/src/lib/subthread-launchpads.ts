@@ -1,5 +1,11 @@
-import type { NavigationDirectoryGitStatus, NavigationThreadSummary } from "@pwragent/shared";
-import { isSubthreadLaunchpadKey, SUBTHREAD_LAUNCHPAD_KEY_PREFIX } from "@pwragent/shared";
+import type {
+  NavigationDirectoryGitStatus,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  isSubthreadLaunchpadKey,
+  SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
+} from "@pwragent/shared/contracts/navigation";
 import type { ProjectIdentity } from "./federation-project-match";
 
 export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree" | "new-workspace";

@@ -3,7 +3,7 @@ import type {
   ReadWorktreeImageRequest,
   ReadWorktreeImageResponse,
   WorktreeImageRevision,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { Extent, ImageDiffEntry, ImageSideKey, SideResolution } from "./image-diff-model";
 
 export type ImageSideState =

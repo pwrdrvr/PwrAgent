@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerThreadMessageOrigin,
   AppServerThreadMessageOriginKind,
   AppServerTurnInputItem,
-  ProjectHeldWakeupSource,
   ThreadExecutionMode,
   ThreadIdentifier,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey, combinedDeliveryInput, mergeCausalMessagingContext } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type { ProjectHeldWakeupSource } from "@pwragent/shared/project-forge-automation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { combinedDeliveryInput } from "@pwragent/shared/combined-delivery";
+import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
 
 export type ThreadTurnQueueOrigin =

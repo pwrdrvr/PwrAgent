@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { ThreadDependencyLocalFile } from "@pwragent/shared";
+import type { ThreadDependencyLocalFile } from "@pwragent/shared/contracts/thread-dependencies";
 import { nativeRelayPath } from "../native-relay-path";
 
 export const LOCAL_FILE_CHECK_INTERVAL_MS = 30_000;

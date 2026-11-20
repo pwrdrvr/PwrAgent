@@ -4,11 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emptyStarMapWorkspaceState } from "@pwragent/shared";
-import type {
-  NavigationThreadSummary,
-  WriteStarMapWorkspaceRequest,
-} from "@pwragent/shared";
+import { emptyStarMapWorkspaceState } from "@pwragent/shared/contracts/star-map";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { WriteStarMapWorkspaceRequest } from "@pwragent/shared/contracts/star-map";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 

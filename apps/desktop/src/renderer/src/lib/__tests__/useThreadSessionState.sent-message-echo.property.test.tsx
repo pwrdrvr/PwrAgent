@@ -1,15 +1,15 @@
 import { act, renderHook } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
+import { qualifyThreadUrlsInText } from "@pwragent/shared/contracts/thread-link";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
-  qualifyThreadUrlsInText,
-  type AgentEvent,
   type AppServerReadThreadResponse,
   type AppServerThreadEntry,
   type AppServerThreadMessageEntry,
-  type FederationInstanceId,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSessionState } from "../useThreadSessionState";
 

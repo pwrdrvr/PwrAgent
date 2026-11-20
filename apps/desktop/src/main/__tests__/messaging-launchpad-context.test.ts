@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { NavigationLaunchpadConfigResponse } from "@pwragent/shared";
+import type { NavigationLaunchpadConfigResponse } from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { readMessagingLaunchpadContext } from "../messaging/core/messaging-launchpad-context";
 

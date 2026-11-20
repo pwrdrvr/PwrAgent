@@ -1,4 +1,7 @@
-import type { AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared";
+import type {
+  AppServerThreadEntry,
+  AppServerThreadMessageEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it } from "vitest";
 import { pullRequestReviewPrompt } from "../../../../shared/__tests__/fixtures/pull-request-review";
 import {

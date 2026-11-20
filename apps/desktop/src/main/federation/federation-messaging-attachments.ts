@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import type { PwrAgentMessagingAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse } from "@pwragent/shared";
+import type {
+  PwrAgentMessagingAttachmentSummary,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared/contracts/messaging-tools";
 import type { FederationRpcEndpoint } from "@pwragent/federation/federation-rpc";
 import { FederationFilePushReceiver, FILE_PUSH_METHODS, pushFederationFile, type FilePushResult } from "./federation-file-push";
 import { handleFederationMessagingDestination } from "./federation-messaging-tools";

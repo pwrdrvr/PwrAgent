@@ -1,8 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "../../test/phase-probes";
 import { afterEach, expect, it, vi } from "vitest";
-import type { BackendSummary, DesktopSettingsConfigPatch, DesktopSettingsWriteResponse, ListBackendsResponse,
-  ReadDesktopSettingsResponse, ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import type { BackendSummary, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import type {
+  DesktopSettingsConfigPatch,
+  DesktopSettingsWriteResponse,
+  ReadDesktopSettingsResponse,
+} from "@pwragent/shared/contracts/settings";
+import type { ReadFederationActivityResponse } from "@pwragent/shared/contracts/federation";
+import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import { UsageActivity } from "./UsageActivity";
 import { usageFixture } from "./usage-activity-fixture";
 import { USAGE_CUSTOM_RANGE_DEBOUNCE_MS } from "./usage-activity-presentation";

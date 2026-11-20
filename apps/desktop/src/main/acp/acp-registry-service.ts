@@ -1,4 +1,4 @@
-import { buildAcpBackendId } from "@pwragent/shared";
+import { buildAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import {
   ACP_REGISTRY_URL,
   type AcpAllowlistDecision,

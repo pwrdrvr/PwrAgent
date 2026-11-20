@@ -1,4 +1,5 @@
-import { CODEX_SPEED_LABELS, mayContainLinearPastedImages, type CodexSpeed } from "@pwragent/shared";
+import { CODEX_SPEED_LABELS, type CodexSpeed } from "@pwragent/shared/codex-speed";
+import { mayContainLinearPastedImages } from "@pwragent/shared/linear-paste";
 import {
   useCallback,
   useEffect,
@@ -14,8 +15,8 @@ import {
 import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,

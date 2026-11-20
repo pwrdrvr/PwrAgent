@@ -13,19 +13,19 @@ import type {
   StarMapViewFilterKey,
   StarMapViewFilterSetting,
   StarMapViewLayout,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import {
   DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
-  isAppServerBackendKind,
   MAX_STAR_MAP_HIGHLIGHT_THREADS,
   MAX_STAR_MAP_VIEW_MAX_THREADS,
   PWRAGENT_STAR_MAP_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
   STAR_MAP_THREAD_OPEN_MODES,
   STAR_MAP_VIEW_FILTER_KEYS,
   STAR_MAP_VIEW_FILTER_SETTINGS,
   STAR_MAP_VIEW_LAYOUTS,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

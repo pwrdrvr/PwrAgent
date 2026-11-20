@@ -1,12 +1,11 @@
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import {
-  buildThreadIdentityKey,
-  isAcpBackendId,
-  shortenDerivedThreadTitle,
   type AcpBackendId,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadNamingLifecycle, type ThreadNamingAttempt } from "./thread-naming-lifecycle";
 import type { OwnerThreadIdentity } from "./thread-storage";
 import type { ThreadTitleGenerationResult } from "./thread-title-generation-service";

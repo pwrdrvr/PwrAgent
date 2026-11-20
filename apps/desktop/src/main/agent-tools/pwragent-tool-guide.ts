@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
 
 import { PWRAGENT_COMPATIBILITY_TOOL_GUIDE } from "./pwragent-workflow-skills";

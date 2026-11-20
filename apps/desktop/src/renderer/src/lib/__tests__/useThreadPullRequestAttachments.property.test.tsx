@@ -1,7 +1,13 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type AgentEvent, type NavigationSelectedDetailRequest, type NavigationSelectedDetailResponse, type PrSummary } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadPullRequestAttachments, type PullRequestAttachmentThread } from "../useThreadPullRequestAttachments";
 

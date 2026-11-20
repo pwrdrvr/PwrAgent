@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationHealthStatus } from "@pwragent/shared";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "../../../lib/federation-display-label";
 import { buildFederationThreadTargets } from "../../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../../chrome/FederationTargetMenuSection";

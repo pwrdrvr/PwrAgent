@@ -1,7 +1,7 @@
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import { useState } from "react";
-import { claudeSubAgentTranscriptThreadIdForMonitor } from "@pwragent/shared";
+import { claudeSubAgentTranscriptThreadIdForMonitor } from "@pwragent/shared/subagent-kind";
 import { SubAgentsIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDesktopApi } from "../../lib/desktop-api";

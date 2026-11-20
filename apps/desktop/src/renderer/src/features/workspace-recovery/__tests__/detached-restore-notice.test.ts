@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { RestoreThreadResponse, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type {
+  RestoreThreadResponse,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { detachedRestoreNotices } from "../detached-restore-notice";
 
 const snapshot = (detachedFrom?: WorktreeSnapshotSummary["detachedFrom"]): WorktreeSnapshotSummary => ({

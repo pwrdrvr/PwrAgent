@@ -1,4 +1,4 @@
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 
 export const FEDERATION_WINDOW_TARGET_ARG_PREFIX =
   "--pwragent-federation-target=";

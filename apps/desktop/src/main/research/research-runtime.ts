@@ -6,9 +6,16 @@ import { getDesktopConfigStore } from "../settings/config-store/desktop-config-s
 import { readResearchHarnessConfig } from "../settings/config-store/research-runtime-config";
 import { openResearchHarnessProcess } from "./research-harness-process";
 import { createHarnessModelTransport, selectHarnessModel } from "./research-harness-model";
-import type { ResearchHarnessStatus } from "@pwragent/shared";
-import { RESEARCH_BOARD_PAGE, researchDeadlinePassed } from "@pwragent/shared";
-import type { ResearchActor, ResearchCommand, StartResearchRequest, ResearchAssignRequest, ResearchSearchQuery, ResearchItem } from "@pwragent/shared";
+import type { ResearchHarnessStatus } from "@pwragent/shared/research-harness";
+import { RESEARCH_BOARD_PAGE, researchDeadlinePassed } from "@pwragent/shared/research";
+import type {
+  ResearchActor,
+  ResearchCommand,
+  StartResearchRequest,
+  ResearchAssignRequest,
+  ResearchSearchQuery,
+  ResearchItem,
+} from "@pwragent/shared/research";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
 import { createResearchStorage } from "../storage/desktop-runtime-storage";

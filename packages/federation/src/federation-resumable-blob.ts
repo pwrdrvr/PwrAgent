@@ -3,7 +3,7 @@ import { constants, createReadStream } from "node:fs";
 import { copyFile, link, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { FederationBlobChunkEnvelope } from "@pwragent/shared";
+import type { FederationBlobChunkEnvelope } from "@pwragent/shared/contracts/federation";
 import type { FilePushResult } from "./federation-file-push";
 
 export const BLOB_CHUNK_BYTES = 256 * 1024;

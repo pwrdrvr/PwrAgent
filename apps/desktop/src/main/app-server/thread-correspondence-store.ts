@@ -11,13 +11,13 @@ import type {
   AppServerThreadReplay,
   AppServerThreadTurnMetadata,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   buildThreadCorrespondenceHeading,
-  buildThreadMarkdownLink,
-  readUuidV7Timestamp,
   type ThreadCorrespondenceState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-system-messages";
+import { buildThreadMarkdownLink } from "@pwragent/shared/contracts/thread-link";
+import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
 import { isUsageActivityEntry, usageActivityScope } from "./overlay-transcript-entries";
 
 type ThreadRef = { backend: AppServerBackendKind; threadId: string; instanceId?: string; title?: string };

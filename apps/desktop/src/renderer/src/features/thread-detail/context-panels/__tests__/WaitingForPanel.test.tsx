@@ -1,12 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  NavigationThreadSummary,
   ThreadPendingWake,
   ThreadPendingWakeEnded,
   ThreadPendingWakesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-pending-wakes";
 import type {
   ThreadPendingWakesController,
   ThreadPendingWakesState,

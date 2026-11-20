@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ThreadReview, ThreadReviewItem } from "@pwragent/shared";
+import type { ThreadReview, ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import { reviewAutoFixMessage } from "../thread-reviews/review-auto-fix";
 
 const item = (id: string, title: string, status: ThreadReviewItem["status"], priority?: number): ThreadReviewItem => ({

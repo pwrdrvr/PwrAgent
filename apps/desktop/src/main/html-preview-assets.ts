@@ -1,14 +1,14 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { filePreviewKind } from "@pwragent/shared/file-preview";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
-  filePreviewKind,
-  isRemoteFederationTarget,
   type HtmlPreviewAsset,
   type HtmlPreviewSkippedAsset,
   type ReadHtmlPreviewAssetsRequest,
   type ReadHtmlPreviewAssetsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 /**
  * An HTML preview may be a self-contained export with its media inlined, so

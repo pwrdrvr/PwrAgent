@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 
 export type ScheduledThreadActionPayload = Pick<
   ScheduledThreadAction,

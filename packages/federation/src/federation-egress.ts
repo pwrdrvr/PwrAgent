@@ -1,4 +1,4 @@
-import type { FederationPeerRole, FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationPeerRole, FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { containedFederationMethodAllowed, containedFederationNotificationAllowed } from "./federation-backend-methods";
 
 export function assertFederationEgress(role: FederationPeerRole, envelope: FederationProtocolEnvelope): void {

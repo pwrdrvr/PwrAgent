@@ -1,4 +1,7 @@
-import type { AppServerMcpElicitationResponse, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type {
+  AppServerMcpElicitationResponse,
+  AppServerPendingRequestNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { automationMcpToolAllowed } from "../automations/automation-mcp-policy";
 
 function record(value: unknown): Record<string, unknown> | undefined {

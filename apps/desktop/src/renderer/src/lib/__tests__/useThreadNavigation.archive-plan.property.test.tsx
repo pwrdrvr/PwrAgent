@@ -1,7 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { ArchiveThreadRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { ArchiveThreadRequest } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";
 import { threadSummaryIdentityKey } from "../federated-thread-events";

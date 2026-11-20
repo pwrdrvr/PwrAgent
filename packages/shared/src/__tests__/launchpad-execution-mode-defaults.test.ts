@@ -7,7 +7,7 @@ import {
   projectNavigationLaunchpadProviderSettings,
   resolveDefaultLaunchpadExecutionMode,
   type NavigationLaunchpadDefaults,
-} from "../index";
+} from "../contracts/navigation";
 
 describe("launchpad access defaults", () => {
   it("starts Codex and Claude on Auto and every other provider on Default Access", () => {

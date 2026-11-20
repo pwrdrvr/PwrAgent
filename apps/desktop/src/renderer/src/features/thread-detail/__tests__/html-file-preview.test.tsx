@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HtmlPreviewNavigationEvent } from "../../../../../shared/html-preview";
-import type { ReadDesktopConfigBootstrapResponse } from "@pwragent/shared";
+import type { ReadDesktopConfigBootstrapResponse } from "@pwragent/shared/contracts/settings";
 import { HtmlPreviewPreferencesProvider } from "../../../lib/html-preview-preferences";
 import { HtmlFilePreview } from "../HtmlFilePreview";
 import { HTML_PREVIEW_LOCAL_LINK_ORIGIN } from "../html-preview-document";

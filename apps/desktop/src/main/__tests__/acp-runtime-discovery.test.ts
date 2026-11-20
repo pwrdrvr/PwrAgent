@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AcpJsonRpcTransport } from "../acp/acp-client";
 import {
   discoverAcpRuntimeCapabilities,

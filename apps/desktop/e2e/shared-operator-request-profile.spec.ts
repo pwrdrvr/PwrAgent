@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { operatorQuestionItemKey } from "@pwragent/shared";
+import { operatorQuestionItemKey } from "@pwragent/shared/contracts/operator-requests";
 import { OperatorRequestStore, OPERATOR_REQUEST_RETENTION_MS } from "@pwragent/sqlite-storage/operator-request-store";
 import { ThreadTodoStore } from "@pwragent/sqlite-storage/thread-todo-store";
 import { SqliteThreadReviewStorage } from "@pwragent/sqlite-storage/thread-review-storage-sqlite";

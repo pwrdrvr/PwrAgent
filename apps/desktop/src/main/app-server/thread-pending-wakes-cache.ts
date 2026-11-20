@@ -1,4 +1,8 @@
-import { THREAD_PENDING_WAKES_ENDED_MAX_LIMIT, type ThreadPendingWakesList, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
+import {
+  THREAD_PENDING_WAKES_ENDED_MAX_LIMIT,
+  type ThreadPendingWakesList,
+} from "@pwragent/shared/contracts/thread-pending-wakes";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { DEFAULT_PENDING_WAKES_ENDED_LIMIT, type PendingWakeThread } from "./thread-pending-wakes";
 
 const REFRESH_INTERVAL_MS = 200;

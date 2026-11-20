@@ -1,7 +1,5 @@
-import type {
-  AppServerBackendKind,
-  FederationRemoteTarget,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 
 export type WindowShowThreadRequest = {
   backend: AppServerBackendKind;

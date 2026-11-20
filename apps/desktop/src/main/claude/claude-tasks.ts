@@ -1,9 +1,7 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import {
-  CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
-  type AppServerBackgroundTask,
-  type ThreadSubAgentStatus,
-} from "@pwragent/shared";
+import { CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent-kind";
+import { type AppServerBackgroundTask } from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadSubAgentStatus } from "@pwragent/shared/contracts/navigation";
 
 export type ClaudeTaskStatus = "running" | "completed" | "failed" | "stopped";
 

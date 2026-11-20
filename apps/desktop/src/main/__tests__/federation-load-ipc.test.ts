@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FederationLoadStatus } from "@pwragent/shared";
+import type { FederationLoadStatus } from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_READ_INSTANCE_LOAD_CHANNEL,

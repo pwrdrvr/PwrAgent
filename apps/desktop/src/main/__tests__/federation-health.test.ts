@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  FederationHealthStatus,
-  FederationPeerSummary,
-} from "@pwragent/shared";
+import type { FederationHealthStatus, FederationPeerSummary } from "@pwragent/shared/contracts/federation";
 import type { RuntimeFederationLeaseSnapshot } from "../runtime-federation-lease";
 import {
   applyFederationLeaseSnapshot,

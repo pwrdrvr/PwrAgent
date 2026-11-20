@@ -1,4 +1,5 @@
-import type { SetAcpSessionRuntimeOptionRequest, ThreadPermissionTransition } from "@pwragent/shared";
+import type { SetAcpSessionRuntimeOptionRequest } from "@pwragent/shared/contracts/agent";
+import type { ThreadPermissionTransition } from "@pwragent/shared/contracts/navigation";
 import { expect, it, vi } from "vitest";
 import type { AcpRuntimeClient, AcpSessionMetadata } from "../app-server/acp-backend-adapter";
 import { AcpSessionRuntimeOptions } from "../app-server/acp-session-runtime-options";

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { NavigationAttentionViewReleaseRequest, NavigationQueryRequest } from "@pwragent/shared";
+import type {
+  NavigationAttentionViewReleaseRequest,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 
 export type NavigationAttentionViewRelease = NavigationAttentionViewReleaseRequest;
 type Lease = NavigationAttentionViewRelease & { rendererViewId: string; senderId: number };

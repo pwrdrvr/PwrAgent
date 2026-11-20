@@ -1,12 +1,11 @@
+import { classifyDirectory, orderByHomePreference } from "@pwragent/shared/directory-navigation";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import {
-  classifyDirectory,
-  isToolManagedWorktreePath,
-  orderByHomePreference,
   resolveProjectForgeAutomation,
-  type FederationTarget,
-  type NavigationThreadSummary,
   type ProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 
 /**

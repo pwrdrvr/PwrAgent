@@ -1,10 +1,6 @@
-import {
-  buildThreadIdentityKey,
-  comparePinnedThreads,
-  type NavigationThreadSummary,
-  type StarMapViewFilter,
-  type StarMapViewFilterKey,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { comparePinnedThreads } from "@pwragent/shared/thread-pins";
+import { type StarMapViewFilter, type StarMapViewFilterKey } from "@pwragent/shared/contracts/star-map-tools";
 import { isThreadRemoteWork } from "../navigation/ThreadRowStatus";
 import {
   isAgentThread,

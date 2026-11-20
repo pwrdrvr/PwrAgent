@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadDependency } from "@pwragent/shared";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";

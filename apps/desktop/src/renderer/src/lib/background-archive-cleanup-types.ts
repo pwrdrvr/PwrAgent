@@ -1,4 +1,4 @@
-import type { ThreadLinkRef } from "@pwragent/shared";
+import type { ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 
 export type BackgroundCleanupThread = { ref: ThreadLinkRef; title?: string };
 export type BackgroundCleanupOutcome = {

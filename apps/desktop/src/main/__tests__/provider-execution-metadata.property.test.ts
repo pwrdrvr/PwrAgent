@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { parseCodexProviderCatalogModel } from "@pwragent/shared";
+import { parseCodexProviderCatalogModel } from "@pwragent/shared/codex-model-providers";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import { readFile, stat } from "node:fs/promises";
 import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-runtime";

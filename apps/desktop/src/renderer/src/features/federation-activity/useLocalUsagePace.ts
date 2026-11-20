@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { BackendSummary, FederationTarget, ReadUsageActivityRequest, ReadUsageActivityResponse } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  ReadUsageActivityRequest,
+  ReadUsageActivityResponse,
+} from "@pwragent/shared/contracts/usage-activity";
 import { buildLimitAccounts, limitSeriesFor, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
 import { summarizeUsageActivity } from "./usage-activity-summary";
 

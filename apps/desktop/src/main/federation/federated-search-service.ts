@@ -1,20 +1,22 @@
 import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationInstanceId,
   FederationPeerSummary,
   FederationThreadSearchRequest,
   FederationThreadSearchResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildFederatedThreadRef,
-  buildThreadIdentityKey,
   parseThreadSearchQuery,
   threadSearchTextTerms,
   matchesThreadSearchProjects,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-search-query";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import {
   hasFederationErrorCode,

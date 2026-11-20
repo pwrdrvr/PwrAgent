@@ -1,7 +1,4 @@
-import type {
-  BackendAccountSummary,
-  BackendRateLimitSummary,
-} from "@pwragent/shared";
+import type { BackendAccountSummary, BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 
 export type AcpProviderStatus = {
   account?: BackendAccountSummary;

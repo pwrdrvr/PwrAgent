@@ -2,14 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
-  materializeNavigationThreads,
-  type AppServerTurnInputItem,
-  type PrAutoDispatchBudgetConfig,
-  type PrAutoDispatchBudgetStatus,
   type PrSummary,
   type ThreadPrAutoDispatchEventKind,
   type ThreadPrAutoDispatchPending,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { materializeNavigationThreads } from "@pwragent/shared/navigation-state";
+import { type AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type PrAutoDispatchBudgetConfig,
+  type PrAutoDispatchBudgetStatus,
+} from "@pwragent/shared/contracts/settings";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {

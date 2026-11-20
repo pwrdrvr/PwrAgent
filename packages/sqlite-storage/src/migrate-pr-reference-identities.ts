@@ -4,8 +4,8 @@ import {
   resolvePullRequestIdentity,
   type PrSummary,
   type ThreadOverlayState,
-  type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 
 /** Runs inside the v63 upgrade transaction, before any PR observers start. */
 export function migratePrReferenceIdentities(db: Database.Database): void {

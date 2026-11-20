@@ -1,5 +1,5 @@
 import { BrowserWindow, nativeTheme } from "electron";
-import type { DesktopColorTheme } from "@pwragent/shared";
+import type { DesktopColorTheme } from "@pwragent/shared/contracts/settings";
 import type { BootstrapAppearance } from "../settings/appearance-bootstrap";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 

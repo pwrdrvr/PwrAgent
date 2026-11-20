@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

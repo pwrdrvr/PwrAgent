@@ -14,7 +14,6 @@ import type {
   DismissFailedSubAgentsRequest,
   ForkThreadRequest,
   InterruptTurnRequest,
-  ListBackendsRequest,
   ListThreadMcpServersRequest,
   MaterializeDirectoryLaunchpadRequest,
   QueueThreadExecutionModeRequest,
@@ -37,7 +36,8 @@ import type {
   SubmitServerRequestRequest,
   TrustCodexProjectRequest,
   UpdateThreadExpectedBranchRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import type { ListBackendsRequest } from "@pwragent/shared/contracts/backend";
 import type { ThreadTurnQueueSubmissionResult } from "@pwragent/owner-core/thread-turn-queue";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();

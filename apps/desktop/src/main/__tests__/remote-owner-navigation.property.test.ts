@@ -1,9 +1,14 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import {
-  buildFederatedThreadRef, buildThreadIdentityKey, expandNavigationRemoteOwner, navigationQueryEventRequiresRefresh,
-  type AgentEvent, type FederationCapability, type FederationProtocolEnvelope, type NavigationQueryRequest,
-} from "@pwragent/shared";
+  buildFederatedThreadRef,
+  type FederationCapability,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey, type NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { createNavigationQuerySnapshot, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";

@@ -1,5 +1,14 @@
-import type { AppServerBackendKind, FederationRemoteTarget, ListOperatorRequestsRequest, ListOperatorRequestsResponse, MarkOperatorItemsSeenRequest } from "@pwragent/shared";
-import { parseRemoteOperatorItemKey, projectOperatorItemKey } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  ListOperatorRequestsRequest,
+  ListOperatorRequestsResponse,
+  MarkOperatorItemsSeenRequest,
+} from "@pwragent/shared/contracts/operator-requests";
+import {
+  parseRemoteOperatorItemKey,
+  projectOperatorItemKey,
+} from "@pwragent/shared/contracts/operator-requests";
 import type { OperatorQuestionOperation, OperatorQuestionOperationRequest, OperatorQuestionOperationResponse } from "./federation-operator-questions";
 
 /** Queue projections never copy remote requests or seen state into the viewer database. */

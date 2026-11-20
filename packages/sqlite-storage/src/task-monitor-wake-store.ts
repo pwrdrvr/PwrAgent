@@ -1,9 +1,6 @@
 import type Database from "better-sqlite3";
-import {
-  JOB_MONITOR_WAKE_LIMIT,
-  JOB_MONITOR_WAKE_WINDOW_MINUTES,
-  type AppServerBackendKind,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { JOB_MONITOR_WAKE_LIMIT, JOB_MONITOR_WAKE_WINDOW_MINUTES } from "@pwragent/shared/contracts/task-monitor-tools";
 
 type Parent = { backend: AppServerBackendKind; threadId: string };
 type Wake = Parent & { monitorId: string };

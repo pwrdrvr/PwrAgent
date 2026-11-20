@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   type AcpBackendId,
   type AppServerThreadReplay,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,

@@ -1,7 +1,8 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { ThreadExecutionMode, ThreadOverlayState } from "@pwragent/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
 import { buildCodexConnectionMcpServerName } from "../app-server/codex-thread-config";

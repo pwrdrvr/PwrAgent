@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary, type TranscriptPullRequestStatuses } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  type NavigationThreadSummary,
+  type PrSummary,
+  type TranscriptPullRequestStatuses,
+} from "@pwragent/shared/contracts/navigation";
 import { TranscriptPrStatusStore } from "../../../lib/transcript-pr-status";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PullRequestLinkChip } from "../PullRequestLinkChip";

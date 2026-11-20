@@ -1,7 +1,4 @@
-import type {
-  FederationCapability,
-  FederationRemoteTarget,
-} from "@pwragent/shared";
+import type { FederationCapability, FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
 import { createMainWindow } from "../window";
 import { mainWindowTitle, updateLockedMainWindowTitle } from "../main-window-title";

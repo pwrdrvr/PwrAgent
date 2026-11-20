@@ -5,14 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
+import { encodeLegacyThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
-  normalizeThreadReview,
   resolveTokenUsagePriceUnavailableReason,
-  type ThreadReview,
   type ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import { normalizeThreadReview, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
 import {
   THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA,

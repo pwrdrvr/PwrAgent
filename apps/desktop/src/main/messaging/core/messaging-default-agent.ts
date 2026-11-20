@@ -1,8 +1,6 @@
-import {
-  isAcpBackendId,
-  type AppServerBackendKind,
-  type BackendSummary,
-} from "@pwragent/shared";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
   MessagingChannelRef,
   MessagingDefaultAgentScope,

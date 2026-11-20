@@ -1,10 +1,9 @@
-import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
+import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { FORGE_SETTINGS } from "./forge-settings";
+import type { GhStatus } from "@pwragent/shared/contracts/navigation";
+import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  GhStatus,
-  AcpAgentSettingsEntry,
-  AppServerBackendKind,
-  BackendSummary,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopSettingsConfigPatch,
@@ -12,8 +11,8 @@ import type {
   DesktopMessagingImageProfile,
   DesktopUpdateChannel,
   DesktopUpdateTrain,
-  MessagingChannelKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ThreadTokenMiserAccounting,
-  TokenMiserSubAgentAccounting,
-} from "@pwragent/shared";
+import type { ThreadTokenMiserAccounting } from "@pwragent/shared/contracts/normalized-app-server";
+import type { TokenMiserSubAgentAccounting } from "@pwragent/shared/contracts/navigation";
 import {
   buildTokenMiserSavingsSplit,
   buildTokenMiserSavingsSummary,

@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { ThreadMaintenanceScan, ThreadMaintenanceSpace } from "@pwragent/shared";
+import type { ThreadMaintenanceScan, ThreadMaintenanceSpace } from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";
 import { buildApplyRequest, defaultSelection, hibernateItems, rebuildableOutputLabels } from "../thread-maintenance-selection";

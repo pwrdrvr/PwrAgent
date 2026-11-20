@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationLoadStatus } from "@pwragent/shared";
+import type { FederationLoadStatus } from "@pwragent/shared/contracts/federation";
 import { StarMapLoadCard } from "../StarMapLoadCard";
 
 type CardProps = Parameters<typeof StarMapLoadCard>[0];

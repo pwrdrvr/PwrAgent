@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AutomationInboundConditionGroup } from "@pwragent/shared";
+import type { AutomationInboundConditionGroup } from "@pwragent/shared/contracts/automations";
 import { chooseSelectOption } from "../../../test/select";
 import { AutomationConditionEditor } from "../AutomationConditionEditor";
 

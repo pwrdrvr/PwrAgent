@@ -2,7 +2,7 @@ import {
   codexAsyncQuestionItemId,
   formatCodexAsyncQuestionReply,
   type CodexAsyncQuestion,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-async-questions";
 
 /**
  * One question's answer while it is being written. Shared by the transcript

@@ -3,9 +3,19 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import {
-  projectResearchRun, researchChangePage, researchEventPage, researchRunAttention, searchResearchItems, summarizeResearchRun, RESEARCH_RUN_ATTENTION_ORDER,
-  type NavigationThreadSummary, type ResearchChange, type ResearchEvent, type ResearchProfileRunsPage, type ResearchRun,
-} from "@pwragent/shared";
+  projectResearchRun,
+  researchChangePage,
+  researchEventPage,
+  researchRunAttention,
+  searchResearchItems,
+  summarizeResearchRun,
+  RESEARCH_RUN_ATTENTION_ORDER,
+  type ResearchChange,
+  type ResearchEvent,
+  type ResearchProfileRunsPage,
+  type ResearchRun,
+} from "@pwragent/shared/research";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ResearchWindow } from "../ResearchWindow";
 import { harnessRun } from "./research-harness-fixture";

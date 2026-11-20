@@ -1,7 +1,9 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey, buildThreadIdentityKey, federatedThreadIdentityKey } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";

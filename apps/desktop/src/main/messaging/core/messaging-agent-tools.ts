@@ -1,9 +1,24 @@
 import type { MessagingAgentToolContext } from "./messaging-agent-tool-context";
 import { agentMessagingTurnKey, type ActiveAgentMessagingOrigin } from "./messaging-backend-event-helpers";
-import { containedMessagingBindingMatches } from "@pwragent/shared";
+import { containedMessagingBindingMatches } from "@pwragent/shared/contained-messaging";
 import { randomUUID } from "node:crypto";
-import { isAppServerBackendKind, isMessagingBindingTargetKind } from "@pwragent/shared";
-import type { AgentEvent, AppServerBackendKind, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationThreadSummary, ThreadIdentifier } from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isMessagingBindingTargetKind } from "@pwragent/shared/contracts/messaging";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  PwrAgentMessagingConversationCapabilitiesSummary,
+  PwrAgentMessagingLocationSummary,
+  PwrAgentMessagingManagedConversationSummary,
+  PwrAgentMessagingOutboundAttachmentSummary,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+  ListMessagingSurfacesResult,
+} from "@pwragent/shared/contracts/messaging-tools";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingRequestSource } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingChannelRef, MessagingInboundEvent, MessagingImagePart, MessagingPrivateConversationResolveResult } from "@pwragent/messaging-interface";
 import { resolveMessagingOutboundFile, resolveMessagingOutboundBytes, validateMessagingFileMetadata, type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";

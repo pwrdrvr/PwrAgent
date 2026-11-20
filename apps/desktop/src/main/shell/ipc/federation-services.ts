@@ -1,5 +1,5 @@
 import { ipcMain, shell } from "electron";
-import type { ServiceUiRequest } from "@pwragent/shared";
+import type { ServiceUiRequest } from "@pwragent/shared/contracts/federation-services";
 import { FEDERATION_SERVICES_CHANNEL } from "../../../shared/ipc";
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
 

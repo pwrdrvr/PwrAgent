@@ -1,5 +1,8 @@
-import { transcriptImageUnavailableReason } from "@pwragent/shared";
-import type { AppServerThreadEntry, AppServerThreadImagePart } from "@pwragent/shared";
+import { transcriptImageUnavailableReason } from "@pwragent/shared/transcript-image-sources";
+import type {
+  AppServerThreadEntry,
+  AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export function collectThreadImageGallery(
   entries: Array<AppServerThreadEntry | undefined>,

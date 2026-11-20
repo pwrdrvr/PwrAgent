@@ -6,7 +6,7 @@ import type {
   MessagingPairingObservedChat,
   MessagingPairingScope,
   MessagingPairingStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 
 export interface MessagingPairingStorage {
   create(params: {

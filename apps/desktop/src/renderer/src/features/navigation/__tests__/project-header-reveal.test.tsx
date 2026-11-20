@@ -6,7 +6,7 @@ import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationRow,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../Sidebar";
 import type { ProjectRevealRequest } from "../DirectoriesList";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";

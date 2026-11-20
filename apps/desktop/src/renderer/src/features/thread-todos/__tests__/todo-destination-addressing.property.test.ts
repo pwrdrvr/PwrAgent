@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerBackendKind, NavigationThreadSummary, ThreadTodo } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { addressableTodoDestinations, todoDestination } from "../todo-destination-addressing";
 
 // Oracle: the machine that owns each thread. A row names its owner relative

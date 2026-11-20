@@ -1,5 +1,6 @@
-import type { AgentEvent } from "@pwragent/shared";
-import { DEFAULT_CHECKOUT_HIBERNATION_POLICY, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { DEFAULT_CHECKOUT_HIBERNATION_POLICY } from "@pwragent/shared/checkout-hibernation-policy";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import {
   ThreadArchiveCoordinator,
   type ThreadArchiveCoordinatorDependencies,

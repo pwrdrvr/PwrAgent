@@ -1,8 +1,12 @@
 import type { Socket } from "node:net";
 import type {
-  ServiceStreamClose, ServiceStreamData, ServiceStreamWindow,
-} from "@pwragent/shared";
-import { FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES } from "@pwragent/shared";
+  ServiceStreamClose,
+  ServiceStreamData,
+  ServiceStreamWindow,
+} from "@pwragent/shared/contracts/federation-services";
+import {
+  FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES,
+} from "@pwragent/shared/contracts/federation-services";
 
 const MiB = 1024 * 1024;
 const EMPTY = new Uint8Array(0);

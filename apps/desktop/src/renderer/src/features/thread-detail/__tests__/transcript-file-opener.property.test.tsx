@@ -1,5 +1,5 @@
 import { fireEvent, render } from "@testing-library/react";
-import type { DesktopApplicationsSnapshot } from "@pwragent/shared";
+import type { DesktopApplicationsSnapshot } from "@pwragent/shared/contracts/settings";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";

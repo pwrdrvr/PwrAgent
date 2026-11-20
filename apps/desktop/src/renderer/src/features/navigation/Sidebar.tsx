@@ -40,34 +40,40 @@ import type {
 } from "react";
 import type {
   AppServerBackendKind,
-  BackendSummary,
-  DesktopPwrAgentProfileSummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
+import type {
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type {
   ProjectForgeAutomation,
   ProjectHeldWakeup,
   ResolveProjectHeldWakeupsRequest,
   ResolveProjectHeldWakeupsResponse,
-  ThreadExecutionMode,
-  AutomationSchedulingStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
+import { buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import {
-  buildThreadUrl,
   comparePinnedDirectories,
-  toolWorktreeRootOwner,
+  isPinnedDirectory,
+  moveDirectoryKey,
+} from "@pwragent/shared/directory-pins";
+import { toolWorktreeRootOwner } from "@pwragent/shared/worktree-paths";
+import {
   comparePinnedThreads,
   isKeptAtTopThread,
-  isPinnedDirectory,
   isPinnedThread,
-  isRemoteFederationTarget,
-  moveDirectoryKey,
   moveThreadKey,
-  isSubthreadLaunchpadKey,
-  resolveThreadParentKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-pins";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import {
   isFederationViewerWindow,
   readRendererFederationLabel,
@@ -250,7 +256,7 @@ import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirec
 import { BrandLockup } from "../chrome/BrandLockup";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 import { ProjectCheckoutsDialog } from "./ProjectCheckoutsDialog";
-import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared/contracts/navigation";
 import { readThreadDependencyIndicator, useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 
 type SidebarProps = {

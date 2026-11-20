@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { AgentMemoryArgs, AgentMemoryResult } from "@pwragent/shared";
+import type { AgentMemoryArgs, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentMemoryPanel } from "../AgentMemoryPanel";
 

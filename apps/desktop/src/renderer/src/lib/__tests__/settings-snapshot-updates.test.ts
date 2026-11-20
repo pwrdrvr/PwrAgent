@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import {
   applyConfigUpdateToSettingsSnapshot,
   applySecretUpdateToSettingsSnapshot,

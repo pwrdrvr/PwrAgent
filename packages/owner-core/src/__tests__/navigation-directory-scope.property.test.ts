@@ -1,7 +1,12 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
-import { buildThreadIdentityKey, NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES, readNavigationDirectoryScope } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import {
+  NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES,
+  readNavigationDirectoryScope,
+} from "@pwragent/shared/navigation-query-events";
 import { NavigationDirectoryScope } from "../navigation-directory-scope";
 import { projectNavigationQuery, type NavigationQueryIndex } from "../navigation-query-projection";
 

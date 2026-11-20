@@ -1,5 +1,5 @@
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import {
   canManageThreadPrWatches,

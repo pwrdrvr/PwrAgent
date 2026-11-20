@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationDirectorySummary } from "@pwragent/shared";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildDirectoryReferenceInsertText,
   buildDirectoryReferenceMarkdown,

@@ -6,8 +6,8 @@ import type {
   DesktopColorTheme,
   DesktopDarkTheme,
   DesktopLightTheme,
-} from "@pwragent/shared";
-import { DESKTOP_DARK_THEME_DEFAULT, DESKTOP_LIGHT_THEME_DEFAULT } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { DESKTOP_DARK_THEME_DEFAULT, DESKTOP_LIGHT_THEME_DEFAULT } from "@pwragent/shared/contracts/settings";
 import { getMainLogger } from "../log";
 import { resolvedColorTheme } from "./native-appearance";
 

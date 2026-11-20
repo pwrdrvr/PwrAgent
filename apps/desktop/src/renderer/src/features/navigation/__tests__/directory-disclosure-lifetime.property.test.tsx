@@ -1,7 +1,7 @@
 import { act, render } from "@testing-library/react";
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "../../../lib/useNavigationDirectoryDisclosure";
 import { FixtureDirectoriesList } from "../../../test/navigation-presentation-fixture";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";

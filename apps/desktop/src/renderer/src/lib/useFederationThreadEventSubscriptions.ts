@@ -1,12 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   isRemoteFederationTarget,
   type FederationEventClass,
   type FederationEventSubscription,
   type FederationRemoteTarget,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "./desktop-api";
 import { threadSummaryIdentityKey } from "./federated-thread-events";
 

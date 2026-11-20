@@ -1,6 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, FederationPeerSummary, NavigationDirectoryRow, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationPeerSummary } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useFederationHealth } from "../../../lib/useFederationHealth";
 import { useStarMapForeground } from "../useStarMapForeground";

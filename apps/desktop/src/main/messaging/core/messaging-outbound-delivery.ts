@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { stripCodexGitActionDirectives } from "@pwragent/shared";
-import type { AppServerBackendKind, FederationTarget, ThreadIdentifier } from "@pwragent/shared";
+import { stripCodexGitActionDirectives } from "@pwragent/shared/codex-git-action-directives";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
 import type {
   MessagingBindingRecord,
@@ -33,7 +37,7 @@ import type {
 } from "./messaging-migrations";
 import {
   claimReplyReceipt,
-  isAcceptedDeliveryOutcome,
+  replyReceiptSettlement,
   openReplyReceiptId,
   openReplyReceiptRecord,
   releaseReplyReceipt,
@@ -66,6 +70,8 @@ export type MessagingReplyReceiptRequest = {
   attempts?: number;
   /** The caller already claimed the receipt; see claimReplyReceipt. */
   claimed?: boolean;
+  /** Set by `deliver` once the pending marker is written. */
+  kept?: boolean;
 };
 
 /** One send's open receipt and what the send proved about it. */
@@ -286,6 +292,7 @@ export class MessagingOutboundDelivery {
         ...receipt,
         at: receipt.receipt.markedAt,
       }));
+      request.kept = true;
       this.context.logger.debug?.("messaging reply receipt opened", {
         attempts: receipt.receipt.attempts,
         bindingId: binding.id,
@@ -644,10 +651,11 @@ export class MessagingOutboundDelivery {
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
         if (receipt) {
+          const sent = replyReceiptSettlement(routedIntent.kind, result).state === "sent";
           await this.settleReceipt(
             receipt,
-            isAcceptedDeliveryOutcome(result.outcome) ? "sent" : "withdrawn",
-            isAcceptedDeliveryOutcome(result.outcome) ? undefined : "cancelled",
+            sent ? "sent" : "withdrawn",
+            sent ? undefined : "cancelled",
             result,
           );
         }
@@ -685,16 +693,17 @@ export class MessagingOutboundDelivery {
       if (receipt) {
         // The settle replaces the delivery row every send writes, so a
         // receipt costs one commit more than an unmarked send: the marker.
-        // Only a retryable rate limit proves nothing visible was posted; a
-        // non-retryable one may follow a partly sent message.
-        if (result.rateLimit?.retryable === true && !isAcceptedDeliveryOutcome(result.outcome)) {
-          await this.settleReceipt(receipt, "owed", "rate-limited");
-        } else if (isAcceptedDeliveryOutcome(result.outcome)) {
+        const settlement = replyReceiptSettlement(routedIntent.kind, result);
+        if (settlement.state === "owed") {
+          await this.settleReceipt(receipt, "owed", settlement.reason);
+        } else if (settlement.state === "sent") {
           await this.settleReceipt(receipt, "sent", undefined, result);
         } else {
-          await this.settleReceipt(receipt, "unknown", "send-failed", result);
+          await this.settleReceipt(receipt, "unknown", settlement.reason, result);
         }
-      } else {
+      } else if (routedIntent.kind !== "stream_update" || routedIntent.stream.isFinal) {
+        // A streamed partial is a best-effort preview: nothing reads its row
+        // back, and a long reply streams many of them, so it writes none.
         await this.options.store.recordDelivery({
           ...result,
           id: `delivery:${routedIntent.id}:${randomUUID()}`,

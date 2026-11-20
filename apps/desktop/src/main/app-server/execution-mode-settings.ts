@@ -1,4 +1,4 @@
-import type { ThreadExecutionMode } from "@pwragent/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { approvalSettingsForMode, localMemberRole } from "../member-containment";
 import { getOwnerHostServices } from "../owner-host";
 import { executionModeUnavailableMessage } from "../owner-runtime-policy";

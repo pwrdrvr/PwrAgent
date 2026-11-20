@@ -2,7 +2,7 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
-import type { ThreadWorktreeRegistration } from "@pwragent/shared";
+import type { ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { removeManagedWorktree } from "./managed-worktree";
@@ -13,15 +13,13 @@ import { mapMaintenanceAudit } from "./maintenance-audit-pool";
 import type { FleetChange } from "./archive-cleanup-fleet-index";
 import { ArchiveCleanupInventory, type ArchiveCleanupInventoryHost } from "./archive-cleanup-inventory";
 import { ArchiveRemovalNeedsFreshInventoryError, ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import {
-  classifyDirectory,
-  type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
-} from "@pwragent/shared";
-import type {
-  CodexBackgroundTerminal,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-archive-policy";
+import type { CodexBackgroundTerminal } from "@pwragent/shared/contracts/background-terminals";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import type { ArchiveCleanupCheckpointStorage, ArchiveCleanupIntent } from "../storage/desktop-runtime-storage";
@@ -43,7 +41,6 @@ import type {
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
-  isToolManagedWorktreePath,
   type ArchiveWorktreeRequest,
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
@@ -52,29 +49,34 @@ import {
   type AppServerNotification,
   type AppServerThreadSummary,
   type AppServerBackendKind,
-  type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
   type LinkedDirectorySummary,
-  type LaunchpadWorkMode,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type RestoreThreadWorktreeResult,
-  type ThreadMessagingBindingTransition,
-  type ThreadOverlayState,
-  type ThreadPullRequestWatchSummary,
-  type ThreadMaintenanceRunStage,
-  type ThreadMaintenanceRunItem,
-  type SetThreadCheckoutHibernationResponse,
   type ThreadHibernatedWorkspace,
   type WorktreeRecoveryFailureReason,
   type WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { type CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
+import {
+  type LaunchpadWorkMode,
+  type ThreadMessagingBindingTransition,
+  type ThreadOverlayState,
+  type SetThreadCheckoutHibernationResponse,
   buildThreadIdentityKey,
   parseThreadIdentityKey,
-  mergeThreadLinkedDirectories,
   isAcpBackendId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import {
+  type ThreadMaintenanceRunStage,
+  type ThreadMaintenanceRunItem,
+} from "@pwragent/shared/thread-maintenance";
+import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   ThreadInfoStore,

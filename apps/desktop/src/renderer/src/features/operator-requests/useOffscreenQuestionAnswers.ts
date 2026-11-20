@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
-import { parseCodexAsyncQuestionReply } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type { OperatorWait } from "./operator-waits";

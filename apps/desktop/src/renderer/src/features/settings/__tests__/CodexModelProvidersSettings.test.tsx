@@ -5,10 +5,12 @@ import type {
   BackendModelOption,
   BackendSummary,
   CodexModelProviderCatalogState,
+} from "@pwragent/shared/contracts/backend";
+import type {
   CodexModelProviderImportScan,
   CodexModelProviderSettings,
   DesktopCodexModelProvider,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CodexModelProvidersSettings, slugifyProviderId } from "../CodexModelProvidersSettings";
 

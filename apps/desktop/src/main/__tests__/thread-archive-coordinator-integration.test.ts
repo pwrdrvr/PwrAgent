@@ -18,7 +18,7 @@ import {
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import type { ClaudeBackend } from "../claude/claude-backend";
-import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import { resolveActiveProfilePath } from "../profile";
 import {
@@ -39,19 +39,21 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerThreadSummary,
   LinkedDirectorySummary,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   NavigationSnapshot,
   NavigationLaunchpadDraft,
   ThreadOverlayState,
-  WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { CODEX_MISSING_THREAD_EVALUATION_DELAY_MS } from "../app-server/backend-registry-runtime-helpers";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";

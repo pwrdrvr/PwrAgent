@@ -1,7 +1,5 @@
-import {
-  validateSlackTeamId,
-  type MessagingPairingApprovalTarget,
-} from "@pwragent/shared";
+import { validateSlackTeamId } from "@pwragent/shared/messaging-id-validation";
+import { type MessagingPairingApprovalTarget } from "@pwragent/shared/contracts/messaging";
 
 /**
  * The observed-chat facts the approval helpers need. Both surfaces can supply

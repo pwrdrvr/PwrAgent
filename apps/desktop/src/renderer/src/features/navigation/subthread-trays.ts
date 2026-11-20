@@ -1,5 +1,5 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
-import { sortSubthreadSummaries } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { threadSummaryIdentityKey, threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 

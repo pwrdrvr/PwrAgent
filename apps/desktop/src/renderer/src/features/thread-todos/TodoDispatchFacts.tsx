@@ -1,19 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
 import type {
-  BackendSummary,
-  CodexSpeed,
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
   ThreadTodoModelSettings,
   ThreadTodoWorkMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { CODEX_SPEED_LABELS, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
+import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
-  CODEX_SPEED_LABELS,
-  THREAD_ENVIRONMENT_NONE,
   resolveThreadTodoModelSettings,
-  selectedCodexSpeed,
   threadTodoActionProject,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   ChevronDownIcon,
   ChevronUpIcon,

@@ -2,8 +2,11 @@ import { Component, useEffect, type ReactNode } from "react";
 import { setImmediate } from "node:timers";
 import { act, getConfig, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
-import type { NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { useThreadNavigation } from "../useThreadNavigation";

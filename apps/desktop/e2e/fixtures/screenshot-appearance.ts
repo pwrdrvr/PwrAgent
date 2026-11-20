@@ -30,10 +30,7 @@
  * stay deterministic on every CI runner.
  */
 
-import type {
-  DesktopAppearanceDensity,
-  DesktopAppearanceTheme,
-} from "@pwragent/shared";
+import type { DesktopAppearanceDensity, DesktopAppearanceTheme } from "@pwragent/shared/contracts/settings";
 
 export type ScreenshotAppearance = {
   theme: DesktopAppearanceTheme;

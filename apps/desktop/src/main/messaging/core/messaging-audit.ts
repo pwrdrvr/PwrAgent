@@ -1,7 +1,7 @@
 import type {
   AppServerBackendKind,
   ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   MessagingActorIdentity,
   MessagingAuditContext,

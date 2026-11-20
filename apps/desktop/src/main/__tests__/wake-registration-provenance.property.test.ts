@@ -1,14 +1,13 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  buildPullRequestStatusKey,
   type AppServerThreadMessageOrigin,
   type MessagingCausalSourceRef,
-  type PrSummary,
-  type ThreadDependency,
-  type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
 import type { ForgeToolBridge } from "../app-server/forge-tool-bridge";
 import type { RegistryContext } from "../app-server/registry-context";

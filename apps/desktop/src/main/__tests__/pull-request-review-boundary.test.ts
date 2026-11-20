@@ -1,6 +1,6 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StartReviewRequest } from "@pwragent/shared";
+import type { StartReviewRequest } from "@pwragent/shared/contracts/agent";
 import { ManagedReviewService, type ManagedReviewServiceHost } from "../app-server/managed-review-service";
 import type { RegistryContext } from "../app-server/registry-context";
 import { resolvePullRequestReview } from "../app-server/pull-request-review";

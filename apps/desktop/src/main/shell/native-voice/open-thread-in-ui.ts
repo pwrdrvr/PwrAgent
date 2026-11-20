@@ -1,5 +1,9 @@
 import type { WebContents } from "electron";
-import type { OpenThreadToolArgs, OperatorFocusSnapshot, PwrAgentStarMapResponse } from "@pwragent/shared";
+import type {
+  OpenThreadToolArgs,
+  OperatorFocusSnapshot,
+  PwrAgentStarMapResponse,
+} from "@pwragent/shared/contracts/star-map-tools";
 import { primaryMainWindowWebContents } from "../primary-main-window";
 import { requestShowThread } from "../window-show-thread";
 import { currentOperatorFocusWebContents, observeOperatorFocus } from "./operator-focus-registry";

@@ -4,10 +4,24 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import {
-  applyResearchChanges, emptyResearchRunStore, projectResearchRun, researchChangePage, researchEventPage, searchResearchItems, summarizeResearchRun,
-  type NavigationThreadSummary, type ResearchChange, type ResearchChanges, type ResearchChangesRequest, type ResearchEvent, type ResearchRun, type ResearchSnapshot, type ResearchSnapshotRequest,
-  type ResearchItemContext, type ResearchUpdateReceipt,
-} from "@pwragent/shared";
+  applyResearchChanges,
+  emptyResearchRunStore,
+  projectResearchRun,
+  researchChangePage,
+  researchEventPage,
+  searchResearchItems,
+  summarizeResearchRun,
+  type ResearchChange,
+  type ResearchChanges,
+  type ResearchChangesRequest,
+  type ResearchEvent,
+  type ResearchRun,
+  type ResearchSnapshot,
+  type ResearchSnapshotRequest,
+  type ResearchItemContext,
+  type ResearchUpdateReceipt,
+} from "@pwragent/shared/research";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption } from "../../../test/select";
 import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../../../../packages/shared/src/__tests__/research-journal-arbitraries";

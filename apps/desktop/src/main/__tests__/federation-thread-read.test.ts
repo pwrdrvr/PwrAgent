@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse, FederationProtocolEnvelope } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { materializeFederationThreadRead, projectFederationThreadRead } from "../federation/federation-thread-read";
 
 import { FederationRemoteBackendClient, registerFederationBackendHandlers, FEDERATION_BACKEND_METHOD_CAPABILITIES, type FederationBackendOperations } from "../federation/federation-backend-bridge";

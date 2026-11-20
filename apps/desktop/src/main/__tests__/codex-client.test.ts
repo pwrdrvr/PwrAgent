@@ -5,21 +5,20 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
 import {
-  buildAgentMemoryContext,
   buildProviderResponseBlockEntry,
-  buildThreadPricingSnapshotEstimate,
   readProviderResponseBlockNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/provider-response-block";
+import { buildThreadPricingSnapshotEstimate } from "@pwragent/shared/thread-pricing-display";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  DesktopHelperModelSettings,
-  HelperModelId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopHelperModelSettings, HelperModelId } from "@pwragent/shared/helper-models";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
@@ -3159,7 +3158,7 @@ describe("CodexAppServerClient", () => {
   it.each([
     [10, 1], [100, 1], [1_000, 1], [1_000, 200],
   ])("reuses unchanged text for %i fresh provider rows with preview multiplier %i while updating metadata", async (count, previewMultiplier) => {
-    const shared = await import("@pwragent/shared");
+    const shared = await import("@pwragent/shared/thread-titles");
     const normalize = vi.spyOn(shared, "shortenDerivedThreadTitle");
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const rows = Array.from({ length: count }, (_, index) => ({

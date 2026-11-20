@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCheckoutHibernationPolicy } from "@pwragent/shared";
+import { normalizeCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 

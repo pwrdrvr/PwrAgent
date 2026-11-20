@@ -1,4 +1,4 @@
-import type { BackendModelOption } from "@pwragent/shared";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 
 export type BackendModelCatalogBackend = "codex";
 

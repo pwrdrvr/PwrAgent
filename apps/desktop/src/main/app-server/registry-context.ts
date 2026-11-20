@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { ClaudeBackend } from "../claude/claude-backend";
 import type { AcpBackendAdapter } from "./acp-backend-adapter";
 import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-registry-types";

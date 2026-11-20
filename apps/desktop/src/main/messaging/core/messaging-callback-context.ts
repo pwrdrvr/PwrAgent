@@ -5,7 +5,20 @@ import type { MessagingPrivateReplyClaims } from "./messaging-private-reply-clai
 import type { MessagingDeliveryGuard, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import type { MessagingLaunchpadDirectory, MessagingLaunchpadContext, MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import type { QueueNoticeState, QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
-import type { AppServerTurnInputItem, AppServerBackendKind, BackendSummary, FederatedThreadRef, FederationTarget, MessagingPermissionId, MessagingToolUpdateMode, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
+import type {
+  AppServerTurnInputItem,
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederatedThreadRef, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type {
+  NavigationSelectedDetailRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type { UpdateDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundEvent, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadPendingWakesList } from "@pwragent/shared/contracts/thread-pending-wakes";
 import type {
-  AppServerBackendKind,
-  ThreadPendingWakesList,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationLaunchpadConfiguration,
@@ -11,15 +11,17 @@ import type {
   NavigationSelectedDetailResponse,
   ThreadActiveSubAgent,
   ThreadSubAgentSummary,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import {
   isThreadSubAgentVisibleInPanel,
+  projectActiveThreadSubAgents,
+} from "@pwragent/shared/subagent-visibility";
+import {
   NAVIGATION_DETAIL_COLLECTION_NAMES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_QUERY_PROTOCOL_VERSION,
-  projectActiveThreadSubAgents,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";

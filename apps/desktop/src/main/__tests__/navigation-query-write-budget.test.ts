@@ -4,7 +4,8 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
-import { buildFederatedThreadRef, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 const mocks = vi.hoisted(() => ({
   store: undefined as unknown as SqliteOverlayStore,

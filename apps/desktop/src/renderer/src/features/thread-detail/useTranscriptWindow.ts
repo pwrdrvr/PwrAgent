@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { AppServerThreadReplayPagination } from "@pwragent/shared";
+import type { AppServerThreadReplayPagination } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
   THREAD_HISTORY_PAGE_LIMIT,

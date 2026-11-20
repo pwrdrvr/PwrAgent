@@ -1,4 +1,4 @@
-import type { MessagingCausalSourceRef } from "@pwragent/shared";
+import type { MessagingCausalSourceRef } from "@pwragent/shared/contracts/normalized-app-server";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { createMessagingRequestStorage } from "../../src/main/storage/desktop-messaging-storage";
 import { selectRequestProfile } from "./messaging-request-profile";

@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   isSteerableAgentTraffic,
   planQueuedDeliveries,

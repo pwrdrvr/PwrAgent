@@ -2,7 +2,14 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { researchChangePage, researchEventPage, searchResearchItems, summarizeResearchRun, type NavigationThreadSummary, type ResearchRun } from "@pwragent/shared";
+import {
+  researchChangePage,
+  researchEventPage,
+  searchResearchItems,
+  summarizeResearchRun,
+  type ResearchRun,
+} from "@pwragent/shared/research";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ResearchPanel } from "../ResearchPanel";
 import { harnessRun } from "./research-harness-fixture";

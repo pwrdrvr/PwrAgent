@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   DesktopHelperModelSettings,
   DesktopTaskMonitorModelChoice,
-} from "@pwragent/shared";
+} from "@pwragent/shared/helper-models";
 import {
   desktopSettingsPatchToEdits,
   parseDesktopSettingsToml,

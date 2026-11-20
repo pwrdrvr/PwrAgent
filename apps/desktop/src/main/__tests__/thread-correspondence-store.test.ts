@@ -2,8 +2,11 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
-import type { AppServerThreadMessageEntry, AppServerThreadReplay } from "@pwragent/shared";
-import { parseThreadCorrespondenceMessage } from "@pwragent/shared";
+import type {
+  AppServerThreadMessageEntry,
+  AppServerThreadReplay,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { parseThreadCorrespondenceMessage } from "@pwragent/shared/contracts/thread-system-messages";
 import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
 import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 

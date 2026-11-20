@@ -1,6 +1,6 @@
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { PWRAGENT_THREAD_REVIEW_OPERATION_NAMES } from "@pwragent/shared";
+import { PWRAGENT_THREAD_REVIEW_OPERATION_NAMES } from "@pwragent/shared/contracts/thread-reviews";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { OPEN_FINDINGS_GUIDANCE, buildPwrAgentThreadReviewToolDefinitions, type PwrAgentThreadReviewHandler } from "../agent-tools/pwragent-thread-review-agent-tools";

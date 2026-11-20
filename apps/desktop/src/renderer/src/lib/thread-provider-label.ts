@@ -1,13 +1,13 @@
 import { createContext, useCallback, useContext, useMemo } from "react";
 import {
   codexModelProviderLabels,
-  codexProviderIdOfModel,
   findCodexModelProviderLabel,
-  type AppServerBackendKind,
-  type BackendSummary,
-  type FederationTarget,
   type ProviderPickerBackend,
-} from "@pwragent/shared";
+} from "@pwragent/shared/provider-picker";
+import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { formatBackendLabel } from "./backend-label";
 
 /**

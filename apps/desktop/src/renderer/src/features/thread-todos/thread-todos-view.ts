@@ -1,7 +1,6 @@
 import type {
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
-  SubmitServerRequestRequest,
   ThreadTodo,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
@@ -9,7 +8,8 @@ import type {
   ThreadTodoStatus,
   TodoBusyThread,
   TodoUnavailableInstance,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import type { SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
 import type { OperatorWait } from "../operator-requests/operator-waits";
 import type { OperatorQuestionTarget } from "../operator-requests/useOperatorRequests";
 

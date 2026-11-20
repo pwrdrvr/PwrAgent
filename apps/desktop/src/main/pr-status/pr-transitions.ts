@@ -5,8 +5,8 @@ import type {
   PrMergeState,
   PrReviewState,
   PrSummary,
-} from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 
 /**
  * A PR status transition — the typed record of a meaningful field flipping

@@ -1,5 +1,5 @@
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
-import type { SubAgentLens } from "@pwragent/shared";
+import type { SubAgentLens } from "@pwragent/shared/subagent-kind";
 import { useThreadDisplayResource } from "../../lib/useThreadDisplayResource";
 import {
   useCallback,
@@ -15,23 +15,22 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  BackendSummary,
-  FederationRemoteTarget,
   AppServerThreadEntry,
-  DesktopApplicationDiscoveryCandidate,
-  EditGroupCommitState,
-  NavigationThreadSummary,
   CodexEnvironmentActionRun,
   ThreadCompactionRecord,
-  ThreadPricingSummary,
-  ThreadTodo,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-  ToolOutputIncidentExplorerLens,
-} from "@pwragent/shared";
-import { isThreadPendingWakeLive, operatorTodoItemKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
+import type { EditGroupCommitState, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import type { ToolOutputIncidentExplorerLens } from "@pwragent/shared/contracts/tool-output-incidents";
+import { isThreadPendingWakeLive } from "@pwragent/shared/contracts/thread-pending-wakes";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,

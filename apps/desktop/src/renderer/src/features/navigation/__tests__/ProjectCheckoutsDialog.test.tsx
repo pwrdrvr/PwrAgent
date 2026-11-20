@@ -1,7 +1,7 @@
 import { createRef } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared/contracts/navigation";
 import { ProjectCheckoutsDialog } from "../ProjectCheckoutsDialog";
 
 function renderDialog(overrides: Partial<Parameters<typeof ProjectCheckoutsDialog>[0]> = {}) {

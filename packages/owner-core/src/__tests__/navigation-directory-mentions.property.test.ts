@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { NavigationDirectorySummary, NavigationQueryRequest } from "@pwragent/shared";
+import type {
+  NavigationDirectorySummary,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryStore } from "../navigation-query-store";
 
 function directory(label: string, latestUpdatedAt: number): NavigationDirectorySummary {

@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { readNavigationLaunchpadKeys, readNavigationModelInventory, useNavigationSettingsPreview } from "../navigation-settings-preview";
 

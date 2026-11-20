@@ -1,4 +1,4 @@
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 
 export type ParsedMessagingSchedule =
   | { ok: true; scheduledFor: number; text: string }

@@ -1,10 +1,7 @@
 import type { WebContents } from "electron";
-import type { FederationRemoteTarget } from "@pwragent/shared";
-import {
-  isFederationInstanceId,
-  isRemoteFederationTarget,
-  parseThreadIdentityKey,
-} from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import { isFederationInstanceId, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,

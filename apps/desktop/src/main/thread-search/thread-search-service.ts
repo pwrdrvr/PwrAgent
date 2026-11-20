@@ -3,19 +3,20 @@ import type {
   AppServerBackendKind,
   AppServerBackendScope,
   AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ThreadSearchFilters,
   ThreadSearchRequest,
   ThreadSearchResponse,
   ThreadSearchUnavailableScope,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-search";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { parseThreadSearchQuery, matchesThreadSearchProjects } from "@pwragent/shared/thread-search-query";
 import {
-  buildThreadIdentityKey,
-  parseThreadSearchQuery,
-  matchesThreadSearchProjects,
   normalizeThreadSearchContentMode,
   normalizeThreadSearchLimit,
   normalizeThreadSearchSemanticMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-search";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import { awaitThreadSearchRead } from "./thread-search-cancellation";
 import type {

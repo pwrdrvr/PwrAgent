@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BackendLaunchpadOptions } from "@pwragent/shared";
+import type { BackendLaunchpadOptions } from "@pwragent/shared/contracts/backend";
 import { assertThreadModelSettingsAvailable } from "../app-server/thread-model-admission";
 
 const options: BackendLaunchpadOptions = { models: [

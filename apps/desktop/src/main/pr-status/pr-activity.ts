@@ -1,4 +1,8 @@
-import type { PrActivityEvent, PrActivitySnapshot, PrActivityTone } from "@pwragent/shared";
+import type {
+  PrActivityEvent,
+  PrActivitySnapshot,
+  PrActivityTone,
+} from "@pwragent/shared/contracts/pr-activity";
 
 type RecordedEvent = Omit<PrActivityEvent, "id" | "occurredAt">;
 

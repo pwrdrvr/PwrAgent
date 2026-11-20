@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FEDERATION_HEALTH_CHANGED_METHOD, type FederationHealthStatus } from "@pwragent/shared";
+import {
+  FEDERATION_HEALTH_CHANGED_METHOD,
+  type FederationHealthStatus,
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "./desktop-api";
 
 /**

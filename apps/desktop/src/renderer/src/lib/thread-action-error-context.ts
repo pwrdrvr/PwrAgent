@@ -1,4 +1,5 @@
-import type { FederationTarget, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 import type { ResolvedThreadLink } from "./thread-links";
 

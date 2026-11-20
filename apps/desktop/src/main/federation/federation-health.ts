@@ -1,10 +1,10 @@
+import type { DesktopFederationMode } from "@pwragent/shared/contracts/settings";
 import type {
-  DesktopFederationMode,
   FederationHealthStatus,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import type { RuntimeFederationLeaseSnapshot } from "../runtime-federation-lease";
 import type { FederationRuntimeConfig } from "./federation-runtime-config";
 

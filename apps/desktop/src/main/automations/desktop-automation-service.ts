@@ -1,10 +1,7 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AgentEvent,
-  AppServerNotification,
   AutomationDetail,
-  AutomationInspectionFailure,
-  AutomationInspectionErrorCode,
-  AutomationInspectionResponse,
   AutomationIdRequest,
   AutomationInboundMessageTriggerDefinition,
   AutomationLoadIssue,
@@ -27,15 +24,22 @@ import type {
   ListAutomationReplayCandidatesResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  ReplayAutomationInboundRequest,
+  RunAutomationNowResponse,
+  UpdateAutomationRequest,
+} from "@pwragent/shared/contracts/automations";
+import type {
+  AutomationInspectionFailure,
+  AutomationInspectionErrorCode,
+  AutomationInspectionResponse,
+} from "@pwragent/shared/contracts/automation-tools";
+import type {
   InboundPreviewMessage,
   MessagingChannelKind,
   MessagingSenderSuggestion,
-  ReplayAutomationInboundRequest,
-  RunAutomationNowResponse,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
-  UpdateAutomationRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingDirectoryActor,
   MessagingInboundEvent,
@@ -43,9 +47,9 @@ import type {
 import {
   AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS,
   automationSuppressesBindingBroadcast,
-  finalTurnOutputText,
   validateAutomationScheduleDefinition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import { finalTurnOutputText } from "@pwragent/shared/turn-output";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";

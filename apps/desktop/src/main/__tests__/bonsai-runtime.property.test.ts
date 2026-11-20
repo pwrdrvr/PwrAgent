@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import { readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
 import { discoverModelCatalog } from "../codex-app-server/local-responses-bridge.mjs";
 

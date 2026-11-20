@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   managedGrokReleaseUrl,

@@ -1,7 +1,11 @@
 import { assertFederationEgress } from "@pwragent/federation/federation-egress";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { FEDERATION_CAPABILITIES, type FederationProtocolEnvelope, type FederationRequestEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_CAPABILITIES,
+  type FederationProtocolEnvelope,
+  type FederationRequestEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { FederationRouter } from "../federation/federation-router";
 import * as owner from "@pwragent/federation/federation-backend-methods";
 import { evaluateFederationSessionPolicy } from "../federation/federation-policy";

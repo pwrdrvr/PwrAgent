@@ -1,7 +1,7 @@
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export type ProviderThreadSnapshot = Readonly<{
   backend: AppServerBackendKind;

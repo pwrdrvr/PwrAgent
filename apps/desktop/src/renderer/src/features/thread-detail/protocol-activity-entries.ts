@@ -2,7 +2,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadTurnMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { mergeActivityDetails, summarizeActivityStatus } from "./live-transcript-activity";
 import {
   isModelRoutingActivityEntry,

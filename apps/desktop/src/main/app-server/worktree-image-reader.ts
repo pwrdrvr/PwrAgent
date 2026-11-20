@@ -6,7 +6,7 @@ import {
   type ReadWorktreeImageRequest,
   type ReadWorktreeImageResponse,
   type WorktreeImageRevision,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { runGitCommand, runGitCommandBinary } from "./git-executable";
 
 /**

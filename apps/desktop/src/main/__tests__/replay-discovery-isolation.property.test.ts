@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "@playwright/test";
 import { CODEX_COMMAND_ENV as DISCOVERY_COMMAND_ENV, compareCodexCliVersions, discoverCommands } from "@pwrdrvr/codex-discovery";
-import { CODEX_MINIMUM_RECOMMENDED_VERSION, parseCodexVersionCore } from "@pwragent/shared";
+import { CODEX_MINIMUM_RECOMMENDED_VERSION, parseCodexVersionCore } from "@pwragent/shared/codex-version";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { launchElectronApp } from "../../../e2e/fixtures/electron-app";

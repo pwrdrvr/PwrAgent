@@ -11,8 +11,8 @@ import {
   isRemoteFederationTarget,
   type FederationCapabilitySet,
   type FederationProtocolEnvelope,
-  type NavigationSnapshot,
-} from "../..";
+} from "../federation";
+import { type NavigationSnapshot } from "../navigation";
 
 describe("federation contracts", () => {
   it("represents local targets without fake peer ids", () => {

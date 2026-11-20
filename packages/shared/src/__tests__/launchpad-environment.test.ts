@@ -3,7 +3,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
   type NavigationLaunchpadDraft,
-} from "../index";
+} from "../contracts/navigation";
 
 function draft(): NavigationLaunchpadDraft {
   return {

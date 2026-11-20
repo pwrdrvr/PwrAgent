@@ -1,9 +1,9 @@
+import { reviewContextPullRequests } from "@pwragent/shared/contracts/thread-reviews";
 import {
-  reviewContextPullRequests,
   type AppServerReviewContext,
   type AppServerReviewPullRequest,
-  type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { useMemo } from "react";
 import {
   reviewComparedPastPullRequestBase,

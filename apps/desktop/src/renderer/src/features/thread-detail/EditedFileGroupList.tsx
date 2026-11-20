@@ -9,12 +9,10 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import type {
-  AppServerThreadActivityDetail,
-  DesktopApplicationDiscoveryCandidate,
-  EditGroupCommitState,
-} from "@pwragent/shared";
-import { formatPathRelativeToDirectories } from "@pwragent/shared";
+import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
+import type { EditGroupCommitState } from "@pwragent/shared/contracts/navigation";
+import { formatPathRelativeToDirectories } from "@pwragent/shared/path-display";
 import { EditorIcon } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { TranscriptDiff } from "./TranscriptDiff";

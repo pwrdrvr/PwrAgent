@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { readNavigationArchiveGroup } from "../navigation-archive-group";
 

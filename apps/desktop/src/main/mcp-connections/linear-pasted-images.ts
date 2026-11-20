@@ -1,10 +1,9 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { findLinearPastedImages, type LinearPastedImage } from "@pwragent/shared/linear-paste";
 import {
-  findLinearPastedImages,
   type FetchLinearPastedImagesResponse,
-  type LinearPastedImage,
   type LinearPastedImageData,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import type { SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 
 /**

@@ -1,9 +1,7 @@
-import type {
-  NavigationThreadSummary,
-  ThreadPrCiWatchMark,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPrCiWatchMark } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { getMainLogger } from "../log";
 
 const log = getMainLogger("pwragent:navigation-pr-watch-marks");

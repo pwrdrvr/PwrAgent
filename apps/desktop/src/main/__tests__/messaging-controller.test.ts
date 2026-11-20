@@ -14,36 +14,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type {
   AgentEvent,
-  AppServerBackendKind,
-  AppServerListSkillsResponse,
-  AppServerPendingRequestNotification,
-  AppServerTurnInputItem,
-  BackendSummary,
   CancelThreadExecutionModeQueueRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
-  HandoffThreadWorkspaceRequest,
-  ListBackendsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
-  MessagingToolUpdateMode,
-  NavigationSnapshot,
   SetAcpSessionRuntimeOptionRequest,
   SetThreadExecutionModeRequest,
   SetThreadModelSettingsRequest,
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
-  ScheduledThreadAction,
   SteerTurnRequest,
   SubmitServerRequestRequest,
   UpdateDirectoryLaunchpadRequest,
-} from "@pwragent/shared";
-import {
-  applyNavigationLaunchpadProviderSettingsPatch,
-  BUILT_IN_ROLES,
-  buildFederatedThreadRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  AppServerListSkillsResponse,
+  AppServerPendingRequestNotification,
+  AppServerTurnInputItem,
+  HandoffThreadWorkspaceRequest,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared/contracts/navigation";
+import { BUILT_IN_ROLES } from "@pwragent/shared/contracts/rbac";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   type MessagingCapabilityProfile,
@@ -95,7 +94,7 @@ import {
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
-import type { MessagingPermissionId } from "@pwragent/shared";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
@@ -4805,16 +4804,8 @@ describe("MessagingController", () => {
 
   it("retracts a source stream that finishes while private delivery is in flight", async () => {
     let now = 1000;
-    let releaseSourceDeliveryRecord!: () => void;
     let releaseSourceStream!: () => void;
-    let resolveSourceDeliveryRecorded!: () => void;
     let resolveSourceStreamStarted!: () => void;
-    const sourceDeliveryRecorded = new Promise<void>((resolve) => {
-      resolveSourceDeliveryRecorded = resolve;
-    });
-    const sourceDeliveryRecordRelease = new Promise<void>((resolve) => {
-      releaseSourceDeliveryRecord = resolve;
-    });
     const sourceStreamStarted = new Promise<void>((resolve) => {
       resolveSourceStreamStarted = resolve;
     });
@@ -4848,16 +4839,6 @@ describe("MessagingController", () => {
         };
       },
     });
-    const recordDelivery = harness.store.recordDelivery.bind(harness.store);
-    vi.spyOn(harness.store, "recordDelivery").mockImplementation(async (delivery) => {
-      const recorded = await recordDelivery(delivery);
-      if (delivery.intentId?.startsWith("assistant-stream:")) {
-        resolveSourceDeliveryRecorded();
-        await sourceDeliveryRecordRelease;
-      }
-      return recorded;
-    });
-
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -4883,9 +4864,10 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    // The source stream's adapter call is still running when the private
+    // response arrives. A streamed partial writes nothing after its adapter
+    // returns, so this is the window in which the stream can still finish.
     await sourceStreamStarted;
-    releaseSourceStream();
-    await sourceDeliveryRecorded;
 
     let privateRequestSettled = false;
     const privateRequest = harness.controller.handlePwrAgentMessagingRequest({
@@ -4906,14 +4888,11 @@ describe("MessagingController", () => {
     });
     expect(privateRequestSettled).toBe(false);
 
-    // The stream adapter has returned and its delivery record is durable, so
-    // its first cancellation check has already passed. Let the private request
-    // cancel and begin awaiting that delivery before its caller receives the
-    // visible surface. This deterministically exercises the result-ownership
-    // gap that Windows load used to expose nondeterministically.
+    // The private request has cancelled the stream and awaits its delivery.
+    // Let the adapter return a visible surface: it must still be retracted.
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(privateRequestSettled).toBe(false);
-    releaseSourceDeliveryRecord();
+    releaseSourceStream();
     const [, response] = await Promise.all([sourceDelivery, privateRequest]);
 
     expect(response).toMatchObject({ ok: true });
@@ -20247,7 +20226,8 @@ describe("MessagingController", () => {
     expect(attempts).toHaveLength(0);
 
     // Past the window, the next delta releases the coalesced block; the
-    // non-retryable rate-limit failure is recorded and not replayed.
+    // non-retryable rate-limit failure is not replayed. A streamed partial is
+    // best-effort and records no delivery row.
     now += 500;
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -20264,13 +20244,7 @@ describe("MessagingController", () => {
 
     expect(attempts).toHaveLength(1);
     const deliveries = Object.values((await harness.store.readSnapshot()).deliveries);
-    expect(deliveries).toHaveLength(deliveriesBefore + 1);
-    expect(deliveries.at(-1)).toMatchObject({
-      outcome: "failed",
-      rateLimit: {
-        retryable: false,
-      },
-    });
+    expect(deliveries).toHaveLength(deliveriesBefore);
   });
 
   it("reports budget deferrals before holding final stream updates", async () => {

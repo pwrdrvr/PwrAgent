@@ -1,4 +1,4 @@
-import { THREAD_TODO_TITLE_MAX_LENGTH } from "@pwragent/shared";
+import { THREAD_TODO_TITLE_MAX_LENGTH } from "@pwragent/shared/contracts/thread-todos";
 
 /**
  * A thread started from a to-do card gets that card's plain steps as its own

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopCodexAuthProfileCandidate,
   DesktopCodexAuthProfileDiscoverySnapshot,
-} from "@pwragent/shared";
-import { normalizeProfileName } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { normalizeProfileName } from "@pwragent/shared/profile-names";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { tildifyPath } from "../../lib/tildify-path";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { DESKTOP_ONBOARDING_COMPLETED_SOURCES } from "@pwragent/shared";
+import { DESKTOP_ONBOARDING_COMPLETED_SOURCES } from "@pwragent/shared/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyDesktopSettingsPatch,

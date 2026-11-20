@@ -1,4 +1,6 @@
-import type { FederationTarget, NavigationThreadSummary, ThreadLinkRef } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 
 /** Legacy blocker ids have no backend. Resolve only an unambiguous row on
  * the cleanup owner's instance, never a same-id row on a different peer. */

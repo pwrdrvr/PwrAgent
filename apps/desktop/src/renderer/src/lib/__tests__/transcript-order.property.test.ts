@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerReadThreadResponse, AppServerThreadEntry } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { injectPermissionTransitions } from "../../features/thread-detail/permission-transition-entries";
 import { insertSyntheticEntriesByTime } from "../../features/thread-detail/synthetic-transcript-entries";
 import {

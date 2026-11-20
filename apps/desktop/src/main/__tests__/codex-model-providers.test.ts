@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { validateCodexModelProviders, type CodexModelProviderSettings, type ThreadUsageLineRecord } from "@pwragent/shared";
+import {
+  validateCodexModelProviders,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import { wrapCodexProviderUsageAttribution } from "../app-server/codex-provider-usage-attribution";
 import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";

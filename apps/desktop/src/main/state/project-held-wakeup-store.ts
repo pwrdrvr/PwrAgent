@@ -1,11 +1,11 @@
 import type Database from "better-sqlite3";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
-  isAppServerBackendKind,
   type AppServerBackendKind,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
-  type ProjectHeldWakeupSource,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ProjectHeldWakeupSource } from "@pwragent/shared/project-forge-automation";
 import { storageProcessAlive } from "./storage-maintenance";
 
 /**

@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendWake,
   AppServerBackgroundTask,
-  ScheduledThreadAction,
-  ThreadDependency,
-  ThreadPrWatchHistoryEntry,
-  ThreadPullRequestWatchSummary,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import {
   SELF_STARTED_TURN_ENTRY_PREFIX,
   buildThreadPendingWakes,

@@ -4,4 +4,4 @@ export {
   directoryIdentityNames,
   findPeerCounterpartDirectory,
   type ProjectIdentity,
-} from "@pwragent/shared";
+} from "@pwragent/shared/federation-project-match";

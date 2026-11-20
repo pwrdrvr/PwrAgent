@@ -25,7 +25,7 @@ async function checkBytecode() {
   const { minifySync } = await import(pathToFileURL(viteRequire.resolve("rolldown/utils")).href);
   const context = await createVitest({
     root: repoRoot,
-    config: resolve(repoRoot, "vitest.workspace.ts"),
+    config: resolve(repoRoot, "vitest.workspace.mts"),
     project: ["desktop-renderer"],
     watch: false,
   });

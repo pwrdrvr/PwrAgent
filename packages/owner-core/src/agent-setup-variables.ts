@@ -1,4 +1,4 @@
-import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared";
+import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * The shell variables an environment's setup captured (PATH, NVM_DIR, ...),

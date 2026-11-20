@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ProviderCatalogRefreshProviderState,
   ProviderCatalogRefreshState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { PendingSpinner } from "../../components/PendingSpinner";

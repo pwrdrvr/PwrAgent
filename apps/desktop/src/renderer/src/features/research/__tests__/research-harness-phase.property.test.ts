@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { researchRunAttention, type ResearchHarnessState, type ResearchRun } from "@pwragent/shared";
+import { researchRunAttention, type ResearchRun } from "@pwragent/shared/research";
+import { type ResearchHarnessState } from "@pwragent/shared/research-harness";
 import { researchHarnessOutcome, researchRunPhase } from "../research-view-model";
 
 /**

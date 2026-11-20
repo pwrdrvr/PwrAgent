@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 import fc from "fast-check";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { expect, it, onTestFinished } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { ensureNamedProfileExists } from "../profile";

@@ -2,10 +2,23 @@ import path from "node:path";
 import { findThreadForBinding } from "./messaging-callback-helpers";
 import { asPlainRecord, federationTargetForBinding } from "./messaging-backend-event-helpers";
 import { DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
-import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
+import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
-import { buildReviewBranchOptions, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd } from "@pwragent/shared";
-import type { AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, NavigationDirectorySummary, NavigationThreadSummary, ThreadExecutionMode } from "@pwragent/shared";
+import {
+  buildReviewBranchOptions,
+  findPreferredReviewWorkspaceCwd,
+  findPrimaryReviewWorkspaceCwd,
+} from "@pwragent/shared/review-branches";
+import type {
+  AppServerBackendKind,
+  AppServerReviewTarget,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ModelSettingsRecent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent, MessagingInboundEvent, MessagingInboundTextEvent, MessagingJsonValue, MessagingPendingIntentRecord, MessagingReviewIntent, MessagingSurfaceAction, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { applyActionCapabilityLimits } from "@pwragent/messaging-interface";
 import { buildConfirmationIntent, buildErrorIntent, buildReviewStartConfirmationIntent, messagingReviewStartTarget } from "./messaging-renderer.js";

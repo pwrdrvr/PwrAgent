@@ -8,7 +8,7 @@ import net from "node:net";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { createFederationEnrollmentInvite } from "../federation/federation-enrollment";
 import { generateFederationIdentityKeyPair } from "../federation/federation-identity";
 import { generateNoiseStaticKeyPair } from "../federation/federation-noise";

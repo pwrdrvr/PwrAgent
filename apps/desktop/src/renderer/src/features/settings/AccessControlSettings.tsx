@@ -21,7 +21,7 @@ import {
   type RbacKnownSubject,
   type RbacRoleDefinition,
   type RbacSubject,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/rbac";
 
 import type { DesktopApi } from "../../lib/desktop-api";
 import { DiscordIcon } from "../../icons/DiscordIcon";

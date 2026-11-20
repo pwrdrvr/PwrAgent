@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "./navigation-query-fixture";
 
 function population() {

@@ -1,4 +1,4 @@
-import { buildAgentMemoryContext } from "@pwragent/shared";
+import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
 import { describe, expect, it } from "vitest";
 import {
   AcpSessionReplayNormalizer,

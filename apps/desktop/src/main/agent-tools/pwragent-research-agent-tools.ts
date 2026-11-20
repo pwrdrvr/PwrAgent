@@ -1,4 +1,5 @@
-import { PWRAGENT_TOOL_NAMESPACE, RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS } from "@pwragent/shared/research";
 import type { AgentToolCallContext, AgentToolDefinition } from "./agent-tool-definition";
 import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition";
 

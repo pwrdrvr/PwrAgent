@@ -3,7 +3,7 @@ import {
   isStarMapArrangementEntry,
   starMapArrangementEntryKey,
   type StarMapArrangementEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export type StarMapCardOffset = { dx: number; dy: number };

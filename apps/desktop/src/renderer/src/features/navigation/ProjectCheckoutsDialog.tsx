@@ -1,6 +1,7 @@
 import { useId, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { canonicalizeNavigationPath, type SetProjectCheckoutGroupRequest } from "@pwragent/shared";
+import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { type SetProjectCheckoutGroupRequest } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, CopyIcon, FolderIcon, FolderPlusIcon, PopoutIcon } from "../../icons";
 import { useModalDialog } from "../../lib/useModalDialog";
 

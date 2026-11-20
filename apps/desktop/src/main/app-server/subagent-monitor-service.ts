@@ -15,37 +15,42 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   type AcpBackendId,
-  CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
-  codexNativeSubAgentName,
-  isClaudeNativeSubAgent,
-  isCodexNativeSubAgentVisibleInNavigation,
-  type AgentEvent,
-  type ThreadLock,
   type AppServerNotification,
   type AppServerThreadActivityEntry,
   type AppServerThreadCommandDetail,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReplay,
   type AppServerThreadSummary,
-  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  isClaudeNativeSubAgent,
+} from "@pwragent/shared/subagent-kind";
+import { codexNativeSubAgentName } from "@pwragent/shared/subagent-activity";
+import {
+  isCodexNativeSubAgentVisibleInNavigation,
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
+} from "@pwragent/shared/subagent-visibility";
+import {
+  type AgentEvent,
   type AppServerCollaborationModeRequest,
   type StopSubAgentRequest,
   type StopSubAgentResponse,
-  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/agent";
+import {
+  type ThreadLock,
   type ThreadOverlayState,
   type ThreadSubAgentSummary,
-  type ThreadUsageLineRecord,
   buildThreadIdentityKey,
   isAcpBackendId,
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
-  resolveHelperModel,
-  automaticProviderMonitorModel,
-  isLightweightHelperModel,
-  type DesktopHelperModelSettings,
-  type DesktopTaskMonitorModelChoice,
   type CancelMonitorDelegationToolArgs,
   type CompleteMonitoringToolArgs,
   type TaskMonitorCompletionData,
@@ -55,9 +60,16 @@ import {
   type TaskMonitorRequest,
   type TaskMonitorResponse,
   type TaskMonitorUsageSnapshot,
-  threadLockRefusalMessage,
-  type ProjectHeldWakeupSource,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/task-monitor-tools";
+import {
+  resolveHelperModel,
+  automaticProviderMonitorModel,
+  isLightweightHelperModel,
+  type DesktopHelperModelSettings,
+  type DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared/helper-models";
+import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
+import { type ProjectHeldWakeupSource } from "@pwragent/shared/project-forge-automation";
 import {
   findAcpThoughtLevelConfigOption,
   withAcpModelRuntimeSelection,
@@ -177,7 +189,8 @@ import {
   taskMonitorRecentActivity,
 } from "./task-monitor-helpers";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
-import { combinedDeliveryInput, mergeCausalMessagingContext, splitCombinedDelivery } from "@pwragent/shared";
+import { combinedDeliveryInput, splitCombinedDelivery } from "@pwragent/shared/combined-delivery";
+import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const TASK_MONITOR_WAKE_ENTRY_PREFIX = "task-monitor:wake:";

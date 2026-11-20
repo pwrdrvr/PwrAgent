@@ -1,5 +1,5 @@
 import { act, render } from "@testing-library/react";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { THREAD_HISTORY_PAGE_LIMIT } from "../../../lib/thread-history-limits";

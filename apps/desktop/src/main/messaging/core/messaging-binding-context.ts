@@ -1,6 +1,9 @@
 import { type MessagingFullAccessControls } from "./messaging-callback-helpers";
 import { type MessagingDeliveryGuard, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import type { AppServerBackendKind, BackendSummary, FederationTarget, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingChannelRef, MessagingDeliveryResult, MessagingInboundEvent, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingResponseMode, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";

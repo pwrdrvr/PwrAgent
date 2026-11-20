@@ -1,12 +1,14 @@
 import type {
   AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   GetMessagingActivitySummaryResponse,
   MessagingActivityEntry,
   MessagingActivityKind,
   MessagingActivityOrigin,
   MessagingChannelKind,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 
 export type RecordMessagingActivityInput = {
   platform: MessagingActivityOrigin;

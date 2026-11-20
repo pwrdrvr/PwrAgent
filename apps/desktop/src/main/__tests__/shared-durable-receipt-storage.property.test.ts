@@ -1,8 +1,14 @@
 import fc from "fast-check";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { canonicalDurableSteerRequest, canonicalDurableTurnRequest } from "@pwragent/shared";
-import type { SubmitDurableSteerRequest, SubmitDurableTurnRequest } from "@pwragent/shared";
+import {
+  canonicalDurableSteerRequest,
+  canonicalDurableTurnRequest,
+} from "@pwragent/shared/durable-turn-request";
+import type {
+  SubmitDurableSteerRequest,
+  SubmitDurableTurnRequest,
+} from "@pwragent/shared/contracts/durable-turn-requests";
 import type { DurableRequestReceipt } from "@pwragent/owner-core/durable-turn-request-storage";
 import { SqliteDurableTurnRequestStore as SharedStore } from "@pwragent/sqlite-storage/durable-turn-request-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";

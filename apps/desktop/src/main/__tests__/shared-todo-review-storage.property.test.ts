@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ThreadReview, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { ThreadTodoStore as SharedTodo } from "@pwragent/sqlite-storage/thread-todo-store";
 import { SqliteThreadReviewStorage as SharedReview } from "@pwragent/sqlite-storage/thread-review-storage-sqlite";

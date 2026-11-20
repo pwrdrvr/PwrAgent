@@ -1,4 +1,5 @@
-import { isAcpBackendId, type AppServerBackendKind } from "@pwragent/shared";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 
 export type ThreadInterruptionTarget = {
   backend: AppServerBackendKind;

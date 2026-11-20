@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import {
   OPENAI_DECISION_BOUNDS,
   OPENAI_DECISIONS_TOOL_NAMES,

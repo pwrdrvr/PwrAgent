@@ -1,11 +1,13 @@
 import type {
   AppServerBackendKind,
-  MessagingDynamicToolCategory,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
   PwrAgentMessagingContext,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging-tools";
 
 /** A dynamic-tool call to authorize against the originating turn's RBAC actor. */
 export type DynamicToolPermissionCheck = {

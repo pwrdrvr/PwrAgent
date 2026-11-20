@@ -18,7 +18,7 @@ import {
   type DirectoryLaunchpadOverlayState,
   type NavigationLaunchpadDefaults,
   type ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../../src/main/state/state-db";
 import { stateDbPathForHomeRoot } from "./readme-state-seeding";

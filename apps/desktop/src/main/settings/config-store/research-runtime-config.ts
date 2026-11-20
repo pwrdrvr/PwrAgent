@@ -1,4 +1,4 @@
-import type { ResearchHarnessConfig } from "@pwragent/shared";
+import type { ResearchHarnessConfig } from "@pwragent/shared/research-harness";
 import type { DesktopConfigStore } from "./desktop-config-store";
 
 /** Invalid edits must not admit a new process using retained executable settings. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopDecisionModelSettings } from "@pwragent/shared";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
 import {
   desktopSettingsPatchToEdits,
   parseDesktopSettingsToml,

@@ -1,11 +1,10 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import type { AcpAgentSettingsEntry, AcpManagedBuildStatus } from "@pwragent/shared/contracts/backend";
 import type {
-  AcpAgentSettingsEntry,
-  AcpManagedBuildStatus,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   DesktopUpdateChannel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { managedGrokReleaseUrl } from "../../lib/grok-build-channel";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";

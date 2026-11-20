@@ -10,7 +10,7 @@ import {
   type RbacPolicy,
   type RbacRoleDefinition,
   type RbacSubject,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/rbac";
 
 import { resolveActiveProfilePath } from "../profile";
 import {

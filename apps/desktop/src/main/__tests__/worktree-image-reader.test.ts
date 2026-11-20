@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKTREE_IMAGE_MAX_BYTES } from "@pwragent/shared";
+import { WORKTREE_IMAGE_MAX_BYTES } from "@pwragent/shared/contracts/navigation";
 import { readWorktreeImage } from "../app-server/worktree-image-reader";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2]);

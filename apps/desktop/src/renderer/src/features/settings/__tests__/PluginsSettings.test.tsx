@@ -11,10 +11,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AuthorizeMcpConnectionResponse,
-  CodexMcpServerSummary,
-  DesktopSettingsSnapshot,
   McpConnectionStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import type { CodexMcpServerSummary } from "@pwragent/shared/contracts/agent";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";

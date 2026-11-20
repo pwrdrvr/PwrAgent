@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { RESEARCH_HARNESS_RECONCILABLE, researchHarnessEffectiveState } from "@pwragent/shared";
+import { RESEARCH_HARNESS_RECONCILABLE } from "@pwragent/shared/research-harness";
+import { researchHarnessEffectiveState } from "@pwragent/shared/research";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { ResearchBoundsEditor, type ResearchBoundsChange } from "./ResearchBoundsEditor";
 import { formatClock, formatResearchDuration, isResearchRunLive, plural, researchWorkerMinutesUsed, researchCutOffWorkers, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";

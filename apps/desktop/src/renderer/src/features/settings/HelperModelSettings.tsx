@@ -5,11 +5,10 @@ import {
   helperChoiceBackend,
   isHelperModelId,
   resolveHelperModel,
-  type BackendModelOption,
-  type BackendSummary,
   type DesktopHelperModelSettings,
   type HelperModelResolution,
-} from "@pwragent/shared";
+} from "@pwragent/shared/helper-models";
+import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import { Select } from "../../components/Select";
 import { modelSelectOptions } from "../../lib/model-select-options";
 import { SettingsField, SettingsSection } from "./SettingsLayout";

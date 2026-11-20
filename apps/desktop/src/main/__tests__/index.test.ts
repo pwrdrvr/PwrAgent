@@ -4,7 +4,7 @@ import fc from "fast-check";
 import legacyOwnerBoot from "./fixtures/legacy-owner-boot.json";
 import { recordOwnerCalls, recordCall, assertOwnerHooksBeforeWork } from "./helpers/owner-startup-recording";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";

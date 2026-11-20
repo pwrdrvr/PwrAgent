@@ -1,9 +1,7 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import {
-  buildDirectorySummaries,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
 function checkProject(checkoutCount: number, preferredIndex: number, reverse: boolean) {

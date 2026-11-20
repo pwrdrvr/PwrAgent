@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { query, McpServerStatus, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { loadClaudeAgentSdk } from "./claude-sdk";
-import type { BackendModelOption } from "@pwragent/shared";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { getMainLogger } from "../log";
 
 const claudeModelLog = getMainLogger("pwragent:claude-models");

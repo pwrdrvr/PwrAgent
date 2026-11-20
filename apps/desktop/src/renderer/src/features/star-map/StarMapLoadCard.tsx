@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import type { FederationLoadStatus } from "@pwragent/shared";
+import type { FederationLoadStatus } from "@pwragent/shared/contracts/federation";
 import { formatByteCount } from "../../lib/format-bytes";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {

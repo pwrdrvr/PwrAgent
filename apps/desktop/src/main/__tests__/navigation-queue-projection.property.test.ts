@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { ComposerThreadOwner, ScheduledThreadAction } from "@pwragent/shared";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import {
   buildThreadComposerScopeKey, getNextReleasableQueuedTurn, useComposerDraftStore,

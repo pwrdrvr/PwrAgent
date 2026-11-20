@@ -1,4 +1,4 @@
-import type { FederationHealthStatus } from "@pwragent/shared";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { buildFederationPeerTargets } from "../chrome/federation-thread-targets";
 
 /**

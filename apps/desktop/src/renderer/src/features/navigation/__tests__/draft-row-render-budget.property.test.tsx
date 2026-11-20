@@ -2,7 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationDirectoryRow, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";

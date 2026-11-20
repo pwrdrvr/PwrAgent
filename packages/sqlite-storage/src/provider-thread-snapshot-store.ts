@@ -1,8 +1,8 @@
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
-} from "@pwragent/shared";
-import { isAppServerBackendKind } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import { projectProviderThreadSummary as toDurableThreadSummary, type ProviderThreadSnapshot, type ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { StateDb } from "./state-db";
 import { SqliteOverlayStore } from "./overlay-store-sqlite";

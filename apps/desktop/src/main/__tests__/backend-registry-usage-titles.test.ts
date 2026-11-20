@@ -1,6 +1,8 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
-import type { AgentEvent, AppServerBackendKind, ThreadUsageLineRecord } from "@pwragent/shared";
-import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

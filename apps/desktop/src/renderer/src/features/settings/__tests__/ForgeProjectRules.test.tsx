@@ -9,12 +9,9 @@ import {
 } from "../../../test/phase-probes";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  DesktopCodexModelProvider,
-  ForgeAgentToolPolicy,
-  ForgeAgentToolRule,
-} from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { DesktopCodexModelProvider } from "@pwragent/shared/codex-model-providers";
+import type { ForgeAgentToolPolicy, ForgeAgentToolRule } from "@pwragent/shared/contracts/forge-agent-tools";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   CURRENT_CODEX_MODEL_LABELS,

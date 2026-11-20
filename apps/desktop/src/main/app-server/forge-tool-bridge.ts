@@ -1,8 +1,8 @@
 import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
-  buildPendingTurnId,
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   FORGE_AGENT_RULE_APPROVAL_SOURCE,
   FORGE_AGENT_TOOL_GROUP_LABELS,
@@ -17,21 +17,11 @@ import {
   forgeAgentToolUnreadableRuleSentence,
   forgeApprovalRememberRuleAgent,
   forgeRuleRepositoryLabel,
-  isAcpBackendId,
-  isAppServerBackendKind,
   isForgeApprovalRememberGroup,
   normalizeForgeRuleRepository,
-  normalizePullRequestProvider,
-  parseCodexProviderModelId,
   readForgeApprovalMergeMethodChoice,
   readForgeApprovalRememberChoice,
   resolveForgeAgentToolAccess,
-  type AppServerBackendKind,
-  type AppServerPendingRequestNotification,
-  type AttachThreadPullRequestToolArgs,
-  type CodexModelProviderSettings,
-  type DetachThreadPullRequestRequest,
-  type DetachThreadPullRequestResponse,
   type ForgeAgentIdentity,
   type ForgeAgentRuleNames,
   type ForgeAgentToolAccess,
@@ -41,16 +31,34 @@ import {
   type ForgeApprovalMergeMethods,
   type ForgeApprovalMergeQueue,
   type ForgeApprovalRememberOptionId,
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
+  isAcpBackendId,
+  isAppServerBackendKind,
+  normalizePullRequestProvider,
+  type DetachThreadPullRequestRequest,
+  type DetachThreadPullRequestResponse,
   type NavigationSnapshot,
   type PrSummary,
-  type PwrAgentThreadInspectionResponse,
   type RefreshOwnedThreadPullRequestsRequest,
   type RefreshThreadPullRequestsResponse,
-  type ThreadExecutionMode,
-  type ThreadInspectionSummary,
   type ThreadOverlayState,
-  type ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import {
+  parseCodexProviderModelId,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import {
+  type AppServerBackendKind,
+  type AppServerPendingRequestNotification,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type AttachThreadPullRequestToolArgs,
+  type PwrAgentThreadInspectionResponse,
+  type ThreadInspectionSummary,
+} from "@pwragent/shared/contracts/thread-tools";
+import { type ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import {
@@ -834,8 +842,8 @@ export class ForgeToolBridge {
 
   /** A viewer's history, Stop or Watch CI on one of this owner's threads. */
   async manageThreadPrWatchesForPeer(
-    request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
-  ): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> {
+    request: import("@pwragent/shared/contracts/thread-pr-watches").FederationThreadPrWatchesRequestV1,
+  ): Promise<import("@pwragent/shared/contracts/thread-pr-watches").ThreadPrWatchesResponse> {
     const handler = this.threadPrWatchesPeerHandler;
     if (!handler) {
       return {

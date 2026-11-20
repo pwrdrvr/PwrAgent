@@ -2,7 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { PwrAgentMessagingAttachmentSummary, PwrAgentMessagingResponse } from "@pwragent/shared";
+import type {
+  PwrAgentMessagingAttachmentSummary,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared/contracts/messaging-tools";
 
 export const ORIGINAL_ATTACHMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ORIGINAL_ATTACHMENT_CACHE_LIMITS = { maxRecords: 256, maxOriginalBytes: 256 * 1024 * 1024 };

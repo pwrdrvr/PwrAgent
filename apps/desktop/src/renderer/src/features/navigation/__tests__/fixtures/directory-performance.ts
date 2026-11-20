@@ -1,8 +1,8 @@
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 
 export type LargeDirectoryFixture = {
   directories: NavigationDirectorySummary[];

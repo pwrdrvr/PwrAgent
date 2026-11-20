@@ -17,26 +17,31 @@ import type { ThreadDirectoryService } from "./thread-directory-service";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
-import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchivePolicy } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
+import type { DesktopThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import type { ArchiveCleanupCheckpointStorage, TaskMonitorWakeStorage } from "../storage/desktop-runtime-storage";
 import type { RestartDispatchPlanOptions } from "./restart-continuation-gate";
 import type { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import type { CodexProviderCatalogRetry, CodexProviderCatalogRetryTimer } from "./codex-provider-catalog-retry";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import type { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import type { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import type {
   CreateScheduledThreadActionRequest,
+  ScheduledThreadActionMutationResponse,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSpendAlertPolicy,
   DesktopToolOutputAlertPolicy,
-  LinkedDirectorySummary,
-  ScheduledThreadActionMutationResponse,
+} from "@pwragent/shared/contracts/settings";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopHelperModelSettings,
   DesktopTaskMonitorModelChoice,
-} from "@pwragent/shared";
+} from "@pwragent/shared/helper-models";
 import type {
   AcpBackendAdapter,
   AcpBackendAdapterOptions,

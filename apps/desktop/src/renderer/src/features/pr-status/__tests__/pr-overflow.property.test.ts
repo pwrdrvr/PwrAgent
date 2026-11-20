@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { resolvePrChipPresentation } from "../pr-chip-state";
 import { prOverflowLabel, resolvePrOverflow, resolvePrRollup } from "../pr-rollup";
 

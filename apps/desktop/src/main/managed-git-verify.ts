@@ -16,7 +16,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { compareManagedGitVersions } from "@pwragent/shared";
+import { compareManagedGitVersions } from "@pwragent/shared/managed-git-version";
 
 export const PWRDRVR_TEAM_ID = "T44CNHC4UH";
 export const PWRDRVR_SIGNING_IDENTITY =
@@ -190,7 +190,7 @@ export {
   compareManagedGitVersions,
   parseManagedGitVersion,
   type ManagedGitVersion,
-} from "@pwragent/shared";
+} from "@pwragent/shared/managed-git-version";
 
 export type ManagedGitReleaseAsset = {
   name: string;

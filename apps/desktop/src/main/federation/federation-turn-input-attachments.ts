@@ -18,11 +18,13 @@ import { fileURLToPath } from "node:url";
 import type {
   AppServerFileInputItem,
   AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   FederationBlobChunkEnvelope,
   FederationInstanceId,
   FederationProtocolEnvelope,
-} from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
   sanitizeTurnAttachmentName,

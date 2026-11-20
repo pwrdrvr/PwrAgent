@@ -7,7 +7,7 @@ import type {
   AppServerLocalFileInputItem,
   AppServerPdfRenderProfile,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { ImageUploadQualityProfile } from "../../shared/image-normalization";
 import type { PendingPdfAttachment } from "./pdf-attachment-store";
 import {

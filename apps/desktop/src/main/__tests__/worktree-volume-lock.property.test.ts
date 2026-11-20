@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { addManagedWorktree, removeManagedWorktree } from "../app-server/managed-worktree";
 import {
   PWRAGENT_WORKTREE_LOCK_REASON,
+  needsDriveLock,
+  readWorktreeLockHolder,
   lockWorktreeOnSeparateVolume,
   unlockPwrAgentWorktreeLock,
 } from "../app-server/worktree-volume-lock";
@@ -128,6 +130,31 @@ describe("worktree volume locks", () => {
       }),
       { numRuns: 16 },
     );
+  });
+
+  it("locks exactly the worktrees a prune could lose while a drive is unplugged", () => {
+    // Oracle: unplug each drive except the home folder's (always mounted). A
+    // prune runs in the repository, so it can delete the worktree's records
+    // only while the repository's drive is attached and the worktree's is not.
+    const drive = fc.constantFrom(0, 1, 2);
+    fc.assert(fc.property(drive, drive, drive, (repository, worktree, home) => {
+      const pruneCanLoseIt = [0, 1, 2].some((unplugged) =>
+        unplugged !== home && unplugged === worktree && unplugged !== repository);
+      expect(needsDriveLock({ repository, worktree, home })).toBe(pruneCanLoseIt);
+    }), { numRuns: 27 });
+    // The Windows CI layout: repository on D:, worktree under the home folder on C:.
+    expect(needsDriveLock({ repository: 2, worktree: 1, home: 1 })).toBe(false);
+  });
+
+  it("treats a locked entry it cannot read as someone else's hold", async () => {
+    const { repo, worktree } = await fixture();
+    const gitDirectory = git(worktree, ["rev-parse", "--absolute-git-dir"]).trim();
+    expect(await readWorktreeLockHolder(gitDirectory)).toBe("none");
+    await mkdir(path.join(gitDirectory, "locked"));
+    expect(await readWorktreeLockHolder(gitDirectory)).toBe("other");
+    await rm(path.join(gitDirectory, "locked"), { recursive: true });
+    git(repo, ["worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, worktree]);
+    expect(await readWorktreeLockHolder(gitDirectory)).toBe("pwragent");
   });
 
   it("marks the lock with PwrAgent's reason", async () => {

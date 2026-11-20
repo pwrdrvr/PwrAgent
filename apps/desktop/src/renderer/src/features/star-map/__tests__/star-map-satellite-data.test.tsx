@@ -6,10 +6,8 @@ import {
   within,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AppServerThreadEntry,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapChatCard } from "../StarMapChatCard";
 import { StarMapContextCard } from "../StarMapSatelliteCards";

@@ -6,9 +6,8 @@ import type {
   CloudflareSetupLink,
   CloudflareSetupRequest,
   CloudflareSetupStatus,
-  DesktopFederationMode,
-  DesktopSettingsConfigPatch,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-cloudflare";
+import type { DesktopFederationMode, DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { AutomationFlow, AutomationStage } from "../automations/AutomationFunnel";
 import { SettingsField, SettingsPendingIndicator, SettingsSection, type SettingsChipTone } from "./SettingsLayout";

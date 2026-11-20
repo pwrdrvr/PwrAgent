@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { OpenPathResponse } from "@pwragent/shared";
+import type { OpenPathResponse } from "@pwragent/shared/contracts/settings";
 import { resolveProjectRevealNotice } from "../project-reveal-notice";
 
 const project = fc.record({

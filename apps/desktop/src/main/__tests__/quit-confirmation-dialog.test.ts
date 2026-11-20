@@ -157,7 +157,7 @@ vi.mock("../settings/appearance-bootstrap", () => ({
 }));
 
 import { app, BrowserWindow, type WebContents } from "electron";
-import { parseThreadIdentityKey } from "@pwragent/shared";
+import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { primaryMainWindowWebContents } from "../shell/primary-main-window";
 import { revealIntegratedTerminal } from "../shell/ipc/integrated-terminal";
 import { requestShowThread } from "../shell/window-show-thread";

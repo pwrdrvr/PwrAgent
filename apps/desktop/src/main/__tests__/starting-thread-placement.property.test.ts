@@ -1,12 +1,11 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { type LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  buildFederatedThreadRef,
-  federatedThreadIdentityKey,
-  type LinkedDirectorySummary,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { attachRemoteThreadsToLocalDirectories } from "../app-server/navigation-viewer-pins";
 import {
   startingThreadHomeDirectoryKey,

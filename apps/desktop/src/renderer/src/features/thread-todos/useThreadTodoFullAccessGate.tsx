@@ -1,5 +1,5 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import { threadTodoSeenExecutionMode, type ThreadTodo } from "@pwragent/shared";
+import { threadTodoSeenExecutionMode, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import type { ThreadTodoRunOptions } from "./thread-todos-view";

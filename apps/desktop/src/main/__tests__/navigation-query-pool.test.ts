@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest, NavigationLaunchpadConfigResponse } from "@pwragent/shared";
+import type {
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationLaunchpadConfigResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 
 const request: NavigationQueryRequest = {

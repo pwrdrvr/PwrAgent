@@ -1,7 +1,10 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AcpAvailableCommandsRecord, AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
-import type { AcpBackendId, AppServerAvailableCommandSummary } from "@pwragent/shared";
+import type {
+  AcpBackendId,
+  AppServerAvailableCommandSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { AcpSessionStore as SharedSessions } from "@pwragent/sqlite-storage/acp-session-store";
 import { AcpAvailableCommandsStore as SharedCommands } from "@pwragent/sqlite-storage/acp-available-commands-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";

@@ -10,8 +10,11 @@ import {
 } from "./helpers/backend-registry-fixture";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
-import { threadLockRefusalMessage } from "@pwragent/shared";
-import { DEFAULT_PROJECT_FORGE_AUTOMATION, type ProjectForgeAutomation } from "@pwragent/shared";
+import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared/project-forge-automation";
 import { getProjectForgeAutomationIndex, resetProjectForgeAutomationIndexForTests } from "../app-server/project-forge-automation-index";
 import {
   mkdir,
@@ -27,13 +30,13 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerPendingRequestNotification,
   AppServerThreadSummary,
-  AttachThreadPullRequestToolArgs,
-  PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AttachThreadPullRequestToolArgs } from "@pwragent/shared/contracts/thread-tools";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { StateDb } from "../state/state-db";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";

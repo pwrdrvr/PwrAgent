@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerBackendKind, FederationInstanceId } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import { resolveCodexStreamNotice } from "../codex-stream-notice";
 
 describe("stream notice navigation", () => {

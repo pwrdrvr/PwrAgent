@@ -1,15 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppServerThreadReviewEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerThreadReviewEntry,
   ReviewAutoFixRun,
   ReviewAutoFixStatus,
   ThreadReview,
-  ThreadTodo,
-  ThreadTodosChangedEvent,
-} from "@pwragent/shared";
-import { threadReviewDisplayTitle, threadReviewTodo } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared/contracts/thread-todos";
+import { threadReviewDisplayTitle, threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { TranscriptReview } from "../../thread-detail/TranscriptReview";
 import { ThreadTodoCard } from "../ThreadTodoCard";

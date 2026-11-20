@@ -1,5 +1,5 @@
 import type { HookCallbackMatcher, HookEvent, SessionCronSummary } from "@anthropic-ai/claude-agent-sdk";
-import type { AppServerBackendWake } from "@pwragent/shared";
+import type { AppServerBackendWake } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * A wake Claude Code scheduled inside its own session: a dynamic /loop

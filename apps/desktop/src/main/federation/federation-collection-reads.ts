@@ -1,9 +1,9 @@
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
-  NavigationSnapshot,
-} from "@pwragent/shared";
-import { isAppServerBackendKind } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 
 /** Collection reads have a payload budget, independent of the socket ceiling. */
 export const FEDERATION_COLLECTION_PAGE_BYTES = 256 * 1024;

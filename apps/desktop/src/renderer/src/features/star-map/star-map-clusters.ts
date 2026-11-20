@@ -3,7 +3,7 @@ import {
   type NavigationThreadSummary,
   type NavigationDirectoryRow,
   type SetThreadParentRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import {
   STAR_MAP_ESTIMATED_CARD_HEIGHT,

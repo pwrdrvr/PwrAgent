@@ -15,7 +15,7 @@ import type {
   ReadCodexEnvironmentDocumentResponse,
   SaveCodexEnvironmentDocumentRequest,
   SaveCodexEnvironmentDocumentResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/codex-environment-editor";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption } from "../../../test/select";
 import {

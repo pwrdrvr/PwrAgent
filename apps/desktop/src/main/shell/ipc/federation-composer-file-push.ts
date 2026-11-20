@@ -5,8 +5,8 @@ import type {
   ComposerFilePushProgress,
   PushComposerFileRequest,
   PushComposerFileResult,
-} from "@pwragent/shared";
-import { isFederationInstanceId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-file-push";
+import { isFederationInstanceId } from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL,
   FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL,

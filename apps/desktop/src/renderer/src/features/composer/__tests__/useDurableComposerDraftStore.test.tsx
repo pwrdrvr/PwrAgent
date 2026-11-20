@@ -4,7 +4,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ComposerDraftSnapshot } from "../useComposerDraftStore";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { snapshotFromDraftRecord, useDurableComposerDraftStore } from "../useDurableComposerDraftStore";
-import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
+import type { ComposerDraftSnapshotRecord } from "@pwragent/shared/contracts/composer-drafts";
 import { serializeDraftWithSkillTokens } from "../composer-mention-tokens";
 
 afterEach(() => {

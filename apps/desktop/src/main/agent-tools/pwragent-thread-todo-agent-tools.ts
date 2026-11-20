@@ -1,15 +1,16 @@
 import type {
   AppServerBackendKind,
   AppServerThreadReviewEntry,
-  PwrAgentThreadTodoOperationName,
   ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  PwrAgentThreadTodoOperationName,
   ThreadTodo,
   ThreadTodoAction,
   ThreadTodoStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   PWRAGENT_THREAD_TODO_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
   THREAD_TODO_DETAIL_MAX_LENGTH,
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
@@ -18,10 +19,11 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
   parseThreadTodoMessageTarget,
-  isAppServerBackendKind,
   threadTodoPrerequisites,
   threadTodoSteps,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type {
   AgentToolCallContext,
   AgentToolDefinition,

@@ -3,16 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import { CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS } from "@pwragent/shared/subagent-visibility";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   NavigationDirectoryGitStatus,
   NavigationThreadSummary,
   PrSummary,
   ThreadQueuedTurnSummary,
-  ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import * as backendRegistry from "../app-server/backend-registry";
 import * as navigationDetail from "../app-server/navigation-detail-service";

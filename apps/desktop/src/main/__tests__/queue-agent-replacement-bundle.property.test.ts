@@ -62,7 +62,7 @@ it("Node's native ESM loader imports a lazy dependency from the real emitted dri
 it("the actual plugin leaves relative entry points and workspace sources bundled while resolving bare native dependencies", async () => {
   const resolve = resolver();
   expect(await resolve("driver.ts", "entry-point")).toBeUndefined();
-  for (const file of ["node:fs", "electron", "@pwragent/shared", "@pwrdrvr/codex-app-server-protocol"]) {
+  for (const file of ["node:fs", "electron", "@pwragent/shared/codex-speed", "@pwrdrvr/codex-app-server-protocol"]) {
     expect(await resolve(file, "import-statement")).toBeUndefined();
   }
   expect(await resolve("better-sqlite3", "import-statement")).toEqual({ path: "/native/better-sqlite3", external: true });

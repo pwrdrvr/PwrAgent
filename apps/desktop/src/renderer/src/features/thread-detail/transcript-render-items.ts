@@ -4,8 +4,8 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
   AppServerThreadTurnMetadata,
-} from "@pwragent/shared";
-import { turnUsageEntryTurnId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
 

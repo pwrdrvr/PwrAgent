@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ThreadHandoffGitReference } from "@pwragent/shared";
-import { normalizeGitOriginUrl, readStatusWithoutNestedWorktrees } from "@pwragent/shared";
+import type { ThreadHandoffGitReference } from "@pwragent/shared/contracts/thread-instance-handoff";
+import { normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
+import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { validateGitHandoffReference } from "./thread-handoff-package";
 
 // Git LFS resolves a relative core.hooksPath, including an empty one, against

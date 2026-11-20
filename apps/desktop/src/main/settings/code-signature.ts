@@ -1,10 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import type {
-  DesktopCodeSignature,
-  DesktopCodeSignatureTrust,
-} from "@pwragent/shared";
+import type { DesktopCodeSignature, DesktopCodeSignatureTrust } from "@pwragent/shared/contracts/settings";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const execFile = promisify(execFileCallback);

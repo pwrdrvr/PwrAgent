@@ -5,7 +5,7 @@ import {
   navigationLaunchpadProviderKey,
   projectNavigationLaunchpadProviderSettings,
   type NavigationLaunchpadDraft,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 
 const stored = vi.hoisted(() => ({ launchpad: undefined as NavigationLaunchpadDraft | undefined }));
 vi.mock("../storage/desktop-overlay-store", () => ({

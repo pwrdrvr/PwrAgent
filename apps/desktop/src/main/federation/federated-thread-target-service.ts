@@ -1,13 +1,15 @@
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   FederationCapability,
   FederationHealthStatus,
   FederationInstanceId,
   FederationRemoteTarget,
-  ThreadIdentifier,
-} from "@pwragent/shared";
-import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { formatFederationPeerDisplayLabel } from "@pwragent/shared/contracts/federation";
 import { getMainLogger } from "../log";
 import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";

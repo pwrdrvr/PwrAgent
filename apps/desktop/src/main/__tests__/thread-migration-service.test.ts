@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AppServerThreadReplay,
-  DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+import type { AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { ResolvedCodexCommandCandidate } from "@pwrdrvr/codex-discovery";
 import type { CodexThreadMigrationMetadata } from "../codex-app-server/desktop-client";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";

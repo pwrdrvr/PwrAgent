@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { isNavigationPeerUnavailable, navigationIdentityKey } from "../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";

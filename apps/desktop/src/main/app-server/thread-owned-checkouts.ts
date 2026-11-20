@@ -1,6 +1,6 @@
 import { lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { runGitCommand } from "./git-executable";
 import type { ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";

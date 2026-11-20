@@ -10,11 +10,11 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
-  type AppServerBackendKind,
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 

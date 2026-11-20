@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationDirectoryRow, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   STAR_MAP_NO_PROJECT_KEY,
   groupThreadsByProject,

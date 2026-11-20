@@ -1,7 +1,10 @@
 import { secretEncryption as safeStorage } from "../owner-host";
 import fs from "node:fs";
 import path from "node:path";
-import type { WriteDesktopSecretsToProfileRequest, WriteDesktopSecretsToProfileResponse } from "@pwragent/shared";
+import type {
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
+} from "@pwragent/shared/contracts/settings";
 import { normalizeProfileName, resolveProfileDir } from "../profile";
 import { openProfileSecretStorage } from "../storage/desktop-settings-storage";
 import { isSecretStorageDisabledByEnv } from "./desktop-secret-store";

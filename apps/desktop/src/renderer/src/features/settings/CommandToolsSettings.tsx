@@ -1,4 +1,4 @@
-import { FORGE_PRODUCTS, type ForgeKind, type ForgeCli } from "@pwragent/shared";
+import { FORGE_PRODUCTS, type ForgeKind, type ForgeCli } from "@pwragent/shared/forge-product";
 import { FORGE_SETTINGS } from "./forge-settings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -7,12 +7,12 @@ import type {
   DesktopGitRuntimeChoice,
   DesktopGhDiscoveryCandidate,
   DesktopSettingsSnapshot,
-  GhStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { GhStatus } from "@pwragent/shared/contracts/navigation";
 import {
   GIT_LFS_UNAVAILABLE_REASON,
   isValidatedDiscoveryCandidate,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";

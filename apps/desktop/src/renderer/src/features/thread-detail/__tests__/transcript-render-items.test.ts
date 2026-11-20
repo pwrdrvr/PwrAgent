@@ -3,7 +3,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { buildTranscriptRenderItems } from "../transcript-render-items";
 
 describe("buildTranscriptRenderItems", () => {

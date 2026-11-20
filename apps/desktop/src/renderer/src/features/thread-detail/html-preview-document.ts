@@ -1,4 +1,4 @@
-import type { ReadHtmlPreviewAssetsResponse } from "@pwragent/shared";
+import type { ReadHtmlPreviewAssetsResponse } from "@pwragent/shared/contracts/settings";
 
 /**
  * Builds the `srcdoc` an HTML file preview renders.

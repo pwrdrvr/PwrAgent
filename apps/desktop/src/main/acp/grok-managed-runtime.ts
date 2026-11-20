@@ -1,9 +1,9 @@
 import { fetchGitHubReleaseMetadata, ReleaseCheckDeferredError } from "../github-release-cache.js";
-import type { DesktopUpdateChannel } from "@pwragent/shared";
+import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
 import {
   MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
   parseDesktopUpdateChannel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { createHash } from "node:crypto";
 import {
   createReadStream,

@@ -1,5 +1,5 @@
-import { matchesAutomationConversation } from "@pwragent/shared";
-import type { InboundPreviewMessage, StartInboundPreviewRequest } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
+import type { InboundPreviewMessage, StartInboundPreviewRequest } from "@pwragent/shared/contracts/messaging";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 
 /**

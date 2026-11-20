@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 
 /**

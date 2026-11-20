@@ -10,47 +10,55 @@ import {
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
   buildMcpProjectToolApprovalOffer,
-  buildThreadIdentityKey,
   canIsolateMcpProviderServers,
-  isAcpBackendId,
   mcpConnectionIdsForNewThread,
-  mcpElicitationPurpose,
   mcpSelectionApplyTiming,
   readMcpProjectToolApprovalChoice,
   resolveMcpConnectionSetup,
   resolveMcpConnectionToolApproval,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
+  type McpConnectionStatus,
+  type McpConnectionToolApprovalResolution,
+  type ReadThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
+  type ThreadMcpConnectionReport,
+} from "@pwragent/shared/contracts/mcp-connections";
+import {
+  buildThreadIdentityKey,
+  isAcpBackendId,
+  type NavigationLaunchpadDraft,
+  type ThreadOverlayState,
+} from "@pwragent/shared/contracts/navigation";
+import { mcpElicitationPurpose } from "@pwragent/shared/mcp-elicitation-purpose";
+import {
   type AppServerBackendKind,
   type AppServerMcpElicitationResponse,
   type AppServerMcpElicitationSchema,
   type AppServerPendingRequestNotification,
   type AppServerThreadSummary,
-  type DescribeThreadMcpConnectionsRequest,
-  type DescribeThreadMcpConnectionsResponse,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type ListCodexMcpServersRequest,
   type ListCodexMcpServersResponse,
   type ListThreadMcpServersRequest,
   type ListThreadMcpServersResponse,
-  type McpConnectionStatus,
-  type McpConnectionToolApprovalResolution,
-  type NavigationLaunchpadDraft,
-  type PwrAgentMcpConnectionRequest,
-  type PwrAgentMcpConnectionResponse,
-  type ReadThreadMcpConnectionsRequest,
   type ReloadCodexMcpConfigRequest,
   type ReloadCodexMcpConfigResponse,
   type ReloadCodexMcpServersRequest,
   type ReloadCodexMcpServersResponse,
   type RemoveCodexMcpServerRequest,
   type RemoveCodexMcpServerResponse,
-  type SetThreadMcpConnectionsRequest,
-  type SetThreadMcpConnectionsResponse,
   type StartCodexMcpServerLoginRequest,
   type StartCodexMcpServerLoginResponse,
   type SubmitServerRequestRequest,
-  type ThreadExecutionMode,
-  type ThreadMcpConnectionReport,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import {
+  type PwrAgentMcpConnectionRequest,
+  type PwrAgentMcpConnectionResponse,
+} from "@pwragent/shared/contracts/mcp-connection-tools";
 import type { ThreadStartParams as CodexThreadStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
