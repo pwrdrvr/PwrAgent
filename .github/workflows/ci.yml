@@ -1495,13 +1495,24 @@ jobs:
           name: pr-test-impact-plan-${{ github.run_attempt }}
           path: .local/ci/pr-test-impact
 
+      # Each step matches the environment of the full lanes on its platform.
+      # A different temp directory changes the paths that tests print.
       - name: Run the selected Vitest files
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        env:
+          PR_TEST_IMPACT_VITEST_CONFIG: vitest.linux-ci.ts
+        run: pnpm exec node scripts/ci/run-pr-test-impact.mjs unit "${{ matrix.target.name }}"
+
+      - name: Run the selected Vitest files on Windows
+        if: runner.os == 'Windows'
         timeout-minutes: 20
         # The Windows unit lanes need a common MSYS parent and a temp
         # directory off the OS volume; keep both here.
         shell: bash
         env:
-          PR_TEST_IMPACT_VITEST_CONFIG: ${{ runner.os == 'Linux' && 'vitest.linux-ci.ts' || 'vitest.workspace.ts' }}
+          PR_TEST_IMPACT_VITEST_CONFIG: vitest.workspace.ts
+          PWRAGENT_UNBORN_WORKSPACE_TRACE: "1"
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: pnpm exec node scripts/ci/run-pr-test-impact.mjs unit "${{ matrix.target.name }}"
