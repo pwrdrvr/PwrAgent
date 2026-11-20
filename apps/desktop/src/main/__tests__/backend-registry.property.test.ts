@@ -8,10 +8,15 @@ import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture"
 
 type TerminalMethod = "turn/completed" | "turn/failed" | "turn/cancelled";
 
-async function checkTerminalDrain(method: TerminalMethod, unregisteredAtSnapshot: boolean) {
+async function checkTerminalDrain(
+  method: TerminalMethod,
+  unregisteredAtSnapshot: boolean,
+  entry: "quit" | "close" = "quit",
+) {
   const databases: StateDb[] = [];
   const registry = registryWithInMemoryStore(databases);
-  const { emit } = registry.constructionPorts();
+  const { codexClient, emit } = registry.constructionPorts();
+  const closeProvider = vi.spyOn(codexClient, "close");
   const { turnState } = registryModules(registry);
   const branchEntered = Promise.withResolvers<void>();
   const releaseBranch = Promise.withResolvers<void>();
@@ -59,7 +64,8 @@ async function checkTerminalDrain(method: TerminalMethod, unregisteredAtSnapshot
     if (unregisteredAtSnapshot) await unregistered;
     expect(turnState.hasRegisteredTurn({ backend, ...params })).toBe(!unregisteredAtSnapshot);
 
-    stop = registry.stopRunningTurnsForShutdown().then(() => { order.push("shutdown returned"); });
+    const shutdown = entry === "close" ? registry.close() : registry.stopRunningTurnsForShutdown();
+    stop = shutdown.then(() => { order.push("shutdown returned"); });
     await unregistered;
     expect(turnState.hasRegisteredTurn({ backend, ...params })).toBe(false);
     await settle();
@@ -69,10 +75,12 @@ async function checkTerminalDrain(method: TerminalMethod, unregisteredAtSnapshot
     await Promise.race([listenerEntered.promise, terminal]);
     await settle();
     expect([...order]).toEqual([]);
+    expect(closeProvider).not.toHaveBeenCalled();
 
     releaseListener.resolve();
     await stop;
     expect(order).toEqual(["listener finished", "shutdown returned"]);
+    if (entry === "close") expect(closeProvider).toHaveBeenCalledOnce();
   } finally {
     releaseBranch.resolve();
     releaseListener.resolve();
@@ -93,12 +101,17 @@ it("drains a terminal that already unregistered its turn at the shutdown snapsho
   await checkTerminalDrain("turn/completed", true);
 });
 
-// An emit pending at the shutdown snapshot must finish listener delivery
-// before the phase returns, regardless of whether its turn has unregistered.
+it("drains a pending terminal on standalone close after its last turn unregisters", async () => {
+  await checkTerminalDrain("turn/completed", true, "close");
+});
+
+// Both shutdown entry points must finish listener delivery for pending
+// terminals before returning, regardless of whether the turn has unregistered.
 it("drains each in-flight terminal at the shutdown snapshot", async () => {
   await fc.assert(fc.asyncProperty(
     fc.constantFrom<TerminalMethod>("turn/completed", "turn/failed", "turn/cancelled"),
     fc.boolean(),
+    fc.constantFrom<"quit" | "close">("quit", "close"),
     checkTerminalDrain,
   ), { numRuns: 15 });
 });

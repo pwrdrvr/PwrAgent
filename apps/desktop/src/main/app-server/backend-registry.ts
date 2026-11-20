@@ -2247,6 +2247,10 @@ export class DesktopBackendRegistry {
     return this.runningTurnsShutdownStop;
   }
 
+  private hasTurnShutdownWork(registeredTurnCount: number): boolean {
+    return registeredTurnCount > 0 || this.pendingTerminalEmits.size > 0;
+  }
+
   private async stopRunningTurnsForShutdownOnce(timeoutMs: number): Promise<void> {
     if (this.closed) {
       return;
@@ -2254,7 +2258,7 @@ export class DesktopBackendRegistry {
     this.stoppingRunningTurnsForShutdown = true;
     this.activeTurnBranchProbeAbort.abort();
     const keys = [...this.context.turnState.registeredTurnKeys()];
-    if (keys.length === 0 && this.pendingTerminalEmits.size === 0) {
+    if (!this.hasTurnShutdownWork(keys.length)) {
       return;
     }
     const startedAt = Date.now();
@@ -14707,13 +14711,12 @@ export class DesktopBackendRegistry {
 
   private async closeResources(): Promise<void> {
     this.threadArchiveCoordinator.tryCheckpointArchiveCleanupsForQuit("before-drain");
-    // Before anything unsubscribes or closes, so each turn's own terminal
-    // still reaches every consumer. A quit has normally done this already,
-    // while messaging was still running. Wait only when there is a turn to
-    // wait for: with none, `closed` below must hold from the call itself.
+    // Drain terminal delivery before closing resources. The quit phase
+    // normally does this while messaging is still running. With no pending
+    // work, `closed` below must hold from the call itself.
     const runningTurnsStopPending = this.runningTurnsShutdownStop
       ? !this.runningTurnsShutdownStopSettled
-      : this.context.turnState.registeredTurnCount > 0;
+      : this.hasTurnShutdownWork(this.context.turnState.registeredTurnCount);
     if (runningTurnsStopPending) {
       await this.stopRunningTurnsForShutdown();
     }
