@@ -1,8 +1,11 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type UserConfig } from "electron-vite";
 import type { Plugin } from "vite";
 import { inlineWorkerDebugCode } from "./scripts/inline-worker-debug-code.mjs";
+
+const desktopRoot = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Dev-only: bridge the renderer to the standalone `react-devtools` app.
@@ -89,7 +92,7 @@ function reactDevtoolsBridge(): Plugin {
           // verbatim, and JSON.stringify does not escape `<` — so a host
           // carrying `</script>` would close this tag early.
           children: `console.info(${JSON.stringify(
-            `[pwragent] React DevTools bridge -> ${endpoint} (renderer from ${__dirname})`,
+            `[pwragent] React DevTools bridge -> ${endpoint} (renderer from ${desktopRoot})`,
           ).replaceAll("<", "\\u003c")});`,
           injectTo: "head-prepend" as const,
         },
@@ -169,15 +172,15 @@ export default defineConfig(({ command }) => {
         sourcemap: "hidden",
         rolldownOptions: {
           input: {
-            index: resolve(__dirname, "src/main/index.ts"),
-            "storage-maintenance-worker": resolve(__dirname, "src/main/state/storage-maintenance-worker.ts"),
-            "claude-session-reader-worker": resolve(__dirname, "src/main/claude/claude-session-reader-worker.ts"),
+            index: resolve(desktopRoot, "src/main/index.ts"),
+            "storage-maintenance-worker": resolve(desktopRoot, "src/main/state/storage-maintenance-worker.ts"),
+            "claude-session-reader-worker": resolve(desktopRoot, "src/main/claude/claude-session-reader-worker.ts"),
             "mcp-connection-bridge": resolve(
-              __dirname,
+              desktopRoot,
               "src/main/mcp-connections/mcp-connection-bridge-entry.ts"
             ),
             "token-miser-hook": resolve(
-              __dirname,
+              desktopRoot,
               "src/main/token-miser/token-miser-hook-entry.ts"
             )
           },
@@ -206,8 +209,8 @@ export default defineConfig(({ command }) => {
           input: {
             // Subframes get only the hardening in entry.ts; the bridge in
             // index.ts loads for a window's own document.
-            index: resolve(__dirname, "src/preload/entry.ts"),
-            "storage-maintenance": resolve(__dirname, "src/preload/storage-maintenance.ts"),
+            index: resolve(desktopRoot, "src/preload/entry.ts"),
+            "storage-maintenance": resolve(desktopRoot, "src/preload/storage-maintenance.ts"),
           },
           output: {
             format: "cjs"
@@ -231,7 +234,7 @@ export default defineConfig(({ command }) => {
       },
       resolve: {
         alias: {
-          "@renderer": resolve(__dirname, "src/renderer/src"),
+          "@renderer": resolve(desktopRoot, "src/renderer/src"),
           ...(profilingEnabled && isBuild
             ? { "react-dom/client": "react-dom/profiling" }
             : {})
@@ -242,8 +245,8 @@ export default defineConfig(({ command }) => {
         sourcemap: "hidden",
         rolldownOptions: {
           input: {
-            index: resolve(__dirname, "src/renderer/index.html"),
-            "storage-maintenance": resolve(__dirname, "src/renderer/storage-maintenance.html"),
+            index: resolve(desktopRoot, "src/renderer/index.html"),
+            "storage-maintenance": resolve(desktopRoot, "src/renderer/storage-maintenance.html"),
           },
           output: {
             codeSplitting: {
