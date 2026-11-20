@@ -28,6 +28,7 @@ import { reviewEntryFailure } from "../../shared/review-output";
 
 const roots: string[] = [];
 const backends: ClaudeBackend[] = [];
+const releaseBeforeBackendClose: Array<() => void> = [];
 // Session reads and titles compare the launch environment's Claude config
 // directory with this process's; the runner's own must not decide them.
 beforeEach(() => {
@@ -35,6 +36,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
+  // A timed-out test may still be suspended before its own finally block.
+  for (const release of releaseBeforeBackendClose.splice(0)) release();
   // A backend queues usage-limit writes into the temp root without the test
   // awaiting them, and a session can still be reporting its last turn.
   // close() joins both, so every backend finishes closing, even when another
@@ -3502,6 +3505,7 @@ describe("Claude SDK backend", () => {
         }
       });
       if (params.wake === "loop") {
+        releaseBeforeBackendClose.push(releaseWakeToolWrite.resolve);
         const append = f.store.append.bind(f.store);
         vi.spyOn(f.store, "append").mockImplementation(async (...args) => {
           if (args[1].some((entry) => entry.id === "tool-wake")) {
