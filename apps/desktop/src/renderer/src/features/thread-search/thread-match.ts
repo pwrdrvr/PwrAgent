@@ -41,6 +41,8 @@ export function prMatchToSearchResult(
     identityKey: buildThreadIdentityKey(thread.source, thread.id),
     title: thread.title,
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
+    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
     linkedDirectories: thread.linkedDirectories ?? [],
     source: thread.source,
     ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),

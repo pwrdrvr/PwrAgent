@@ -4967,7 +4967,9 @@ function DesktopAppShell(props: {
                   // seeded with the search query so it highlights + scrolls the
                   // matched message into view (auto-loading older history if the
                   // match lives further up than the first page).
-                  const seed = threadSearchState.query.trim();
+                  // The query that produced the results, not text typed since.
+                  const searchSnapshot = threadSearchState.getSnapshot();
+                  const seed = (searchSnapshot.response?.query ?? searchSnapshot.query).trim();
                   setFindRequest(
                     seed
                       ? {
