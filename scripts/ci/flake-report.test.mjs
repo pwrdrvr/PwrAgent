@@ -58,6 +58,15 @@ test("platforms the classifier skipped are not reported as missing", () => {
     assert.deepEqual(report.slices.map((s) => s.key), arrived.map((s) => s.key));
     assert.deepEqual(report.notRun, notRun);
   }
+  // A narrowed test plan runs fewer lanes. A lane it left out is not missing,
+  // and a lane it ran still is when its slice does not arrive.
+  const narrowed = aggregateSlices({
+    slices: [createSlice({ kind: "unit", platform: "linux", lane: 1, sample: 1, first: null, retries: [] })],
+    notRun: ["unit-macos", "e2e-macos", "e2e-windows"],
+    lanes: { "unit-linux": [1], "unit-windows-main": [1], "unit-windows-renderer": [], "e2e-linux": [] },
+  });
+  assert.equal(narrowed.expectedSlices, 2);
+  assert.deepEqual(narrowed.missingSlices.map((s) => s.key), ["unit-windows-main-lane-1-sample-1"]);
   assert.deepEqual(parseNotRun(""), []);
   assert.deepEqual(parseNotRun(undefined), []);
   assert.deepEqual(parseNotRun("unit-macos,e2e-macos,e2e-windows"), ["unit-macos", "e2e-macos", "e2e-windows"]);
@@ -73,9 +82,10 @@ test("the expected slice inventory follows every configured workflow matrix", as
     ["desktop-e2e", "e2e", "linux"], ["desktop-e2e-macos", "e2e", "macos"], ["windows-e2e", "e2e", "windows"],
   ];
   for (const [job, kind, platform] of jobs) {
-    const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+    const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
     assert.ok(section, `missing job ${job}`);
-    const lanes = section.match(/lane: \[([\d, ]+)\]/)?.[1].split(",").map(Number);
+    // A job that a pull request's test plan can narrow names its full lanes as the default.
+    const lanes = section.match(/lane: (?:\$\{\{ fromJSON\(.+ \|\| ')?\[([\d, ]+)\]/)?.[1].split(",").map(Number);
     assert.ok(lanes, `missing matrix in ${job}`);
     assert.deepEqual(expectedSlices().filter((s) => s.kind === kind && s.platform === platform).map((s) => s.lane), lanes);
     assert.match(section, new RegExp(`kind: ${kind}\\n\\s+platform: ${platform}\\n`));

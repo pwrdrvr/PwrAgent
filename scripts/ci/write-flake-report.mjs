@@ -37,7 +37,7 @@ if (process.argv[2] === "slice") {
     }
   }
   const report = aggregateSlices({ slices, samples: Number(process.env.FLAKE_SAMPLES),
-    notRun: parseNotRun(process.env.FLAKE_NOT_RUN), runId: process.env.GITHUB_RUN_ID,
+    notRun: parseNotRun(process.env.FLAKE_NOT_RUN), lanes: JSON.parse(process.env.FLAKE_LANES || "{}"), runId: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT, sha: process.env.GITHUB_SHA, headSha: process.env.FLAKE_HEAD_SHA, warnings });
   write(".local/ci/flake-report/flake-report.json", report);
   const incomplete = report.slices.filter((slice) => !slice.first.available || !slice.first.complete).length;
