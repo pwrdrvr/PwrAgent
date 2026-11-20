@@ -83,6 +83,9 @@ final class Source: NSObject, SCStreamOutput, SCStreamDelegate {
   var latest: CVPixelBuffer?, latestMs = 0.0, changedMs = 0.0, version = 0, sentVersion = -1, repairedVersion = -1
   var requestId = ""
   var credit = false, key = true, busy = false, stopped = false, paused = false, seq = 0
+  #if PWRWIN_DATAGRAMS
+  let tiles = TileEncoder()
+  #endif
   let context = CIContext()
   func startEncoder(_ width: Int, _ height: Int) throws {
     let status = VTCompressionSessionCreate(allocator: nil, width: Int32(width), height: Int32(height),
@@ -142,7 +145,11 @@ final class Source: NSObject, SCStreamOutput, SCStreamDelegate {
     emit(["kind": "encoder", "hardware": String(describing: hardware?.takeRetainedValue())])
   }
   func stream(_ stream: SCStream, didStopWithError error: Error) {
-    stopped = true; emit(["kind": "error", "message": error.localizedDescription])
+    stopped = true
+    #if PWRWIN_DATAGRAMS
+    tiles.stop()
+    #endif
+    emit(["kind": "error", "message": error.localizedDescription])
   }
   func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
     guard !stopped, type == .screen, sample.isValid else { return }
@@ -150,6 +157,9 @@ final class Source: NSObject, SCStreamOutput, SCStreamDelegate {
     let status = info?[.status] as? Int ?? -1
     if status == SCFrameStatus.complete.rawValue, let buffer = sample.imageBuffer {
       if paused { paused = false; emit(["kind": "resumed"]) }
+      #if PWRWIN_DATAGRAMS
+      tiles.submit(buffer)
+      #else
       if let previous = latest, !key {
         CVPixelBufferLockBaseAddress(previous, .readOnly); CVPixelBufferLockBaseAddress(buffer, .readOnly)
         var equal = CVPixelBufferGetWidth(previous) == CVPixelBufferGetWidth(buffer)
@@ -164,6 +174,7 @@ final class Source: NSObject, SCStreamOutput, SCStreamDelegate {
         if equal { latest = buffer; latestMs = Date().timeIntervalSince1970 * 1000; return }
       }
       latest = buffer; latestMs = Date().timeIntervalSince1970 * 1000; changedMs = latestMs; version += 1; produce()
+      #endif
     } else if status == SCFrameStatus.suspended.rawValue { paused = true; emit(["kind": "paused"]) }
   }
   func produce() {
@@ -204,6 +215,9 @@ final class Source: NSObject, SCStreamOutput, SCStreamDelegate {
   }
   func stop() {
     stopped = true
+    #if PWRWIN_DATAGRAMS
+    tiles.stop()
+    #endif
     Task { @MainActor in
       try? await stream?.stopCapture()
       if let encoder { VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid); VTCompressionSessionInvalidate(encoder) }
@@ -240,7 +254,9 @@ Task { @MainActor in
     config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
     config.pixelFormat = kCVPixelFormatType_32BGRA
     config.showsCursor = false; config.capturesAudio = false; config.ignoreShadowsSingleWindow = true
+    #if !PWRWIN_DATAGRAMS
     try source.startEncoder(800, 548)
+    #endif
     let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: own), configuration: config, delegate: source)
     source.stream = stream; try stream.addStreamOutput(source, type: .screen, sampleHandlerQueue: .main)
     try await stream.startCapture()
