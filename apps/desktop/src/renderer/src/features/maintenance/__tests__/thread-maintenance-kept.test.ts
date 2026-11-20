@@ -100,7 +100,7 @@ describe("kept guidance", () => {
   it("has guidance for every reason the scans send", () => {
     for (const reason of ["Other ignored files", "Commits on no branch", "Already archived", "Used by an active thread",
       "Ignored files only", "Externally managed", "Repository no longer exists", "Main checkout", "Stashed changes",
-      "Submodule changes", "Git operation in progress", "Locked worktree"]) {
+      "Submodule changes", "Git operation in progress", "Locked worktree", "Not a Git checkout", "Checkout missing"]) {
       expect(keptGuidance(reason, { step: "hibernate" }), reason).toBeDefined();
     }
   });

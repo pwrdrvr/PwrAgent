@@ -1575,6 +1575,8 @@ describe("archived checkouts removal can actually remove", () => {
     const scan = await built.service.scan();
     expect(scan.checkouts.items).toEqual([]);
     expect(scan.checkouts.kept).toEqual({ "Not a Git checkout": 1 });
+    // The review still names the folder, so the operator can find it.
+    expect(scan.checkouts.coverage?.keptCheckouts).toEqual([expect.objectContaining({ path: worktreePath, reason: "Not a Git checkout" })]);
   });
 
   // Rule: once the removal step starts, every selected checkout it is
