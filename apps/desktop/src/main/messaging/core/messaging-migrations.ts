@@ -71,6 +71,7 @@ export type MessagingReplyReceiptState =
 export type MessagingReplyReceiptReason =
   | "adapter-stopped"
   | "rate-limited"
+  | "stream-declined"
   | "budget-dropped"
   | "send-failed"
   | "send-threw"

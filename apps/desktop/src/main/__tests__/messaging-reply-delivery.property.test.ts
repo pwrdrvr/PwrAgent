@@ -21,8 +21,14 @@ import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
  * database, as a launch or an adapter restart does, and a last launch ends
  * the run.
  *
- * Oracle: the chat itself. Every final reply is in the chat once, or the
- * operator was told to check it; none is in the chat twice.
+ * A final reply goes out as one message, as the last edit of a streamed
+ * message, or as the buffered stream flushed at turn end. Streamed partials
+ * are best-effort and never meet a fault.
+ *
+ * Oracle: the chat itself, with edits applied. A message counts as a copy of
+ * a final reply once a final intent wrote it; a partial preview that happens
+ * to show the whole text is not a delivery. Every final reply is in the chat
+ * once, or the operator was told to check it; none is in it twice.
  */
 const FAULTS = [
   "none",
@@ -38,13 +44,18 @@ const FAULTS = [
   "rate-limited-not-retryable",
   "send-failed",
   "send-throws",
+  // A final stream edit fails, landing or not; a message sends cleanly.
+  "stream-edit-fails",
   // After the send: the process dies before the provider answers.
   "crash-after-send",
   // Before the settle: the settle write fails after the provider accepted.
   "settle-write-fails",
 ] as const;
 type Fault = (typeof FAULTS)[number];
-type Step = { fault: Fault; landed: boolean };
+const MODES = ["message", "stream-final", "stream-terminal"] as const;
+type Mode = (typeof MODES)[number];
+/** `markerFails` adds a marker write failure to any other fault. */
+type Step = { fault: Fault; landed: boolean; mode?: Mode; markerFails?: boolean };
 
 const BINDING_ID = "fixture-binding";
 const THREAD_ID = "fixture-thread";
@@ -64,10 +75,12 @@ function world() {
   const { dbPath, tempDir } = createTempStateDb("reply-delivery-");
   const state = {
     dbPath,
-    chat: [] as string[],
+    chat: [] as Array<{ id: string; text: string; final: boolean }>,
     activity: [] as Array<{ summary: string; payload?: Record<string, unknown> }>,
     cards: [] as Array<{ threadId: string; key: string }>,
     transcript: new Map<string, { turnId: string; text: string }>(),
+    clock: 1_000,
+    partials: 0,
     db: undefined as StateDb | undefined,
   };
   cleanups.push(() => {
@@ -79,17 +92,24 @@ function world() {
 type World = ReturnType<typeof world>;
 
 /** One process: a database handle and a controller with the step's faults. */
-function boot(w: World, fault: { current?: Step; crashed?: () => void }, now?: () => number) {
+function boot(
+  w: World,
+  fault: { current?: Step; crashed?: () => void },
+  now?: () => number,
+  options?: { receipts?: boolean },
+) {
   w.db?.close();
   w.db = StateDb.open(w.dbPath);
   const store = new SqliteMessagingStore(w.db);
   const faulty = new Proxy(store, { get: (target, key) => {
     if (key === "recordDelivery") return async (delivery: Parameters<SqliteMessagingStore["recordDelivery"]>[0]) => {
-      if (fault.current?.fault === "marker-write-fails" && delivery.id.startsWith(receipts.OPEN_REPLY_RECEIPT_PREFIX)) {
+      if ((fault.current?.fault === "marker-write-fails" || fault.current?.markerFails) && delivery.id.startsWith(receipts.OPEN_REPLY_RECEIPT_PREFIX)) {
         throw new Error("Fixture marker write failure");
       }
       return await target.recordDelivery(delivery);
     };
+    // A store without settleDelivery keeps no receipts: the baseline send path.
+    if (key === "settleDelivery" && options?.receipts === false) return undefined;
     if (key === "settleDelivery") return async (params: Parameters<SqliteMessagingStore["settleDelivery"]>[0]) => {
       if (fault.current?.fault === "settle-write-fails") throw new Error("Fixture settle write failure");
       return await target.settleDelivery(params);
@@ -123,49 +143,66 @@ function boot(w: World, fault: { current?: Step; crashed?: () => void }, now?: (
     list: () => [],
     getPlatformActivitySummary: () => ({ platforms: [] }),
   } as unknown as MessagingActivityStorage;
-  const deliver = async (intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> => {
+  /** Posts a message, or edits the one a stream update targets. */
+  const apply = (intent: MessagingSurfaceIntent): MessagingDeliveryResult => {
+    const final = intent.kind === "message" || (intent.kind === "stream_update" && intent.stream.isFinal);
+    if (intent.kind === "stream_update" && !final) w.partials += 1;
     const text = intent.kind === "message"
       ? intent.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
-      : "";
-    const ok: MessagingDeliveryResult = {
-      channel: "telegram", deliveredAt: 1, outcome: "presented", surface: { channel: "telegram", id: `surface-${w.chat.length}` },
-    };
-    const step = fault.current;
-    if (!step || intent.kind !== "message" || intent.role !== "assistant") {
-      if (text) w.chat.push(text);
-      return ok;
+      : intent.kind === "stream_update" ? intent.text : "";
+    const edited = intent.kind === "stream_update" && intent.targetSurface
+      ? w.chat.find((message) => message.id === intent.targetSurface!.id)
+      : undefined;
+    if (edited) {
+      edited.text = text;
+      edited.final ||= final;
+      return { channel: "telegram", deliveredAt: 1, outcome: "updated", surface: { channel: "telegram", id: edited.id } };
     }
+    const id = `surface-${w.chat.length}`;
+    if (text) w.chat.push({ id, text, final });
+    return { channel: "telegram", deliveredAt: 1, outcome: "presented", surface: { channel: "telegram", id } };
+  };
+  const deliver = async (intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> => {
+    const step = fault.current;
+    const final = (intent.kind === "message" && intent.role === "assistant")
+      || (intent.kind === "stream_update" && intent.stream.isFinal);
+    if (!step || !final) return apply(intent);
     switch (step.fault) {
       case "crash-before-send":
         fault.crashed?.();
         return await new Promise<never>(() => {});
       case "crash-after-send":
-        w.chat.push(text);
+        apply(intent);
         fault.crashed?.();
         return await new Promise<never>(() => {});
       case "rate-limited":
       case "rate-limited-not-retryable": {
         const retryable = step.fault === "rate-limited";
         // A non-retryable limit may follow a partly posted message.
-        if (!retryable && step.landed) w.chat.push(text);
+        if (!retryable && step.landed) apply(intent);
         return {
           channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture rate limit",
           rateLimit: { scope: { id: "fixture-scope", platform: "telegram", kind: "dm" }, retryAfterMs: 1_000, retryable },
         };
       }
       case "send-failed":
-        if (step.landed) w.chat.push(text);
+        if (step.landed) apply(intent);
         return { channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture send failure" };
+      case "stream-edit-fails":
+        if (intent.kind !== "stream_update") return apply(intent);
+        if (step.landed) apply(intent);
+        return { channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture edit failure" };
       case "send-throws":
-        if (step.landed) w.chat.push(text);
+        if (step.landed) apply(intent);
         throw new Error("Fixture socket reset");
       default:
-        w.chat.push(text);
-        return ok;
+        return apply(intent);
     }
   };
   const controller = new MessagingController({
-    channel: "telegram", authorizedActorIds: ["fixture-actor"], store: faulty, backend, logger: {}, now,
+    channel: "telegram", authorizedActorIds: ["fixture-actor"], store: faulty, backend, logger: {},
+    // Every call moves a second, so streamed deltas release partial edits.
+    now: now ?? (() => (w.clock += 1_000)), streamingResponsesDefault: true,
     adapter: { capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE, deliver },
     replacementAdapter: { now: () => undefined, settled: async () => undefined },
     activityLog: () => activityLog,
@@ -188,11 +225,27 @@ async function start(controller: MessagingController): Promise<void> {
 }
 
 function finalReply(index: number) {
-  const text = `Final reply ${index}.`;
+  const text = `Final reply ${index}, in three parts.`;
+  const turnId = `turn-${index}`;
+  const itemId = `item-${index}`;
+  const lifecycle = (method: "turn/started" | "turn/completed") => ({
+    backend: "codex" as const,
+    notification: {
+      method,
+      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: method === "turn/started" ? "inProgress" : "completed" } },
+    },
+  });
+  const deltas = text.match(/.{1,12}/g)!.map((delta) => ({
+    backend: "codex" as const,
+    notification: { method: "item/agentMessage/delta" as const, params: { threadId: THREAD_ID, turnId, itemId, delta } },
+  }));
   return {
     text,
-    turnId: `turn-${index}`,
-    itemId: `item-${index}`,
+    turnId,
+    itemId,
+    started: lifecycle("turn/started"),
+    completed: lifecycle("turn/completed"),
+    deltas,
     event: {
       backend: "codex" as const,
       notification: {
@@ -222,11 +275,17 @@ async function runModel(steps: readonly Step[]): Promise<World> {
     const crashed = new Promise<void>((resolve) => {
       fault.crashed = () => { crash = true; resolve(); };
     });
+    const mode = step.mode ?? "message";
+    const events = mode === "message"
+      ? [reply.event]
+      : [reply.started, ...reply.deltas, mode === "stream-final" ? reply.event : reply.completed];
+    const drive = async () => {
+      for (const event of events) {
+        await process.controller.handleBackendEvent(event as Parameters<MessagingController["handleBackendEvent"]>[0]).catch(() => {});
+      }
+    };
     // A crashed process never finishes the send; do not wait for it.
-    await Promise.race([
-      process.controller.handleBackendEvent(reply.event).catch(() => {}),
-      crashed,
-    ]);
+    await Promise.race([drive(), crashed]);
     fault.current = undefined;
     fault.crashed = undefined;
     if (crash) {
@@ -253,7 +312,7 @@ async function runModel(steps: readonly Step[]): Promise<World> {
 function outcome(w: World, index: number) {
   const reply = finalReply(index);
   return {
-    copies: w.chat.filter((text) => text.includes(reply.text)).length,
+    copies: w.chat.filter((message) => message.final && message.text.includes(reply.text)).length,
     flagged: w.activity.some((entry) => entry.payload?.turnId === reply.turnId)
       && w.cards.some((card) => card.threadId === THREAD_ID),
   };
@@ -262,7 +321,9 @@ function outcome(w: World, index: number) {
 describe("final reply delivery model", () => {
   it("delivers every final reply once or flags it, whatever fault each send meets", async () => {
     await fc.assert(fc.asyncProperty(
-      fc.array(fc.record({ fault: fc.constantFrom(...FAULTS), landed: fc.boolean() }), { minLength: 1, maxLength: 5 }),
+      fc.array(fc.record({
+        fault: fc.constantFrom(...FAULTS), landed: fc.boolean(), mode: fc.constantFrom(...MODES),
+      }), { minLength: 1, maxLength: 5 }),
       async (steps) => {
         const w = await runModel(steps);
         for (const [index, step] of steps.entries()) {
@@ -297,6 +358,19 @@ describe("final reply delivery model", () => {
   ] as const)("keeps a final reply when %s", async (_name, fault, copies) => {
     const w = await runModel([{ fault, landed: false }]);
     expect(outcome(w, 0)).toEqual({ copies, flagged: copies === 0 });
+  });
+
+  // The streamed paths, pinned the same way.
+  it.each([
+    ["a final stream edit fails after it landed", { fault: "send-failed", landed: true, mode: "stream-final" }, 1, true],
+    ["the adapter is stopped before a streamed final", { fault: "adapter-stopped", landed: false, mode: "stream-final" }, 1, false],
+    ["PwrAgent restarts while flushing a buffered stream", { fault: "crash-before-send", landed: false, mode: "stream-terminal" }, 0, true],
+    // With no marker there is nothing to flag, so the message fallback runs.
+    ["the marker write and the final edit both fail", { fault: "stream-edit-fails", landed: false, mode: "stream-final", markerFails: true }, 1, false],
+    ["the marker write and the buffered final edit both fail", { fault: "stream-edit-fails", landed: false, mode: "stream-terminal", markerFails: true }, 1, false],
+  ] as const)("keeps a streamed final reply when %s", async (_name, step, copies, flagged) => {
+    const w = await runModel([step]);
+    expect(outcome(w, 0)).toEqual({ copies, flagged });
   });
 
   it.each([true, false])("sends an owed approval card again only while it is pending (pending: %s)", async (pending) => {
@@ -368,6 +442,43 @@ describe("final reply delivery model", () => {
     expectSqliteWriteBudget({
       scenario: "messaging-final-reply-receipt",
       note: "Five final replies to one binding: per reply, a pending marker and one settle commit that replaces the delivery row every send already wrote; no message text.",
+      writes,
+    });
+  });
+
+  it("has a checked-in write budget: streamed partials add no receipt commits", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const replies = [0, 1, 2, 3, 4].map(finalReply);
+    const stream = async (receiptsKept: boolean) => {
+      const w = world();
+      const process = boot(w, {}, undefined, { receipts: receiptsKept });
+      await bind(process.store);
+      for (const reply of replies) w.transcript.set(reply.itemId, { turnId: reply.turnId, text: reply.text });
+      const { writes } = await measureSqliteWrites(async () => {
+        for (const reply of replies) {
+          for (const event of [reply.started, ...reply.deltas, reply.event]) {
+            await process.controller.handleBackendEvent(event as Parameters<MessagingController["handleBackendEvent"]>[0]);
+          }
+        }
+      });
+      process.controller.dispose();
+      // Each reply streamed partial edits into one message, then its final edit.
+      expect(w.partials).toBeGreaterThanOrEqual(replies.length);
+      expect(w.chat).toHaveLength(5);
+      for (const [index] of replies.entries()) expect(outcome(w, index)).toEqual({ copies: 1, flagged: false });
+      return { partials: w.partials, writes };
+    };
+    const baseline = await stream(false);
+    const { partials, writes } = await stream(true);
+    // The same sends, partials included, cost one commit more per reply: the
+    // final edit's marker. Its settle replaces the row every send records.
+    expect(partials).toBe(baseline.partials);
+    // Two partial edits per reply, which write nothing: 25 commits, not 35.
+    expect(partials).toBe(2 * replies.length);
+    expect(writes.commits - baseline.writes.commits).toBe(replies.length);
+    expectSqliteWriteBudget({
+      scenario: "messaging-streamed-final-reply-receipt",
+      note: "Five streamed final replies to one binding, each with several partial edits. Partials write nothing; the final edit costs a pending marker and one settle commit.",
       writes,
     });
   });
