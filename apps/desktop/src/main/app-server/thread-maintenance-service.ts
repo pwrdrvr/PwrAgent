@@ -911,17 +911,17 @@ export class ThreadMaintenanceService {
           complete(row.itemId);
           // The thread is archived; a worktree someone else locked stays on
           // disk. Its own row offers Unlock and Remove, as a removal row does.
-          let after = row.itemId;
-          outcome.lockedWorktrees.forEach((kept, lockedIndex) => {
-            const itemId = `${row.itemId}:locked:${lockedIndex}`;
-            rows.splice(rows.findIndex((candidate) => candidate.itemId === after) + 1, 0, {
-              itemId, step: "threads", action: "removeCheckout", object: kept.worktreePath, path: kept.worktreePath,
-              backend: item.backend, threadId: item.threadId, status: "running", startedAt: this.now(),
-            });
-            change(itemId, { status: "kept", reason: WORKTREE_LOCKED_SKIP_REASON, lockReason: kept.lockReason,
-              finishedAt: this.now() });
-            after = itemId;
-          });
+          if (outcome.lockedWorktrees.length) {
+            const finishedAt = this.now();
+            rows.splice(rows.findIndex((candidate) => candidate.itemId === row.itemId) + 1, 0,
+              ...outcome.lockedWorktrees.map((kept, lockedIndex): ThreadMaintenanceRunItem => ({
+                itemId: `${row.itemId}:locked:${lockedIndex}`, step: "threads", action: "removeCheckout",
+                object: kept.worktreePath, path: kept.worktreePath, backend: item.backend, threadId: item.threadId,
+                status: "kept", reason: WORKTREE_LOCKED_SKIP_REASON, lockReason: kept.lockReason,
+                startedAt: finishedAt, finishedAt, finishedOrder: ++finishedOrder,
+              })));
+            update();
+          }
         } else {
           threadStep.kept += 1;
           addProblem({ step: "threads", kind: "kept", object, reason: outcome, backend: item.backend, threadId: item.threadId });

@@ -3129,6 +3129,9 @@ export class ThreadArchiveCoordinator {
     let inventory!: Awaited<ReturnType<ArchiveCleanupInventory["readPacedArchiveCleanupInventory"]>>;
     let report!: ArchivedWorktreeRepairReport;
     const ownersByPath = new Map<string, { thread: AppServerThreadSummary; worktreePath: string }>();
+    // Every archived thread that links each checkout. Several can share one
+    // (a parent and its sub-threads); any of them may name it for removal.
+    const ownerKeysByPath = new Map<string, Set<string>>();
     const canonicalKeys = new Map<string, string>();
     options.onDiscoveryProgress?.({ detail: "Waiting for checkout ownership audit" });
     await this.archiveCleanupQueue.enqueue(`archive-repair-read:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
@@ -3141,6 +3144,9 @@ export class ThreadArchiveCoordinator {
           // Canonical keys may fold Windows casing or resolve an alias. Keep
           // the supplied path for filesystem/provider calls and result data.
           ownersByPath.set(key, { thread, worktreePath: normalizeWorktreePathForComparison(value) });
+          const ownerKeys = ownerKeysByPath.get(key) ?? new Set<string>();
+          ownerKeys.add(buildThreadIdentityKey(thread.source, thread.id));
+          ownerKeysByPath.set(key, ownerKeys);
         } catch (error) {
           report.cleanup.push({ worktreePath: value, removedWorktree: false, deletedBranch: false,
             error: error instanceof Error ? error.message : String(error) });
@@ -3321,7 +3327,8 @@ export class ThreadArchiveCoordinator {
       }
       const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
       const expectedOwner = options.select?.expectedOwners?.get(normalizeWorktreePathForComparison(candidate.worktreePath));
-      if (expectedOwner !== undefined && expectedOwner !== key) {
+      const candidateOwners = ownerKeysByPath.get(canonicalKeys.get(normalizeWorktreePathForComparison(candidate.worktreePath)) ?? "");
+      if (expectedOwner !== undefined && !candidateOwners?.has(expectedOwner)) {
         report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
           worktreeState: "present", skippedReason: ARCHIVED_OWNER_CHANGED_REASON });
         options.onItem?.({ path: candidate.worktreePath, status: "kept", reason: ARCHIVED_OWNER_CHANGED_REASON });
