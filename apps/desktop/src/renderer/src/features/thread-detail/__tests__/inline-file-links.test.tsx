@@ -7,8 +7,8 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
-vi.mock("@pwragent/shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@pwragent/shared")>();
+vi.mock("@pwragent/shared/transcript-file-reference", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@pwragent/shared/transcript-file-reference")>();
   return { ...actual, transcriptFileReference: vi.fn(actual.transcriptFileReference) };
 });
 

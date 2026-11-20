@@ -3159,7 +3159,7 @@ describe("CodexAppServerClient", () => {
   it.each([
     [10, 1], [100, 1], [1_000, 1], [1_000, 200],
   ])("reuses unchanged text for %i fresh provider rows with preview multiplier %i while updating metadata", async (count, previewMultiplier) => {
-    const shared = await import("@pwragent/shared");
+    const shared = await import("@pwragent/shared/thread-titles");
     const normalize = vi.spyOn(shared, "shortenDerivedThreadTitle");
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const rows = Array.from({ length: count }, (_, index) => ({

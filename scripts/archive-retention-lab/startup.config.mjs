@@ -5,5 +5,4 @@ export default {
     pool: "forks",
     env: { PWRAGENT_HOME: path.resolve(".local/archive-retention/test-home") },
   },
-  resolve: { alias: { "@pwragent/shared": path.resolve("packages/shared/src/index.ts") } },
 };

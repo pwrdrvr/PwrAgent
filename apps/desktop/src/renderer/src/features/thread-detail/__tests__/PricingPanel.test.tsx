@@ -7,7 +7,13 @@ import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ComponentProps } from "react";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PricingPanel } from "../context-panels/PricingPanel";
-import * as spend from "@pwragent/shared";
+import { formatPricingModelLabel, priceLocalModelUsage } from "@pwragent/shared/local-model-pricing";
+import {
+  aggregateUsageLines,
+  buildPricingDisplayLines,
+  buildThreadPricingDisplay,
+  buildThreadPricingSnapshotEstimate,
+} from "@pwragent/shared/thread-pricing-display";
 import * as formatting from "../context-panels/subagent-format";
 import * as rail from "../context-panels/context-rail-shared";
 import { buildTokenMiserPricingFixture } from "./token-miser-pricing-fixture";
@@ -19,7 +25,7 @@ afterEach(() => {
 });
 
 it("shows current-model historical estimates above account usage with an attribution warning", () => {
-  const display = spend.buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: {
+  const display = buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: {
     model: "gpt-6.1-sol",
     modelLabel: "GPT-6.1 Sol",
     tokens: { inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 20_000, reasoningOutputTokens: 10_000, totalTokens: 1_020_000 },
@@ -125,13 +131,13 @@ it("labels live reference prices and their summary as assumed estimates", () => 
 });
 
 it("replaces the fallback card when normal pricing is available", () => {
-  const fallbackEstimate = spend.buildThreadPricingSnapshotEstimate({ model: "gpt-6.1-sol" });
-  const empty = spend.buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: { model: "gpt-6.1-sol" } } });
+  const fallbackEstimate = buildThreadPricingSnapshotEstimate({ model: "gpt-6.1-sol" });
+  const empty = buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: { model: "gpt-6.1-sol" } } });
   const view = render(<PricingPanel display={empty} />);
   expect(view.container.querySelector(".pricing-snapshot-card")).toBeInTheDocument();
   const { pricing } = buildTokenMiserPricingFixture();
   // A stale fallback in a merged viewer snapshot must not add a second card.
-  view.rerender(<PricingPanel display={{ ...spend.buildThreadPricingDisplay({ pricing }), fallbackEstimate }} />);
+  view.rerender(<PricingPanel display={{ ...buildThreadPricingDisplay({ pricing }), fallbackEstimate }} />);
   expect(view.container.querySelector(".pricing-snapshot-card")).not.toBeInTheDocument();
   expect(view.container.querySelector(".pricing-summary-card")).toBeInTheDocument();
 });
@@ -151,7 +157,7 @@ it("balances the two summary cards without rounding the usage rows or accounting
   const { pricing, accounting } = buildTokenMiserPricingFixture();
   pricing.lines[0] = { ...pricing.lines[0]!, totalCostMicros: 30_039_073 };
   pricing.lines[1] = { ...pricing.lines[1]!, totalCostMicros: 113_330 };
-  pricing.summaries = [spend.aggregateUsageLines(pricing.lines)!];
+  pricing.summaries = [aggregateUsageLines(pricing.lines)!];
   accounting.savings = {
     ...accounting.savings!,
     withoutGateCostMicros: 29_486_274,
@@ -160,7 +166,7 @@ it("balances the two summary cards without rounding the usage rows or accounting
     savingsMicros: 13_062_178,
   };
   // The fixture has a $12.26 gap, bringing the exact total to $42.412403.
-  const display = spend.buildThreadPricingDisplay({ pricing, tokenMiserAccounting: accounting });
+  const display = buildThreadPricingDisplay({ pricing, tokenMiserAccounting: accounting });
   const before = structuredClone(display);
   const view = render(<PricingPanel display={display} />);
   const pricingCard = view.container.querySelector(".pricing-summary-card")!;
@@ -181,7 +187,7 @@ it("balances the two summary cards without rounding the usage rows or accounting
 it.each([true, false])("includes historical usage in the savings baseline (provider summary: %s)", (hasSummary) => {
   const { pricing, accounting } = buildTokenMiserPricingFixture();
   if (!hasSummary) pricing.summaries = [];
-  const display = spend.buildThreadPricingDisplay({ pricing, tokenMiserAccounting: accounting });
+  const display = buildThreadPricingDisplay({ pricing, tokenMiserAccounting: accounting });
   const view = render(<PricingPanel display={display} />);
   expect(view.container.querySelector(".pricing-summary-card")).toHaveTextContent("$32.45 estimated");
   const card = view.container.querySelector(".token-miser-summary-card");
@@ -192,7 +198,7 @@ it.each([true, false])("includes historical usage in the savings baseline (provi
 
 it("prices historical gaps at the small-context rate without a known context window", () => {
   const { pricing } = buildTokenMiserPricingFixture();
-  const display = spend.buildThreadPricingDisplay({ pricing });
+  const display = buildThreadPricingDisplay({ pricing });
   const gap = display.rows.find((row) => row.line.estimatedUsageGap)?.line;
   expect(gap).toMatchObject({
     inputTokens: 10_226_000,
@@ -204,7 +210,7 @@ it("prices historical gaps at the small-context rate without a known context win
   });
   // Missing context metadata alone must never manufacture a historical gap.
   const complete = { ...pricing.lines[0]!, cumulativeInputTokens: 2_100_000, cumulativeCachedInputTokens: 100_000 };
-  expect(spend.buildPricingDisplayLines([complete]).some((line) => line.estimatedUsageGap)).toBe(false);
+  expect(buildPricingDisplayLines([complete]).some((line) => line.estimatedUsageGap)).toBe(false);
 });
 
 function buildMonitorLine(
@@ -243,7 +249,7 @@ it("shows a local model label and zero price without changing its accounting ide
     scope: "turn", model: id, modelLabel: "PrismML Bonsai 2 27B",
     priceStatus: "unpriced", priceUnavailableReason: "missing-rate",
   });
-  const local = spend.priceLocalModelUsage(original);
+  const local = priceLocalModelUsage(original);
   const { getAllByText, queryByText, container } = render(<PricingPanel pricing={{ lines: [local], summaries: [] }} />);
   expect(getAllByText("PrismML Bonsai 2 27B").length).toBeGreaterThan(0);
   expect(queryByText(id)).toBeNull();
@@ -257,10 +263,10 @@ it("shows a local model label and zero price without changing its accounting ide
 });
 
 it("keeps remote model IDs and shortens only absolute filesystem paths", () => {
-  expect(spend.formatPricingModelLabel("vendor/model-name")).toBe("vendor/model-name");
-  expect(spend.formatPricingModelLabel("/models/bonsai.gguf")).toBe("bonsai.gguf");
-  expect(spend.formatPricingModelLabel(String.raw`C:\models\bonsai.gguf`)).toBe("bonsai.gguf");
-  expect(spend.formatPricingModelLabel("/models/bonsai.gguf", "Bonsai")).toBe("Bonsai");
+  expect(formatPricingModelLabel("vendor/model-name")).toBe("vendor/model-name");
+  expect(formatPricingModelLabel("/models/bonsai.gguf")).toBe("bonsai.gguf");
+  expect(formatPricingModelLabel(String.raw`C:\models\bonsai.gguf`)).toBe("bonsai.gguf");
+  expect(formatPricingModelLabel("/models/bonsai.gguf", "Bonsai")).toBe("Bonsai");
 });
 
 it.each([undefined, "/models/private/bonsai.gguf"])("shortens historical qualified paths in the current model, groups, and usage rows with label %s", (modelLabel) => {
@@ -283,14 +289,14 @@ it.each([undefined, "/models/private/bonsai.gguf"])("shortens historical qualifi
 });
 
 it("retains zero local pricing for projected historical gaps", () => {
-  const line = spend.priceLocalModelUsage(buildMonitorLine({
+  const line = priceLocalModelUsage(buildMonitorLine({
     scope: "turn", model: "/models/bonsai.gguf", modelLabel: "Bonsai",
     inputTokens: 100, uncachedInputTokens: 100, outputTokens: 10,
     cumulativeInputTokens: 1000, cumulativeUncachedInputTokens: 1000,
     cumulativeCachedInputTokens: 0, cumulativeOutputTokens: 100,
     cumulativeReasoningOutputTokens: 0,
   }));
-  const display = spend.buildThreadPricingDisplay({ pricing: { lines: [line], summaries: [] } });
+  const display = buildThreadPricingDisplay({ pricing: { lines: [line], summaries: [] } });
   expect(display.rows.some((row) => row.line.estimatedUsageGap)).toBe(true);
   expect(display.rows.every((row) => row.line.priceStatus === "priced" && row.line.totalCostMicros === 0)).toBe(true);
   expect(display.summary?.unpricedUsageLineCount).toBe(0);
@@ -546,7 +552,7 @@ it("formats one changed card out of a full page of twenty remote usage rows", ()
 
 it("renders owner-prepared pricing with the same visible values and no viewer ledger calculation", () => {
   const pricing = { lines: [buildMonitorLine({ scope: "turn", turnId: "turn-1", source: "live", completedAt: 1_800_000_000_999 })], summaries: [] };
-  const display = spend.buildThreadPricingDisplay({ pricing });
+  const display = buildThreadPricingDisplay({ pricing });
   const legacy = render(<PricingPanel pricing={pricing} />);
   const text = legacy.container.textContent;
   legacy.unmount();
@@ -578,7 +584,7 @@ it("revalidates only expanded Pricing gate resources and preserves unchanged his
     },
   }));
   const input = { pricing: { lines: [parent, ...gates], summaries: [] }, subAgents };
-  const display = spend.buildThreadPricingDisplay({ ...input, deferGates: true });
+  const display = buildThreadPricingDisplay({ ...input, deferGates: true });
   const legacy = render(<PricingPanel {...input} />);
   const visibleText = legacy.container.textContent;
   legacy.unmount();
@@ -586,7 +592,7 @@ it("revalidates only expanded Pricing gate resources and preserves unchanged his
   let revision = "r";
   const readThread = vi.fn<NonNullable<DesktopApi["readThread"]>>(async (request) => {
     const offset = Number(request.display?.cursor ?? 0);
-    const pricingPage = spend.buildThreadPricingDisplay({ ...input, deferGates: true,
+    const pricingPage = buildThreadPricingDisplay({ ...input, deferGates: true,
       gateSelection: request.display?.pricingGateGroup, offset, limit: 20 });
     return { backend: "codex", threadId: "thread-1", fetchedAt: 1, replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
       display: { pricing: pricingPage, pricingPage, revision, nextCursor: offset + 20 < pricingPage.totalRows ? String(offset + 20) : undefined } };
