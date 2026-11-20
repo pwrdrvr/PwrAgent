@@ -625,17 +625,32 @@ export class WorktreeArchiveService {
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
     let sourceBranch: string | undefined;
-    const sourceHead = params.restoreSourceCheckout ? params.snapshot?.sourceHead : undefined;
+    // The source checkout comes back only from its own snapshot. A fallback
+    // commit is checked out detached as it is: it is not the saved edits, so
+    // laying its tree over the source HEAD would invent changes.
+    const sourceHead = params.restoreSourceCheckout && restoreCommit === params.snapshotCommit
+      ? params.snapshot?.sourceHead : undefined;
     let branchReason: string | undefined;
+    let detachedFrom: WorktreeSnapshotSummary["detachedFrom"];
     if (sourceHead && params.snapshot?.sourceBranch) {
       const branch = params.snapshot.sourceBranch;
       const worktrees = await this.listWorktrees(repositoryPath);
       try {
         const branchHead = trimGitOutput((await this.runGit(repositoryPath, ["rev-parse", `refs/heads/${branch}^{commit}`])).stdout);
-        if (branchHead === sourceHead && !worktrees.some((worktree) => worktree.branch === branch)) sourceBranch = branch;
-        else branchReason = "The original branch moved or is in use; restored its saved HEAD detached.";
+        // Git refuses a second checkout of one branch, and a moved branch
+        // would take the saved edits onto commits they were never made on.
+        // Either way the checkout comes back at its saved HEAD, detached.
+        const holder = worktrees.find((worktree) => worktree.branch === branch);
+        if (branchHead === sourceHead && !holder) sourceBranch = branch;
+        else {
+          branchReason = "The original branch moved or is in use; restored its saved HEAD detached.";
+          detachedFrom = holder
+            ? { branch, head: sourceHead, reason: "in-use", checkedOutAt: holder.path }
+            : { branch, head: sourceHead, reason: "moved" };
+        }
       } catch {
         branchReason = "The original branch is unavailable; restored its saved HEAD detached.";
+        detachedFrom = { branch, head: sourceHead, reason: "missing" };
       }
     }
     await this.runGit(repositoryPath, sourceBranch
@@ -673,6 +688,7 @@ export class WorktreeArchiveService {
       state: "restored",
       restoredCheckoutIdentity: await this.readRestoredCheckoutIdentity(worktreePath),
       unavailableReason: [fallbackReason, branchReason].filter(Boolean).join(" ") || undefined,
+      detachedFrom,
     };
   }
 

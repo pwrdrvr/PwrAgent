@@ -172,3 +172,84 @@ describe("ThreadView with a hibernated checkout", () => {
     expect(screen.queryByRole("region", { name: /Checkout hibernated/ })).toBeNull();
   });
 });
+
+describe("ThreadView with an archived thread", () => {
+  const snapshot = {
+    id: "s1", backend: "codex" as const, threadId: "t1", worktreePath: WORKTREE, repositoryPath: "/home/dev/src/atlas",
+    snapshotRef: "refs/pwragent/snapshots/s1", snapshotCommit: "abc123", sourceBranch: "fix/retry-backoff",
+    createdAt: 1, archivedAt: 2, state: "archived" as const, ignoredFilesExcluded: true,
+  };
+  const archived = (overrides: Partial<NavigationThreadSummary> = {}) =>
+    thread({ archivedAt: 2, worktreeSnapshots: [snapshot], ...overrides });
+
+  it("replaces the composer with the archived card, not the missing-worktree card", () => {
+    const { container } = render(
+      <ThreadView {...baseProps} selectedThread={archived()} selectedThreadArchived onRestoreArchivedThread={async () => undefined} />,
+    );
+
+    const card = screen.getByRole("region", { name: /Thread archived/ });
+    expect(card).toHaveTextContent(WORKTREE);
+    expect(card).toHaveTextContent("fix/retry-backoff · recovery snapshot saved");
+    expect(card).toHaveTextContent("Restore it to reply.");
+    expect(screen.queryByRole("region", { name: /worktree is gone/ })).toBeNull();
+    expect(container.querySelector(".composer")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open integrated terminal" })).toBeEnabled();
+    expect(inComposerColumn(card)).toBe(true);
+  });
+
+  it("restores only on Restore thread, and shows a refused restore in the card", async () => {
+    const onRestoreArchivedThread = vi.fn(async () => {
+      throw new Error("Worktree restoration failed; the thread remains archived.");
+    });
+    render(<ThreadView {...baseProps} selectedThread={archived()} selectedThreadArchived onRestoreArchivedThread={onRestoreArchivedThread} />);
+    expect(onRestoreArchivedThread).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore thread" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("the thread remains archived"));
+    expect(onRestoreArchivedThread).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+  });
+
+  it("names the owner and offers no restore when this window cannot restore it", () => {
+    render(
+      <ThreadView
+        {...baseProps}
+        activeFederationOwnerLabel="Build Mac"
+        selectedThread={archived({ workspaceMissing: undefined, worktreeSnapshots: [] })}
+        selectedThreadArchived
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: /Thread archived/ })).toHaveTextContent("Restore it on Build Mac to reply.");
+    expect(screen.queryByRole("button", { name: /Restore/ })).toBeNull();
+  });
+
+  // Oracle over every slot input. An archived thread never shows a composer
+  // that looks ready (unless a turn is live, so Stop stays reachable), and
+  // never the missing-worktree or hibernated card, whose actions would act
+  // on a thread the operator archived.
+  it.each(
+    [false, true].flatMap((isArchived) => [false, true].flatMap((missing) => [false, true].flatMap((hibernated) =>
+      [false, true].map((turn) => ({ isArchived, missing, hibernated, turn }))))),
+  )("slot for %o", ({ isArchived, missing, hibernated, turn }) => {
+    const selected = thread({
+      workspaceMissing: missing ? thread().workspaceMissing : undefined,
+      workspaceHibernated: hibernated
+        ? { worktreePath: WORKTREE, repositoryPath: "/home/dev/src/atlas", hibernatedAt: 1 }
+        : undefined,
+      ...(isArchived ? { archivedAt: 2, worktreeSnapshots: [snapshot] } : {}),
+    });
+    const { container } = render(
+      <ThreadView {...baseProps} activeTurnId={turn ? "turn-1" : undefined} selectedThread={selected} selectedThreadArchived={isArchived} />,
+    );
+
+    const archivedCard = screen.queryByRole("region", { name: /Thread archived/ });
+    const missingCard = screen.queryByRole("region", { name: /worktree is gone/ });
+    const hibernatedCard = screen.queryByRole("region", { name: /Checkout hibernated/ });
+    expect(Boolean(archivedCard)).toBe(isArchived);
+    expect(Boolean(missingCard)).toBe(!isArchived && missing);
+    expect(Boolean(hibernatedCard)).toBe(!isArchived && !missing && hibernated);
+    expect(container.querySelector(".composer") !== null).toBe(turn || (!isArchived && !missing));
+  });
+});

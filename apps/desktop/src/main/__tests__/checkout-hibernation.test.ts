@@ -619,19 +619,9 @@ describe("idle checkout hibernation and restore", () => {
   }));
 
   it.each([
-    ["the branch is checked out elsewhere", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
-      await git(fixture.repo, ["worktree", "add", path.join(fixture.root, "elsewhere"), "owned"]);
-    }],
     ["the path is occupied", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
       await mkdir(fixture.worktree, { recursive: true });
       await writeFile(path.join(fixture.worktree, "someone-else.txt"), "not ours\n");
-    }],
-    ["the branch moved", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
-      // A commit the saved changes do not conflict with: only the check refuses it.
-      await writeFile(path.join(fixture.repo, "other.txt"), "moved on\n");
-      await git(fixture.repo, ["add", "other.txt"]);
-      await git(fixture.repo, ["commit", "-m", "move"]);
-      await git(fixture.repo, ["branch", "-f", "owned", "main"]);
     }],
   ])("keeps the snapshot and holds the message when %s", ownFixtureTest(async (_name, breakRestore) => {
     const fixture = await createFixture();
@@ -657,6 +647,55 @@ describe("idle checkout hibernation and restore", () => {
     expect(started).not.toHaveBeenCalled();
     expect(registry.readCheckoutHibernation(identity).restoreFailure?.message).toBe(registry.getQueuedTurnsForThread(identity)[0]!.holdReason);
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
+  }));
+});
+
+// Oracle: a branch Git can't put back unmoved (checked out elsewhere, moved,
+// or deleted) never blocks the restore. The checkout comes back at its saved
+// HEAD on a detached HEAD with its saved edits, the branch stays where it
+// was, the message goes ahead, and the final event says why, once.
+describe("hibernated restore when the branch can't be put back", () => {
+  it.each([
+    ["in-use", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
+      await git(fixture.repo, ["worktree", "add", path.join(fixture.root, "elsewhere"), "owned"]);
+    }],
+    ["moved", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
+      await writeFile(path.join(fixture.repo, "other.txt"), "moved on\n");
+      await git(fixture.repo, ["add", "other.txt"]);
+      await git(fixture.repo, ["commit", "-m", "move"]);
+      await git(fixture.repo, ["branch", "-f", "owned", "main"]);
+    }],
+    ["missing", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
+      await git(fixture.repo, ["branch", "-D", "owned"]);
+    }],
+  ] as const)("restores detached when the branch is %s, and sends", ownFixtureTest(async (reason, breakBranch) => {
+    const fixture = await createFixture();
+    const head = (await git(fixture.worktree, ["rev-parse", "HEAD"])).trim();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
+    const { registry, store } = fixture.open();
+    await sweep(registry);
+    await breakBranch(fixture);
+    const branchBefore = reason === "missing" ? "" : (await git(fixture.repo, ["rev-parse", "owned"])).trim();
+    const events: unknown[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/checkoutHibernation/updated") events.push(event.notification.params);
+    });
+
+    const started = stubProviderTurnStart(registry);
+    await registry.startTurn({ ...identity, input: [{ type: "text", text: "after hibernation" }] });
+    expect(started).toHaveBeenCalledTimes(1);
+
+    expect((await git(fixture.worktree, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect((await git(fixture.worktree, ["branch", "--show-current"])).trim()).toBe("");
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
+    if (reason !== "missing") expect((await git(fixture.repo, ["rev-parse", "owned"])).trim()).toBe(branchBefore);
+    const detachedFrom = { branch: "owned", head, reason,
+      ...(reason === "in-use" ? { checkedOutAt: expect.stringContaining("elsewhere") } : {}) };
+    expect(await snapshotOf(store)).toMatchObject({ state: "restored", detachedFrom });
+    const withOutcome = events.filter((params) => (params as { restoredDetached?: unknown }).restoredDetached);
+    expect(withOutcome).toEqual([{ threadId: THREAD_ID, workspace: null,
+      restoredDetached: { worktreePath: fixture.worktree, detachedFrom } }]);
+    expect(events.at(-1)).toBe(withOutcome[0]);
   }));
 });
 
@@ -730,10 +769,11 @@ describe("Restore now and Keep it awake", () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     await sweep(registry);
-    await git(fixture.repo, ["worktree", "add", path.join(fixture.root, "elsewhere"), "owned"]);
+    await mkdir(fixture.worktree, { recursive: true });
+    await writeFile(path.join(fixture.worktree, "someone-else.txt"), "not ours\n");
     const events = hibernationEvents(registry);
     const result = await registry.setThreadCheckoutHibernation({ ...identity, restore: true });
-    expect(result).toMatchObject({ keepAwake: false, hibernated: true, restoreError: expect.stringContaining("owned") });
+    expect(result).toMatchObject({ keepAwake: false, hibernated: true, restoreError: expect.stringContaining("Something now exists") });
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
     expect(registry.readCheckoutHibernation(identity).restoreFailure?.message).toBe(result.restoreError);
     // The card goes back to the hibernated checkout; it never reads awake.

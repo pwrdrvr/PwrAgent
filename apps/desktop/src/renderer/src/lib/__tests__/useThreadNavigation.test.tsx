@@ -15473,7 +15473,9 @@ describe("main selected detail authority", () => {
     await waitFor(() => expect(hook.result.current.selectedThread?.id).toBe(archived.id));
     expect(hook.result.current.selectedThread?.archivedAt).toBe(123);
     expect(hook.result.current.selectedThreadConfigurationReady).toBe(false);
-    expect(hook.result.current.selectedThreadConfigurationError).toBe("This thread is archived.");
+    // The archived card replaces the composer; archival is not a transcript error.
+    expect(hook.result.current.selectedThreadArchived).toBe(true);
+    expect(hook.result.current.selectedThreadConfigurationError).toBeUndefined();
     expect(hook.result.current.threads.some((row) => row.id === archived.id)).toBe(false);
     expect(restoreThread).not.toHaveBeenCalled();
   });
