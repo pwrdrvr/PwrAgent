@@ -42,6 +42,8 @@ import type {
   AppServerThreadStatus,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   CreateScheduledThreadActionRequest,
@@ -266,6 +268,10 @@ export type MessagingBackendBridge = {
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  /** Someone else's Git lock on a thread's worktree, so a handoff can ask first. */
+  readThreadWorktreeLock?(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse>;
   ensureDirectoryLaunchpad?(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse>;

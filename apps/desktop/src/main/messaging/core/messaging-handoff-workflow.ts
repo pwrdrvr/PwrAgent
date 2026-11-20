@@ -22,9 +22,10 @@ import {
 } from "./messaging-status-card";
 import type { MessagingStoreLike } from "./messaging-storage";
 import type { MessagingThreadContext } from "./messaging-thread-state";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 
 interface MessagingHandoffContext {
-  readonly backend: Pick<MessagingBackendBridge, "getNavigationQueryPage" | "handoffThreadWorkspace">;
+  readonly backend: Pick<MessagingBackendBridge, "getNavigationQueryPage" | "handoffThreadWorkspace" | "readThreadWorktreeLock">;
   readonly store: Pick<MessagingStoreLike, "getBinding" | "findActivePendingIntentForChannel" | "deletePendingIntent">;
   readonly queryPool: Pick<MessagingBrowseQueryPool, "read" | "release">;
   readonly capabilityProfile: MessagingCapabilityProfile;
@@ -37,7 +38,22 @@ interface MessagingHandoffContext {
   readonly deliverAndStoreStatusSubmode: MessagingBindingService["deliverAndStoreStatusSubmode"];
   readonly updateBindingAfterHandoff: MessagingBindingService["updateBindingAfterHandoff"];
   readonly renderBindingStatus: MessagingBindingService["renderBindingStatus"];
+  /** Render-time probe: never audits or notifies. */
+  readonly actorHasPermission: (event: MessagingInboundEvent, permission: MessagingPermissionId) => boolean;
+  /** Enforcement: audits a denial and tells the actor. */
+  readonly requirePermission: (
+    event: MessagingInboundEvent, permission: MessagingPermissionId, auditAction: string,
+  ) => Promise<boolean>;
 }
+
+/**
+ * Unlocking someone else's Git lock removes a worktree, so it needs the
+ * archive permission as well as handoff, as `mutate_thread` archive does.
+ */
+export const UNLOCK_AND_HAND_OFF_PERMISSIONS: readonly MessagingPermissionId[] = [
+  "thread.control.handoff",
+  "thread.control.archive",
+];
 
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
@@ -180,6 +196,7 @@ export class MessagingHandoffWorkflow {
       return;
     }
 
+    const worktreeLock = await this.readSourceWorktreeLock(binding, context, request);
     await this.context.deliverAndStoreStatusSubmode(
       {
         ...buildHandoffConfirmationIntent({
@@ -193,6 +210,12 @@ export class MessagingHandoffWorkflow {
           leaveLocalBranch: request.leaveLocalBranch,
           strategy: request.strategy,
           direction: request.direction,
+          ...(worktreeLock ? {
+            worktreeLock,
+            // Built for the actor who asked; the callback re-checks whoever clicks.
+            canUnlockWorktree: UNLOCK_AND_HAND_OFF_PERMISSIONS
+              .every((permission) => this.context.actorHasPermission(event, permission)),
+          } : {}),
         }),
         audit: this.buildHandoffAudit(
           `handoff.confirmation.${request.direction}`,
@@ -223,6 +246,13 @@ export class MessagingHandoffWorkflow {
     if (!request) {
       await this.deliverInvalidHandoffSelection(binding, event);
       return;
+    }
+    // Whatever button or value carried it, an approval to unlock needs the
+    // archive permission too. The top-guard already required handoff.
+    if (request.approvedLockReason !== undefined) {
+      for (const permission of UNLOCK_AND_HAND_OFF_PERMISSIONS) {
+        if (!(await this.context.requirePermission(event, permission, "handoff:confirm-unlock"))) return;
+      }
     }
 
     const currentBinding = await this.context.store.getBinding(binding.id);
@@ -326,6 +356,32 @@ export class MessagingHandoffWorkflow {
     });
     if (pendingIntent && pendingIntent.intent.id.includes("handoff")) {
       await this.context.store.deletePendingIntent(pendingIntent.id);
+    }
+  }
+
+  /**
+   * Someone else's lock on the worktree this handoff leaves. PwrAgent's own
+   * drive lock is never reported, and a failed read asks nothing: without an
+   * approval the owner keeps a locked worktree.
+   */
+  private async readSourceWorktreeLock(
+    binding: MessagingBindingRecord,
+    context: MessagingWorkspaceHandoffContext,
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<{ lockReason: string } | undefined> {
+    if (context.workspaceKind !== "worktree" || request.direction === "to-project" || !this.context.backend.readThreadWorktreeLock) {
+      return undefined;
+    }
+    try {
+      const response = await this.context.backend.readThreadWorktreeLock({
+        backend: context.backend,
+        threadId: context.threadId,
+        worktreePath: context.workingDirectoryPath,
+        federationTarget: federationTargetForBinding(binding),
+      });
+      return response.lock ? { lockReason: response.lock.lockReason } : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -466,12 +522,18 @@ function formatHandoffDirection(
       : direction === "worktree-to-worktree" ? "Worktree to new worktree" : "Worktree to Local";
 }
 
-function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
+export function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
+  const kept = result.keptSourceWorktree;
   return [
     `Workspace handoff complete: ${formatHandoffDirection(result.direction)}.`,
     `Workspace: ${result.workMode === "worktree" ? "Worktree" : "Local"}`,
     `Target: ${result.targetPath}`,
     result.branch ? `Branch: ${result.branch}` : undefined,
+    kept
+      ? kept.lockReason
+        ? `The worktree was kept because Git has it locked: ${kept.lockReason}`
+        : "The worktree was kept because Git has it locked."
+      : undefined,
     ...result.warnings.map((warning) => `Warning: ${warning}`),
   ]
     .filter((line): line is string => Boolean(line))

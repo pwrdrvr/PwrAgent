@@ -2743,6 +2743,8 @@ script = "printf setup"
         tool: "move_thread_workspace",
         arguments: {
           sourcePath: "/repo/app",
+          // Agents never unlock: an approval the agent invents is not forwarded.
+          approvedLockReason: "release prep, do not remove",
         },
       },
     } as AppServerPendingRequestNotification);

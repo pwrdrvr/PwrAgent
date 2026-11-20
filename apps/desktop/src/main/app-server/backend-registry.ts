@@ -232,6 +232,11 @@ import {
   type AppServerToolRequestUserInputNotification,
   type ThreadExecutionMode,
   type ThreadHibernatedWorkspace,
+  type ReadThreadWorktreeLockRequest,
+  type ReadThreadWorktreeLockResponse,
+  type RemoveLockedThreadWorktreeRequest,
+  type RemoveLockedThreadWorktreeResponse,
+  type WorktreeLockedKept,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   type NavigationLaunchpadAgent,
@@ -6143,6 +6148,15 @@ export class DesktopBackendRegistry {
     request: MoveThreadToMainCheckoutRequest,
   ): Promise<MoveThreadToMainCheckoutResponse> {
     return this.threadWorkspaceService.moveThreadToMainCheckout(request);
+  }
+
+  readThreadWorktreeLock(request: ReadThreadWorktreeLockRequest): Promise<ReadThreadWorktreeLockResponse> {
+    return this.threadWorkspaceService.readThreadWorktreeLock(request);
+  }
+
+  /** Only from the operator's explicit choice; never an automatic path or an agent tool. */
+  removeLockedThreadWorktree(request: RemoveLockedThreadWorktreeRequest): Promise<RemoveLockedThreadWorktreeResponse> {
+    return this.threadArchiveCoordinator.removeLockedThreadWorktree(request);
   }
 
   async renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse> {
@@ -17308,12 +17322,14 @@ export class DesktopBackendRegistry {
 
   removeArchivedCheckouts(selection: { worktreePaths: string[]; emptyFolders: boolean;
     /** Reviewed approvals to snapshot an over-limit checkout, by path. */
-    snapshotLimits?: { worktreePath: string; bytes: number }[] }, options?: {
-    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    snapshotLimits?: { worktreePath: string; bytes: number }[];
+    /** The operator's approvals to unlock someone else's lock, by checkout, with the lock text they saw. */
+    unlockApprovals?: { worktreePath: string; lockReason: string }[] }, options?: {
+    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail" | "lockReason"> & { path: string }) => void;
     stopped: () => boolean;
   }): Promise<{
     removed: { worktreePath: string }[];
-    kept: { worktreePath: string; reason: string }[];
+    kept: { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[];
     failed: { worktreePath: string; message: string }[];
     emptyFoldersRemoved: number;
     emptyFoldersFailed: { worktreePath: string; message: string }[];

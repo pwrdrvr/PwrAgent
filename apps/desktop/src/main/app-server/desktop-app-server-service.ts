@@ -55,6 +55,10 @@ import {
 import {
   type AppServerThreadTurnMetadata,
   type AppServerNotification,
+  type ReadThreadWorktreeLockRequest,
+  type ReadThreadWorktreeLockResponse,
+  type RemoveLockedThreadWorktreeRequest,
+  type RemoveLockedThreadWorktreeResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   type ThreadPendingWakesList,
@@ -1833,6 +1837,27 @@ class DesktopAppServerService {
     }
     const { federationTarget: _federationTarget, ...localRequest } = request;
     return await getDesktopBackendRegistry().moveThreadToMainCheckout(localRequest);
+  }
+
+  /** Local owners only: a remote thread's handoff keeps a locked worktree. */
+  async readThreadWorktreeLock(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return { worktreePath: request.worktreePath };
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().readThreadWorktreeLock(localRequest);
+  }
+
+  async removeLockedThreadWorktree(
+    request: RemoveLockedThreadWorktreeRequest,
+  ): Promise<RemoveLockedThreadWorktreeResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      throw new Error("Unlock and remove this worktree on the PwrAgent instance that owns the thread.");
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().removeLockedThreadWorktree(localRequest);
   }
 
   async renameThread(

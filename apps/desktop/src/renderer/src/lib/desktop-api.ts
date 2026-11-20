@@ -390,6 +390,10 @@ import type {
   ResolveMissingCodexThreadsResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
+  RemoveLockedThreadWorktreeRequest,
+  RemoveLockedThreadWorktreeResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   CreateScheduledThreadActionRequest,
@@ -1307,6 +1311,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   moveThreadToMainCheckout?: (
     request: MoveThreadToMainCheckoutRequest
   ) => Promise<MoveThreadToMainCheckoutResponse>;
+  readThreadWorktreeLock?: (
+    request: ReadThreadWorktreeLockRequest
+  ) => Promise<ReadThreadWorktreeLockResponse>;
+  removeLockedThreadWorktree?: (
+    request: RemoveLockedThreadWorktreeRequest
+  ) => Promise<RemoveLockedThreadWorktreeResponse>;
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;

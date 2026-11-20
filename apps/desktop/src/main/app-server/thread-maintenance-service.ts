@@ -1,7 +1,7 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
-import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type AppServerBackendKind, type WorktreeLockedKept } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   defaultThreadMaintenanceRules,
   type ThreadMaintenanceApplyRequest,
@@ -90,13 +90,13 @@ export type ArchivedCheckoutAudit = {
 
 export type UnreferencedCheckoutRemoval = {
   removed: { worktreePath: string }[];
-  kept: { worktreePath: string; reason: string }[];
+  kept: { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[];
   failed: { worktreePath: string; message: string }[];
 };
 
 export type ArchivedCheckoutRemoval = {
   removed: { worktreePath: string }[];
-  kept: { worktreePath: string; reason: string }[];
+  kept: { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[];
   failed: { worktreePath: string; message: string }[];
   emptyFoldersRemoved: number;
   emptyFoldersFailed: { worktreePath: string; message: string }[];
@@ -126,8 +126,10 @@ export type ThreadMaintenanceDeps = {
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
   removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean;
     /** One-run approvals to snapshot past the normal limit, by checkout. */
-    snapshotLimits?: { worktreePath: string; bytes: number }[] }, options?: {
-    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    snapshotLimits?: { worktreePath: string; bytes: number }[];
+    /** The operator's approvals to unlock someone else's lock, by checkout, with the lock text they saw. */
+    unlockApprovals?: { worktreePath: string; lockReason: string }[] }, options?: {
+    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail" | "lockReason"> & { path: string }) => void;
     stopped: () => boolean;
   }) => Promise<ArchivedCheckoutRemoval>;
   /** Legacy dependency retained for callers; never invoked. */
@@ -1031,6 +1033,8 @@ export class ThreadMaintenanceService {
         for (const item of removal.kept) {
           checkoutStep.kept += 1;
           addProblem({ step: "checkouts", kind: "kept", object: item.worktreePath, reason: item.reason, path: item.worktreePath });
+          const row = item.lock && rows.find((row) => row.action === "removeCheckout" && row.path === item.worktreePath);
+          if (row && item.lock) change(row.itemId, { lockReason: item.lock.lockReason });
         }
         for (const item of [...removal.failed, ...removal.emptyFoldersFailed]) {
           checkoutStep.failed += 1;

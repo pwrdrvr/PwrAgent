@@ -360,6 +360,9 @@ export type ThreadMaintenanceRunItem = {
   stage?: ThreadMaintenanceRunStage;
   reason?: string;
   detail?: string;
+  /** Kept because Git has the checkout locked by someone else: the lock's
+   * text, "" when it has none. Older owners omit it. */
+  lockReason?: string;
   startedAt?: number;
   finishedAt?: number;
   /** Strict completion order within the run, including equal timestamps

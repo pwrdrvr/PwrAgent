@@ -104,7 +104,11 @@ export function keptGuidance(reason: string, context: KeptGuidanceContext): stri
     case "Git operation in progress":
       return "A merge, rebase or similar Git operation is waiting in this checkout. Finish or abort it, then re-scan.";
     case "Locked worktree":
-      return "Git has this worktree locked. It stays until someone unlocks it.";
+      return context.step === "hibernate"
+        ? "Git has this worktree locked, so hibernation leaves it alone and never unlocks it. To remove it, archive the "
+          + "thread and choose Unlock and Remove when its worktree is kept, or run git worktree unlock yourself and re-scan."
+        : "Git has this worktree locked, so removal keeps it. Remove it with Unlock and Remove after the run, or run "
+          + "git worktree unlock yourself and re-scan.";
     case "Main checkout":
       return "This is a repository's main checkout. Maintenance never hibernates or removes one.";
     case "Not a Git checkout":

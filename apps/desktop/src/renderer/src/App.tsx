@@ -4133,10 +4133,13 @@ function DesktopAppShell(props: {
     // detail again so it never waits on a revision that was already current.
     await navigation.refreshSelectedThreadConfiguration().catch(() => undefined);
   });
-  const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
+  const handleMoveThreadToMainCheckout = useEventCallback(async (
+    worktreePath: string,
+    options?: { approvedLockReason?: string },
+  ) => {
     const thread = navigation.selectedThread;
     if (!thread) throw new Error("Select the thread again, then try once more.");
-    return await navigation.moveThreadToMainCheckout(thread, worktreePath);
+    return await navigation.moveThreadToMainCheckout(thread, worktreePath, options);
   });
   const handleSetExecutionMode = useEventCallback(async (
     executionMode: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[0],

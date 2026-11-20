@@ -1,7 +1,11 @@
 import {
   isPwrAgentWorktreeLock,
+  lockApprovalMatches,
   lockWorktreeOnSeparateVolume,
+  readWorktreeLockAt,
   unlockPwrAgentWorktreeLock,
+  WorktreeLockedError,
+  type WorktreeLock,
   type WorktreeLockRecord,
 } from "./worktree-volume-lock";
 
@@ -39,7 +43,10 @@ export async function addManagedWorktree<T>(params: {
 
 /**
  * Clears PwrAgent's own drive lock, then runs `git worktree remove`. Any
- * other lock stays, so Git still refuses the removal.
+ * other lock stays, so Git still refuses the removal, unless the operator
+ * approved unlocking it: `approvedLockReason` is the lock text they saw. That
+ * lock is cleared only while it still says exactly that; otherwise this
+ * throws `WorktreeLockedError` and removes nothing.
  *
  * `lock` is the worktree's record from `git worktree list --porcelain`. Pass
  * it when the checkout folder may be gone: the lock is then read from the
@@ -50,18 +57,31 @@ export async function removeManagedWorktree<T>(params: {
   git: GitRunner<T>;
   force?: boolean;
   lock?: WorktreeLockRecord;
+  /** Only from an operator's explicit choice; never from an automatic path or an agent. */
+  approvedLockReason?: string;
   /**
    * Runs the remove itself when it needs options the unlock must not get,
    * such as process-tree ownership with a spawn hook. Defaults to `git`.
    */
   removeGit?: GitRunner<T>;
 }): Promise<T> {
-  if (params.lock) {
-    if (isPwrAgentWorktreeLock(params.lock)) {
+  // Without a record or an approval, only PwrAgent's own lock is read and cleared.
+  if (!params.lock && params.approvedLockReason === undefined) {
+    await unlockPwrAgentWorktreeLock({ worktreePath: params.worktreePath, git: params.git });
+  } else {
+    const lock: WorktreeLock = params.lock
+      ? !params.lock.locked ? { holder: "none" }
+        : isPwrAgentWorktreeLock(params.lock) ? { holder: "pwragent" }
+        : { holder: "other", reason: (params.lock.lockReason ?? "").trim() }
+      : await readWorktreeLockAt(params.worktreePath);
+    if (lock.holder === "other" && params.approvedLockReason !== undefined
+      && !lockApprovalMatches(lock, params.approvedLockReason)) {
+      throw new WorktreeLockedError(params.worktreePath, lock.reason ?? "");
+    }
+    // Someone else's lock without an approval stays, so Git refuses the removal.
+    if (lock.holder === "pwragent" || (lock.holder === "other" && params.approvedLockReason !== undefined)) {
       await params.git(["worktree", "unlock", params.worktreePath]);
     }
-  } else {
-    await unlockPwrAgentWorktreeLock({ worktreePath: params.worktreePath, git: params.git });
   }
   const removeGit = params.removeGit ?? params.git;
   return await removeGit(["worktree", "remove", ...(params.force ? ["--force"] : []), params.worktreePath]);
