@@ -10,6 +10,12 @@ function rowsOf(heights: readonly number[]): Row[] {
   return heights.map((height, index) => ({ key: `project-${index}`, height }));
 }
 
+function entriesOf(rows: Row[], selectedKey?: string): ProjectIndexEntry[] {
+  return rows.map(({ key }) => ({
+    key, label: key, active: false, review: false, containsSelection: key === selectedKey,
+  }));
+}
+
 function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 } = {}) {
   const listTop = 52;
   let rows = projectRows;
@@ -34,9 +40,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
   };
   let target = createRef<HTMLDivElement>();
   let regionVersion = 0;
-  const projects: ProjectIndexEntry[] = projectRows.map(({ key }) => ({
-    key, label: key, active: false, review: false, containsSelection: false,
-  }));
+  let projects = entriesOf(projectRows);
   const onJump = vi.fn();
   const onWidthChange = vi.fn();
   const frames = new Map<number, FrameRequestCallback>();
@@ -188,6 +192,16 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
       if (replaceList) listVersion += 1;
       view.rerender(tree());
     },
+    replaceProjects(next: Row[], selectedKey?: string) {
+      projects = entriesOf(next, selectedKey);
+      rows = next;
+      layOut();
+      view.rerender(tree());
+    },
+    tabStops: () => Array.from(
+      view.container.querySelectorAll<HTMLElement>('nav button[data-project-key][tabindex="0"]'),
+      (item) => item.dataset["projectKey"],
+    ),
     enableSpy(next: boolean) {
       spy = next;
       view.rerender(tree());
@@ -289,6 +303,48 @@ describe("Project Index scroll work", () => {
       fixture.resize(191);
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-2", "project-3", "project-4"]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it.each([128, 256])("reads live bounds after nested insertion without looking up %i direct children", async (count) => {
+    const fixture = mountIndex(rowsOf(Array<number>(count).fill(100)), { gap: 0, height: 80 });
+    try {
+      fixture.scroll(210);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-2"]);
+      const children = vi.spyOn(fixture.list(), "children", "get");
+      fixture.resetWork();
+      // A tray can add rows and invalidate the browser's live child collection
+      // even though the list's direct children and their order stay the same.
+      await act(async () => {
+        fixture.section("project-0").lastElementChild!.append(document.createElement("div"));
+        fixture.updateHeight("project-0", 160);
+      });
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-1", "project-2"]);
+      expect(fixture.work).toMatchObject({ queries: 0, mutationPublications: 0, resizePublications: 1, frames: 1 });
+      expect(children).not.toHaveBeenCalled();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it.each([undefined, "project-3"])("keeps one project Tab stop after removal with selection %s", async (selectedKey) => {
+    const rows = rowsOf([100, 100, 100, 100]);
+    const fixture = mountIndex(rows, { gap: 0, height: 80 });
+    try {
+      fixture.scroll(110);
+      fixture.paint();
+      expect(fixture.tabStops()).toEqual(["project-1"]);
+      // The refresh commits immediately. Tab still needs a valid stop while
+      // the spy waits for its frame to measure the new directory order.
+      await act(async () => fixture.replaceProjects([rows[0]!, rows[2]!, rows[3]!], selectedKey));
+      expect(fixture.tabStops()).toEqual([selectedKey ?? "project-0"]);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-2"]);
+      expect(fixture.tabStops()).toEqual(["project-2"]);
     } finally {
       fixture.dispose();
     }

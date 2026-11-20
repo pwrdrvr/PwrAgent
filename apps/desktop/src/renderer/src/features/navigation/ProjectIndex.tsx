@@ -59,19 +59,19 @@ const DROP_FLASH_MS = 1200;
 
 function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => void): () => void {
   let list: HTMLElement | null = null;
-  let sectionIndices: number[] = [];
+  let sections: Element[] = [];
   let frame = 0;
 
   const measure = (): void => {
     const target = list;
     const height = target?.clientHeight ?? 0;
-    if (target === null || height === 0 || sectionIndices.length === 0) {
+    if (target === null || height === 0 || sections.length === 0) {
       publish(NO_PROJECT_SPY);
       return;
     }
     const top = target.getBoundingClientRect().top;
-    publish(spyProjects(sectionIndices.length, (index) => {
-      const section = target.children[sectionIndices[index]!]!;
+    publish(spyProjects(sections.length, (index) => {
+      const section = sections[index]!;
       const rect = section.getBoundingClientRect();
       return {
         key: section.getAttribute("data-directory-key")!,
@@ -90,14 +90,14 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
 
   const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
   const findList = () => region.querySelector<HTMLElement>(":scope > .directory-list");
-  // DirectoriesList renders its sections as keyed direct children. Only
-  // membership and order need indexing. Keep child positions so the spy
-  // holds neither stale layout nor references to removed sections.
-  const indexChildren = (): void => {
-    sectionIndices = [];
+  // DirectoriesList renders its sections as keyed direct children. Refresh
+  // their references on membership changes. Nested thread updates can
+  // invalidate the live children collection without changing this order.
+  const syncSections = (): void => {
+    sections = [];
     if (list === null) return;
-    for (const [index, child] of Array.from(list.children).entries()) {
-      if (child.matches("section.directory-row[data-directory-key]")) sectionIndices.push(index);
+    for (const child of list.children) {
+      if (child.matches("section.directory-row[data-directory-key]")) sections.push(child);
       // Starting rows and the pin divider also shift the sections below them.
       resize?.observe(child, { box: "border-box" });
     }
@@ -118,7 +118,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
         if (child instanceof Element && child.parentElement !== list) resize?.unobserve(child);
       }
     }
-    indexChildren();
+    syncSections();
     schedule();
   });
   const watchList = (next: HTMLElement | null): void => {
@@ -131,7 +131,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
       mutation.observe(list, { childList: true });
       resize?.observe(list);
     }
-    indexChildren();
+    syncSections();
   };
 
   watchList(findList());
@@ -145,6 +145,8 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     region.removeEventListener("scroll", schedule, { capture: true });
     mutation.disconnect();
     resize?.disconnect();
+    sections = [];
+    list = null;
   };
 }
 
@@ -337,7 +339,7 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   const selectedKey = props.projects.find((project) => project.containsSelection)?.key;
   const tabStop =
     (focusedKey !== null && keys.includes(focusedKey) ? focusedKey : null)
-    ?? currentProjectKey
+    ?? (currentProjectKey !== null && keys.includes(currentProjectKey) ? currentProjectKey : null)
     ?? selectedKey
     ?? keys[0]
     ?? null;
