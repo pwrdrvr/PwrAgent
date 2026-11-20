@@ -14569,6 +14569,41 @@ describe("app server ipc", () => {
     });
   });
 
+  async function expectDetachInProviderPartition(threadId: string, archived: boolean, archivedAt?: number) {
+    const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const primary = { id: "/repo/primary", kind: "local" as const, label: "Primary", path: "/repo/primary" };
+    const secondary = { id: "/repo/secondary", kind: "local" as const, label: "Secondary", path: "/repo/secondary" };
+    const thread: AppServerThreadSummary = {
+      id: threadId, title: "Thread with attachments", titleSource: "explicit", source: "codex",
+      projectKey: primary.path, linkedDirectories: [primary], archivedAt,
+    };
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [primary, secondary],
+    });
+    await listThreads.withImplementation(
+      async (request) => ((request?.archived === true) === archived ? [thread] : []) as never,
+      async () => {
+        const response = await handlers.get(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL)?.(
+          {}, { backend: "codex", threadId, directory: secondary },
+        );
+        expect(response).toMatchObject({ ok: true, threadId });
+        expect(removeLinkedDirectory).toHaveBeenLastCalledWith({ backend: "codex", threadId, directory: secondary });
+      },
+    );
+  }
+
+  it("detaches a secondary directory from an archived thread without an archive timestamp", async () => {
+    registerAppServerIpcHandlers();
+    await expectDetachInProviderPartition("thread-archived", true);
+  });
+
+  it("detaches secondary directories regardless of provider archive membership and timestamp", async () => {
+    registerAppServerIpcHandlers();
+    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), fc.boolean(), async (threadId, archived, stamped) => {
+      await expectDetachInProviderPartition(threadId, archived, archived && stamped ? 500 : undefined);
+    }), { numRuns: 25 });
+  });
+
   it("rejects detaching the last linked directory", async () => {
     const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =
       await import("../../shared/ipc");

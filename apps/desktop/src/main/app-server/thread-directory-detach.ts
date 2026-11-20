@@ -1,16 +1,27 @@
-import { findPrimaryThreadLinkedDirectory } from "@pwragent/shared";
+import { findPrimaryThreadLinkedDirectory, mergeThreadLinkedDirectories } from "@pwragent/shared";
 import type {
-  AppServerBackendKind,
   DetachDirectoryFromThreadRequest,
   DetachDirectoryFromThreadResponse,
   LinkedDirectorySummary,
   AppServerThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
+import type { DesktopBackendRegistry } from "./backend-registry";
 import {
   dedupeLinkedDirectoriesByNormalizedIdentity,
+  linkedDirectoriesHaveSameWorkspaceIdentity,
   normalizeLinkedDirectoryPathForMatch,
 } from "./linked-directory-identity";
+
+/** Apply the same provider-then-overlay merge as Linked Projects before selecting the checkout. */
+export function isPrimaryDirectoryForDetach(
+  directory: LinkedDirectorySummary,
+  allDirectories: LinkedDirectorySummary[],
+  projectKey: string | undefined,
+): boolean {
+  const primary = findPrimaryThreadLinkedDirectory(mergeThreadLinkedDirectories(allDirectories), projectKey);
+  return primary !== undefined && linkedDirectoriesHaveSameWorkspaceIdentity(primary, directory);
+}
 
 function linkedDirectoriesMatchForDetach(
   left: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
@@ -35,12 +46,14 @@ export async function detachOwnedThreadDirectory(
   request: DetachDirectoryFromThreadRequest,
   deps: {
     overlayStore: Pick<DesktopOwnerStorage, "getThreadOverlayState" | "removeLinkedDirectory">;
-    readThread: (backend: AppServerBackendKind, threadId: string) => Promise<Pick<AppServerThreadSummary, "linkedDirectories" | "projectKey"> | undefined>;
-    publishUpdate: (backend: AppServerBackendKind, threadId: string) => Promise<void>;
+    registry: Pick<DesktopBackendRegistry, "listThreads" | "publishLocalEvent">;
   },
 ): Promise<DetachDirectoryFromThreadResponse> {
   const backend = request.backend ?? "codex";
-  const thread = await deps.readThread(backend, request.threadId);
+  const lookup = { backend, enrichDirectories: false, callerReason: "thread-id-lookup" } as const;
+  const matchesThread = (thread: AppServerThreadSummary) => thread.id === request.threadId && thread.source === backend;
+  const thread = (await deps.registry.listThreads(lookup)).find(matchesThread)
+    ?? (await deps.registry.listThreads({ ...lookup, archived: true, skipArchivedMetadataRefresh: true })).find(matchesThread);
   if (!thread) {
     return {
       ok: false,
@@ -69,10 +82,10 @@ export async function detachOwnedThreadDirectory(
     };
   }
   const allDirectories = [
-    ...currentDirectories,
     ...thread.linkedDirectories,
+    ...currentDirectories,
   ];
-  if (matched === findPrimaryThreadLinkedDirectory(allDirectories, thread.projectKey)) {
+  if (isPrimaryDirectoryForDetach(matched, allDirectories, thread.projectKey)) {
     return {
       ok: false,
       backend,
@@ -98,7 +111,13 @@ export async function detachOwnedThreadDirectory(
     directory: matched,
   });
 
-  await deps.publishUpdate(backend, request.threadId);
+  await deps.registry.publishLocalEvent({
+    backend,
+    notification: {
+      method: "navigation/threadDirectories/updated",
+      params: { reason: "selected-thread", threadIds: [request.threadId] },
+    },
+  });
 
   return {
     ok: true,

@@ -535,10 +535,12 @@ describe("DesktopFederationRuntime", () => {
     const primary = { id: "/owner/PwrSnap", kind: "local" as const, label: "PwrSnap", path: "/owner/PwrSnap" };
     const extra = { id: "/owner/PwrGit", kind: "local" as const, label: "PwrGit", path: "/owner/PwrGit" };
     const remaining = { id: "/owner/PwrAgnt", kind: "local" as const, label: "PwrAgnt", path: "/owner/PwrAgnt" };
-    const resolveThread = vi.fn(async () => ({ linkedDirectories: [primary, extra, remaining] }));
+    const listThreads = vi.fn(async ({ archived }: { archived?: boolean }) => archived
+      ? [{ id: "snap", source: "codex", projectKey: primary.path, linkedDirectories: [primary, extra, remaining] }]
+      : [{ id: "only", source: "codex", linkedDirectories: [extra] }]);
     const publishLocalEvent = vi.fn(async () => undefined);
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
-      .mockReturnValue({ resolveThread, publishLocalEvent } as never);
+      .mockReturnValue({ listThreads, publishLocalEvent } as never);
     try {
       await overlayStore.addLinkedDirectory({ backend: "codex", threadId: "snap", directory: extra });
       await overlayStore.addLinkedDirectory({ backend: "codex", threadId: "snap", directory: remaining });
@@ -548,7 +550,7 @@ describe("DesktopFederationRuntime", () => {
       expect(publishLocalEvent).not.toHaveBeenCalled();
       await expect(backend.detachDirectoryFromThread({ threadId: "snap", directory: extra }))
         .resolves.toEqual({ ok: true, backend: "codex", threadId: "snap", directories: [remaining] });
-      expect(resolveThread).toHaveBeenCalledWith({ backend: "codex", threadId: "snap" });
+      expect(listThreads).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", archived: true }));
       expect(publishLocalEvent).toHaveBeenCalledExactlyOnceWith({ backend: "codex", notification: {
         method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["snap"] },
       } });
@@ -556,7 +558,6 @@ describe("DesktopFederationRuntime", () => {
         .toEqual([remaining]);
 
       await overlayStore.addLinkedDirectory({ backend: "codex", threadId: "only", directory: extra });
-      resolveThread.mockResolvedValueOnce({ linkedDirectories: [extra] });
       await expect(backend.detachDirectoryFromThread({ threadId: "only", directory: extra }))
         .resolves.toMatchObject({ ok: false, reason: "last-directory" });
       expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "only" }))?.extraLinkedDirectories)

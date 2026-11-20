@@ -81,7 +81,6 @@ import {
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
   buildThreadIdentityKey,
-  findPrimaryThreadLinkedDirectory,
   isAcpBackendId,
   isAppServerBackendKind,
   readCodexEnvironmentActionRuns,
@@ -164,6 +163,7 @@ import {
   shouldRepairCachedDirectoryRelationship,
 } from "./linked-directory-identity";
 import { refuseResolvedWorkMode } from "./required-work-mode";
+import { isPrimaryDirectoryForDetach } from "./thread-directory-detach";
 import type { RegistryHostPorts } from "./registry-host-ports";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
@@ -3047,8 +3047,8 @@ export class ThreadDirectoryService {
     const matched = attachedDirectories.find((directory) =>
       linkedDirectoryMatchesDetachArgs(directory, request.args),
     );
-    const allDirectories = [...attachedDirectories, ...sourceThread.linkedDirectories];
-    if (!matched || matched === findPrimaryThreadLinkedDirectory(allDirectories, sourceThread.projectKey)) {
+    const allDirectories = [...sourceThread.linkedDirectories, ...attachedDirectories];
+    if (!matched || isPrimaryDirectoryForDetach(matched, allDirectories, sourceThread.projectKey)) {
       return threadOrchestrationFailure(
         "forbidden",
         "Only secondary directories attached to this thread can be detached.",
