@@ -37,7 +37,8 @@ build without this setting ignores the key and uses the home folder.
   (`checkWorktreeFolder` in `src/main/settings/worktree-folder-check.ts`) when it shows the folder and
   whenever the window regains focus, and shows **Checking…**, **Available**, **Not available**, or
   **Not responding** (no answer within 3 seconds). The check reads the configured folder itself; the
-  renderer cannot name a path.
+  renderer cannot name a path. Worktree creation uses the same check, and a check joins a stat still
+  running for that folder, so a hung mount never ties up more than one libuv threadpool thread.
 - Codex threads keep `$CODEX_HOME/worktrees` unless **Use for Codex threads too**
   (`base_directory_includes_codex = true`) is on. Codex Desktop lists an owner-marked worktree
   (`codex-thread.json` in its Git directory) only under `$CODEX_HOME/worktrees` (#164), so it does not

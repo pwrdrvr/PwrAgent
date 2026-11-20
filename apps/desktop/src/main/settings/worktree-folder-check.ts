@@ -5,6 +5,14 @@ import type { DesktopWorktreeFolderStatus } from "@pwragent/shared";
 export const WORKTREE_FOLDER_CHECK_TIMEOUT_MS = 3_000;
 
 /**
+ * Stats still running, by folder. A stat on a stale mount holds one of
+ * libuv's few threadpool threads until it returns, so repeated checks (every
+ * window focus) join the running stat instead of starting another; otherwise
+ * they would take every thread and stall all async filesystem work.
+ */
+const runningStats = new Map<string, Promise<DesktopWorktreeFolderStatus>>();
+
+/**
  * Checks the operator's worktree folder without blocking the main process.
  * A stat on a stale network mount can hang for a long time, so the answer is
  * `not-responding` once the timeout passes; the stat itself is left to finish
@@ -23,10 +31,15 @@ export async function checkWorktreeFolder(
   const timedOut = new Promise<DesktopWorktreeFolderStatus>((resolve) => {
     timer = setTimeout(() => resolve("not-responding"), options.timeoutMs ?? WORKTREE_FOLDER_CHECK_TIMEOUT_MS);
   });
-  const checked = statDirectory(directory).then(
-    (info): DesktopWorktreeFolderStatus => (info.isDirectory() ? "available" : "missing"),
-    (): DesktopWorktreeFolderStatus => "missing",
-  );
+  let checked = runningStats.get(directory);
+  if (!checked) {
+    checked = statDirectory(directory).then(
+      (info): DesktopWorktreeFolderStatus => (info.isDirectory() ? "available" : "missing"),
+      (): DesktopWorktreeFolderStatus => "missing",
+    );
+    runningStats.set(directory, checked);
+    void checked.finally(() => runningStats.delete(directory));
+  }
   try {
     return await Promise.race([checked, timedOut]);
   } finally {

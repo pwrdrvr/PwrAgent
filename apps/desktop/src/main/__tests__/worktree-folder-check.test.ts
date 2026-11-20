@@ -69,4 +69,16 @@ describe("worktree folder availability", () => {
     });
     expect(hung).toBe("not-responding");
   });
+
+  it("joins a stat that is still running instead of starting another", async () => {
+    const folder = path.join(tempRoot(), "stale-share");
+    const statDirectory = vi.fn(() => new Promise<{ isDirectory(): boolean }>(() => {}));
+    const checks = await Promise.all(
+      Array.from({ length: 6 }, () => checkWorktreeFolder(folder, { timeoutMs: 10, statDirectory })),
+    );
+    // A second round, as on the next window focus, while the stat still hangs.
+    checks.push(await checkWorktreeFolder(folder, { timeoutMs: 10, statDirectory }));
+    expect(checks).toEqual(Array(7).fill("not-responding"));
+    expect(statDirectory).toHaveBeenCalledTimes(1);
+  });
 });

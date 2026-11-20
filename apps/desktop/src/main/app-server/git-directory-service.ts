@@ -1,4 +1,4 @@
-import { mkdir, realpath, rmdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -22,6 +22,7 @@ import {
   readStatusWithoutNestedWorktrees,
 } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
+import { checkWorktreeFolder } from "../settings/worktree-folder-check";
 import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
@@ -300,8 +301,13 @@ function worktreesRootFor(
  * existing folder is created.
  */
 async function assertWorktreeBaseDirectoryAvailable(baseDirectory: string): Promise<void> {
-  const info = await stat(baseDirectory).catch(() => undefined);
-  if (!info?.isDirectory()) {
+  const status = await checkWorktreeFolder(baseDirectory);
+  if (status === "not-responding") {
+    throw new Error(
+      `Worktree folder ${baseDirectory} is not responding. Check the drive or network share, or choose another folder in Settings → Worktrees.`,
+    );
+  }
+  if (status !== "available") {
     throw new Error(
       `Worktree folder ${baseDirectory} is not available. Connect the drive or choose another folder in Settings → Worktrees.`,
     );
