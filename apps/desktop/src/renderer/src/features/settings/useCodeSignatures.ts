@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DesktopCodeSignature } from "@pwragent/shared";
+import type { DesktopCodeSignature } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

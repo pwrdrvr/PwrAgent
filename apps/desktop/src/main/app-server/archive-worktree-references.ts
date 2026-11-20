@@ -1,6 +1,6 @@
 import path from "node:path";
 import { realpath } from "node:fs/promises";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ArchiveCleanupIntent } from "../storage/desktop-runtime-storage";
 
 export type DeferredArchiveWorktree = NonNullable<ArchiveCleanupIntent["deferredWorktrees"]>[number];

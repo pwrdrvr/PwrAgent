@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { BUILT_IN_ROLES, type AppServerThreadMessageOrigin } from "@pwragent/shared";
+import { BUILT_IN_ROLES } from "@pwragent/shared/contracts/rbac";
+import { type AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 import { authorizeAppManagement } from "../agent-tools/app-management-authorization";
 
 const source: AppServerThreadMessageOrigin = { kind: "messaging", causalMessagingSource: { ownerId: "profile", requestId: "actor-request" } };

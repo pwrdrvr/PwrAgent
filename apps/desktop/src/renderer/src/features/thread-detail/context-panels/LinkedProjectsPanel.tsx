@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
-import type { NavigationThreadSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { WorktreeSnapshotSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { FolderIcon, WorktreeIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PrChip } from "../../pr-status/PrChip";

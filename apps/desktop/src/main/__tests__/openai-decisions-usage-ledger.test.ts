@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
-import { estimateTokenUsageCost } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import { buildOpenAIDecisionsUsageLine } from "../openai-decisions/openai-decisions-service";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import type { StateDb } from "../state/state-db";

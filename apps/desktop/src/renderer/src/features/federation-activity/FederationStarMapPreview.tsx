@@ -1,4 +1,4 @@
-import type { FederationActivitySeries } from "@pwragent/shared";
+import type { FederationActivitySeries } from "@pwragent/shared/contracts/federation";
 import type { FocusEvent, MouseEvent } from "react";
 import { CelestialIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";

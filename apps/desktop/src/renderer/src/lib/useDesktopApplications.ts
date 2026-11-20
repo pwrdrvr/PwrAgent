@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DesktopApplicationsSnapshot } from "@pwragent/shared";
+import type { DesktopApplicationsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "./desktop-api";
 
 export function useDesktopApplications(params: {

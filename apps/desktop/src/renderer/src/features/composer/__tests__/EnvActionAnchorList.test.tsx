@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
   CodexEnvironmentActionRun,
   CodexThreadEnvironmentRuntime,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvActionAnchorList } from "../Composer";
 

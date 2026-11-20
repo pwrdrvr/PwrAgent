@@ -1,9 +1,9 @@
 import type {
-  RemoveLockedThreadWorktreeResponse,
   ThreadMaintenanceProblem,
   ThreadMaintenanceRunItem,
   ThreadMaintenanceRunStage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
+import type { RemoveLockedThreadWorktreeResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { formatBytes } from "./thread-maintenance-selection";
 
 /** A run's items by where they are. Every item appears in exactly one

@@ -1,4 +1,4 @@
-import type { AppServerNotification } from "@pwragent/shared";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 
 /** Contrived protocol data; exercises the production client paginator. */

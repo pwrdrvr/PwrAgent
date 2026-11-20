@@ -1,4 +1,5 @@
-import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** Classify the event without loading a controller on an unconfigured owner. */
 export function isMessagingInteractivePendingRequest(

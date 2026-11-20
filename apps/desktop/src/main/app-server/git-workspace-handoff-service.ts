@@ -2,8 +2,6 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   AppServerBackendKind,
-  DesktopWorktreeFolder,
-  DesktopWorktreeStorageLocation,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   ThreadIdentifier,
@@ -12,11 +10,13 @@ import type {
   ThreadWorkspaceHandoffStashSummary,
   WorktreeLockedKept,
   WorktreeSnapshotSummary,
-} from "@pwragent/shared";
-import {
-  DESKTOP_WORKTREE_STORAGE_DEFAULT,
-  readStatusWithoutNestedWorktrees,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  DesktopWorktreeFolder,
+  DesktopWorktreeStorageLocation,
+} from "@pwragent/shared/contracts/settings";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared/contracts/settings";
+import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { addManagedWorktree } from "./managed-worktree";
 import {

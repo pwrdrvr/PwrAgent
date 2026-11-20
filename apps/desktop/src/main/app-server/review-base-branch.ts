@@ -1,4 +1,4 @@
-import type { AppServerReviewTarget } from "@pwragent/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import { runGitCommand } from "./git-executable";
 import type { ReviewGitRunner } from "./review-workspace-guard";
 

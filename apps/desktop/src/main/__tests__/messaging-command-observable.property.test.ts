@@ -1,7 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { MessagingBindingRecord, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";

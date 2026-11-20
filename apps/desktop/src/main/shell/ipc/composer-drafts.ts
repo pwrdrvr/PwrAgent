@@ -10,7 +10,7 @@ import type {
   RecordComposerDraftHistoryResponse,
   SaveComposerDraftRequest,
   SaveComposerDraftResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-drafts";
 import {
   COMPOSER_DRAFT_CLEAR_CHANNEL,
   COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL,

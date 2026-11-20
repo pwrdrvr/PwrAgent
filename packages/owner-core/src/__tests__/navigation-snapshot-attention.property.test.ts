@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { createNavigationQuerySnapshot, type NavigationQueryIndex } from "../navigation-query-projection";
 import { NavigationQueryStore } from "../navigation-query-store";
 import { nextNavigationObservation } from "../navigation-observation-clock";

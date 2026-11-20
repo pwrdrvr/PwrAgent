@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AgentEvent, FederationRemoteTarget, NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";
 import { readRendererFederationTarget } from "../federation-window";

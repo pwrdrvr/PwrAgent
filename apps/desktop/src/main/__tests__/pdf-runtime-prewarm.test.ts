@@ -1,4 +1,4 @@
-// Pins the PDF runtime prewarm in `vitest.workspace.ts`.
+// Pins the PDF runtime prewarm in `vitest.workspace.mts`.
 //
 // The prewarm pays PDF.js's machine-cold first read once per run so it is not
 // billed to whichever test file renders a PDF first -- measured on a Windows
@@ -17,7 +17,7 @@
 // measuring the runner.
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import workspaceConfig from "../../../../../vitest.workspace";
+import workspaceConfig from "../../../../../vitest.workspace.mts";
 
 const PREWARM_ENTRY = "apps/desktop/src/test-setup/pdf-runtime-prewarm.ts";
 const PDFJS_SPECIFIER = "pdfjs-dist/legacy/build/pdf.mjs";

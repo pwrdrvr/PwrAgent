@@ -6,9 +6,9 @@ import {
   mergeFederationInstanceShortNames,
   normalizeFederationShortName,
   sameFederationShortNameEntry,
-  type FederationHostInfo,
   type FederationInstanceShortName,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-short-names";
+import { type FederationHostInfo } from "@pwragent/shared/contracts/federation";
 import {
   federationShortNameInputKey,
   federationShortNamesNeedGeneration,

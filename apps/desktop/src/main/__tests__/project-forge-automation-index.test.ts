@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
 import {
-  buildDirectorySummaries,
   DEFAULT_PROJECT_FORGE_AUTOMATION,
-  type LinkedDirectorySummary,
-  type NavigationThreadSummary,
   type ProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import { type LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   getProjectForgeAutomationIndex,
   ProjectForgeAutomationIndex,

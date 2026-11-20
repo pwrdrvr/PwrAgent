@@ -1,11 +1,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { filePreviewKind, isRemoteFederationTarget } from "@pwragent/shared";
+import { filePreviewKind } from "@pwragent/shared/file-preview";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import { scopeDesktopApiToFederationTarget } from "../../lib/federation-desktop-api";
 import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerFile,
   MarkdownFileViewerSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";

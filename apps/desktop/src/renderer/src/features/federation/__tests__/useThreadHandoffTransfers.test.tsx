@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { HandoffInstanceThreadResult, ThreadHandoffProgress } from "@pwragent/shared";
+import type {
+  HandoffInstanceThreadResult,
+  ThreadHandoffProgress,
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 import { useThreadHandoffTransfer, type ThreadHandoffStore } from "../thread-handoff-store";
 import { useThreadHandoffTransfers } from "../useThreadHandoffTransfers";
 

@@ -2,12 +2,15 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, ThreadUsageLineRecord, NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ComponentProps } from "react";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PricingPanel } from "../context-panels/PricingPanel";
-import * as spend from "@pwragent/shared";
+import { formatPricingModelLabel, priceLocalModelUsage } from "@pwragent/shared/local-model-pricing";
+import * as spend from "@pwragent/shared/thread-pricing-display";
 import * as formatting from "../context-panels/subagent-format";
 import * as rail from "../context-panels/context-rail-shared";
 import { buildTokenMiserPricingFixture } from "./token-miser-pricing-fixture";
@@ -243,7 +246,7 @@ it("shows a local model label and zero price without changing its accounting ide
     scope: "turn", model: id, modelLabel: "PrismML Bonsai 2 27B",
     priceStatus: "unpriced", priceUnavailableReason: "missing-rate",
   });
-  const local = spend.priceLocalModelUsage(original);
+  const local = priceLocalModelUsage(original);
   const { getAllByText, queryByText, container } = render(<PricingPanel pricing={{ lines: [local], summaries: [] }} />);
   expect(getAllByText("PrismML Bonsai 2 27B").length).toBeGreaterThan(0);
   expect(queryByText(id)).toBeNull();
@@ -257,10 +260,10 @@ it("shows a local model label and zero price without changing its accounting ide
 });
 
 it("keeps remote model IDs and shortens only absolute filesystem paths", () => {
-  expect(spend.formatPricingModelLabel("vendor/model-name")).toBe("vendor/model-name");
-  expect(spend.formatPricingModelLabel("/models/bonsai.gguf")).toBe("bonsai.gguf");
-  expect(spend.formatPricingModelLabel(String.raw`C:\models\bonsai.gguf`)).toBe("bonsai.gguf");
-  expect(spend.formatPricingModelLabel("/models/bonsai.gguf", "Bonsai")).toBe("Bonsai");
+  expect(formatPricingModelLabel("vendor/model-name")).toBe("vendor/model-name");
+  expect(formatPricingModelLabel("/models/bonsai.gguf")).toBe("bonsai.gguf");
+  expect(formatPricingModelLabel(String.raw`C:\models\bonsai.gguf`)).toBe("bonsai.gguf");
+  expect(formatPricingModelLabel("/models/bonsai.gguf", "Bonsai")).toBe("Bonsai");
 });
 
 it.each([undefined, "/models/private/bonsai.gguf"])("shortens historical qualified paths in the current model, groups, and usage rows with label %s", (modelLabel) => {
@@ -283,7 +286,7 @@ it.each([undefined, "/models/private/bonsai.gguf"])("shortens historical qualifi
 });
 
 it("retains zero local pricing for projected historical gaps", () => {
-  const line = spend.priceLocalModelUsage(buildMonitorLine({
+  const line = priceLocalModelUsage(buildMonitorLine({
     scope: "turn", model: "/models/bonsai.gguf", modelLabel: "Bonsai",
     inputTokens: 100, uncachedInputTokens: 100, outputTokens: 10,
     cumulativeInputTokens: 1000, cumulativeUncachedInputTokens: 1000,
@@ -714,7 +717,7 @@ it("shows Claude limits without requesting or displaying the Codex account pace"
   const thread = { id: "claude-thread", source: "claude" as const, updatedAt: 1 };
   const view = render(<PricingPanel pricing={pricing} thread={thread}
     desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }}
-    backends={[{ kind: "claude", label: "Claude", rateLimits: [{ name: "Weekly limit", usedPercent: 35 }] } as import("@pwragent/shared").BackendSummary]} />);
+    backends={[{ kind: "claude", label: "Claude", rateLimits: [{ name: "Weekly limit", usedPercent: 35 }] } as import("@pwragent/shared/contracts/backend").BackendSummary]} />);
   expect(view.getByLabelText("Claude plan limits")).toHaveTextContent("35% used");
   expect(view.container.querySelector(".usage-pace-card")).toBeNull();
   expect(readUsageActivity).not.toHaveBeenCalled();
@@ -727,7 +730,7 @@ it("shows Grok's own limit, not the Codex account's pace", () => {
   const backends = [
     { kind: "codex", label: "OpenAI", rateLimits: [{ name: "Weekly limit", usedPercent: 68 }] },
     { kind: "acp:grok", label: "Grok", rateLimits: [{ name: "Weekly limit", usedPercent: 12 }] },
-  ] as import("@pwragent/shared").BackendSummary[];
+  ] as import("@pwragent/shared/contracts/backend").BackendSummary[];
   const view = render(<PricingPanel pricing={pricing} thread={thread} backends={backends}
     desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
   expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("12% used");
@@ -740,7 +743,7 @@ it("shows a peer-owned Grok thread's limit from its owner's account", () => {
   const { pricing } = buildTokenMiserPricingFixture();
   const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };
   const grok = (usedPercent: number) => ({ kind: "acp:grok", label: "Grok", available: true,
-    rateLimits: [{ name: "Weekly limit", usedPercent }] }) as unknown as import("@pwragent/shared").BackendSummary;
+    rateLimits: [{ name: "Weekly limit", usedPercent }] }) as unknown as import("@pwragent/shared/contracts/backend").BackendSummary;
   const view = render(<PricingPanel pricing={pricing} thread={thread} backends={[grok(80)]} ownerBackends={[grok(10)]}
     desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
   expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("10% used");
@@ -751,7 +754,7 @@ it("keeps the Grok card while Grok has not reported a limit yet", () => {
   const { pricing } = buildTokenMiserPricingFixture();
   const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };
   const view = render(<PricingPanel pricing={pricing} thread={thread}
-    backends={[{ kind: "acp:grok", label: "Grok", available: true } as unknown as import("@pwragent/shared").BackendSummary]}
+    backends={[{ kind: "acp:grok", label: "Grok", available: true } as unknown as import("@pwragent/shared/contracts/backend").BackendSummary]}
     desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
   expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("Grok has not reported plan limits.");
   expect(view.container.querySelector(".usage-pace-card")).toBeNull();
@@ -779,7 +782,7 @@ it("keeps the Usage Activity card on ACP threads without the Codex account's lim
   const backends = [
     { kind: "codex", label: "OpenAI", rateLimits: [{ name: "Weekly limit", usedPercent: 68 }] },
     { kind: "acp:kimi", label: "Kimi", available: true },
-  ] as unknown as import("@pwragent/shared").BackendSummary[];
+  ] as unknown as import("@pwragent/shared/contracts/backend").BackendSummary[];
   const view = render(<PricingPanel pricing={pricing} thread={thread} backends={backends}
     desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
   const card = view.container.querySelector(".usage-pace-card");

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { RENAME_THREAD_EXPECTED_NAME_MISMATCH, type AgentEvent } from "@pwragent/shared";
+import { RENAME_THREAD_EXPECTED_NAME_MISMATCH } from "@pwragent/shared/contracts/normalized-app-server";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentThreadRenameNotice } from "../AgentThreadRenameNotice";
 

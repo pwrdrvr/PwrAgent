@@ -2,8 +2,8 @@ import {
   isThreadExecutionMode,
   threadExecutionModeExceeds,
   threadExecutionModeForRawPermissions,
-  type ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-execution-mode";
+import { type ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 
 const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
   default: "Default Access",

@@ -3,7 +3,10 @@ import { createServer, request as httpRequest, type IncomingHttpHeaders } from "
 import { once } from "node:events";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { type CodexModelProviderSettings, validateCodexModelProviders } from "@pwragent/shared";
+import {
+  type CodexModelProviderSettings,
+  validateCodexModelProviders,
+} from "@pwragent/shared/codex-model-providers";
 import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-runtime";

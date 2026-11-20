@@ -1,4 +1,4 @@
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 
 /** Include diagnostic wire overhead without depending on process-lifetime counter
  * values (9 -> 10, or another fixture allocating a view). Charge every counter at

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { releaseNotesUrl } from "@pwragent/shared";
+import { releaseNotesUrl } from "@pwragent/shared/release-notes";
 import type {
   AppLicenseDocument,
   AppLicenseDocumentKind,

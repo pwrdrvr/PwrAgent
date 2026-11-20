@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../Sidebar";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";

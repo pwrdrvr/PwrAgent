@@ -1,7 +1,7 @@
 import { retrievalSuccess } from "./token-miser-delivery";
 import { buildFocusedTokenMiserTools } from "./token-miser-focused-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import {
   agentToolFailure,
   type AgentToolDefinition,

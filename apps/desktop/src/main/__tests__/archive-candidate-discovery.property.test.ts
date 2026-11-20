@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 import { ArchiveCandidateDiscovery, archiveCandidateCheckpoint } from "../app-server/archive-candidate-discovery";
 

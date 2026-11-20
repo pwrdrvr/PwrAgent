@@ -1,4 +1,5 @@
-import type { AppServerThreadMessageOrigin, ScheduledThreadAction } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { MessagingInboundEvent, MessagingJsonValue } from "@pwragent/messaging-interface";
 import { type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 

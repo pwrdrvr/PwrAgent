@@ -1,6 +1,10 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadReplay, AppServerThreadSummary, ThreadUsageLineRecord } from "@pwragent/shared";
+import type {
+  AppServerThreadReplay,
+  AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 
 import * as appState from "../state/app-state";
 import { StateDb } from "../state/state-db";

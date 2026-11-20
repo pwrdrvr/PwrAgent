@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerPendingRequestNotification } from "@pwragent/shared";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildAutomationMcpConsent, buildMcpToolApprovalConsent } from "../mcp-connections/mcp-approval-consent";
 import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
 

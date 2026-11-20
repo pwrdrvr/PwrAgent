@@ -11,15 +11,11 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import {
-  buildReviewBranchOptions,
-  findPreferredReviewWorkspaceCwd,
-  type AppServerReviewTarget,
-  type BackendSummary,
-  type ReviewAfterAction,
-  type ReviewRunMode,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildReviewBranchOptions, findPreferredReviewWorkspaceCwd } from "@pwragent/shared/review-branches";
+import { type AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type ReviewAfterAction, type ReviewRunMode } from "@pwragent/shared/contracts/agent";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 type ReviewDirectory = Pick<NavigationDirectorySummary, "key" | "path"> & {

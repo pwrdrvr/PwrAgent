@@ -1,4 +1,9 @@
-import { comparePullRequestStack, pullRequestRollupPriority, resolveLifecycleState, type PrSummary } from "@pwragent/shared";
+import {
+  comparePullRequestStack,
+  pullRequestRollupPriority,
+  resolveLifecycleState,
+} from "@pwragent/shared/pull-request-rollup";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { formatRelativeTime } from "../navigation/thread-time";
 import { prStatusLabel } from "./pr-chip-state";
 

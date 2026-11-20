@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Editor } from "@tiptap/react";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { Composer } from "../Composer";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";

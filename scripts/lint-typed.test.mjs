@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { checkTypedSuppressions, typedLintFiles, typedSuppressionLines } from "./lint-typed.mjs";
 import { syntaxLintPaths } from "./lint-syntax.mjs";
 import { oxlintBin, tsgolintExecutable } from "./oxlint.mjs";
-import workspaceConfig from "../vitest.workspace.ts";
+import workspaceConfig from "../vitest.workspace.mts";
 
 const directories = [];
 const fixtureProbes = new Map();
@@ -161,7 +161,7 @@ describe("native typed lint correctness", () => {
     const config = join(root, ".oxlintrc.json");
     writeFileSync(config, readFileSync(".oxlintrc.json"));
     mkdirSync(join(root, "packages"));
-    source(root, "vitest.workspace.ts", "const unusedRoot = 1; export {};");
+    source(root, "vitest.workspace.mts", "const unusedRoot = 1; export {};");
     source(root, "apps/desktop/src/renderer/probe.tsx", [
       'import { useEffect, useState } from "react";',
       "const unused = 1; const _ignored = 1; type _Ignored = string;",
@@ -176,7 +176,7 @@ describe("native typed lint correctness", () => {
     expect(result.status).toBe(1);
     const diagnostics = JSON.parse(result.stdout).diagnostics;
     expect(diagnostics.filter((entry) => entry.code === "eslint(no-unused-vars)")).toHaveLength(3);
-    expect(diagnostics.some((entry) => entry.filename === "vitest.workspace.ts")).toBe(true);
+    expect(diagnostics.some((entry) => entry.filename === "vitest.workspace.mts")).toBe(true);
     const hooks = diagnostics.filter((entry) => entry.code === "react-hooks(rules-of-hooks)");
     expect(hooks).toHaveLength(1);
     expect(hooks[0].filename.replaceAll("\\", "/")).toContain("src/renderer/");

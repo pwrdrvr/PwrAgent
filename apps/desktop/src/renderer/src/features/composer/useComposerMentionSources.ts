@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FederationTarget, NavigationDirectoryRow, NavigationRow } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationDirectoryRow, NavigationRow } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { listInstanceReferences, type InstanceReference } from "../../lib/instance-references";
 import { readRendererFederationTarget } from "../../lib/federation-window";

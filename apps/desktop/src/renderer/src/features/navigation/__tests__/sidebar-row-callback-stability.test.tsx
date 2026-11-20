@@ -14,7 +14,7 @@ import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
   PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { pressEscape } from "../../../test/tab-walk";

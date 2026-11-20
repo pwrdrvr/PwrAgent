@@ -1,7 +1,12 @@
 import type {
-  ThreadDependencyCiRunObservation, ThreadDependencyCondition, ThreadDependencyEvidence,
-} from "@pwragent/shared";
-import { threadDependencyCiRunId, threadDependencyCiRunOutcomes } from "@pwragent/shared";
+  ThreadDependencyCiRunObservation,
+  ThreadDependencyCondition,
+  ThreadDependencyEvidence,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  threadDependencyCiRunId,
+  threadDependencyCiRunOutcomes,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 
 /**

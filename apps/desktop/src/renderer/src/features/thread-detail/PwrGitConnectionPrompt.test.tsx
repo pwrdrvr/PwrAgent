@@ -4,7 +4,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_MCP_CONNECTION_ID,
   type PwrGitConnectionStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import type { PwrSuiteInstallerState } from "../../../../shared/pwrsuite-installer";
 import {
   PwrGitConnectionPrompt,

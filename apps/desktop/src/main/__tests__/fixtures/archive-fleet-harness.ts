@@ -1,7 +1,13 @@
 import { createDesktopBackendRegistry, registryModules } from "../../app-server/backend-registry-wiring";
 import { vi } from "vitest";
 import { realpath } from "node:fs/promises";
-import type { AppServerNotification, AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  AppServerThreadSummary,
+  LinkedDirectorySummary,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../../app-server/archive-cleanup-queue";
 import { ClaudeSessionStore } from "../../claude/claude-session-store";
 import { DesktopBackendRegistry } from "../../app-server/backend-registry";

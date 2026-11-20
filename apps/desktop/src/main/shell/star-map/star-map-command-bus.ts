@@ -5,7 +5,7 @@ import type {
   StarMapCommandKind,
   StarMapCommandResponse,
   StarMapCommandResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import { STAR_MAP_COMMAND_CHANNEL } from "../../../shared/ipc";
 import { currentStarMapWebContents } from "./star-map-view-registry";
 

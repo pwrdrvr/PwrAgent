@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AppServerTurnInputItem } from "@pwragent/shared";
+import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
 import { launchLiveApp } from "./lib/live-app";
 import { LiveDriver, type ModelOptions, type TurnOutcome } from "./lib/driver";
 

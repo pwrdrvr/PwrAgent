@@ -1,9 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, parse, resolve } from "node:path";
-import type {
-  AcpBackendId,
-  BackendAcpSessionRuntimeState,
-} from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
 import type { AcpRuntimeClient, AcpSessionMetadata } from "./acp-backend-adapter";
 import { parseAcpJsonAnswer } from "./acp-json-answer";
 import type {

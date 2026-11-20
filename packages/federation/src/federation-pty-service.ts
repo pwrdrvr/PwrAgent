@@ -4,13 +4,13 @@ import { TerminalHistoryStore, type TerminalHistoryRecord } from "./terminal-his
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isWithinWorktree } from "./worktree-terminals";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   FederationCapability,
   FederationInstanceId,
   FederationRequestEnvelope,
-} from "@pwragent/shared";
-import { isFederationInstanceId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { isFederationInstanceId } from "@pwragent/shared/contracts/federation";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";

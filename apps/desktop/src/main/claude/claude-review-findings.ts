@@ -4,7 +4,7 @@ import type {
   AppServerReviewFinding,
   AppServerReviewFindingOutcome,
   AppServerReviewOutput,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { EXPLICIT_REVIEW_PULL_REQUEST_URL } from "../../shared/pull-request-review";
 import type { NamedReviewPullRequest } from "../../shared/review-command";
 import { normalizeReviewCategory } from "../../shared/review-output";

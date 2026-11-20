@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { AppServerThreadReplay } from "@pwragent/shared";
+import type { AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
 import { findAssistantMessageForText } from "../messaging/find-assistant-reply-message";
 
 it("collects the selected reply's turn images once without changing the desktop replay", () => {

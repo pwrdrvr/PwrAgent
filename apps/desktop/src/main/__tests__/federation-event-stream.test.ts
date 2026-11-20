@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent, ThreadToolAccounting, ThreadToolInvocationRecord } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  ThreadToolAccounting,
+  ThreadToolInvocationRecord,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 
 function invocation(index: number): ThreadToolInvocationRecord {

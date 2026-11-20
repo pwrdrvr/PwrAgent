@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { AppServerReadThreadRequest, AppServerReadThreadResponse } from "@pwragent/shared";
+import type {
+  AppServerReadThreadRequest,
+  AppServerReadThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { projectThreadDisplay } from "../app-server/thread-display";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,

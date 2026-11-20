@@ -3,12 +3,12 @@ import {
   CODEX_MINIMUM_RECOMMENDED_VERSION,
   isCodexVersionBelowMinimum,
   parseCodexVersionCore,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-version";
 import type {
   DesktopCodexCandidateSource,
   DesktopCodexInstaller,
   DesktopCodexVersionAdvisory,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 export type CodexInstallerClassification = {
   installer: DesktopCodexInstaller;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, ThreadTodo, ThreadTodoFeedDelta } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadTodo, ThreadTodoFeedDelta } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoFeed, type ThreadTodoFeedOwner } from "../thread-todos/thread-todo-feed";
 
 function card(id: string, threadId: string, createdAt: number, extra: Partial<ThreadTodo> = {}): ThreadTodo {

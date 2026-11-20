@@ -1,15 +1,17 @@
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type NavigationIdentity,
+} from "@pwragent/shared/contracts/navigation";
+import {
   compareThreadFamilyPricingMembers,
   summarizeThreadFamilyPricing,
-  type AppServerBackendKind,
-  type NavigationIdentity,
   type ReadThreadFamilyPricingResponse,
   type ThreadFamilyPricingInputMember,
   type ThreadFamilyPricingMember,
   type ThreadFamilyPricingReferral,
-  type ThreadPricingSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-family-pricing";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadPricingSummary } from "@pwragent/shared/token-usage-pricing";
 import { projectNavigationQuery, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 
 /** A family can span machines; past this many owner reads the rest is left out. */

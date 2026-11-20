@@ -5,7 +5,7 @@ import type {
   DesktopWorktreeFolderCheck,
   DesktopWorktreeFolderStatus,
   DesktopWorktreeStorageLocation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { CheckoutHibernationSettings } from "./CheckoutHibernationSettings";
 import {

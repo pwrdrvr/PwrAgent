@@ -1,13 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import type {
-  ServiceForward, ServiceThread, ThreadService, ServiceExchangeResult, ServiceStreamData, ServiceStreamOpen,
+  ServiceForward,
+  ServiceThread,
+  ThreadService,
+  ServiceExchangeResult,
+  ServiceStreamData,
+  ServiceStreamOpen,
   ServiceStreamOpened,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-services";
 import {
-  FEDERATION_SERVICE_METHODS as METHODS, FEDERATION_SERVICE_V2_METHODS as V2,
+  FEDERATION_SERVICE_METHODS as METHODS,
+  FEDERATION_SERVICE_V2_METHODS as V2,
   FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-services";
 import {
   decodeServiceData, readServiceData, waitServiceReadable, writeServiceData, SERVICE_MAX_PEER_STREAMS,
 } from "./federation-service-socket";

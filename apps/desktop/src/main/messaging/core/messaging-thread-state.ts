@@ -4,14 +4,14 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   NavigationSelectedDetailResponse,
-  BackendAcpSessionRuntimeState,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   MessagingActiveTurnSummary,
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 
 /** Exact thread context has no collection membership or completeness semantics. */
 export type MessagingThreadContext = {

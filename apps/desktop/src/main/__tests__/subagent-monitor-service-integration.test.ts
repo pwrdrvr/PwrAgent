@@ -40,11 +40,10 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { buildPricingSpendByModel, CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS } from "@pwragent/shared";
+import { buildPricingSpendByModel } from "@pwragent/shared/pricing-spend-by-model";
+import { CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS } from "@pwragent/shared/subagent-visibility";
 import type {
   AcpBackendId,
-  DesktopTaskMonitorModelChoice,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -52,7 +51,9 @@ import type {
   AppServerThreadSummary,
   CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopTaskMonitorModelChoice } from "@pwragent/shared/helper-models";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

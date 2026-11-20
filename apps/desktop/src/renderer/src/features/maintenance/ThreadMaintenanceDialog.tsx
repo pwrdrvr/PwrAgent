@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import {
-  type AppServerBackendKind,
   defaultThreadMaintenanceRules,
-  normalizeCheckoutHibernationPolicy,
-  normalizeThreadArchivePolicy,
   THREAD_MAINTENANCE_SCAN_STEPS,
-  type DesktopCheckoutHibernationPolicy,
-  type DesktopThreadArchivePolicy,
   type ThreadMaintenanceArchivedCheckout,
   type ThreadMaintenanceBuildOutput,
   type ThreadMaintenanceCoverage,
@@ -23,7 +18,16 @@ import {
   type ThreadMaintenanceScanStep,
   type ThreadMaintenanceSpace,
   type ThreadMaintenanceStep,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
+import {
+  normalizeCheckoutHibernationPolicy,
+  type DesktopCheckoutHibernationPolicy,
+} from "@pwragent/shared/checkout-hibernation-policy";
+import {
+  normalizeThreadArchivePolicy,
+  type DesktopThreadArchivePolicy,
+} from "@pwragent/shared/thread-archive-policy";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { CloseIcon, MinimizeIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";

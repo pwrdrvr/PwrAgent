@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationSnapshot, NavigationThreadSummary, NavigationQueryRequest } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import type {
+  NavigationSnapshot,
+  NavigationThreadSummary,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { readFederationPinnedSnapshot } from "../federation/federation-collection-client";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";

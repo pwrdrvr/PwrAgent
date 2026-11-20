@@ -1,7 +1,9 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, BackendSummary, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationRow } from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";

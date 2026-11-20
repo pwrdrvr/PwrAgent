@@ -1,7 +1,7 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared";
+import { CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent-kind";
 import { ClaudeTaskTracker, claudeTaskRow } from "../claude/claude-tasks";
 
 /**

@@ -1,7 +1,7 @@
-import { buildOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { ComposerThreadOwner } from "@pwragent/shared";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { resolveComposerScopeOwner, useOwnedComposerDraftStore } from "../useOwnedComposerDraftStore";
 import { snapshotFromDraftRecord } from "../useDurableComposerDraftStore";

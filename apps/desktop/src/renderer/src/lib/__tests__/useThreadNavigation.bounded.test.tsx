@@ -2,7 +2,18 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
 import { useLayoutEffect } from "react";
-import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationDirectoryRow, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared/project-forge-automation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
+  type NavigationDirectoryRow,
+  type NavigationQueryPage,
+  type NavigationRow,
+  type NavigationSelectedDetailResponse,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LaunchpadCreationOperations, LaunchpadCreationCancelledError, type LaunchpadCreationOperation } from "../app-server/launchpad-creation-operations";
-import type { MaterializeDirectoryLaunchpadResponse } from "@pwragent/shared";
+import type { MaterializeDirectoryLaunchpadResponse } from "@pwragent/shared/contracts/agent";
 
 const request = { operationId: "creation-1", directoryKey: "repo", submittedAt: 1_000 };
 const result: MaterializeDirectoryLaunchpadResponse = { backend: "codex", threadId: "thread-1", executionMode: "default", workMode: "local" };

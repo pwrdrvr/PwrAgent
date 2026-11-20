@@ -1,4 +1,4 @@
-import type { NavigationDirectorySummary } from "@pwragent/shared";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 
 type DirectoryGitStatusCacheEntryLike = {
   directoryUpdatedAt?: number;

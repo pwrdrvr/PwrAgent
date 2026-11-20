@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";

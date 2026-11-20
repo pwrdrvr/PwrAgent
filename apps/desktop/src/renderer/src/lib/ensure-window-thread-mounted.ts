@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import type { DesktopApi } from "./desktop-api";
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationCounts } from "@pwragent/shared";
+import type { NavigationCounts } from "@pwragent/shared/contracts/navigation";
 import { starMapThreadProviders } from "../star-map-thread-providers";
 
 function counts(backends?: NavigationCounts["backends"]): NavigationCounts {

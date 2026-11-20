@@ -1,4 +1,4 @@
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Pick the cwd to ask `gh` about for each linked directory. Worktree

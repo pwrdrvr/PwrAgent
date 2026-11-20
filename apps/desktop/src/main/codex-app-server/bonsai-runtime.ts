@@ -6,7 +6,7 @@ import {
   LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
   codexProviderContextWindow,
   type CodexModelProviderSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
 import { resolveActiveProfilePath } from "../profile";
 import { getMainLogger } from "../log";
 import { discoverModelCatalog, startBridge, type LocalModelCatalog } from "./local-responses-bridge.mjs";

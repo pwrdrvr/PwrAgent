@@ -1,6 +1,10 @@
 import os from "node:os";
 import path from "node:path";
-import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
 import { resolveOutpostCodexHome, resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
 import { resolvePwragentRoot } from "./profile";
 

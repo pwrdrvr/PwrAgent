@@ -2,21 +2,22 @@ import { createHash } from "node:crypto";
 import {
   canonicalDurableTurnRequest,
   canonicalDurableSteerRequest,
+} from "@pwragent/shared/durable-turn-request";
+import {
   DURABLE_TURN_REQUEST_RETENTION_MS,
   type DurableTurnPayload,
   type DurableTurnReceipt,
   type GetDurableTurnRequest,
   type SubmitDurableTurnRequest,
-  type StartTurnResponse,
   type DurableSteerPayload,
   type DurableSteerReceipt,
   type SubmitDurableSteerRequest,
-  type ControlActiveTurnResponse,
   DurableTurnRequestError,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/durable-turn-requests";
+import { type StartTurnResponse, type ControlActiveTurnResponse } from "@pwragent/shared/contracts/agent";
 import type { DurableTurnRequestStorage } from "./durable-turn-request-storage";
 
-export { DurableTurnRequestError } from "@pwragent/shared";
+export { DurableTurnRequestError } from "@pwragent/shared/contracts/durable-turn-requests";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STALE_DISPATCH_MS = 5 * 60_000;

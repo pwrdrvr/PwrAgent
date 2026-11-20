@@ -1,4 +1,4 @@
-import type { FederationCapability } from "@pwragent/shared";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 
 // The owner contract: every `backend.*` request method and the capability a
 // peer needs to call it. Desktop and the Outpost both read this table, so a

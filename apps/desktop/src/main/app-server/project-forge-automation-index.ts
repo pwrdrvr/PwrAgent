@@ -1,18 +1,19 @@
 import type {
   AppServerBackendKind,
-  DirectoryOverlayState,
   LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  DirectoryOverlayState,
   NavigationDirectorySummary,
-  ProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { classifyDirectory, orderByHomePreference } from "@pwragent/shared/directory-navigation";
 import {
-  buildThreadIdentityKey,
-  classifyDirectory,
   isDefaultProjectForgeAutomation,
-  isToolManagedWorktreePath,
-  orderByHomePreference,
   resolveProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 
 /** A thread's Directories project and that project's Forge Automation. */
 export type ProjectForgeAutomationResolution = {

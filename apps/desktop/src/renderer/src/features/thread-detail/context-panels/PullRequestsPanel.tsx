@@ -1,15 +1,12 @@
 import { memo, useEffect, useState } from "react";
-import type {
-  NavigationThreadSummary,
-  PrSummary,
-  ThreadPrWatchHistoryEntry,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   pullRequestMatchesRepositoryKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import {

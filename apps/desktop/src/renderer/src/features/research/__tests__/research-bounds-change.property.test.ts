@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { applyResearchBounds, RESEARCH_MAX_WORKERS } from "@pwragent/shared";
+import { applyResearchBounds, RESEARCH_MAX_WORKERS } from "@pwragent/shared/research";
 import { researchBoundsChange } from "../ResearchBoundsEditor";
 import { researchLimitDraft, researchLimitMinutes } from "../ResearchLimitField";
 

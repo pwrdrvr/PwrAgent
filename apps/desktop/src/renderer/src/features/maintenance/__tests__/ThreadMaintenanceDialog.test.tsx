@@ -8,7 +8,7 @@ import type {
   ThreadMaintenanceScan,
   ThreadMaintenanceScanProgress,
   ThreadMaintenanceScanStep,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";

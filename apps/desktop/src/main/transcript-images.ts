@@ -3,9 +3,9 @@ import {
   isPwrSnapResourceUri,
   MAX_TRANSCRIPT_IMAGE_BYTES,
   pwrSnapToolImageParts,
-} from "@pwragent/shared";
+} from "@pwragent/shared/transcript-image-sources";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
@@ -13,8 +13,8 @@ import type {
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
-  FederationInstanceId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";

@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
-import type { NavigationDirectoryRow, NavigationIdentity, NavigationQueryPage } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import type {
+  NavigationDirectoryRow,
+  NavigationIdentity,
+  NavigationQueryPage,
+} from "@pwragent/shared/contracts/navigation";
 import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, projectDisclosedNavigationParents, visibleDisclosedNavigationParents } from "../navigation-window-demand";
 import { navigationIdentityKey } from "../navigation-query-state";
 import type { NavigationPresentedThread } from "../navigation-loaded-rows";

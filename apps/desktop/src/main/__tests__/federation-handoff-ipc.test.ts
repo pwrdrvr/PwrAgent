@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HandoffInstanceThreadResult, ThreadHandoffProgress } from "@pwragent/shared";
+import type {
+  HandoffInstanceThreadResult,
+  ThreadHandoffProgress,
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 import {
   FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,

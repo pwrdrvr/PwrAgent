@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { ResearchDiscoverySnapshot } from "@pwragent/shared";
+import type { ResearchDiscoverySnapshot } from "@pwragent/shared/research-harness";
 import { discoveryOutline, ResearchDiscoveryPanel } from "../ResearchDiscoveryPanel";
 
 type Node = NonNullable<ResearchDiscoverySnapshot["tree"]>["nodes"][number];

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { NavigationThreadSummary, WorktreeLockedKept } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { WorktreeLockedKept } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 

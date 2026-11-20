@@ -5,8 +5,11 @@ import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/prom
 import path from "node:path";
 import { lock } from "proper-lockfile";
 import type {
-  AppServerThreadEntry, AppServerThreadSummary, AppServerThreadTurnMetadata, BackendRateLimitSummary,
-} from "@pwragent/shared";
+  AppServerThreadEntry,
+  AppServerThreadSummary,
+  AppServerThreadTurnMetadata,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 import type { ClaudeSessionMetadataStorage } from "@pwragent/owner-core/claude-profile-storage";
 import { createClaudeSessionMetadataStorage } from "../storage/desktop-claude-profile-storage";
 import { persistTranscriptEntryImages } from "../transcript-images";

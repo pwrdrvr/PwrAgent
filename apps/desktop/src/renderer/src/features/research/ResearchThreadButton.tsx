@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { ResearchThread } from "@pwragent/shared";
+import type { ResearchThread } from "@pwragent/shared/research";
 import { useThreadLinks } from "../../lib/thread-links";
 
 /**

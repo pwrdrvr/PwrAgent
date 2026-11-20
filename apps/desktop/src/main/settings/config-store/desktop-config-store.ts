@@ -2,7 +2,7 @@ import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   watchConfigFile,
   type ConfigFileWatcher,

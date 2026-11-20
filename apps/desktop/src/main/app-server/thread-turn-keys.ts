@@ -1,10 +1,9 @@
 import {
   type AppServerTurnInputItem,
   type AppServerBackendKind,
-  buildPendingTurnId,
-  buildThreadIdentityKey,
-  isAcpBackendId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 
 
 

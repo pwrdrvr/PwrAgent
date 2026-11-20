@@ -3,7 +3,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { formatTokenUsageMicrosAsUsd, type AgentEvent, type AppServerThreadEntry } from "@pwragent/shared";
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../../renderer/src/lib/desktop-api";
 import { useThreadSessionState } from "../../renderer/src/lib/useThreadSessionState";
 import { buildLiveThreadUsageLine } from "../app-server/thread-usage-math";

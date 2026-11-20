@@ -1,13 +1,13 @@
 import {
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   isThreadSubAgentVisibleInPanel,
-  isTokenMiserSubAgent,
-  subAgentLens,
-  totalTokenMiserGateAccountings,
-  type SubAgentLens,
+} from "@pwragent/shared/subagent-visibility";
+import { isTokenMiserSubAgent, subAgentLens, type SubAgentLens } from "@pwragent/shared/subagent-kind";
+import { totalTokenMiserGateAccountings } from "@pwragent/shared/token-miser-savings-summary";
+import {
   type ThreadSubAgentSummary,
   type TokenMiserSubAgentAccounting,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statSync } from "node:fs";

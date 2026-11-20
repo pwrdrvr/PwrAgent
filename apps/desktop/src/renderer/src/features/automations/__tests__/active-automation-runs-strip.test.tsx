@@ -1,11 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  AutomationDetail,
-  AutomationRunStatus,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AutomationDetail, AutomationRunStatus } from "@pwragent/shared/contracts/automations";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ActiveAutomationRunsStrip } from "../ActiveAutomationRunsStrip";
 

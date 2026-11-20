@@ -1,5 +1,5 @@
 import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
-import { describeMergeQueueState } from "@pwragent/shared";
+import { describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,
   parseGithubMergeQueueGate,
@@ -8,12 +8,9 @@ import {
 import { isMergeQueueRepository, mentionsMergeQueue, noteMergeQueueRepository } from "./merge-queue-repositories";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type {
-  DesktopGhDiscoverySnapshot,
-  GhStatus,
-  PrSummary,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+import type { DesktopGhDiscoverySnapshot } from "@pwragent/shared/contracts/settings";
+import type { GhStatus, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";

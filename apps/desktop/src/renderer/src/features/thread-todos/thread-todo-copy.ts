@@ -1,5 +1,6 @@
-import type { ThreadReviewItem, ThreadTodo, ThreadTodoItem } from "@pwragent/shared";
-import { threadTodoPrerequisites, threadTodoSteps } from "@pwragent/shared";
+import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo, ThreadTodoItem } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoPrerequisites, threadTodoSteps } from "@pwragent/shared/contracts/thread-todos";
 import { copyTextWithHtml } from "../../lib/copy-text";
 import { renderMarkdownToClipboardHtml } from "../thread-detail/markdown-clipboard-html";
 

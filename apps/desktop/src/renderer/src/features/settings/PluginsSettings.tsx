@@ -7,32 +7,32 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { CodexMcpServerSummary } from "@pwragent/shared/contracts/agent";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type {
-  CodexMcpServerSummary,
-  DesktopSettingsSnapshot,
   McpConnectionSetupState,
   McpConnectionStatus,
   McpConnectionToolApproval,
   SandboxerTransport,
-  InspectGithubMcpSetupResponse,
   ProbeMcpConnectionResponse,
-  TestGithubMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
   TestMcpStdioConnectionResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import type {
+  InspectGithubMcpSetupResponse,
+  TestGithubMcpConnectionResponse,
+} from "@pwragent/shared/github-mcp";
+import { describeMcpAuthStatus, describeMcpConnectionAuth } from "@pwragent/shared/mcp-auth-status";
 import {
-  describeMcpAuthStatus,
-  describeMcpConnectionAuth,
   formatMcpCommandLine,
   describeGithubMcpConnection,
-  isMcpIpcUrl,
-  isSuggestedMcpConnection,
   mcpConnectionIdsForNewThread,
-  orderManagedMcpConnections,
   resolveMcpConnectionSetup,
   summarizeMcpConnectionReadiness,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { isMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
+import { isSuggestedMcpConnection, orderManagedMcpConnections } from "@pwragent/shared/mcp-connection-order";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
 import { Select, type SelectOption } from "../../components/Select";
 import {

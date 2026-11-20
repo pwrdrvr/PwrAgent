@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import type {
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 

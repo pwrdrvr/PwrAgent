@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { type AgentEvent, type EnsureDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import {
-  isRemoteFederationTarget,
-  type AgentEvent,
-  type EnsureDirectoryLaunchpadRequest,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationDirectoryRow,
@@ -12,7 +11,7 @@ import {
   type NavigationSnapshot,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import type { GitReadRequest } from "../git-info/read-cache";
 import { getMainLogger } from "../log";

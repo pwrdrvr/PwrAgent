@@ -1,5 +1,6 @@
-import type { FederationServiceDataEnvelope, ServiceStreamData } from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import type { FederationServiceDataEnvelope } from "@pwragent/shared/contracts/federation";
+import type { ServiceStreamData } from "@pwragent/shared/contracts/federation-services";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 
 /** The binary `service_data` envelope that carries `frame`; `route` names it and its ends. */
 export function serviceDataEnvelope(

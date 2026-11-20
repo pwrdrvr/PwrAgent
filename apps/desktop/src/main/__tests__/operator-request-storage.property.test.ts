@@ -1,7 +1,10 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AsyncQuestionStatus, OperatorRequestStorage } from "@pwragent/owner-core/operator-request-storage";
-import { operatorQuestionItemKey, type OperatorAsyncQuestion } from "@pwragent/shared";
+import {
+  operatorQuestionItemKey,
+  type OperatorAsyncQuestion,
+} from "@pwragent/shared/contracts/operator-requests";
 import { createDesktopOperatorRequestService } from "../operator-requests/operator-request-runtime";
 import type { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

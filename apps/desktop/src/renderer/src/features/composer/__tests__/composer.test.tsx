@@ -12,32 +12,39 @@ import fc from "fast-check";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
-  buildFederatedThreadRef,
-  DEFAULT_PROJECT_FORGE_AUTOMATION,
-  type BackendSummary,
-  type ProjectForgeAutomation,
-  type AgentEvent,
-  type CompactThreadRequest,
-  type ComposerDraftRecoveryCandidate,
-  type CreateScheduledThreadActionRequest,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef, type FederationCapability } from "@pwragent/shared/contracts/federation";
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared/project-forge-automation";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import {
+  type AgentEvent,
+  type CompactThreadRequest,
   type StartReviewRequest,
   type ModelSettingsRecent,
-  type FederationCapability,
-  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   type MoveQueuedTurnResponse,
   type SetQueuedTurnPausedRequest,
   type SetQueuedTurnPausedResponse,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
+  type SteerTurnRequest,
+} from "@pwragent/shared/contracts/agent";
+import { type ComposerDraftRecoveryCandidate } from "@pwragent/shared/contracts/composer-drafts";
+import {
+  type CreateScheduledThreadActionRequest,
   type ScheduledThreadAction,
   type ScheduledThreadActionIdRequest,
-  type SteerTurnRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { Editor, JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";

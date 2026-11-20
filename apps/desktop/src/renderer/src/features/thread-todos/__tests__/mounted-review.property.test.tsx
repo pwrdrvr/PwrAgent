@@ -1,7 +1,12 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, ThreadTodo, ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  ThreadTodo,
+  ThreadTodoFeedDelta,
+  ThreadTodosChangedEvent,
+} from "@pwragent/shared/contracts/thread-todos";
 import { useThreadTodos } from "../useThreadTodos";
 
 afterEach(cleanup);

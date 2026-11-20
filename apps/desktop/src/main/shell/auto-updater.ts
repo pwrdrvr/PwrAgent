@@ -28,7 +28,7 @@ import {
   type DesktopUpdateChannel,
   type DesktopUpdateSelection,
   type DesktopUpdateTrain,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { getMainLogger } from "../log";
 import { getDesktopConfigStore } from "../settings/desktop-settings-singleton";
 import {

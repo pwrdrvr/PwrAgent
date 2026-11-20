@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadTurnFailure } from "@pwragent/shared";
+import type { ThreadTurnFailure } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import {

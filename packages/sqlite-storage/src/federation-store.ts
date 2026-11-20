@@ -1,4 +1,5 @@
-import type { FederationReceiverPermissions, FederationStorage } from "@pwragent/shared";
+import type { FederationReceiverPermissions } from "@pwragent/shared/contracts/federation";
+import type { FederationStorage } from "@pwragent/shared/contracts/federation-storage";
 import {
   createHmac,
   randomBytes,
@@ -13,15 +14,25 @@ import type {
   FederationPeerId,
   FederationPeerSummary,
   FederationSessionId,
-} from "@pwragent/shared";
-import { isFederationInstanceId, normalizeFederationPeerRole } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { isFederationInstanceId, normalizeFederationPeerRole } from "@pwragent/shared/contracts/federation";
 import type { StateDb } from "./state-db";
 
 const FEDERATION_ENROLLMENT_SECRET_META_KEY =
   "federation_enrollment_secret_v1";
 
-import type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationSessionAuditKind, FederationSessionAuditEntry } from "@pwragent/shared";
-export type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationSessionAuditKind, FederationSessionAuditEntry } from "@pwragent/shared";
+import type {
+  FederationEnrollmentStatus,
+  FederationEnrollmentEntry,
+  FederationSessionAuditKind,
+  FederationSessionAuditEntry,
+} from "@pwragent/shared/contracts/federation-storage";
+export type {
+  FederationEnrollmentStatus,
+  FederationEnrollmentEntry,
+  FederationSessionAuditKind,
+  FederationSessionAuditEntry,
+} from "@pwragent/shared/contracts/federation-storage";
 
 /**
  * A repeat of the newest matching audit row inside this window collapses
@@ -32,7 +43,7 @@ export type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationS
 const FEDERATION_AUDIT_REPEAT_COLLAPSE_WINDOW_MS = 10 * 60 * 1000;
 
 type FederationPeerPayload = {
-  permissionRole?: import("@pwragent/shared").FederationPeerRole;
+  permissionRole?: import("@pwragent/shared/contracts/federation").FederationPeerRole;
   capabilities?: FederationCapability[];
   protocolVersion?: number;
   endpoint?: string;
@@ -48,7 +59,7 @@ type FederationPeerPayload = {
 };
 
 type FederationEnrollmentPayload = {
-  permissionRole?: import("@pwragent/shared").FederationPeerRole;
+  permissionRole?: import("@pwragent/shared/contracts/federation").FederationPeerRole;
   label?: string;
   role?: FederationInstanceRole;
   endpoint?: string;
@@ -98,7 +109,7 @@ export class FederationStore implements FederationStorage {
 
   upsertPeer(params: {
     peer: FederationPeerSummary & { pinnedPublicKeyPem?: string };
-    assignedRole?: import("@pwragent/shared").FederationPeerRole;
+    assignedRole?: import("@pwragent/shared/contracts/federation").FederationPeerRole;
     createdAt?: number;
     updatedAt: number;
     /**
@@ -197,7 +208,7 @@ export class FederationStore implements FederationStorage {
     return rows.map(rowToPeer);
   }
 
-  setPeerRole(peerId: FederationPeerId, role: import("@pwragent/shared").FederationPeerRole, updatedAt: number): void {
+  setPeerRole(peerId: FederationPeerId, role: import("@pwragent/shared/contracts/federation").FederationPeerRole, updatedAt: number): void {
     if (role !== "full" && role !== "contained") throw new Error("Invalid federation permission role.");
     const peer = this.getPeer(peerId);
     if (!peer || !peer.pinnedPublicKeyPem) throw new Error("Peer is not locally enrolled.");
@@ -222,7 +233,7 @@ export class FederationStore implements FederationStorage {
     token: string;
     generatedAt: number;
     expiresAt: number;
-    permissionRole?: import("@pwragent/shared").FederationPeerRole;
+    permissionRole?: import("@pwragent/shared/contracts/federation").FederationPeerRole;
     label?: string;
     role?: FederationInstanceRole;
     endpoint?: string;

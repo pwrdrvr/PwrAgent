@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ThreadSearchResponse } from "@pwragent/shared";
+import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 

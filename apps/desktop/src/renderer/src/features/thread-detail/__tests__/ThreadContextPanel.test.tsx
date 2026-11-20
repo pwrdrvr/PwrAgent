@@ -10,16 +10,14 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
-  BackendSummary,
   AppServerThreadEntry,
-  NavigationThreadSummary,
-  ThreadPricingSummary,
-  ThreadPullRequestWatchSummary,
-  ThreadSubAgentSummary,
   ThreadToolAccounting,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import {
   summarizeThreadPrWatches,

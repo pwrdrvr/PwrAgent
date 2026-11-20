@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import type { DesktopGitRuntimeChoice } from "@pwragent/shared";
+import type { DesktopGitRuntimeChoice } from "@pwragent/shared/contracts/settings";
 import { MANAGED_GIT_GENERATION_PATTERN } from "../managed-git-verify";
 import { parseTomlTables } from "./toml-editor";
 

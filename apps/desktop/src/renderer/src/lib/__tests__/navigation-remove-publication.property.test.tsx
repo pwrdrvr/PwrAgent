@@ -1,7 +1,8 @@
 import { useLayoutEffect } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";

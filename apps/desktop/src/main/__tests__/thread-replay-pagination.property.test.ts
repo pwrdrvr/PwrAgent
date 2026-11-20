@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { AppServerThreadEntry, AppServerThreadReplay } from "@pwragent/shared";
+import type {
+  AppServerThreadEntry,
+  AppServerThreadReplay,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 import { fitNormalizedReplayWithinByteBudget } from "../app-server/thread-replay-pagination";
 import {

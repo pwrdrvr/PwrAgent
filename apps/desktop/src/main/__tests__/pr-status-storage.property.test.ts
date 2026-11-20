@@ -1,7 +1,8 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PrAutoDispatchStorage, PrStatusWatchStorage } from "@pwragent/owner-core/pr-status-storage";
-import type { PrAutoDispatchBudgetConfig, ThreadPrAutoDispatchPending } from "@pwragent/shared";
+import type { PrAutoDispatchBudgetConfig } from "@pwragent/shared/contracts/settings";
+import type { ThreadPrAutoDispatchPending } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

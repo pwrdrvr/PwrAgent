@@ -1,7 +1,5 @@
-import {
-  AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
-  type ThreadHandoffOrigin,
-} from "@pwragent/shared";
+import { AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE } from "@pwragent/shared/contracts/navigation";
+import { type ThreadHandoffOrigin } from "@pwragent/shared/contracts/thread-orchestration-tools";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

@@ -1,6 +1,6 @@
 import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
-import { matchesAutomationConversation } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
@@ -20,12 +20,11 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
 } from "./core/messaging-adapter";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AgentEvent,
-  AppServerBackendKind,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
-  FederationEventSubscription,
   InboundPreviewMessage,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
@@ -37,11 +36,14 @@ import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   MessagingToolUpdateMode,
+} from "@pwragent/shared/contracts/messaging";
+import type { FederationEventSubscription } from "@pwragent/shared/contracts/federation";
+import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
   PwrAgentMessagingContext,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging-tools";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingRecord,
   MessagingAdapterAuthorizationUpdate,

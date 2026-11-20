@@ -2,7 +2,8 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { DismissFailedSubAgentsRequest, NavigationThreadSummary, ThreadActiveSubAgent } from "@pwragent/shared";
+import type { DismissFailedSubAgentsRequest } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary, ThreadActiveSubAgent } from "@pwragent/shared/contracts/navigation";
 import { ActiveSubAgentsStrip } from "../ActiveSubAgentsStrip";
 
 async function expectDismissalToSurviveRemount(count: number, bulk: boolean) {

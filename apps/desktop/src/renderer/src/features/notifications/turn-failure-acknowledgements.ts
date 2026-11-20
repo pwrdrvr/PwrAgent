@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, FederationInstanceId } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 
 export function turnFailureScopeKey(
   backend: AppServerBackendKind,

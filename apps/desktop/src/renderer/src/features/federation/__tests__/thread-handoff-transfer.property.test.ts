@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { ThreadHandoffProgress } from "@pwragent/shared";
+import type { ThreadHandoffProgress } from "@pwragent/shared/contracts/thread-instance-handoff";
 import {
   ETA_MIN_SAMPLE_MS,
   RATE_WINDOW_MS,

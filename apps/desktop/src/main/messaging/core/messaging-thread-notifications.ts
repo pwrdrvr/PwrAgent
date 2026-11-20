@@ -1,10 +1,12 @@
 import {
   parseThreadCorrespondenceMessage,
   threadNotificationSnippet,
-  type AgentEvent,
+} from "@pwragent/shared/contracts/thread-system-messages";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
   type AppServerThreadMessageOrigin,
   type ThreadIncomingWorkSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 function senderLabel(origin: AppServerThreadMessageOrigin): string {
   const source = origin.sourceThread;

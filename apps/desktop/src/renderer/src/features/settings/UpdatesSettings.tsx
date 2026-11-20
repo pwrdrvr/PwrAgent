@@ -13,12 +13,12 @@
 // tells main the pair is a pin rather than an inference.
 
 import { useEffect, useRef, useState } from "react";
-import { releaseNotesUrl } from "@pwragent/shared";
+import { releaseNotesUrl } from "@pwragent/shared/release-notes";
 import type {
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
   DesktopUpdateTrain,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type {
   AppUpdateCheckResult,
   AppUpdateReleaseVersions,

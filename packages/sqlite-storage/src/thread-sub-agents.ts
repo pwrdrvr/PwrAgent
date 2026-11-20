@@ -2,11 +2,11 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
-  type FailedSubAgentAttempt,
-  type SubAgentLens,
   type ThreadSubAgentSummary,
-  type TokenMiserGateAccountingTotals,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type FailedSubAgentAttempt } from "@pwragent/shared/contracts/agent";
+import { type SubAgentLens } from "@pwragent/shared/subagent-kind";
+import { type TokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 import { LegacyPayloadArrayMove } from "./legacy-payload-array-move";
 
 /**

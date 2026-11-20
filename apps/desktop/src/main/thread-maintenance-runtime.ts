@@ -1,7 +1,8 @@
 import { externalLinks as shell } from "./owner-host";
 import path from "node:path";
 import { stat } from "node:fs/promises";
-import { isToolManagedWorktreePath, type ThreadMaintenanceRun } from "@pwragent/shared";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { type ThreadMaintenanceRun } from "@pwragent/shared/thread-maintenance";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "./app-server/thread-maintenance-service";
 import { MAX_WORKTREE_SNAPSHOT_BYTES } from "./app-server/worktree-archive-service";

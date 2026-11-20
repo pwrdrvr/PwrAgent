@@ -1,4 +1,4 @@
-import { isAppServerBackendKind } from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";

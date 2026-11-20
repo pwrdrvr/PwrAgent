@@ -1,11 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { PrStatusWatchStorage } from "@pwragent/owner-core/pr-status-storage";
-import {
-  buildPullRequestStatusKey,
-  type AppServerTurnInputItem,
-  type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { type AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { mapGraphqlPrNode, type GraphqlPrNode } from "../pr-status/github-graphql-client";
 import { parseGitLabMr } from "../pr-status/gitlab-pr-fetcher";
 import type { GhCheckRunPayload } from "../pr-status/pr-derivations";

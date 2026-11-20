@@ -4,8 +4,11 @@ import type {
   PrMergeState,
   PrReviewState,
   PrSummary,
-} from "@pwragent/shared";
-import { DEFAULT_PULL_REQUEST_PROVIDER, resolvePullRequestIdentity } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import {
+  DEFAULT_PULL_REQUEST_PROVIDER,
+  resolvePullRequestIdentity,
+} from "@pwragent/shared/contracts/navigation";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 
 /**

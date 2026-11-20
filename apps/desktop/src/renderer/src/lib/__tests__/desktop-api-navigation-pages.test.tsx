@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { getDesktopApi, type DesktopApi } from "../desktop-api";
 
 const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" } };

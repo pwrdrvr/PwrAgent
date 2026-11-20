@@ -19,12 +19,12 @@ import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { threadLockRefusalMessage } from "@pwragent/shared";
+import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
 import {
   THREAD_EXECUTION_MODES_BY_ACCESS,
   threadExecutionModeForRawPermissions,
   threadExecutionModeRank,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-execution-mode";
 import { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -39,17 +39,19 @@ import {
 } from "vitest";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerPendingRequestNotification,
   AppServerThreadSummary,
   ArchiveThreadCleanupResult,
   ArchiveThreadRequest,
   HandoffThreadWorkspaceResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   MarkThreadSeenRequest,
   SetThreadParentRequest,
   SetThreadPinRequest,
-  PwrAgentMessagingResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { PwrAgentMessagingResponse } from "@pwragent/shared/contracts/messaging-tools";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";

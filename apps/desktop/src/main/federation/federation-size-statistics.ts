@@ -1,4 +1,4 @@
-import type { FederationPayloadSizeStats } from "@pwragent/shared";
+import type { FederationPayloadSizeStats } from "@pwragent/shared/contracts/federation";
 
 // 32 bins per power of two cover every nonnegative safe integer byte size.
 // Fixed storage: at most 1,698 numeric bins, independent of traffic volume.

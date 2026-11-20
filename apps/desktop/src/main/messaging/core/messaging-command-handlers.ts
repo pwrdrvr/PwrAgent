@@ -1,5 +1,5 @@
 import { federationTargetForBinding } from "./messaging-backend-event-helpers";
-import { permissionForCommandVerb } from "@pwragent/shared";
+import { permissionForCommandVerb } from "@pwragent/shared/contracts/rbac";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { buildHelpActions, formatMessagingCommandHelpBody, matchMessagingCommandVerb, MESSAGING_COMMAND_CATALOG, MESSAGING_HELP_ACTION_COMMANDS, MESSAGING_REVIEW_HELP_SPEC, paginateHelpCatalog } from "./messaging-command-catalog.js";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";

@@ -1,12 +1,12 @@
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type {
-  HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingPermissionId, NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { HandoffThreadWorkspaceResponse, HandoffThreadWorkspaceRequest } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { handoffSuccessText, MessagingHandoffWorkflow } from "../messaging/core/messaging-handoff-workflow";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 
 type Context = ConstructorParameters<typeof MessagingHandoffWorkflow>[0];
 const binding: MessagingBindingRecord = {

@@ -17,7 +17,7 @@ import {
   type ReadCodexEnvironmentDocumentResponse,
   type SaveCodexEnvironmentDocumentRequest,
   type SaveCodexEnvironmentDocumentResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/codex-environment-editor";
 import {
   CodexEnvironmentTomlError,
   formatCodexTomlValue,

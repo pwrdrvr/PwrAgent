@@ -20,7 +20,7 @@ import type {
   SetDesktopPwrAgentProfileMenuVisibilityResponse,
   WriteDesktopSecretsToProfileRequest,
   WriteDesktopSecretsToProfileResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,

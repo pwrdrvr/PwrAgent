@@ -1,4 +1,4 @@
-import type { BackendLaunchpadOptions, BackendModelOption } from "@pwragent/shared";
+import type { BackendLaunchpadOptions, BackendModelOption } from "@pwragent/shared/contracts/backend";
 
 export type ThreadTodoModelResolution =
   | { ok: true; model?: string; reasoningEffort?: string }

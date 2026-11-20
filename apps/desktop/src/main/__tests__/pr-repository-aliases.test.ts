@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { PullRequestRepositoryAliases } from "../pr-status/pr-repository-aliases";
 
 function pr(url: string, overrides: Partial<PrSummary> = {}): PrSummary {

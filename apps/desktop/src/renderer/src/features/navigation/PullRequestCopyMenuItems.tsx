@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { statusPulseRef } from "../../lib/status-pulse";
 import {
   prChipModifierClasses,

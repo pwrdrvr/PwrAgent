@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   AutomationDetail,
   AutomationIdRequest,
   AutomationRunArtifact,
@@ -8,9 +11,8 @@ import type {
   AutomationRunSummary,
   CreateAutomationRequest,
   ListAutomationsRequest,
-  ThreadIdentifier,
   UpdateAutomationRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type AutomationState = {

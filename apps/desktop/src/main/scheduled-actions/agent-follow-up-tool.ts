@@ -4,13 +4,15 @@ import {
   AGENT_FOLLOW_UP_MIN_DELAY_MS,
   type AgentFollowUpProtection,
   type AgentFollowUpSummary,
-  type AppServerBackendKind,
-  type AppServerThreadMessageOrigin,
-  type PwrAgentThreadInspectionResponse,
   type ScheduleFollowUpToolArgs,
   type ScheduleFollowUpToolResult,
   type ScheduledThreadAction,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import {
+  type AppServerBackendKind,
+  type AppServerThreadMessageOrigin,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type PwrAgentThreadInspectionResponse } from "@pwragent/shared/contracts/thread-tools";
 import type { AgentFollowUpToolHandler } from "../app-server/backend-registry-handlers.js";
 import { AgentFollowUpRefusal } from "./agent-follow-up-refusal.js";
 

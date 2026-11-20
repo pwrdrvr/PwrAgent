@@ -1,22 +1,29 @@
 import {
   buildSubAgentActivityDetail,
-  graphemePrefix,
-  buildTokenUsageActivityEntry,
   isSubAgentActivityDetail,
   readCodexNativeSubAgentName,
   readSubAgentActivity,
-  pwrSnapResourceLinkImageParts,
-  pwrSnapToolImageParts,
-  shortSubAgentThreadId,
   subAgentActivitySummaryParts,
   subAgentTargetLabel,
-} from "@pwragent/shared";
-export { buildTokenUsageActivityEntry, buildTurnUsageActivityEntryFromLine } from "@pwragent/shared";
+} from "@pwragent/shared/subagent-activity";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
+import { buildTokenUsageActivityEntry } from "@pwragent/shared/thread-usage-display";
+import {
+  pwrSnapResourceLinkImageParts,
+  pwrSnapToolImageParts,
+} from "@pwragent/shared/transcript-image-sources";
+import { shortSubAgentThreadId } from "@pwragent/shared/subagent-kind";
+export {
+  buildTokenUsageActivityEntry,
+  buildTurnUsageActivityEntryFromLine,
+} from "@pwragent/shared/thread-usage-display";
 import {
   classifyExplorationLabel,
   formatExplorationSummary,
   formatSearchCommandActionLabel,
   formatWebSearchLabel,
+} from "@pwragent/shared/command-action-labels";
+import {
   type AppServerSource,
   type AppServerThreadActivityDetail,
   type AppServerThreadActivityEntry,
@@ -24,7 +31,7 @@ import {
   type AppServerThreadImagePart,
   type AppServerThreadSubAgentCallDetail,
   type AppServerThreadTurnMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   formatDynamicToolOutput,
   formatMcpToolOutput,

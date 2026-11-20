@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, MessagingChannelKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";

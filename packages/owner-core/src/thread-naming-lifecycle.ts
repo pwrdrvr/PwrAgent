@@ -1,17 +1,19 @@
 import {
   buildThreadIdentityKey,
   isAcpBackendId,
+  type ThreadAgentMetadata,
+} from "@pwragent/shared/contracts/navigation";
+import {
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
-  shortenDerivedThreadTitle,
-  type AgentEvent,
   type AppServerBackendKind,
   type AppServerRenamedTitleSource,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
   type RenameThreadRequest,
   type RenameThreadResponse,
-  type ThreadAgentMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { OwnerThreadIdentity } from "./thread-storage";
 
 // Internal owner options, never accepted from the viewer's rename request.

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { navigationRequestByteBudget } from "./navigation-traffic-budget";
 
 it("charges diagnostic counters at their full wire width and retains all other metadata", () => {

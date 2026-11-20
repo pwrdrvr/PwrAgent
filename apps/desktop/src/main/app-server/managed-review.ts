@@ -1,4 +1,4 @@
-import type { AppServerReviewTarget } from "@pwragent/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
   reviewTargetInstructions,

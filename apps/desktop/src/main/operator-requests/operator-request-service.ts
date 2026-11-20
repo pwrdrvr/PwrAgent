@@ -1,21 +1,25 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerPendingRequestNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ListOperatorRequestsResponse,
   ListOperatorRequestsRequest,
   OperatorRequestsChangedEvent,
   OperatorServerRequest,
   OperatorQuestionThreadRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
 import {
   MAX_OPERATOR_ITEM_KEY_LENGTH,
-  codexAsyncQuestionReplyMessageId,
   operatorServerRequestItemKey,
   operatorQuestionItemKey,
+} from "@pwragent/shared/contracts/operator-requests";
+import {
+  codexAsyncQuestionReplyMessageId,
   readCodexAsyncQuestionRepliesFromNotification,
   readCodexAsyncQuestionsFromNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-async-questions";
 import type { OperatorRequestStorage } from "@pwragent/owner-core/operator-request-storage";
 
 /** The registry surface the service reads. */

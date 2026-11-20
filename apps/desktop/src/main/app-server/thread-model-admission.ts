@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, BackendLaunchpadOptions } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendLaunchpadOptions } from "@pwragent/shared/contracts/backend";
 
 type RequestedModelSettings = {
   model?: string;

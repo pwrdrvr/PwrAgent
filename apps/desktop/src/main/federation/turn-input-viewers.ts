@@ -1,10 +1,7 @@
-import type {
-  AppServerBackendKind,
-  FederatedThreadRef,
-  FederationInstanceId,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederatedThreadRef, FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 
 type ThreadKey = { backend: AppServerBackendKind; threadId: string };
 type TurnKey = ThreadKey & { turnId: string };

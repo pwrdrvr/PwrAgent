@@ -1,13 +1,9 @@
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  comparePinnedThreads,
-  isPinnedThread,
-  resolveThreadParentKey,
-  sortSubthreadSummaries,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared/thread-pins";
+import { resolveThreadParentKey, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   isThreadActive,

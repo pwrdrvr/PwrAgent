@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  AgentEvent,
-  AppServerBackendKind,
-  FederationRemoteTarget,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ThreadTodo,
@@ -11,13 +11,13 @@ import type {
   ThreadTodoMergeMethodPreferences,
   ThreadTodosChangedEvent,
   TodoUnavailableInstance,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   compareThreadTodosNewestFirst,
-  THREAD_TODO_BUSY_RETRY_MS,
   THREAD_TODO_FEED_ACKNOWLEDGED_METHOD,
   ThreadTodoFeedFollower,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-todo-feed";
+import { THREAD_TODO_BUSY_RETRY_MS } from "@pwragent/shared/contracts/thread-todos";
 import { projectRemoteThreadTodo, remoteThreadTodoId } from "../federation/federation-thread-todos";
 import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 

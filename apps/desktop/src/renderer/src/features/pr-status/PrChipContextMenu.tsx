@@ -1,4 +1,4 @@
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

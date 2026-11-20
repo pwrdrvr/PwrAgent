@@ -1,8 +1,5 @@
-import type {
-  FederationRemoteTarget,
-  IntegratedTerminalSessionSummary,
-  TerminalSnapshot,
-} from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { IntegratedTerminalSessionSummary, TerminalSnapshot } from "@pwragent/shared/contracts/terminal";
 
 export type IntegratedTerminalContextMenuRequest = {
   x: number;
@@ -49,7 +46,11 @@ export type IntegratedTerminalCreateRequest = {
   federationTarget?: FederationRemoteTarget;
 };
 
-export type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary, TerminalSnapshot } from "@pwragent/shared";
+export type {
+  IntegratedTerminalRemoteInfo,
+  IntegratedTerminalSessionSummary,
+  TerminalSnapshot,
+} from "@pwragent/shared/contracts/terminal";
 
 export type IntegratedTerminalSessionsEvent = {
   sessions: IntegratedTerminalSessionSummary[];

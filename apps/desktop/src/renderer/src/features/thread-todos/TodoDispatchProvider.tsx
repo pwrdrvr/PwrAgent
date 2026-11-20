@@ -1,8 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  BackendSummary, CodexSpeed, FederationTarget, ThreadTodo, ThreadTodoModelSettings, ThreadTodoWorkMode, ThreadTodoMessageTarget,
-} from "@pwragent/shared";
-import { threadTodoThreadKey } from "@pwragent/shared";
+  ThreadTodo,
+  ThreadTodoModelSettings,
+  ThreadTodoWorkMode,
+  ThreadTodoMessageTarget,
+} from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadJumpSearchApi } from "../navigation/useThreadJumpSearch";
 

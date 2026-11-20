@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import {
-  buildDirectorySummaries,
-  buildThreadIdentityKey,
-  isToolManagedWorktreePath,
   type AppServerThreadReplay,
+  type ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type ForkThreadRequest,
   type ForkThreadResponse,
   type ListThreadMigrationSourceThreadsRequest,
@@ -14,12 +17,10 @@ import {
   type ListThreadMigrationSourcesResponse,
   type StartThreadMigrationRequest,
   type StartThreadMigrationResponse,
-  type ThreadIdentifier,
   type ThreadMigrationRunItem,
   type ThreadMigrationSourceProjectGroup,
   type ThreadMigrationSourceThreadSummary,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { getOwnerHostServices } from "../owner-host";

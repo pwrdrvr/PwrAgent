@@ -1,5 +1,5 @@
 import type { JsonRpcConnectionOptions, JsonRpcTransport } from "@pwrdrvr/agent-transport";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { CodexExecutableIdentity } from "./app-server-installation";
 

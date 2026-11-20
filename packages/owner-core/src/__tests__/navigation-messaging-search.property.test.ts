@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
 function thread(id: string, source: AppServerBackendKind, title: string): NavigationThreadSummary {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { DecisionsProfileDecision } from "@pwragent/shared";
+import type { DecisionsProfileDecision } from "@pwragent/shared/decisions-rail";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useModalDialog } from "../../lib/useModalDialog";

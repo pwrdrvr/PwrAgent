@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopAppearanceDensity, NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { DesktopAppearanceDensity } from "@pwragent/shared/contracts/settings";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadRow } from "../ThreadRow";
 import { ThreadRowDensityContext } from "../thread-row-density";

@@ -1,9 +1,6 @@
 import type { WebContents } from "electron";
-import {
-  isAppServerBackendKind,
-  OPERATOR_FOCUS_VIEWS,
-  type OperatorFocusSnapshot,
-} from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { OPERATOR_FOCUS_VIEWS, type OperatorFocusSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 
 /**
  * Latest published operator focus, per local main window.

@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AppServerReadThreadResponse, AppServerThreadMessage } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadMessage,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 type MessageReference = { entryIndex: number; fields: string[] };
 type TextReference = { messageIndex: number };

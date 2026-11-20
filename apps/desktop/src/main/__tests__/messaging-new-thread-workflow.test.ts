@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { MessagingNewThreadWorkflow } from "../messaging/core/messaging-new-thread-workflow";
 import type { MessagingNewThreadContext } from "../messaging/core/messaging-new-thread-context";
 import { readMessagingLaunchpadContext } from "../messaging/core/messaging-launchpad-context";

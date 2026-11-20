@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import {
   AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS,
   type AutomationRunSourceMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type { AutomationRunner } from "../automations/automation-runner";
 import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../storage/automation-store";

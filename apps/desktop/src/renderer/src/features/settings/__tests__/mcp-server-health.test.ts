@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CodexMcpServerSummary } from "@pwragent/shared";
+import type { CodexMcpServerSummary } from "@pwragent/shared/contracts/agent";
 import {
   countMcpServerHealth,
   describeMcpServerTools,

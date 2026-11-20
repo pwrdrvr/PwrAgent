@@ -1,10 +1,10 @@
+import type { DesktopSpendAlertPolicy } from "@pwragent/shared/contracts/settings";
 import type {
-  DesktopSpendAlertPolicy,
   ThreadPricingSummary,
   ThreadSpendAlert,
   ThreadUsageLineRecord,
-} from "@pwragent/shared";
-import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared/thread-pricing-projection";
 
 const USD_MICROS = 1_000_000;
 

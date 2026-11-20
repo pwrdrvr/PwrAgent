@@ -1,7 +1,7 @@
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Transcript rows PwrAgent mints itself, as opposed to rows a provider issued.

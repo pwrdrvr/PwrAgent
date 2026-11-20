@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AppServerBackendKind,
-  BackendSummary,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { resolveReviewRunMode } from "../review-run-mode";
 
 function thread(

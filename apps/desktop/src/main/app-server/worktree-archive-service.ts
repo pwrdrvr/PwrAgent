@@ -5,8 +5,8 @@ import path from "node:path";
 import type {
   AppServerBackendKind,
   WorktreeSnapshotSummary,
-  ThreadMaintenanceRunStage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadMaintenanceRunStage } from "@pwragent/shared/thread-maintenance";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";

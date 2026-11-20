@@ -20,13 +20,12 @@ import { closeHistory } from "prosemirror-history";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { EditorContent, Extension, useEditor, type JSONContent } from "@tiptap/react";
+import { parseThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
+import { readSkillOrigin } from "@pwragent/shared/skill-origin";
 import {
-  parseThreadUrl,
-  readSkillOrigin,
   type AppServerSkillOrigin,
   type AppServerSkillSummary,
-  type ThreadLinkRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   parseBacktickFenceLine,
   repairNestedLanguageFences,

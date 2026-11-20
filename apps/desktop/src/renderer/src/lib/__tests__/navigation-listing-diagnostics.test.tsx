@@ -1,7 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { navigationListingDiagnostics, NavigationListingDiagnostics, setNavigationListingDiagnosticsEnabled } from "../navigation-listing-diagnostics";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { NavigationWindowQueries, navigationDemandKey } from "../navigation-window-queries";

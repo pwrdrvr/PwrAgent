@@ -18,10 +18,12 @@ import type {
   OpenAutomationRunWindowRequest,
   ReplayAutomationInboundRequest,
   RunAutomationNowResponse,
+  UpdateAutomationRequest,
+} from "@pwragent/shared/contracts/automations";
+import type {
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
-  UpdateAutomationRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import {
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,

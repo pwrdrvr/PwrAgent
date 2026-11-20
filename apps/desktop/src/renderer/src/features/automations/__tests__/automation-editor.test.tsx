@@ -9,17 +9,17 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AutomationDetail } from "@pwragent/shared/contracts/automations";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 import type {
-  AppServerBackendKind,
-  AutomationDetail,
-  BackendModelOption,
   InboundPreviewMessage,
-  McpConnectionStatus,
   MessagingChannelKind,
   MessagingPairingEntry,
-  NavigationThreadSummary,
-  ReadDesktopMessagingSettingsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ReadDesktopMessagingSettingsResponse } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {

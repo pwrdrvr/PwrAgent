@@ -1,4 +1,7 @@
-import type { ArchiveCleanupProgress, ArchiveThreadCleanupResult } from "@pwragent/shared";
+import type {
+  ArchiveCleanupProgress,
+  ArchiveThreadCleanupResult,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 import { withThreadActionErrorContext, type ThreadActionErrorContext } from "./thread-action-error-context";
 

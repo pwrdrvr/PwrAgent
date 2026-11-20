@@ -1,5 +1,5 @@
-import type { FederationHealthStatus } from "@pwragent/shared";
-import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
+import { formatFederationPeerDisplayLabel } from "@pwragent/shared/contracts/federation";
 import { federationViaLabel } from "./federation-transport";
 
 /**

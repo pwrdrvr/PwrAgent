@@ -3,7 +3,6 @@ import {
   isBuiltInRbacRoleId,
   resolveEffectivePermissions,
   roleIsDangerous,
-  type MessagingChannelKind,
   type RbacAdmittedVia,
   type RbacAttachment,
   type RbacPolicy,
@@ -11,8 +10,9 @@ import {
   type RbacRoleDefinition,
   type RbacSubject,
   type ReadRbacPolicyResponse,
-} from "@pwragent/shared";
-import { MESSAGING_PERMISSION_CATALOG } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/rbac";
+import { type MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import { MESSAGING_PERMISSION_CATALOG } from "@pwragent/shared/contracts/rbac";
 
 import {
   rbacPolicySourceFingerprint,

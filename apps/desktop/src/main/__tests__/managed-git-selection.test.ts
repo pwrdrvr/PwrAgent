@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DesktopGitRuntimeChoice } from "@pwragent/shared";
+import type { DesktopGitRuntimeChoice } from "@pwragent/shared/contracts/settings";
 import {
   currentGitRuntimeChoice,
   decodeGitRuntimeChoice,

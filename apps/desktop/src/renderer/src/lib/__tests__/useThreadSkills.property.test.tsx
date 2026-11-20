@@ -1,7 +1,10 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationLaunchpadDraft,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSkills } from "../useThreadSkills";
 

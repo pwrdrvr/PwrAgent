@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { _resetKeybindingsStoreForTests } from "../../../lib/keybindings-store";
 

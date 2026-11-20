@@ -1,10 +1,10 @@
 import type {
   AppServerBackendKind,
   ArchiveThreadCleanupResult,
-  FederationTarget,
   RemoveLockedThreadWorktreeResponse,
   WorktreeLockedKept,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 
 /** An archived thread's worktree that Git has locked by someone else, kept on disk. */

@@ -2,7 +2,7 @@ import type { AcpAvailableCommandsRecord, AcpAvailableCommandsStorage } from "@p
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "./state-db.js";
 
 export class AcpAvailableCommandsStore implements AcpAvailableCommandsStorage {

@@ -1,8 +1,8 @@
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-  ThreadQuestionnaireActivity,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadQuestionnaireActivity } from "@pwragent/shared/contracts/navigation";
 import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 export const QUESTIONNAIRE_ACTIVITY_ENTRY_PREFIX = "questionnaire:";

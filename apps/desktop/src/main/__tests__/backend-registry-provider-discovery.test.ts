@@ -30,18 +30,20 @@ import {
 } from "vitest";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerAvailableCommandSummary,
   AppServerThreadReplay,
   AppServerThreadSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   BackendAccountSummary,
   BackendAcpSessionRuntimeState,
   BackendSummary,
   BackendRateLimitSummary,
-  LinkedDirectorySummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";

@@ -1,22 +1,24 @@
-import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerBackendKind,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
   ComposerThreadOwner,
-  FederationTarget,
   ListComposerDraftRecoveryCandidatesRequest,
+} from "@pwragent/shared/contracts/composer-drafts";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
-  ModelSettingsRecent,
-  ReviewAfterAction,
-  ReviewRunMode,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ModelSettingsRecent, ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {

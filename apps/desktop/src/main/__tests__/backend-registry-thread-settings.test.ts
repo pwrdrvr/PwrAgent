@@ -24,15 +24,17 @@ import {
 } from "vitest";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
-  DesktopProviderThreadModelMigration,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
+import type { DesktopProviderThreadModelMigration } from "@pwragent/shared/contracts/settings";
 import { buildCodexFastModeMismatchNotificationParams, getCodexFastModeMismatchWarning } from "../app-server/thread-model-options";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";

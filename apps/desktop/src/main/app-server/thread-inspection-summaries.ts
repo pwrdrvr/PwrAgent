@@ -1,14 +1,20 @@
+import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import {
-  buildThreadMarkdownLink,
-  buildThreadUrl,
   type AppServerThreadEntry,
   type AppServerThreadMessage,
   type AppServerThreadSummary,
   type AppServerBackendKind,
   type LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type NavigationThreadSummary,
-  type SetThreadModelSettingsRequest,
   type MessagingThreadBindingSummary,
+  type ThreadOverlayState,
+  buildThreadIdentityKey,
+  isAppServerBackendKind,
+} from "@pwragent/shared/contracts/navigation";
+import { type SetThreadModelSettingsRequest } from "@pwragent/shared/contracts/agent";
+import {
   type MutateThreadToolArgs,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
@@ -17,12 +23,8 @@ import {
   type ThreadReadEntrySummary,
   type ThreadReadMessageSummary,
   type ThreadInspectionSummary,
-  type ThreadSearchFilters,
-  type ThreadSearchResult,
-  type ThreadOverlayState,
-  buildThreadIdentityKey,
-  isAppServerBackendKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import { type ThreadSearchFilters, type ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 import { PwrAgentFederatedThreadInspectionError } from "../agent-tools/pwragent-thread-agent-tools";
 import {
   dedupeLinkedDirectoriesByNormalizedIdentity,

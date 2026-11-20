@@ -23,10 +23,10 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   turnUsageEntryTurnId,
-  finalTurnOutputText,
   isTerminalTurnMetadata,
-  readUuidV7Timestamp,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-usage-display";
+import { finalTurnOutputText } from "@pwragent/shared/turn-output";
+import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerNotification,
@@ -47,16 +47,13 @@ import type {
   AppServerTransientThreadMessageEntry,
   AppServerThreadTurnMetadata,
   AppServerThreadImagePart,
-  MessagingChannelKind,
-  MessagingConversationKind,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  isAppServerBackendKind,
-  isCelestialIconId,
-  isProviderResponseBlockEntry,
-  threadTodoMessageOriginFromUnknown,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingChannelKind, MessagingConversationKind } from "@pwragent/shared/contracts/messaging";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isCelestialIconId } from "@pwragent/shared/contracts/celestial";
+import { isProviderResponseBlockEntry } from "@pwragent/shared/provider-response-block";
+import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { isPendingEntryId } from "./pending-entry-id";

@@ -18,10 +18,10 @@ import type {
   AutomationReplaySource,
   AutomationReplayUnsupportedReason,
   ListAutomationReplayCandidatesResponse,
-  MessagingChannelKind,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { useProviderLabelFormatter } from "../../lib/thread-provider-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";

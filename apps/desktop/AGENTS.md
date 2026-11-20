@@ -214,7 +214,7 @@ Desktop Vitest fails a test that spawns a real agent CLI, runs Git against the
 checkout, makes an outbound request, or touches operator state. Fix a failure
 by injecting a seam, never by widening a guard. Before fixing a guard failure,
 or changing the guards, `PWRAGENT_HOME`, XDG, or `PATH` sandboxing in
-`vitest.workspace.ts`, read [docs/vitest-guards.md](docs/vitest-guards.md).
+`vitest.workspace.mts`, read [docs/vitest-guards.md](docs/vitest-guards.md).
 
 ## Sqlite Write-Volume Instrumentation
 

@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
 import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
-import type { MessagingActivityEntry, MessagingPairingEntry } from "@pwragent/shared";
+import type { MessagingActivityEntry, MessagingPairingEntry } from "@pwragent/shared/contracts/messaging";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import type { MessagingRequestSource, MessagingRequestStore } from "../messaging/core/messaging-storage";
 import { MessagingActivityLog } from "../storage/messaging-activity-log";

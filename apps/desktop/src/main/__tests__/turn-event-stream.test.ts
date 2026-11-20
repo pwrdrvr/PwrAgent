@@ -30,7 +30,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { registryModules } from "../app-server/backend-registry-wiring";

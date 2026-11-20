@@ -1,7 +1,11 @@
 import { createHmac } from "node:crypto";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { FederationEnrollmentEntry, FederationSessionAuditEntry, FederationStorage } from "@pwragent/shared";
+import type {
+  FederationEnrollmentEntry,
+  FederationSessionAuditEntry,
+  FederationStorage,
+} from "@pwragent/shared/contracts/federation-storage";
 import { FederationStore as SharedStore } from "@pwragent/sqlite-storage/federation-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { FederationStore as DesktopStore } from "../storage/federation-store";

@@ -3,9 +3,9 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
-  CelestialIconId,
-  FederationInstanceId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 
 type FederatedSourceThreadRef = {
   backend: AppServerBackendKind;

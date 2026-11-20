@@ -2,7 +2,9 @@ import "@testing-library/jest-dom/vitest";
 import fc from "fast-check";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import {

@@ -7,8 +7,8 @@ import type {
   NavigationQueryRequest,
   NavigationRow,
   NavigationThreadSummary,
-} from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { Sidebar } from "../Sidebar";

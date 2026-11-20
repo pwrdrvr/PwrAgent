@@ -1,4 +1,4 @@
-import { graphemePrefix, graphemeSuffix } from "@pwragent/shared";
+import { graphemePrefix, graphemeSuffix } from "@pwragent/shared/text-graphemes";
 import { getDesktopApi, type DesktopApi } from "./desktop-api";
 
 export async function copyText(

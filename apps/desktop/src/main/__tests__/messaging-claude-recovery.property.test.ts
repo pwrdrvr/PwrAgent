@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { MessagingPermissionId } from "@pwragent/shared";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingInboundEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";

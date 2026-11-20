@@ -6,7 +6,7 @@ import {
   type FederationProtocolEnvelope,
   type FederationShutdownNotice,
   type FederationPeerShutdown,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import type { FederationRouterConnection } from "./federation-router";
 
 /** Ephemeral control-plane state: countdown ticks never write or send traffic. */

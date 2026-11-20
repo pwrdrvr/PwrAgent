@@ -1,11 +1,11 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  NavigationThreadSummary,
-  SubmitThreadReplyRequest,
-  SubmitThreadReplyResponse,
-} from "@pwragent/shared";
-import { codexAsyncQuestionItemId, formatCodexAsyncQuestionReply } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SubmitThreadReplyRequest, SubmitThreadReplyResponse } from "@pwragent/shared/contracts/agent";
+import {
+  codexAsyncQuestionItemId,
+  formatCodexAsyncQuestionReply,
+} from "@pwragent/shared/codex-async-questions";
 import { buildOperatorWaits } from "../operator-waits";
 import { useOffscreenQuestionAnswers } from "../useOffscreenQuestionAnswers";
 

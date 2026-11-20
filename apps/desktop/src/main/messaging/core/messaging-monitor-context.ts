@@ -1,6 +1,14 @@
 import type { MessagingTurns } from "./messaging-turn-state";
 import { type MessagingDeliveryGuard, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import type { AppServerBackendKind, FederatedThreadRef, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadIdentifier } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationSelectedDetailRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingChannelKind, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";

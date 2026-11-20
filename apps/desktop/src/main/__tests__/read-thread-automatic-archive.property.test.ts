@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse, ThreadSearchResult } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 import type { RegistryReadThreadRequest } from "../app-server/registry-host-ports";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";

@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  isFilePreviewPath,
-  isRemoteFederationTarget,
-  type FederationTarget,
-} from "@pwragent/shared";
+import { isFilePreviewPath } from "@pwragent/shared/file-preview";
+import { isRemoteFederationTarget, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { HTML_PREVIEW_FRAME_NAME } from "../../../../shared/html-preview";
 import { splitFilePath } from "./FileViewerHeader";
 import { BanIcon, FileCodeIcon, ShieldIcon } from "../../icons";

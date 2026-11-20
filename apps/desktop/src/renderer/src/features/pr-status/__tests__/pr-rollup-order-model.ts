@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 
 /**
  * An independent statement of the PR list order (`resolvePrRollup().ordered`):

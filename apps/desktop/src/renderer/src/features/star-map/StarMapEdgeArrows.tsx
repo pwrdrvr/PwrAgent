@@ -1,5 +1,5 @@
 import { memo, useSyncExternalStore, type CSSProperties } from "react";
-import type { CelestialIconId } from "@pwragent/shared";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { CelestialIcon } from "../../icons";
 import {
   computeStarMapEdgeArrows,

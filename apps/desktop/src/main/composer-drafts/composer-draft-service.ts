@@ -9,7 +9,7 @@ import type {
   RecordComposerDraftHistoryResponse,
   SaveComposerDraftRequest,
   SaveComposerDraftResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-drafts";
 import { createComposerDraftStorage } from "../storage/desktop-composer-draft-storage";
 
 export function saveComposerDraft(request: SaveComposerDraftRequest): SaveComposerDraftResponse {

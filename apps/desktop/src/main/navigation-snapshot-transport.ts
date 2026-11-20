@@ -7,13 +7,13 @@ import type {
   NavigationSnapshotTransportResponse,
   NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   buildNavigationSnapshotTransportScopeKey,
   buildThreadIdentityKey,
-  federatedThreadIdentityKey,
   normalizeThreadIdentityKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 
 type CachedNavigationSnapshot = {
   revision: string;

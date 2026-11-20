@@ -14,9 +14,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
+} from "@pwragent/shared/contracts/settings";
+import type {
   FederationHealthStatus,
   ReadFederationDiagnosticsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../../../shared/federation-receiving-folder";
 import { FederationCapabilities } from "../FederationCapabilities";

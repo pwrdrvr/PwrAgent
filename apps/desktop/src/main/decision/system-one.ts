@@ -1,4 +1,4 @@
-import { DECISION_SYSTEM_ONE_PATH } from "@pwragent/shared";
+import { DECISION_SYSTEM_ONE_PATH } from "@pwragent/shared/decision-models";
 
 /**
  * A server that speaks TypeSafe's System One API: TypeSafe's hosted Jev, or a

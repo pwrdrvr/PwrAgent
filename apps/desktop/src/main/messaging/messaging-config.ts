@@ -10,9 +10,8 @@ import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
-  MessagingToolUpdateMode,
-  MessagingChannelKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { MessagingToolUpdateMode, MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,

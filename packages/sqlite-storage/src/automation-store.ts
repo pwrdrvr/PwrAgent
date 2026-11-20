@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   AutomationBacklogPolicy,
   AutomationExecutionProfile,
   AutomationPriorRunLookback,
@@ -27,14 +30,11 @@ import type {
   AutomationStatus,
   AutomationTriggerDefinition,
   AutomationThreadSummary,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import {
   AUTOMATION_SCHEDULE_KINDS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
-  buildLegacyEncodedThreadIdentityKey,
-  buildThreadIdentityKey,
   formatAutomationConversationList,
   formatAutomationScheduleSummary,
   isSupportedAutomationInboundConditionGroup,
@@ -43,7 +43,11 @@ import {
   resolveAutomationDailyRunLimit,
   resolveAutomationRunTimeoutMs,
   resolveAutomationRunsPerHour,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import {
+  buildLegacyEncodedThreadIdentityKey,
+  buildThreadIdentityKey,
+} from "@pwragent/shared/contracts/navigation";
 import type { StateDb } from "./state-db.js";
 import { mergeTranscriptEvents } from "@pwragent/owner-core/automation-transcript-merge";
 import type { AutomationRunAdmission, AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";

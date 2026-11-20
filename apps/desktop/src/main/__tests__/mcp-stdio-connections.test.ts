@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { mcpConnectionsForPeer } from "@pwragent/shared";
+import { mcpConnectionsForPeer } from "@pwragent/shared/contracts/mcp-connections";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";

@@ -130,7 +130,7 @@ const nativeUpdater = {
   quitAndInstall: () => {},
 };
 
-vi.mock("@pwragent/shared", async (importOriginal) => await importOriginal());
+vi.mock("@pwragent/shared/contracts/settings", async (importOriginal) => await importOriginal());
 vi.mock("electron", () => ({
   app: { isPackaged: true, getVersion: () => "1.0.0", quit: () => {}, relaunch: () => {} },
   autoUpdater: { on: () => {}, removeListener: () => {}, checkForUpdates: () => {} },

@@ -10,7 +10,7 @@ import {
   type RbacRoleDefinition,
   type ReadRbacKnownSubjectsResponse,
   type ReadRbacPolicyResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/rbac";
 
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { AccessControlSettings } from "../AccessControlSettings";

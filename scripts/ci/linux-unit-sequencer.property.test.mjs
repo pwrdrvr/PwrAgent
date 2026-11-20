@@ -131,7 +131,7 @@ it("gives every Linux CI lane deadline headroom on the slowest measured runner",
   const workflow = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
   const job = workflow.split("\n  test:\n")[1].split("\n  test-result:\n")[0];
   const lanes = job.match(/lane: \[([\d, ]+)\]/)[1].split(",").map(Number);
-  const shards = Number(job.match(/--config vitest\.linux-ci\.ts --shard=\$\{\{ matrix\.lane \}\}\/(\d+) /)[1]);
+  const shards = Number(job.match(/--config vitest\.linux-ci\.mts --shard=\$\{\{ matrix\.lane \}\}\/(\d+) /)[1]);
   const deadlineSeconds = Number(job.match(/name: Test\n\s+id: unit-tests\n(?:\s+.*\n)*?\s+timeout-minutes: (\d+)\n/)[1]) * 60;
   expect(lanes).toEqual(Array.from({ length: shards }, (_, index) => index + 1));
   const suiteWorkSeconds = 1761;

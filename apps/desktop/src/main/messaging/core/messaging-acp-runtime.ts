@@ -3,9 +3,9 @@ import type {
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
-import { isAcpBackendId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 
 export type MessagingAcpRuntimeModeChoice = {
   description?: string;

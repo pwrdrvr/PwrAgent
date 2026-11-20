@@ -1,9 +1,9 @@
 import {
   type AppServerBackendKind,
-  type FederationRemoteTarget,
-  type ReadThreadFamilyPricingResponse,
   type ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import { type ReadThreadFamilyPricingResponse } from "@pwragent/shared/thread-family-pricing";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkRow } from "../../lib/thread-link-rows";
 export { readThreadInfoRow } from "../../lib/thread-link-rows";

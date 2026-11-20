@@ -4,24 +4,24 @@ import "@testing-library/jest-dom/vitest";
 import { act, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { StrictMode } from "react";
 import { DirectoriesList } from "../../features/navigation/DirectoriesList";
-import {
-  buildPullRequestStatusKey,
-  canonicalizeNavigationPath,
-  shortenDerivedThreadTitle,
-} from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerThreadTitleSource,
-  DesktopProviderModelDefaults,
-  FederationRemoteTarget,
   HandoffThreadWorkspaceResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopProviderModelDefaults } from "@pwragent/shared/contracts/settings";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
-  NavigationResumeState,
   NavigationSnapshot,
   NavigationThreadSummary,
   PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
 import { useMemo } from "react";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import { buildLaunchpadComposerScopeKey } from "../../features/composer/launchpad-composer-scope";

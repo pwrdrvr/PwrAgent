@@ -1,5 +1,5 @@
 import { useRef, useState, type RefObject } from "react";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { useModalDialog } from "../../lib/useModalDialog";
 
 const DETACH_PR_WARNING_DISMISSED_KEY = "pwragent.detachPrWarning.dismissed";

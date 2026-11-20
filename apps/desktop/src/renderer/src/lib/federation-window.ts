@@ -1,11 +1,7 @@
-import type {
-  FederationRemoteTarget,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 
 export function readRendererFederationTarget(): FederationRemoteTarget | undefined {
   const target = (window as typeof window & {

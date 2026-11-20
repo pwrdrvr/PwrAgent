@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadCreationLifecycle, type CreatedThreadIdentity, type CreatedThreadParent, type ThreadCreationHost, type ThreadCreationOptions, type ThreadCreationStage } from "../thread-creation-lifecycle";
 
 const backend = fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi", "acp:qwen");

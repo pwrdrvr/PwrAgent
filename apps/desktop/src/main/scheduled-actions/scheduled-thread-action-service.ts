@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AgentFollowUpProtection,
-  AppServerReviewTarget,
-  AppServerThreadMessageOrigin,
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
@@ -13,15 +11,19 @@ import type {
   ScheduledThreadActionMutationResponse,
   ScheduledThreadReviewPayload,
   UpdateScheduledThreadActionRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
+  AppServerReviewTarget,
+  AppServerThreadMessageOrigin,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { pullRequestSetLabel, samePullRequestSet } from "@pwragent/shared/pull-request-review";
 import {
   AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD,
   AGENT_FOLLOW_UP_MAX_DELAY_MS,
   AGENT_FOLLOW_UP_MIN_DELAY_MS,
   AGENT_FOLLOW_UP_PROMPT_MAX_CHARS,
-  isThreadLockRefusal,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";

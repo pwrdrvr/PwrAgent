@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import { buildThreadIdentityKey, resolveThreadParentKey, type AppServerBackendKind, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { canNestThread } from "../../renderer/src/features/navigation/thread-nest-drop";

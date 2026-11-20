@@ -1,13 +1,11 @@
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerThreadSummary,
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   compareBindingsByCreation,
   isBindingForThread,

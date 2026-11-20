@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import type { ResearchEvent } from "@pwragent/shared";
+import type { ResearchEvent } from "@pwragent/shared/research";
 import {
   emptyResearchDifferentialCoverage, expectResearchServicesAgree, researchDifferentialBoundsStepArb, researchDifferentialStepArb,
 } from "../../../../../packages/owner-core/src/__tests__/fixtures/research-differential";

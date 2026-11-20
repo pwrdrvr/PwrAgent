@@ -5,9 +5,11 @@ import fc from "fast-check";
 import type {
   RemoveLockedThreadWorktreeRequest,
   RemoveLockedThreadWorktreeResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ThreadMaintenanceRun,
   ThreadMaintenanceRunItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";
 import { itemAfterUnlockAndRemove, offersUnlockAndRemove } from "../thread-maintenance-run-items";

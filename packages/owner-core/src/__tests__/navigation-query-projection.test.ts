@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerThreadSummary,
   NavigationQueryRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadOverlayState,
-} from "@pwragent/shared";
-import { materializeNavigationThreads } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { materializeNavigationThreads } from "@pwragent/shared/navigation-state";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
 function thread(

@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerReviewTarget, PrSummary, StartReviewRequest } from "@pwragent/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { StartReviewRequest } from "@pwragent/shared/contracts/agent";
 import { parseClaudeCodeReviewPullRequests } from "../claude/claude-review-findings";
 import { prepareClaudeCodeReview } from "../app-server/claude-code-review-start";
 import {

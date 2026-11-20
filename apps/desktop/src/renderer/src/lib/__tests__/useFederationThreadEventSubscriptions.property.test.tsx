@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import fc from "fast-check";
-import type { FederationCapability, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../desktop-api";
 import { buildFederationThreadEventSubscriptions, useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";

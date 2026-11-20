@@ -1,5 +1,9 @@
 import type Database from "better-sqlite3";
-import { buildThreadIdentityKey, isAppServerBackendKind, type AppServerBackendKind, type WorktreeSnapshotSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import {
+  type AppServerBackendKind,
+  type WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { storageProcessAlive } from "./storage-maintenance";
 
 export type ArchiveCleanupIntent = {

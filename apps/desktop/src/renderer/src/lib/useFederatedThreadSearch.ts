@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { getDesktopApi, type DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 

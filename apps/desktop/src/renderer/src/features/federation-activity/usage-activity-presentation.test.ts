@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { usageChartStep, usageRollupStep } from "@pwragent/shared";
+import { usageChartStep, usageRollupStep } from "@pwragent/shared/contracts/usage-activity";
 import { usageBucketBounds, usageBucketLabel, usageCompletionBuckets, usageSpendStrip } from "./usage-activity-presentation";
 import { usageFixture } from "./usage-activity-fixture";
 

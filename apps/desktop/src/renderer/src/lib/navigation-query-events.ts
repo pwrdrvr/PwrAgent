@@ -1,1 +1,1 @@
-export { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
+export { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";

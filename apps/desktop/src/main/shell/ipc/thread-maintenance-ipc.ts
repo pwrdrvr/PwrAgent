@@ -6,7 +6,7 @@ import {
   type ThreadMaintenanceRun,
   type ThreadMaintenanceScan,
   type ThreadMaintenanceScanStep,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import {
   APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL,
   APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL,

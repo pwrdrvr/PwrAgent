@@ -3,8 +3,8 @@ import {
   isInjectedContextPlaceholderTitle,
 } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import {
-  shortenDerivedThreadTitle,
   type AppServerThreadEntry,
   type AppServerReviewContext,
   type AppServerThreadMessageOrigin,
@@ -12,9 +12,9 @@ import {
   type AppServerThreadReplay,
   type AppServerThreadSummary,
   type AppServerBackendKind,
-  type ThreadSubAgentSummary,
-  type CompleteMonitoringToolArgs,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { type CompleteMonitoringToolArgs } from "@pwragent/shared/contracts/task-monitor-tools";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { type ThreadTurnQueueOrigin } from "@pwragent/owner-core/thread-turn-queue";
 import { type QueuedMessageTitleSettlement } from "./queued-message-title";

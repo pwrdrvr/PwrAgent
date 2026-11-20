@@ -1,12 +1,9 @@
 import { useMemo, useRef } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type {
-  AgentEvent,
-  BackendSummary,
-  ComposerThreadOwner,
-  StartReviewRequest,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AgentEvent, StartReviewRequest } from "@pwragent/shared/contracts/agent";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";

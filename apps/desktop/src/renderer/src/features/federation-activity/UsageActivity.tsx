@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { parseUsageLimitProvider, type AppServerBackendKind, type DesktopHelperModelSettings, type FederationTarget,
-  type ReadUsageActivityResponse, type UsageAnalysisModelBackend } from "@pwragent/shared";
+import {
+  parseUsageLimitProvider,
+  type ReadUsageActivityResponse,
+  type UsageAnalysisModelBackend,
+} from "@pwragent/shared/contracts/usage-activity";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,

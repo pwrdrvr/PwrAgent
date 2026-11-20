@@ -2,10 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  federatedThreadIdentityKey,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadAttentionCategories } from "../attention";
 import {
   cardRiseDelays,

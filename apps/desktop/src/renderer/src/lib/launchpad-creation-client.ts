@@ -2,7 +2,7 @@ import type {
   LaunchpadCreationStatus,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "./desktop-api";
 
 export class LaunchpadStartupCancelledError extends Error {}

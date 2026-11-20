@@ -1,7 +1,9 @@
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { NavigationThreadSummary, SetThreadModelSettingsResponse, ThreadExecutionMode } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SetThreadModelSettingsResponse } from "@pwragent/shared/contracts/agent";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent, MessagingJsonValue } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { MessagingThreadSettings } from "../messaging/core/messaging-thread-settings";

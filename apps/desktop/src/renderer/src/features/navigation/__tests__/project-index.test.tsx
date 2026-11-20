@@ -3,7 +3,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { createRef } from "react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PROJECT_FORGE_AUTOMATION, type BackendSummary, type NavigationThreadSummary } from "@pwragent/shared";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../../lib/navigation-loaded-rows";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { ProjectIndex, type ProjectIndexEntry } from "../ProjectIndex";

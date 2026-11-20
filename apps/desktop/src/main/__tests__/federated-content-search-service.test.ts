@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind, ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { searchFederatedContent, type ContentSearchPeer } from "../federation/federated-content-search-service";
 import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPendingRequestActions,
   buildPendingRequestResponse,
-  deriveInboxState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pending-request-response";
+import { deriveInboxState } from "@pwragent/shared/inbox";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";

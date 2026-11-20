@@ -1,10 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  DesktopHelperModelSettings,
-} from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   codexCatalogModels,

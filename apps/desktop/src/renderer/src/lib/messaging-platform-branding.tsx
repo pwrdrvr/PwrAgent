@@ -1,8 +1,5 @@
 import type { ReactElement } from "react";
-import type {
-  MessagingActivityOrigin,
-  MessagingChannelKind,
-} from "@pwragent/shared";
+import type { MessagingActivityOrigin, MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
 import {
   DiscordIcon,
   FeishuIcon,

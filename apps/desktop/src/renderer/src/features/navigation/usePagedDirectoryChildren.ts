@@ -1,4 +1,4 @@
-import type { NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { useLayoutEffect, useRef } from "react";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";

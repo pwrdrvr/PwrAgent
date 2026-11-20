@@ -1,10 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  NavigationThreadSummary,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ActiveSubAgentsStrip } from "../ActiveSubAgentsStrip";
 

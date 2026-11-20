@@ -1,12 +1,11 @@
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   isRemoteFederationTarget,
   type FederationEventClass,
   type FederationEventSubscription,
   type FederationPeerSummary,
   type FederationThreadSelection,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 
 /** Graph invalidations are broad; only open cards own detail payload demand. */
 export function buildStarMapEventSubscriptions(

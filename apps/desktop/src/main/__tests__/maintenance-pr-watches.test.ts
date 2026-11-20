@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { PrSummary, ThreadPullRequestWatchSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { protectiveMaintenanceWatches } from "../app-server/maintenance-pr-watches";
 
 const identity = fc.record({

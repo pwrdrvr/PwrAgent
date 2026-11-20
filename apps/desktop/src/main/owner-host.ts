@@ -5,7 +5,16 @@ import type { StorageMaintenanceHost } from "./storage-maintenance-host";
 import type { BootstrapAppearance } from "./settings/appearance-bootstrap";
 import type { SettingsSecretEncryption } from "@pwragent/owner-core/settings-secret-storage";
 import type { MessagingApprovalDecision, MessagingApprovalIntent } from "@pwragent/messaging-interface";
-import type { AgentEvent, InboundPreviewMessage, CodexEnvironmentSetupProgressEvent, OpenThreadToolArgs, PwrAgentStarMapResponse, OperatorFocusSnapshot, StarMapCommandInput, StarMapCommandResponse, StarMapViewSnapshot } from "@pwragent/shared";
+import type { AgentEvent, CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
+import type { InboundPreviewMessage } from "@pwragent/shared/contracts/messaging";
+import type {
+  OpenThreadToolArgs,
+  PwrAgentStarMapResponse,
+  OperatorFocusSnapshot,
+  StarMapCommandInput,
+  StarMapCommandResponse,
+  StarMapViewSnapshot,
+} from "@pwragent/shared/contracts/star-map-tools";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
 import type { AppUpdateCancelResult, AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateStatus } from "../shared/app-metadata";
 import type { ClaudeSessionReaderChild } from "./claude/claude-session-reader-contracts";

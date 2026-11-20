@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { ArchiveThreadCleanupResult, RemoveLockedThreadWorktreeRequest, RemoveLockedThreadWorktreeResponse } from "@pwragent/shared";
+import type { ArchiveThreadCleanupResult, RemoveLockedThreadWorktreeRequest, RemoveLockedThreadWorktreeResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ArchiveThreadNotice } from "../archive-cleanup-notice";
 import { collectLockedArchiveWorktrees, formatLockedWorktreeNotice } from "../locked-worktree-notice";
 import { useLockedArchiveWorktreeNotice } from "../useLockedArchiveWorktreeNotice";

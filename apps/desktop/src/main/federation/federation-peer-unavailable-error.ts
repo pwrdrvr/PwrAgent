@@ -1,4 +1,4 @@
-import type { FederationInstanceId } from "@pwragent/shared";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 
 export const FEDERATION_PEER_UNAVAILABLE_ERROR_CODE =
   "FEDERATION_PEER_UNAVAILABLE";

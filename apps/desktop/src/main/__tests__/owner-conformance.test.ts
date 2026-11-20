@@ -10,7 +10,9 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerBackendKind, FederationCapability } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import {
@@ -47,11 +49,19 @@ import {
 } from "./helpers/owner-conformance";
 import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
 import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
-import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitDurableSteerRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
+import {
+  canonicalDurableSteerRequest,
+  canonicalDurableTurnRequest,
+} from "@pwragent/shared/durable-turn-request";
+import {
+  type SubmitDurableSteerRequest,
+  type SubmitDurableTurnRequest,
+} from "@pwragent/shared/contracts/durable-turn-requests";
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
-import { parseThreadCorrespondenceMessage, threadLockRefusalMessage } from "@pwragent/shared";
+import { parseThreadCorrespondenceMessage } from "@pwragent/shared/contracts/thread-system-messages";
+import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { publishSelfStartedWakes } from "../../../e2e/fixtures/self-started-wake-publication";
 import { withOwnerPauseState } from "../../renderer/src/features/composer/queued-turn-pause";

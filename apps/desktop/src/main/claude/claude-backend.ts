@@ -9,17 +9,43 @@ import type {
   SDKResultMessage, SDKUserMessage, SlashCommand, UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import { loadClaudeAgentSdk } from "./claude-sdk";
-import { isClaudeAuthenticationFailure } from "@pwragent/shared";
+import { isClaudeAuthenticationFailure } from "@pwragent/shared/claude-authentication";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerBackendWake, AppServerBackgroundTask, AppServerCollaborationModeRequest,
-  AppServerPendingRequestNotification, AppServerReviewContext,
-  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart, AppServerThreadMessageEntry,
+  AgentEvent,
+  AppServerCollaborationModeRequest,
+  CodexMcpServerSummary,
+  PreviewThreadRewindResponse,
+  SteerTurnDelivery,
+  ThreadRewindMode,
+  ThreadRewindTarget,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerAvailableCommandSummary,
+  AppServerBackendWake,
+  AppServerBackgroundTask,
+  AppServerPendingRequestNotification,
+  AppServerReviewContext,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+  AppServerThreadImagePart,
+  AppServerThreadMessageEntry,
   AppServerThreadMessageOrigin,
-  AppServerThreadMessagePart, AppServerThreadPlanEntry, AppServerThreadPlanStep, AppServerThreadReplay,
-  AppServerThreadReviewEntry, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
-  CodexMcpServerSummary, PreviewThreadRewindResponse, SteerTurnDelivery, ThreadRewindMode, ThreadRewindTarget, UsageLimitObservation,
-} from "@pwragent/shared";
+  AppServerThreadMessagePart,
+  AppServerThreadPlanEntry,
+  AppServerThreadPlanStep,
+  AppServerThreadReplay,
+  AppServerThreadReviewEntry,
+  AppServerThreadSummary,
+  AppServerTurnInputItem,
+  LinkedDirectorySummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  BackendModelOption,
+  BackendRateLimitSummary,
+  BackendSummary,
+} from "@pwragent/shared/contracts/backend";
+import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";

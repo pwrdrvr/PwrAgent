@@ -1,7 +1,11 @@
 import { Profiler } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationLaunchpadDraft,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { ThreadRow } from "../../features/navigation/ThreadRow";
 import { memoRenderObserver } from "../../test/memo-render-observer";

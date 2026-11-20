@@ -1,4 +1,4 @@
-import type { BackendAcpDistributionKind } from "@pwragent/shared";
+import type { BackendAcpDistributionKind } from "@pwragent/shared/contracts/backend";
 import type { AcpRegistryDistribution } from "./acp-registry-types.js";
 
 export function describeDistributionSource(

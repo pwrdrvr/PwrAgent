@@ -1,7 +1,11 @@
 import { createNavigationDiagnosticView } from "../../lib/navigation-listing-diagnostics";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../../shared/navigation-diagnostic-cause";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { NavigationDirectoryRow, NavigationQueryRequest, NavigationStarMapFilterSelection } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryRequest,
+  NavigationStarMapFilterSelection,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { NavigationWindowQueries, type NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { threadProjectKey } from "./star-map-projects";

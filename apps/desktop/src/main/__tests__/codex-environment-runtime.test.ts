@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyCodexEnvironmentActionRunUpdate,
   withoutSupersededCodexEnvironmentActionRuns,
-  type CodexThreadEnvironmentRuntime,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-environment-action-runs";
+import { type CodexThreadEnvironmentRuntime } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   applyLocalCodexEnvironmentSelection,
   attachDetachedCommandThreadId,

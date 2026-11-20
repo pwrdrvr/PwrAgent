@@ -1,4 +1,5 @@
-import type { AppServerThreadMessageOrigin, PwrAgentAppManagementContext } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentAppManagementContext } from "@pwragent/shared/contracts/app-tools";
 
 export type AppManagementAuthorizationPorts = {
   /** Only a host-bound, already accepted lifecycle operation may outlive its turn. */

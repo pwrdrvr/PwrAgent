@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
-  applyResearchChanges, emptyResearchRunStore, projectResearchRun, RESEARCH_MAP_LEAVES, researchApproachLeaves, researchApproachOccupiesSlot, researchChangePage, researchEventPage, researchRunState,
-  searchResearchItems, summarizeResearchRun, type ResearchApproach, type ResearchEvent, type ResearchEventData, type ResearchEventRange, type ResearchFinding, type ResearchItem,
-  type ResearchRun, type ResearchRunStore, type ResearchSearchQuery, type ResearchSubmission,
-} from "@pwragent/shared";
+  applyResearchChanges,
+  emptyResearchRunStore,
+  projectResearchRun,
+  RESEARCH_MAP_LEAVES,
+  researchApproachLeaves,
+  researchApproachOccupiesSlot,
+  researchChangePage,
+  researchEventPage,
+  researchRunState,
+  searchResearchItems,
+  summarizeResearchRun,
+  type ResearchApproach,
+  type ResearchEvent,
+  type ResearchEventData,
+  type ResearchEventRange,
+  type ResearchFinding,
+  type ResearchItem,
+  type ResearchRun,
+  type ResearchRunStore,
+  type ResearchSearchQuery,
+  type ResearchSubmission,
+} from "@pwragent/shared/research";
 import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../../../../packages/shared/src/__tests__/research-journal-arbitraries";
 import {
   appendResearchActivityOlder, appendResearchFindingsOlder, emptyResearchActivity, emptyResearchFindings, mergeResearchActivityHead, mergeResearchFindingsHead, researchActivityHeadRange,

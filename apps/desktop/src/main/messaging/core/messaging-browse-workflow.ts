@@ -1,4 +1,5 @@
-import type { BackendSummary, NavigationQuery } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationQuery } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,

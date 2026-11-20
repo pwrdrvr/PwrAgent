@@ -1,12 +1,11 @@
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { DecisionProviderCheck, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
-  BackendSummary,
-  DecisionProviderCheck,
-  DecisionProviderId,
   SettingsCredentialTestKind,
   SettingsCredentialTestResult,
   SettingsCredentialTestStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import type { CredentialValidationRequest } from "../messaging/messaging-runtime";

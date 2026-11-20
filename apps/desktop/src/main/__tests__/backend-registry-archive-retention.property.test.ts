@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { buildThreadIdentityKey, type AppServerThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 
 const providers = ["codex", "claude", "acp:kimi"] as const;

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   FEDERATION_SHUTDOWN_CHANGED_METHOD,
   type FederationPeerShutdown,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 

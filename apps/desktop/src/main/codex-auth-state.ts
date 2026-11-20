@@ -3,7 +3,7 @@ import path from "node:path";
 export const CODEX_SIGN_IN_REQUIRED =
   "Codex is logged out. Please sign in again to resume operations.";
 
-export { isCodexAuthenticationFailure } from "@pwragent/shared";
+export { isCodexAuthenticationFailure } from "@pwragent/shared/codex-authentication";
 
 /** Runtime evidence overrides credential-file discovery. No timer or SQLite writes. */
 export class CodexAuthState {

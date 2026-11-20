@@ -1,5 +1,6 @@
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
-import { threadTodoThreadKey, type AddRemoteThreadPinResponse, type ThreadTodo } from "@pwragent/shared";
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { type AddRemoteThreadPinResponse } from "@pwragent/shared/contracts/navigation";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
@@ -14,7 +15,9 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
-import { classifyDirectory, detectProviderResponseBlock, directoryIncludesCheckout, operatorTodoItemKey } from "@pwragent/shared";
+import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import { detectProviderResponseBlock } from "@pwragent/shared/provider-response-block";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -35,39 +38,46 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
-  DEFAULT_THREAD_TODO_MERGE_METHOD,
+  type MessagingThreadBindingSummary,
+  type NavigationThreadSummary,
+  type PrSummary,
+  SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
+} from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD } from "@pwragent/shared/contracts/thread-todos";
+import {
   federatedThreadIdentityKey,
+  isRemoteFederationTarget,
+  type FederationInstanceId,
+  type FederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
-  isRemoteFederationTarget,
-  resolveNewThreadBackend,
-  type AppServerBackendKind,
-  type WorktreeSnapshotSummary,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
   type DesktopSettingsSnapshot,
-  type FederationInstanceId,
-  type FederationTarget,
-  type MessagingChannelKind,
-  type MessagingThreadBindingSummary,
-  type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
-  type PrSummary,
-  type ThreadToolAccounting,
-  type ThreadToolIncidentNoticeState,
-  type ThreadToolInvocationAlert,
-  type ThreadSpendAlert,
-  type ThreadUsageLineRecord,
-  type SetThreadToolIncidentNoticeRequest,
-  type SubmitServerRequestRequest,
   DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
+} from "@pwragent/shared/contracts/settings";
+import { resolveNewThreadBackend } from "@pwragent/shared/backend-selection";
+import {
+  type AppServerBackendKind,
+  type WorktreeSnapshotSummary,
+  type ThreadToolAccounting,
+  type ThreadToolInvocationAlert,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import {
+  type ThreadToolIncidentNoticeState,
+  type SetThreadToolIncidentNoticeRequest,
   resolveToolIncidentVisibility,
-  SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import { type ThreadSpendAlert, type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
 import { Sidebar } from "./features/navigation/Sidebar";
 import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList";
 import { isSubthreadLaunchpadDraft, pendingThreadTitleLine } from "./features/navigation/StartingThreadRow";
@@ -1298,7 +1308,7 @@ function DesktopAppShell(props: {
             incidentNotice?: ThreadToolIncidentNoticeState;
             toolAccounting?: ThreadToolAccounting;
             displayInvalidated?: true;
-            incidentSummary?: import("@pwragent/shared").ThreadIncidentSummary;
+            incidentSummary?: import("@pwragent/shared/thread-incident-summary").ThreadIncidentSummary;
             triggeredAlerts?: ThreadToolInvocationAlert[];
           };
           /* One card per thread, folded from the whole accounting snapshot,

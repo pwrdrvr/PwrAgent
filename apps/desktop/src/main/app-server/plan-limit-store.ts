@@ -1,4 +1,4 @@
-import type { BackendRateLimitSummary } from "@pwragent/shared";
+import type { BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 
 /**
  * Account plan limits for every provider (Codex, Claude, ACP agents), one

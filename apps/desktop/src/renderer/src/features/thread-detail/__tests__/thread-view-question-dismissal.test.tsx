@@ -3,8 +3,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerProps } from "../../composer/Composer";
 import type { ThreadTodosView } from "../../thread-todos/thread-todos-view";
-import { buildFederatedThreadRef, threadTodoThreadKey, type ThreadTodo, type NavigationThreadSummary, type OperatorQuestionThreadRequest,
-  type OperatorRequestsChangedEvent } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import {
+  type OperatorQuestionThreadRequest,
+  type OperatorRequestsChangedEvent,
+} from "@pwragent/shared/contracts/operator-requests";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import { ThreadView, type ThreadViewProps } from "../ThreadView";
 

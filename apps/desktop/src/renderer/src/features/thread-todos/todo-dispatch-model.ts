@@ -1,5 +1,7 @@
-import type { BackendSummary, CodexSpeed, ThreadTodoModelSettings } from "@pwragent/shared";
-import { codexSpeedOptions } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
+import type { ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
+import { codexSpeedOptions } from "@pwragent/shared/codex-speed";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { FEDERATION_TARGET_AVAILABILITY_LABEL } from "../chrome/federation-thread-targets";
 

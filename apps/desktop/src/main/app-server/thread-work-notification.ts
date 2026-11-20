@@ -1,9 +1,9 @@
+import { threadNotificationSnippet } from "@pwragent/shared/contracts/thread-system-messages";
 import {
-  threadNotificationSnippet,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
   type ThreadIncomingWorkSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /** Read the contribution list, never attribute a whole grouped steer to its first sender. */
 export function buildIncomingWorkSummary(params: {

@@ -1,8 +1,5 @@
-import type {
-  AppServerBackendKind,
-  MarkThreadSeenRequest,
-  MarkThreadSeenResponse,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { MarkThreadSeenRequest, MarkThreadSeenResponse } from "@pwragent/shared/contracts/navigation";
 import {
   getDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,

@@ -3,11 +3,8 @@ import type {
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
 } from "@pwragent/messaging-interface";
-import {
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 
 export type MessagingTurnInputEvent =
   | MessagingInboundTextEvent

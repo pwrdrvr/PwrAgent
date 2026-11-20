@@ -4,7 +4,12 @@ import {
   FEDERATION_PEER_ROLE_CHANGED_METHOD,
   FEDERATION_PEER_ROLE_METHOD,
 } from "@pwragent/federation/federation-backend-methods";
-import { FEDERATION_CAPABILITIES, FEDERATION_INVITE_VERSION, type FederationPeerRole, type FederationProtocolEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_CAPABILITIES,
+  FEDERATION_INVITE_VERSION,
+  type FederationPeerRole,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { encodeFederationInvite } from "@pwragent/federation/federation-enrollment";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";

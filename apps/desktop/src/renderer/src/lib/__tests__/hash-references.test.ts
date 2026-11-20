@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildHashReferenceOptions,
   collapseHashReferenceWhitespace,

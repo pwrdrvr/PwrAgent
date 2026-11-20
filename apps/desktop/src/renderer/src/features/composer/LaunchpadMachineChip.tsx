@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { CelestialIconId } from "@pwragent/shared";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { CelestialIcon, ServerIcon } from "../../icons";
 import type { ProjectIdentity } from "../../lib/federation-project-match";
 import {

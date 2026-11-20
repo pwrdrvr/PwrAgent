@@ -4,36 +4,25 @@ import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
-import {
-  resolveModelOptionReference,
-} from "@pwragent/shared";
+import { resolveModelOptionReference } from "@pwragent/shared/codex-model-providers";
 import {
   buildProjectPausedThreadMessageRefusal,
   PROJECT_PAUSED_ERROR_CODE,
   projectRefusesThreadMessages,
-} from "@pwragent/shared";
-import {
-  isRemoteLaunchpadStorageKey,
-  type FederationTarget,
-  type ReadThreadWorktreeLockRequest,
-  type ReadThreadWorktreeLockResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import { isRemoteLaunchpadStorageKey } from "@pwragent/shared/contracts/navigation";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   type AcpBackendId,
-  buildThreadMarkdownLink,
-  buildThreadUrl,
-  shortenDerivedThreadTitle,
   type AppServerPendingRequestNotification,
   type AppServerThreadMessageOrigin,
   type AppServerToolRequestUserInputResponse,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
-  type CreatedThreadEnvironmentReport,
-  type ForkThreadResponse,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type LinkedDirectorySummary,
@@ -41,12 +30,26 @@ import {
   type MoveThreadToMainCheckoutResponse,
   type RecreateThreadWorktreeRequest,
   type RecreateThreadWorktreeResponse,
+  type ThreadExecutionMode,
+  type ThreadWorkspaceHandoffDirection,
+  type ThreadWorkspaceHandoffStrategy,
+  type ReadThreadWorktreeLockRequest,
+  type ReadThreadWorktreeLockResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import {
+  type CreatedThreadEnvironmentReport,
+  type ForkThreadResponse,
+  type SubmitServerRequestRequest,
+  type EnsureDirectoryLaunchpadRequest,
+  type EnsureDirectoryLaunchpadResponse,
+  THREAD_ENVIRONMENT_NONE,
+} from "@pwragent/shared/contracts/agent";
+import {
   DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
-  type PendingThreadHandoffPhase,
-  type PendingThreadHandoffSummary,
-  type PendingThreadWorkspaceMoveSummary,
   type PwrAgentThreadOrchestrationRequest,
   type PwrAgentThreadOrchestrationResponse,
   type HandoffTaskResult,
@@ -56,19 +59,19 @@ import {
   type HandoffTaskInheritedSettings,
   type HandoffTaskMessagingAttachment,
   type ThreadHandoffOriginWorkspace,
-  type SubmitServerRequestRequest,
-  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import {
+  type PendingThreadHandoffPhase,
+  type PendingThreadHandoffSummary,
+  type PendingThreadWorkspaceMoveSummary,
+} from "@pwragent/shared/contracts/thread-tools";
+import {
   type ThreadOverlayState,
-  type ThreadWorkspaceHandoffDirection,
-  type ThreadWorkspaceHandoffStrategy,
-  type EnsureDirectoryLaunchpadRequest,
-  type EnsureDirectoryLaunchpadResponse,
   buildThreadIdentityKey,
-  insertSubthreadIdAfter,
   isAcpBackendId,
   isAppServerBackendKind,
-  THREAD_ENVIRONMENT_NONE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { insertSubthreadIdAfter } from "@pwragent/shared/subthreads";
 import {
   ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
   acpSessionHasConversationHistory,
@@ -973,7 +976,7 @@ export class ThreadWorkspaceService {
     return await this.host().gitDirectoryService.allocateCodexWorktreePath(repositoryPath);
   }
 
-  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared/contracts/thread-instance-handoff").ThreadHandoffExport> {
     const client = this.host().getClient("codex", "default");
     if (!client.exportThreadForHandoff) throw new Error("This backend does not support protocol thread export.");
     const exported = await client.exportThreadForHandoff(threadId);

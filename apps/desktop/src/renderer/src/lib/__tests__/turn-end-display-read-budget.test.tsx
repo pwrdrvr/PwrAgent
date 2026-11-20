@@ -1,15 +1,17 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
-  buildThreadPricingDisplay,
-  type AgentEvent,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadEntry,
-  type FederationTarget,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
+import {
   type NavigationSelectedDetailResponse,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useNavigationSelectedDetail } from "../useNavigationSelectedDetail";
 import { useThreadDisplayResource } from "../useThreadDisplayResource";

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

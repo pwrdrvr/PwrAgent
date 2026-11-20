@@ -1,6 +1,8 @@
 import type {
-  HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingPermissionId, NavigationThreadSummary,
-} from "@pwragent/shared";
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 import type {
   MessagingActiveTurnSummary, MessagingBindingRecord, MessagingCapabilityProfile, MessagingDeliveryResult,
@@ -20,6 +22,7 @@ import {
 } from "./messaging-status-card";
 import type { MessagingStoreLike } from "./messaging-storage";
 import type { MessagingThreadContext } from "./messaging-thread-state";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 
 interface MessagingHandoffContext {
   readonly backend: Pick<MessagingBackendBridge, "getNavigationQueryPage" | "handoffThreadWorkspace" | "readThreadWorktreeLock">;

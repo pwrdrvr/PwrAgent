@@ -36,21 +36,22 @@ import type {
   SetFederationPeerRoleResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
-  SetCelestialIconRequest,
-  SetCelestialIconResponse,
-  SetFederationShortNameRequest,
-  SetFederationShortNameResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   WatchFederatedDirectorySetRequest,
   WatchFederatedDirectorySetResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import type { SetCelestialIconRequest, SetCelestialIconResponse } from "@pwragent/shared/contracts/celestial";
+import type {
+  SetFederationShortNameRequest,
+  SetFederationShortNameResponse,
+} from "@pwragent/shared/contracts/federation-short-names";
+import { isCelestialIconId } from "@pwragent/shared/contracts/celestial";
 import {
-  isCelestialIconId,
   isFederationEventClass,
   isFederationInstanceId,
   isFederationPinDisposition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_READ_ACTIVITY_CHANNEL,
   FEDERATION_RESET_ACTIVITY_CHANNEL,

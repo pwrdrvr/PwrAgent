@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse } from "@pwragent/shared";
+import type {
+  NavigationQueryEntry,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationSelectedDetailResponse,
+} from "@pwragent/shared/contracts/navigation";
 import {
   applyNavigationPage,
   applyNavigationSelectedDetail,

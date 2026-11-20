@@ -6,8 +6,8 @@ import type {
   AutomationReplaySource,
   AutomationRunSummary,
   GetAutomationRunArtifactResponse,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { AutomationsScreen } from "../AutomationsScreen";
 import { ThreadProviderCatalogsContext } from "../../../lib/thread-provider-label";

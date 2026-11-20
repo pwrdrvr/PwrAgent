@@ -3,7 +3,7 @@ import type {
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { AppMetadata } from "../../../../shared/app-metadata";
 import {
   buildCodexProtocolCaptureHandoffMessage,

@@ -1,18 +1,15 @@
 import {
   threadDependencyConditionName,
   threadDependencyConditionPhrase,
+  type ThreadDependency,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
   THREAD_PENDING_WAKE_TEXT_MAX_CHARS,
   THREAD_PENDING_WAKES_ENDED_MAX_LIMIT,
   buildThreadPendingWakeKey,
-  isThreadLockRefusal,
   parseThreadPendingWakeKey,
-  type AppServerBackendKind,
-  type AppServerBackendWake,
-  type AppServerBackgroundTask,
   type PendingWakeScheduledAction,
   type PendingWakeScheduledActions,
-  type ThreadDependency,
-  type ProjectHeldWakeupSource,
   type ThreadPendingHeldMessageSource,
   type ThreadPendingWake,
   type ThreadPendingWakeEnded,
@@ -20,11 +17,20 @@ import {
   type ThreadPendingWakesErrorCode,
   type ThreadPendingWakesList,
   type ThreadPendingWakesResponse,
+} from "@pwragent/shared/contracts/thread-pending-wakes";
+import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
+import {
+  type AppServerBackendKind,
+  type AppServerBackendWake,
+  type AppServerBackgroundTask,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ProjectHeldWakeupSource } from "@pwragent/shared/project-forge-automation";
+import {
   type ThreadPrAutoFixState,
   type ThreadPrWatchHistoryEntry,
-  type ThreadPullRequestWatchSummary,
-  type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-pr-watches";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import { type ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 
 export type PendingWakeThread = { backend: AppServerBackendKind; threadId: string };
 

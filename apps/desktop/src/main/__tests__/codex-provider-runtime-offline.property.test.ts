@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import type { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 

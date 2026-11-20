@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { THREAD_SUB_AGENTS_MOVED_META_KEY } from "../state/thread-sub-agents";

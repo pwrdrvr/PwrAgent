@@ -1,6 +1,9 @@
 import { lstat, stat } from "node:fs/promises";
 import path from "node:path";
-import { REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
+import {
+  REBUILDABLE_OUTPUT_NAMES,
+  type ThreadMaintenanceWorkspace,
+} from "@pwragent/shared/thread-maintenance";
 import { runGitCommand } from "./git-executable";
 import { isOutsideAnyGitRepository, WORKSPACE_KEEP_REASONS } from "./thread-archive-sweeper";
 

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
-import { PWRAGENT_TOOL_NAMESPACE, type AppServerPendingRequestNotification, type ThreadExecutionMode } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import {
+  type AppServerPendingRequestNotification,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { FORGE_PR_TOOL_OPERATIONS, FORGE_PR_WRITE_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
 import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";

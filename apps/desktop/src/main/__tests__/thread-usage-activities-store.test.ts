@@ -1,9 +1,8 @@
+import { MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   type AppServerThreadActivityEntry,
   type AppServerThreadSummary,
-  type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

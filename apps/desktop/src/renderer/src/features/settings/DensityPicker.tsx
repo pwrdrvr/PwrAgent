@@ -1,9 +1,6 @@
 import { useMemo, useRef, type KeyboardEvent } from "react";
-import type {
-  DesktopAppearanceDensity,
-  NavigationThreadSummary,
-  PrSummary,
-} from "@pwragent/shared";
+import type { DesktopAppearanceDensity } from "@pwragent/shared/contracts/settings";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadRow } from "../navigation/ThreadRow";
 import { ThreadRowDensityContext } from "../navigation/thread-row-density";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";

@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { PwrAgentAppRequest } from "@pwragent/shared";
+import type { PwrAgentAppRequest } from "@pwragent/shared/contracts/app-tools";
 import type { AppUpdateStatus } from "../../shared/app-metadata";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";

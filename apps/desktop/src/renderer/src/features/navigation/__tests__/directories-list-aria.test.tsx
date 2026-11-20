@@ -16,7 +16,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { FixtureDirectoriesList as DirectoriesList } from "../../../test/navigation-presentation-fixture";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 

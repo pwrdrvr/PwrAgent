@@ -1,4 +1,5 @@
-import { buildPullRequestStatusKey, FORGE_PRODUCTS, type PrSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { FORGE_PRODUCTS } from "@pwragent/shared/forge-product";
 import { getMainLogger } from "../log";
 import { parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef as PrRef } from "./forge-pr-ref";
 import {

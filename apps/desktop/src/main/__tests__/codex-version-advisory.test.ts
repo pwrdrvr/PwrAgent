@@ -3,7 +3,7 @@ import {
   CODEX_MINIMUM_RECOMMENDED_VERSION,
   isCodexVersionBelowMinimum,
   parseCodexVersionCore,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-version";
 import {
   buildCodexVersionAdvisory,
   classifyCodexInstaller,

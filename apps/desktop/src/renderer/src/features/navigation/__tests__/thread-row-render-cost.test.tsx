@@ -2,12 +2,9 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  NavigationThreadSummary,
-  PrSummary,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { ThreadRow } from "../ThreadRow";
 import { PrChip } from "../../pr-status/PrChip";
 import {

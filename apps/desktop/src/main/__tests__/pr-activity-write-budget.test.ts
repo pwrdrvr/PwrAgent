@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";
 import { PrActivityJournal } from "../pr-status/pr-activity";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

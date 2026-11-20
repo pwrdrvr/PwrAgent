@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildFederatedThreadRef,
-  federatedThreadIdentityKey,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { buildDirectoryThreadRenderModel } from "../directory-thread-render-model";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 

@@ -1,6 +1,6 @@
 import "./foreground-fixture";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { beforeEach, expect, it, vi } from "vitest";
 import { StarMapWindow } from "../StarMapWindow";
 

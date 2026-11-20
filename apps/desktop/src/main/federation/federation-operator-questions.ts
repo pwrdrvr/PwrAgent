@@ -1,4 +1,4 @@
-import type { FederationCapability } from "@pwragent/shared";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import { localOperatorQuestionOperations } from "../operator-requests/operator-request-runtime";
 import type { FederationRouter } from "./federation-router";
 

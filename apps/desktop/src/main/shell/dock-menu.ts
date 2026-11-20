@@ -1,6 +1,4 @@
-import type {
-  DesktopPwrAgentProfileSummary,
-} from "@pwragent/shared";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
 import type { MenuItemConstructorOptions } from "electron";
 
 /**

@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendCapabilities, BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { BackendCapabilities, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { StarMapReviewSetup } from "../StarMapReviewSetup";
 
 const thread = {

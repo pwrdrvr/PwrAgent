@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerThreadSummary, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

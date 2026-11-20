@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FederationHealthStatus } from "@pwragent/shared";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 

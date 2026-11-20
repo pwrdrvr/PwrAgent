@@ -1,16 +1,17 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BackendSummary, ListBackendsRequest } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  BackendSummary,
-  FederationTarget,
-  ListBackendsRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
+  ThreadTodo,
+} from "@pwragent/shared/contracts/thread-todos";
+import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationThreadSummary,
-  ThreadTodo,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import type { ThreadTodoInstance } from "../thread-todos-view";

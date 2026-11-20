@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
-import type { AppServerBackendKind, ArchiveThreadCleanupResult, FederationTarget } from "@pwragent/shared";
+import type { AppServerBackendKind, ArchiveThreadCleanupResult } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { formatArchiveCleanupNotice, type ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { DesktopApi } from "./desktop-api";
 import {

@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadActivityEntry } from "@pwragent/shared";
+import type { AppServerThreadActivityEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   applyProtocolActivityNotice,
   protocolActivityEntriesAtTurnEnd,

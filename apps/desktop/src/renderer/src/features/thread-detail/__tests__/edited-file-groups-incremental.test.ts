@@ -3,7 +3,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   MAX_RETAINED_TURN_GROUPS,
   collectEditedFileGroups,

@@ -1,15 +1,18 @@
 import {
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   isThreadSubAgentVisibleInPanel,
+} from "@pwragent/shared/subagent-visibility";
+import {
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
-  subAgentLens,
-  totalTokenMiserGateAccountings,
-  type AppServerBackendKind,
-  type AppServerThreadActivityEntry,
-  type SubAgentLens,
   type ThreadOverlayState,
   type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { subAgentLens, type SubAgentLens } from "@pwragent/shared/subagent-kind";
+import { totalTokenMiserGateAccountings } from "@pwragent/shared/token-miser-savings-summary";
+import {
+  type AppServerBackendKind,
+  type AppServerThreadActivityEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { OverlayStoreLike } from "../../state/overlay-store-sqlite";
 import { TOKEN_MISER_MONITOR_ID_PREFIX } from "../../state/thread-sub-agents";
 

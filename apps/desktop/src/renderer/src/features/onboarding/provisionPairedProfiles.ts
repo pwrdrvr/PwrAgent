@@ -1,7 +1,4 @@
-import {
-  isCanonicalProfileName,
-  normalizeProfileName,
-} from "@pwragent/shared";
+import { isCanonicalProfileName, normalizeProfileName } from "@pwragent/shared/profile-names";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export { normalizeProfileName };

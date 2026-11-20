@@ -1,9 +1,10 @@
-import type { AgentEvent, NavigationDirectorySummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-query-events";
 
 /**
  * The thread-list reuse window. A provider can list a thread that PwrAgent

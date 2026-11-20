@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { BackendSummary, ThreadTodoModelSettings } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
 import { todoDispatchRecentResolves } from "../todo-dispatch-model";
 
 const backend = { kind: "codex", available: true, capabilities: { createThread: true }, launchpadOptions: {

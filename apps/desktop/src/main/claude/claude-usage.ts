@@ -1,5 +1,5 @@
 import type { ModelUsage, SDKControlGetUsageResponse, SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { BackendRateLimitSummary } from "@pwragent/shared";
+import type { BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 
 export type ClaudeUsageTotals = Record<string, ModelUsage>;
 

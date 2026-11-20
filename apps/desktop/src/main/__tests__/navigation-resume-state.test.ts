@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationResumeState } from "@pwragent/shared";
+import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

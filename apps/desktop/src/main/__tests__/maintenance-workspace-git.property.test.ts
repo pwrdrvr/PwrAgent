@@ -10,7 +10,7 @@ import { inspectMaintenanceWorkspace } from "../app-server/thread-maintenance-wo
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "../app-server/checkout-hibernation-workspace";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { WorktreeRecoveryService } from "../app-server/worktree-recovery-service";
-import type { WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { WorktreeSnapshotSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 
 const execute = promisify(execFile);

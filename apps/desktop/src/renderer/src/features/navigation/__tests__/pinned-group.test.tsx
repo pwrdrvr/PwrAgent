@@ -3,12 +3,12 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { ComponentProps } from "react";
+import { KEEP_AT_TOP_RANK_BOUNDARY } from "@pwragent/shared/thread-pins";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
 import {
-  KEEP_AT_TOP_RANK_BOUNDARY,
-  type BackendSummary,
   type NavigationQueryPage,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { RecentsList, readPinnedGroupCounts } from "../RecentsList";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";

@@ -13,9 +13,12 @@ import { randomBytes } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import type {
-  FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope, FederationServiceDataEnvelope,
-  ServiceStreamData, ServiceThread,
-} from "@pwragent/shared";
+  FederationCapability,
+  FederationNotificationEnvelope,
+  FederationProtocolEnvelope,
+  FederationServiceDataEnvelope,
+} from "@pwragent/shared/contracts/federation";
+import type { ServiceStreamData, ServiceThread } from "@pwragent/shared/contracts/federation-services";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
 import { serviceDataEnvelope } from "../federation/federation-service-stream";

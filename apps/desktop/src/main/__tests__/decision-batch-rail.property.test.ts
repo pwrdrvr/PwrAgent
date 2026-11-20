@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DecisionsRailItem, DecisionsRailItemFilter } from "@pwragent/shared";
+import type { DecisionsRailItem, DecisionsRailItemFilter } from "@pwragent/shared/decisions-rail";
 import {
   DECISION_INPUT_PREVIEW_MAX_BYTES,
   decisionInputPreview,

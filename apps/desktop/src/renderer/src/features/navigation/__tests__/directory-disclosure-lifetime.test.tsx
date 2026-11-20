@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { useNavigationDirectoryDisclosure } from "../../../lib/useNavigationDirectoryDisclosure";
 import { FixtureDirectoriesList as DirectoriesList } from "../../../test/navigation-presentation-fixture";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";

@@ -1,5 +1,6 @@
 import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
-import { isAcpBackendId, type AcpBackendId } from "@pwragent/shared";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "./state-db.js";
 
 type AcpPersistedTranscriptUpdate = {

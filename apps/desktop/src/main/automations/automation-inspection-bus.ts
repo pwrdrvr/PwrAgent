@@ -1,5 +1,10 @@
 import type {
   AutomationDetail,
+  AutomationRunArtifact,
+  AutomationRunSummary,
+  AutomationTimelineCard,
+} from "@pwragent/shared/contracts/automations";
+import type {
   AutomationInspectionArtifact,
   AutomationInspectionAutomationSummary,
   AutomationInspectionContext,
@@ -12,16 +17,13 @@ import type {
   AutomationInspectionToolArgsByOperation,
   AutomationInspectionToolDataByOperation,
   AutomationInspectionToolData,
-  AutomationRunArtifact,
-  AutomationRunSummary,
-  AutomationTimelineCard,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automation-tools";
 import {
   isAutomationInspectionOperationName,
   normalizeAutomationInspectionEventLimit,
   normalizeAutomationInspectionRunLimit,
   normalizeAutomationInspectionTextLimitChars,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automation-tools";
 import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
 
 export class AutomationInspectionBus {

@@ -1,17 +1,17 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  AppServerBackendKind,
-  NavigationThreadSummary,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   STAR_MAP_MANAGER_AGENT_INSTRUCTIONS,
   STAR_MAP_MANAGER_AGENT_NAME,
   STAR_MAP_MANAGER_THREAD_TITLE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";

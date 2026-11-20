@@ -1,9 +1,9 @@
 import {
   formatFederationPeerDisplayLabel,
-  type CelestialIconId,
   type FederationCapability,
   type FederationHealthStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { type CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { federationDisplayLabel } from "../../lib/federation-display-label";
 
 /**

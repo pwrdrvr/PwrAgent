@@ -6,7 +6,7 @@ import {
   type PrLifecycleState,
   type PrMergeQueueStatus,
   type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";

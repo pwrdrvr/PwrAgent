@@ -5,11 +5,11 @@ import type {
   ThreadToolAnalysisCoverage,
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   TOOL_OUTPUT_CAP_CHARS,
   TOOL_OUTPUT_WARNING_CHARS,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
 import {
   buildToolInvocationSteeringPrompt,
   buildToolOutputMetrics,

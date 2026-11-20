@@ -65,17 +65,13 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import {
-  buildFederatedThreadRef,
-  buildNavigationSnapshot,
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
-  PWRSNAP_MCP_CONNECTION_ID,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION } from "@pwragent/shared/contracts/messaging-tools";
+import { PWRSNAP_MCP_CONNECTION_ID } from "@pwragent/shared/contracts/mcp-connections";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -83,17 +79,22 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   BackendAccountSummary,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
-  CodexThreadEnvironmentRuntime,
-  CreateScheduledThreadActionRequest,
+} from "@pwragent/shared/contracts/backend";
+import type { CreateScheduledThreadActionRequest } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
   NavigationThreadSummary,
-  PwrAgentMessagingResponse,
   ThreadOverlayState,
   ThreadSubAgentSummary,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { PwrAgentMessagingResponse } from "@pwragent/shared/contracts/messaging-tools";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { withTokenMiserBridgeDescriptorEnv } from "../app-server/codex-thread-config";
 import type { CodexServerCapabilities } from "../codex-app-server/desktop-client";
@@ -8833,7 +8834,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await resolving;
       // A replacement connection has no materialize response, only status RPCs.
-      const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
+      const replies: import("@pwragent/shared/contracts/federation").FederationProtocolEnvelope[] = [];
       router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"], sendEnvelope: (envelope) => { replies.push(envelope); } });
       await route("read", FEDERATION_BACKEND_METHODS.manageLaunchpadCreation, { operationId: request.operationId, action: "read" });
       expect(replies).toContainEqual(expect.objectContaining({ requestId: "read", result: { operation: expect.objectContaining({
@@ -9707,7 +9708,7 @@ command = "pnpm dev"
   it("refuses a federated Claude/Terra creation at the owner", async () => {
     const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null });
-    const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
+    const replies: import("@pwragent/shared/contracts/federation").FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
     router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: (envelope) => { replies.push(envelope); } });
     registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });

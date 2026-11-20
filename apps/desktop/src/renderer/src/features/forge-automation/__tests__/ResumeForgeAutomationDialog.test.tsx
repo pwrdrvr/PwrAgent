@@ -5,7 +5,7 @@ import type {
   ProjectHeldWakeup,
   ResolveProjectHeldWakeupsRequest,
   ResolveProjectHeldWakeupsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import {
   ResumeForgeAutomationDialog,

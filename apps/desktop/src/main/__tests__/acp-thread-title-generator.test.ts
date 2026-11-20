@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { parse } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import { AcpThreadTitleGenerator } from "../app-server/acp-thread-title-generator";
 
 describe("AcpThreadTitleGenerator", () => {

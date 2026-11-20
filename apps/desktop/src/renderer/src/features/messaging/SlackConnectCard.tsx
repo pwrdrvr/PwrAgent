@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { DesktopSettingsValue } from "@pwragent/shared";
+import type { DesktopSettingsValue } from "@pwragent/shared/contracts/settings";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SlackAppIconStep } from "./SlackAppIconStep";

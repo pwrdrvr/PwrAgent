@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadEntry } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildClaudeSessionPrimer } from "../claude/claude-session-primer";
 
 const message = (role: "user" | "assistant", text: string, id: string): AppServerThreadEntry =>
