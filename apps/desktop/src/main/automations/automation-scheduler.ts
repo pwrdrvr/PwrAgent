@@ -1069,25 +1069,22 @@ export class AutomationScheduler {
     const pending = this.pendingSkipCounts.get(markerId);
     const count = (pending?.count ?? marker.coalescedCount ?? 1) + 1;
     const writtenAt = marker.completedAt ?? now;
-    if (Math.abs(now - writtenAt) >= SKIP_MARKER_FLUSH_MS) {
-      if (pending?.timer) this.clearTimer(pending.timer);
-      this.pendingSkipCounts.set(markerId, {
-        count,
-        skipReason: params.skipReason,
-        message: params.message,
-      });
-      return this.flushSkipCount(markerId, now) ?? marker;
-    }
-    const timer = pending?.timer ?? this.setTimer(() => {
-      this.flushSkipCount(markerId, this.now());
-    }, Math.max(0, writtenAt + SKIP_MARKER_FLUSH_MS - now));
-    timer.unref?.();
-    this.pendingSkipCounts.set(markerId, {
+    const next: PendingSkipCount = {
       count,
       skipReason: params.skipReason,
       message: params.message,
-      timer,
-    });
+      timer: pending?.timer,
+    };
+    this.pendingSkipCounts.set(markerId, next);
+    if (Math.abs(now - writtenAt) >= SKIP_MARKER_FLUSH_MS) {
+      return this.flushSkipCount(markerId, now) ?? marker;
+    }
+    if (!next.timer) {
+      next.timer = this.setTimer(() => {
+        this.flushSkipCount(markerId, this.now());
+      }, Math.max(0, writtenAt + SKIP_MARKER_FLUSH_MS - now));
+      next.timer.unref?.();
+    }
     return marker;
   }
 
