@@ -6,20 +6,40 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
+  readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const teamRequirement = '=anchor apple generic and certificate leaf[subject.OU] = "T44CNHC4UH"';
+const runtimeDirectoryMode = 0o755;
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const checked = (command, args, options = {}) => {
   const r = spawnSync(command, args, { encoding: "utf8", timeout: 120_000, windowsHide: true, ...options });
   if (r.error || r.status !== 0) throw new Error(`${command} failed: ${r.error?.message ?? r.stderr}`);
   return r.stdout.trim();
 };
+
+// Node's rename cannot replace a nonempty directory. Keep the published path
+// a real directory for packagers by exchanging both entries in one syscall.
+const exchangeDirectories = (staging, output) => checked("python3", ["-I", "-c", `
+import ctypes
+import os
+import sys
+
+source, target = map(os.fsencode, sys.argv[1:])
+libc = ctypes.CDLL(None, use_errno=True)
+if sys.platform == 'darwin':
+    result = libc.renamex_np(source, target, 2)  # RENAME_SWAP
+elif sys.platform == 'linux':
+    result = libc.renameat2(-100, source, -100, target, 2)  # AT_FDCWD, RENAME_EXCHANGE
+else:
+    raise RuntimeError('Atomic runtime replacement requires macOS or Linux')
+if result != 0:
+    raise OSError(ctypes.get_errno(), 'Atomic runtime directory exchange failed', sys.argv[2])
+`, staging, output]);
 
 export function readRuntimeManifest(path, platform, arch) {
   const m = JSON.parse(readFileSync(path, "utf8"));
@@ -116,9 +136,15 @@ export function verifyRuntime(root, pin, { requireSigned = true, probe = true } 
 }
 
 export async function stageRuntime({ manifestPath, platform, arch, output, cache = join(homedir(), ".cache", "pwrgit-runtime") }) {
+  output = resolve(output);
   const pin = readRuntimeManifest(manifestPath, platform, arch);
   if (existsSync(output)) {
-    try { verifyRuntime(output, pin); return pin; } catch { /* Replace a stale stage atomically. */ }
+    try {
+      if ((statSync(output).mode & 0o7777) === runtimeDirectoryMode) {
+        verifyRuntime(output, pin);
+        return pin;
+      }
+    } catch { /* Prepare a verified replacement. */ }
   }
   mkdirSync(cache, { recursive: true, mode: 0o700 });
   const archive = join(cache, `${pin.asset.sha256}.tar.gz`);
@@ -138,14 +164,19 @@ export async function stageRuntime({ manifestPath, platform, arch, output, cache
   mkdirSync(dirname(output), { recursive: true });
   const temp = mkdtempSync(join(dirname(output), ".pwrgit-stage-"));
   const staging = join(temp, "runtime");
-  const previous = join(temp, "previous");
   mkdirSync(staging);
   try {
     checked("tar", ["-xpzf", archive, "-C", staging]);
+    // The archive contains the children, so extraction does not set this mode.
+    chmodSync(staging, runtimeDirectoryMode);
     verifyRuntime(staging, pin);
-    if (existsSync(output)) renameSync(output, previous);
-    try { renameSync(staging, output); }
-    catch (error) { if (existsSync(previous)) renameSync(previous, output); throw error; }
+    try {
+      renameSync(staging, output);
+    } catch (error) {
+      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
+      exchangeDirectories(staging, output);
+    }
+    // After an exchange, the old runtime is under temp and can be removed.
   } finally { rmSync(temp, { recursive: true, force: true }); }
   return pin;
 }

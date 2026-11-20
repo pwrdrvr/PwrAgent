@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -120,7 +120,8 @@ esac
     const temp = mkdtempSync(join(tmpdir(), "pwragent-extraction-"));
     roots.push(temp);
     const archive = join(temp, "fixture.tar.gz");
-    execFileSync("tar", ["-czf", archive, "-C", root, "."]);
+    // Published archives contain the children, with no root directory entry.
+    execFileSync("tar", ["-czf", archive, "-C", root, ...readdirSync(root)]);
     const digest = sha256(readFileSync(archive));
     renameSync(archive, join(temp, `${digest}.tar.gz`));
     const manifestPath = join(temp, "manifest.json");
@@ -145,6 +146,7 @@ esac
         await stageRuntime({ manifestPath: process.argv[2], platform: "linux", arch: "x64",
           output: process.argv[3], cache: process.argv[4] });
       `, String(mask), manifestPath, output, temp], { stdio: "pipe" });
+      expect(lstatSync(output).mode & 0o7777).toBe(0o755);
       expect(verifyRuntime(output, pin, { probe: false }).version).toBe(version);
     }), { numRuns: 12, examples: [[0o077]] });
   });
