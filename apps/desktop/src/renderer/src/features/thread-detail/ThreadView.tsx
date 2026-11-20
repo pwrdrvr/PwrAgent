@@ -1200,6 +1200,21 @@ export function ThreadView(props: ThreadViewProps) {
   const pendingProtocolActivityEntriesRef = useRef<
     readonly AppServerThreadActivityEntry[]
   >(NO_PROTOCOL_ACTIVITY_ENTRIES);
+  // Writes the ref before the state, so a turn end handled in the same batch
+  // as a notice still defers that notice's row.
+  const updatePendingProtocolActivityEntries = useCallback(
+    (
+      update: (
+        current: readonly AppServerThreadActivityEntry[],
+      ) => readonly AppServerThreadActivityEntry[],
+    ) => {
+      const next = update(pendingProtocolActivityEntriesRef.current);
+      if (next === pendingProtocolActivityEntriesRef.current) return;
+      pendingProtocolActivityEntriesRef.current = next;
+      setPendingProtocolActivityEntries(next);
+    },
+    [],
+  );
   const pendingUsageActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
     undefined,
   );
@@ -1281,7 +1296,7 @@ export function ThreadView(props: ThreadViewProps) {
   // the feature hooks are stable; the event callback reads them after commit.
   const resetThreadViewState = useEventCallback(() => {
     setPendingActivityEntry(undefined);
-    setPendingProtocolActivityEntries(NO_PROTOCOL_ACTIVITY_ENTRIES);
+    updatePendingProtocolActivityEntries(() => NO_PROTOCOL_ACTIVITY_ENTRIES);
     setPendingUsageActivityEntry(undefined);
     setPendingPlanEntry(undefined);
     setLastCompletedPlanEntry(undefined);
@@ -1316,12 +1331,10 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     pendingActivityEntryRef.current = pendingActivityEntry;
-    pendingProtocolActivityEntriesRef.current = pendingProtocolActivityEntries;
     pendingUsageActivityEntryRef.current = pendingUsageActivityEntry;
     pendingPlanEntryRef.current = pendingPlanEntry;
   }, [
     pendingActivityEntry,
-    pendingProtocolActivityEntries,
     pendingUsageActivityEntry,
     pendingPlanEntry,
   ]);
@@ -2779,7 +2792,7 @@ export function ThreadView(props: ThreadViewProps) {
           event.notification.method === "mcpServer/startupStatus/updated"
             ? { method: "mcpServer/startupStatus/updated", params }
             : { method: "mcpServer/oauthLogin/completed", params };
-        setPendingProtocolActivityEntries((current) =>
+        updatePendingProtocolActivityEntries((current) =>
           applyProtocolActivityNotice(current, notice, { threadId: selectedThread.id })
         );
         return;
@@ -2855,13 +2868,12 @@ export function ThreadView(props: ThreadViewProps) {
         for (const explaining of protocolActivityEntriesAtTurnEnd(
           pendingProtocolActivityEntriesRef.current,
           event.notification.method === "turn/failed" ? "failed" : "cancelled",
+          liveTerminalTurn,
         )) {
-          deferLiveTranscriptEntry(
-            liveTerminalTurn ? { ...explaining, turn: liveTerminalTurn } : explaining,
-          );
+          deferLiveTranscriptEntry(explaining);
         }
         setPendingActivityEntry(undefined);
-        setPendingProtocolActivityEntries(NO_PROTOCOL_ACTIVITY_ENTRIES);
+        updatePendingProtocolActivityEntries(() => NO_PROTOCOL_ACTIVITY_ENTRIES);
         setPendingUsageActivityEntry(undefined);
         return;
       }
@@ -2908,10 +2920,11 @@ export function ThreadView(props: ThreadViewProps) {
           for (const protocolActivity of protocolActivityEntriesAtTurnEnd(
             pendingProtocolActivityEntriesRef.current,
             "completed",
+            liveTurn,
           )) {
-            deferLiveTranscriptEntry({ ...protocolActivity, turn: liveTurn });
+            deferLiveTranscriptEntry(protocolActivity);
           }
-          setPendingProtocolActivityEntries(NO_PROTOCOL_ACTIVITY_ENTRIES);
+          updatePendingProtocolActivityEntries(() => NO_PROTOCOL_ACTIVITY_ENTRIES);
 
           const completedUsageActivity = completeEntryTurn(
             pendingUsageActivityEntryRef.current,
@@ -2936,7 +2949,7 @@ export function ThreadView(props: ThreadViewProps) {
           method: "warning",
           params: { message: event.notification.params.message },
         };
-        setPendingProtocolActivityEntries((current) =>
+        updatePendingProtocolActivityEntries((current) =>
           applyProtocolActivityNotice(current, notice, { threadId: selectedThread.id })
         );
         return;
@@ -2952,7 +2965,7 @@ export function ThreadView(props: ThreadViewProps) {
           turnId: liveNotificationTurnId(notification.params.turnId),
           activeTurnStartedAt: props.activeTurnStartedAt,
         });
-        setPendingProtocolActivityEntries((current) =>
+        updatePendingProtocolActivityEntries((current) =>
           applyProtocolActivityNotice(current, notification, {
             threadId: selectedThread.id,
             ...(turn ? { turn } : {}),
@@ -3087,6 +3100,7 @@ export function ThreadView(props: ThreadViewProps) {
     deferLiveTranscriptEntry,
     liveNotificationTurnId,
     selectedThread,
+    updatePendingProtocolActivityEntries,
   ]);
 
   async function respondToPendingRequest(action: PendingRequestAction): Promise<void> {

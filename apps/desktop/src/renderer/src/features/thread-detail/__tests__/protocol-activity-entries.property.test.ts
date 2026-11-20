@@ -164,7 +164,7 @@ describe("pending protocol activity rows", () => {
         const entries = replay(notices, (live, step) => {
           expectAllShown(live, expectedNotices(notices.slice(0, step + 1)));
         });
-        expectAllShown(protocolActivityEntriesAtTurnEnd(entries, "completed"), expectedNotices(notices));
+        expectAllShown(protocolActivityEntriesAtTurnEnd(entries, "completed", undefined), expectedNotices(notices));
       }),
     );
   });
@@ -175,7 +175,7 @@ describe("pending protocol activity rows", () => {
         fc.array(noticeArb, { minLength: 1, maxLength: 16, size: "max" }),
         fc.constantFrom<ProtocolActivityTurnEnd>("failed", "cancelled"),
         (notices, end) => {
-          const kept = protocolActivityEntriesAtTurnEnd(replay(notices), end);
+          const kept = protocolActivityEntriesAtTurnEnd(replay(notices), end, undefined);
           const explaining = new Map(
             [...expectedNotices(notices)].filter(([, notice]) => notice.kind !== "mcp"),
           );
@@ -184,6 +184,47 @@ describe("pending protocol activity rows", () => {
           expect([...shownNotices(kept).keys()].some((key) => key.startsWith("live-mcp-"))).toBe(false);
         },
       ),
+    );
+  });
+
+  it("keeps each turn's deferred rows when a later turn repeats the same notices", () => {
+    // `upsertLiveTranscriptEntry` retains deferred rows in a Map keyed by row
+    // id, so a later turn's row with the same id would replace this turn's.
+    const turnArb = fc.record({
+      notices: fc.array(noticeArb, { maxLength: 6 }),
+      end: fc.constantFrom<ProtocolActivityTurnEnd>("completed", "failed", "cancelled"),
+    });
+    fc.assert(
+      fc.property(fc.array(turnArb, { minLength: 2, maxLength: 4, size: "max" }), (turns) => {
+        const retained = new Map<string, AppServerThreadActivityEntry>();
+        const expectedByTurn = turns.map(({ notices, end }, index) => {
+          const turnId = `turn-${index + 1}`;
+          const turnNotices = notices.map((notice): ProtocolActivityNotice =>
+            notice.method === "turn/modelRerouted" || notice.method === "turn/verificationRequested"
+              ? { ...notice, params: { ...notice.params, turnId } } as ProtocolActivityNotice
+              : notice
+          );
+          const deferred = protocolActivityEntriesAtTurnEnd(
+            replay(turnNotices),
+            end,
+            { id: turnId, status: end === "completed" ? "completed" : end },
+          );
+          for (const entry of deferred) retained.set(entry.id, entry);
+          const expected = expectedNotices(turnNotices);
+          return {
+            turnId,
+            expected: end === "completed"
+              ? expected
+              : new Map([...expected].filter(([, notice]) => notice.kind !== "mcp")),
+          };
+        });
+        for (const { turnId, expected } of expectedByTurn) {
+          expectAllShown(
+            [...retained.values()].filter((entry) => entry.turn?.id === turnId),
+            expected,
+          );
+        }
+      }),
     );
   });
 
@@ -207,7 +248,7 @@ describe("pending protocol activity rows", () => {
       },
     ]);
     expect(entries).toHaveLength(2);
-    expect(protocolActivityEntriesAtTurnEnd(entries, "failed").map((entry) => entry.summary)[0])
+    expect(protocolActivityEntriesAtTurnEnd(entries, "failed", undefined).map((entry) => entry.summary)[0])
       .toBe("Warning: Low disk space");
   });
 

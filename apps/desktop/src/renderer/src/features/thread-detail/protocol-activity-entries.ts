@@ -77,21 +77,34 @@ export function applyProtocolActivityNotice(
 }
 
 /**
- * The rows a turn end defers into the transcript. A completed turn keeps every
- * row. A failed or cancelled turn keeps warnings and model routing, which can
- * explain why it ended; MCP startup and login status is ambient session state.
+ * The rows a turn end defers into the transcript, stamped with that turn. A
+ * completed turn keeps every row. A failed or cancelled turn keeps warnings
+ * and model routing, which can explain why it ended; MCP startup and login
+ * status is ambient session state.
+ *
+ * Deferred rows are retained by id, so MCP and warning rows, whose live ids
+ * do not name a turn, take the turn's id. Otherwise the same warning or MCP
+ * row in a later turn would replace this turn's row.
  */
 export function protocolActivityEntriesAtTurnEnd(
   entries: readonly AppServerThreadActivityEntry[],
   end: ProtocolActivityTurnEnd,
+  turn: AppServerThreadTurnMetadata | undefined,
 ): AppServerThreadActivityEntry[] {
-  if (end === "completed") return [...entries];
-  return entries.filter(
-    (entry) => isModelRoutingActivityEntry(entry) || isWarningActivityEntry(entry),
-  );
+  const kept = end === "completed"
+    ? entries
+    : entries.filter(
+      (entry) => isModelRoutingActivityEntry(entry) || isWarningActivityEntry(entry),
+    );
+  if (!turn) return [...kept];
+  return kept.map((entry) => ({
+    ...entry,
+    id: isModelRoutingActivityEntry(entry) ? entry.id : `${entry.id}@${turn.id}`,
+    turn,
+  }));
 }
 
-export function isWarningActivityEntry(entry: AppServerThreadActivityEntry): boolean {
+function isWarningActivityEntry(entry: AppServerThreadActivityEntry): boolean {
   return entry.id.startsWith(WARNING_ENTRY_ID_PREFIX);
 }
 
