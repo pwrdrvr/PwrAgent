@@ -16,11 +16,13 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
-  // recovery guard, research, and request-pricing changes that followed it.
+  // recovery guard, automatic wake guard, research, and request-pricing changes that followed it.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_compaction_recovery_guards"
+    && row.tbl_name !== "thread_automatic_wake_guards"
+    && row.tbl_name !== "thread_automatic_wake_admissions"
     && row.tbl_name !== "thread_search_fts_rows"
     && row.tbl_name !== "research_runs"
     && row.tbl_name !== "research_events"
@@ -84,7 +86,7 @@ const upgrades = [
   { version: 76, sql: "DROP TABLE thread_dependencies" },
   { version: 77, sql: "DROP INDEX idx_thread_todos_dependency; ALTER TABLE thread_todos DROP COLUMN dependency_id" },
   { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
-  { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing" },
+  { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing; DROP TABLE thread_automatic_wake_guards; DROP TABLE thread_automatic_wake_admissions" },
 ] as const;
 
 describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {
