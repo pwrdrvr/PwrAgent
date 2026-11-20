@@ -22,7 +22,7 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 const SCROLLER = ".transcript-list__items";
 const screenshotDir = process.env.PWRAGENT_TRANSCRIPT_PIN_SCREENSHOTS;
 
-async function geometry(page: Page, target: Locator) {
+async function geometry(target: Locator) {
   return target.evaluate((element, scrollerSelector) => {
     const scroller = element.closest(scrollerSelector);
     if (!scroller) {
@@ -76,7 +76,7 @@ test("open transcript work fits the pane and stays one click from closed", async
 
     // Fit: the whole card is inside the scrollport with its header above
     // it, and the long command scrolls inside the card.
-    const cardBox = await geometry(page, card);
+    const cardBox = await geometry(card);
     expect(cardBox.height).toBeLessThanOrEqual(cardBox.portHeight);
     expect(await card.locator(".transcript-command__block").evaluate(
       (pane) => pane.scrollHeight > pane.clientHeight + 1,
@@ -85,7 +85,7 @@ test("open transcript work fits the pane and stays one click from closed", async
     // The output preview opens into the same card, still inside the pane.
     await card.getByRole("button", { name: /Show \d+ more lines/ }).click();
     await expect(card.getByRole("button", { name: "Show less" })).toBeVisible();
-    const openBox = await geometry(page, card);
+    const openBox = await geometry(card);
     expect(openBox.height).toBeLessThanOrEqual(openBox.portHeight);
     expect(await card.locator(".transcript-command__output").evaluate(
       (pane) => pane.scrollHeight > pane.clientHeight + 1,
@@ -101,8 +101,8 @@ test("open transcript work fits the pane and stays one click from closed", async
       port.scrollTop += element.getBoundingClientRect().top
         - port.getBoundingClientRect().top - 80;
     }, SCROLLER);
-    const underHeader = await geometry(page, card);
-    expect((await geometry(page, commandToggle)).bottom).toBeLessThanOrEqual(underHeader.top + 1);
+    const underHeader = await geometry(card);
+    expect((await geometry(commandToggle)).bottom).toBeLessThanOrEqual(underHeader.top + 1);
     expect(underHeader.bottom).toBeLessThanOrEqual(underHeader.portHeight);
     await screenshot(page, "01b-card-under-pinned-header");
 
@@ -119,10 +119,10 @@ test("open transcript work fits the pane and stays one click from closed", async
           + box.height * (fraction as number);
       }, [SCROLLER, depth] as const);
 
-      const pinned = await geometry(page, commandToggle);
+      const pinned = await geometry(commandToggle);
       expect(pinned.top).toBeGreaterThanOrEqual(0);
       expect(pinned.bottom).toBeLessThan(96);
-      const group = await geometry(page, groupToggle);
+      const group = await geometry(groupToggle);
       expect(group.top).toBeGreaterThanOrEqual(0);
       expect(group.bottom).toBeLessThanOrEqual(pinned.top + 1);
       // The pinned headers are opaque: the card passes under them, and no
@@ -150,28 +150,28 @@ test("open transcript work fits the pane and stays one click from closed", async
       await commandToggle.click();
       await expect(card).toHaveCount(0);
       await expect
-        .poll(async () => (await geometry(page, commandToggle)).top)
+        .poll(async () => (await geometry(commandToggle)).top)
         .toBeCloseTo(pinned.top, 0);
       if (depth === 0.5) {
         await screenshot(page, "03-collapsed-in-place");
       }
 
-      const closed = await geometry(page, commandToggle);
+      const closed = await geometry(commandToggle);
       await commandToggle.click();
       await expect(card).toHaveCount(1);
       await expect
-        .poll(async () => (await geometry(page, commandToggle)).top)
+        .poll(async () => (await geometry(commandToggle)).top)
         .toBeCloseTo(closed.top, 0);
       await card.getByRole("button", { name: /Show \d+ more lines/ }).click();
     }
 
     // The group's own toggle closes the whole group from inside it and
     // stays where it was clicked.
-    const groupPinned = await geometry(page, groupToggle);
+    const groupPinned = await geometry(groupToggle);
     await groupToggle.click();
     await expect(card).toHaveCount(0);
     await expect
-      .poll(async () => (await geometry(page, groupToggle)).top)
+      .poll(async () => (await geometry(groupToggle)).top)
       .toBeCloseTo(groupPinned.top, 0);
     await groupToggle.click();
 
@@ -188,13 +188,13 @@ test("open transcript work fits the pane and stays one click from closed", async
     await transcript.getByRole("button", { name: /^(Worked for|Previous work)/ }).click();
     const lastToggle = transcript.getByRole("button", { name: /pnpm test:atlas-routes/ });
     await expect(lastToggle).toBeVisible();
-    const atBottom = await geometry(page, lastToggle);
+    const atBottom = await geometry(lastToggle);
     await lastToggle.click();
     await expect(card).toHaveCount(1);
     await card.getByRole("button", { name: /Show \d+ more lines/ }).click();
     await expect(card.getByRole("button", { name: "Show less" })).toBeVisible();
     await expect
-      .poll(async () => (await geometry(page, lastToggle)).top)
+      .poll(async () => (await geometry(lastToggle)).top)
       .toBeCloseTo(atBottom.top, 0);
     await screenshot(page, "04-opened-at-bottom");
   } finally {

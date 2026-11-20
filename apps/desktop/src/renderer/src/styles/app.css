@@ -29434,6 +29434,10 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   min-width: 0;
 }
 
+.transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header .transcript-work-phase-group__toggle {
+  min-width: 0;
+}
+
 .transcript-work-phase-group__toggle,
 .transcript-work-phase-group__label {
   display: inline-flex;
@@ -36878,7 +36882,9 @@ div.composer-error-row__toggle {
 .transcript-command__block,
 .transcript-command__output {
   flex: 0 1 auto;
-  min-height: calc(var(--transcript-pane-lines, 1) * 12px * 1.55 + 20px);
+  /* The pane's own lines plus its 10px of bottom padding, and no more: the
+     floor applies to an unconstrained card too. */
+  min-height: calc(var(--transcript-pane-lines, 1) * 12px * 1.55 + 10px);
   margin: 0;
   padding: 0 12px 10px;
   overflow-y: auto;
@@ -37026,7 +37032,10 @@ div.composer-error-row__toggle {
 /* An open row's label is one line. A command label wraps to three or four
    lines, and pinned at that height it would cover the top of the body it
    heads and overrun the step the levels below are offset by. The body shows
-   the whole command directly underneath. */
+   the whole command directly underneath. An open group's label is held to
+   one line for the same step: wrapped in a narrow column it covered the row
+   header pinned under it. */
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header .transcript-work-phase-group__toggle > span:last-child,
 .transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > .transcript-activity__header .transcript-activity__label,
 .transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row .transcript-activity__detail-label {
   overflow: hidden;

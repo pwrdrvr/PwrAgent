@@ -77,12 +77,37 @@ describe("disclosure scroll anchor", () => {
     const onLayoutChange = vi.fn();
     installDisclosureAnchor(scroller, onLayoutChange);
 
-    // A menu button carries aria-expanded too and resizes nothing.
     control.click();
     frames.forEach((frame) => frame(0));
 
     expect(state.scrollTop).toBe(120);
     expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
+  it("never blames a popup button for content that grew while it was clicked", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 4_000 }), (growth) => {
+        const frames: FrameRequestCallback[] = [];
+        vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+          frames.push(callback);
+          return frames.length;
+        });
+        const { control, scroller, state } = modelScroller(400, 120);
+        control.setAttribute("aria-haspopup", "menu");
+        const onLayoutChange = vi.fn();
+        const uninstall = installDisclosureAnchor(scroller, onLayoutChange);
+
+        control.click();
+        // A streaming turn appends output in the same frame.
+        state.scrollHeight += growth;
+        frames.forEach((frame) => frame(0));
+
+        expect(state.scrollTop).toBe(120);
+        expect(onLayoutChange).not.toHaveBeenCalled();
+        uninstall();
+        scroller.remove();
+      }),
+    );
   });
 
   it("ignores sub-pixel drift", () => {

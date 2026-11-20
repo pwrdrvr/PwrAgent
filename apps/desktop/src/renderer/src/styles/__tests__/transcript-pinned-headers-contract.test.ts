@@ -102,5 +102,9 @@ describe("transcript pinned headers contract", () => {
     expect(panes).toMatch(/flex:\s*0 1 auto/);
     expect(panes).toMatch(/overflow-y:\s*auto/);
     expect(panes).toMatch(/min-height:\s*calc\(var\(--transcript-pane-lines, 1\)/);
+    // The floor is the pane's lines plus its own bottom padding, so a short
+    // pane in an unconstrained card is exactly as tall as its text.
+    const padBottom = panes.match(/padding:\s*0 \d+px (\d+px)/)?.[1];
+    expect(panes).toMatch(new RegExp(`\\* 1\\.55 \\+ ${padBottom}\\)`));
   });
 });

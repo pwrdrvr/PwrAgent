@@ -68,8 +68,8 @@ export function disclosureScrollCorrection(before: number, after: number): numbe
  * Expanding the last row of a transcript that follows its bottom did the
  * reverse: the growth was read as new output and the row was scrolled away.
  * `onLayoutChange` lets the list drop bottom-follow for a toggle that changed
- * the content's height; a control that opens a menu changes nothing and is
- * ignored.
+ * the content's height; a control that opens a popup (`aria-haspopup`) is
+ * never one of these and is ignored.
  *
  * The listener is native and on the scroller, below React's root listener, so
  * it reads the control's position before React commits the toggle. React
@@ -84,7 +84,10 @@ export function installDisclosureAnchor(
     const control = event.target instanceof Element
       ? event.target.closest<HTMLElement>("[aria-expanded]")
       : null;
-    if (!control || !scroller.contains(control)) {
+    // A popup's button carries aria-expanded too. It opens over the content
+    // and resizes nothing, and while a turn streams the content grows on its
+    // own, so it must not be mistaken for the cause.
+    if (!control || !scroller.contains(control) || control.hasAttribute("aria-haspopup")) {
       return;
     }
     const before = control.getBoundingClientRect().top;

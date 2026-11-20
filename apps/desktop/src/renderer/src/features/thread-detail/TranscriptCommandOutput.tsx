@@ -522,9 +522,7 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
   // The collapsed preview decides whether there is anything to toggle. Asking
   // the expanded one hid "Show less" as soon as the output was opened.
   const collapsedPreview = buildOutputPreview(output, false);
-  const preview = isExpanded
-    ? buildOutputPreview(output, true)
-    : collapsedPreview;
+  const shownOutput = isExpanded ? output : collapsedPreview.text;
   const statusText = formatCommandStatus(props.detail);
   const source =
     command.source ??
@@ -541,7 +539,7 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
 
   const commandLineCount = countLines(fullCommand);
   const outputLineCount = output ? countLines(output) : 0;
-  const shownOutputLineCount = preview.text ? countLines(preview.text) : 0;
+  const shownOutputLineCount = shownOutput ? countLines(shownOutput) : 0;
 
   return (
     <div className="transcript-command" ref={cardRef}>
@@ -627,18 +625,19 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
         style={paneLineStyle(shownOutputLineCount)}
         tabIndex={0}
       >
-        {preview.text ? <pre><code>{preview.text}</code></pre> : <p>No output captured.</p>}
+        {shownOutput ? <pre><code>{shownOutput}</code></pre> : <p>No output captured.</p>}
       </div>
     </div>
   );
 }
 
+/** Lines of text, where a final newline ends the last line and starts none. */
 function countLines(text: string): number {
-  let count = 1;
+  let count = text.endsWith("\n") ? 0 : 1;
   for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
     count += 1;
   }
-  return count;
+  return Math.max(count, 1);
 }
 
 function formatLineCount(count: number): string {
