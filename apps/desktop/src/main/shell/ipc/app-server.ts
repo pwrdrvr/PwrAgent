@@ -1,3 +1,5 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
+import { AGENT_MEMORY_CHANNEL } from "../../../shared/ipc";
 import type { OwnerNavigationRequest } from "../../../shared/owner-request";
 import { LocalOwnerNavigationTransport } from "../../federation/local-owner-navigation-transport";
 
@@ -773,6 +775,12 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<SetThreadPinResponse> => {
       return await appServerService.setThreadPin(request);
     },
+  );
+  ipcMain.removeHandler(AGENT_MEMORY_CHANNEL);
+  ipcMain.handle(
+    AGENT_MEMORY_CHANNEL,
+    async (_event, request: AgentMemoryRequest): Promise<AgentMemoryResult> =>
+      await appServerService.accessAgentMemory(request),
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.handle(
@@ -1553,6 +1561,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL);
+  ipcMain.removeHandler(AGENT_MEMORY_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);

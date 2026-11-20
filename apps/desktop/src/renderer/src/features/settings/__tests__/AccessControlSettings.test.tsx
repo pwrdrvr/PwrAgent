@@ -228,7 +228,7 @@ describe("AccessControlSettings", () => {
     expect(bucket).toHaveClass("is-dim");
   });
 
-  it("opens a permission's reverse map beside its card, never over it", async () => {
+  it("places the permission reverse map beside its card and hides the pinned map when focus moves", async () => {
     const user = userEvent.setup();
     render(<AccessControlSettings desktopApi={makeApi()} />);
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
@@ -254,14 +254,9 @@ describe("AccessControlSettings", () => {
     expect(above?.style.top).toBe("444px");
     // Its shadow then casts up, off the card's ring.
     expect(above).toHaveClass("is-above");
-  });
 
-  it("hides a pinned permission's reverse map while focus rests on another card", async () => {
-    const user = userEvent.setup();
-    render(<AccessControlSettings desktopApi={makeApi()} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-    const [first, second] = MESSAGING_PERMISSION_CATALOG;
-
+    await user.click(document.body);
+    expect(screen.queryByText(/Reachable by/)).not.toBeInTheDocument();
     await tabTo(user, traceButton(first.label));
     await user.keyboard("{Enter}");
     expect(nodeOf(traceButton(first.label))).toHaveClass("is-pinned");

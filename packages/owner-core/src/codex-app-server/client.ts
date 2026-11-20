@@ -1,3 +1,4 @@
+import { isAgentMemoryContext, stripAgentMemoryChunk } from "@pwragent/shared";
 import type {
   CodexClientHost,
   CodexClientLogger,
@@ -1649,9 +1650,16 @@ function normalizeServerNotification(
   // session-error banner, messaging delivery, and headless-automation error
   // extraction all already key on `turn/failed`. Doing the alias here keeps the
   // Codex-specific shape out of every downstream consumer.
+  const turnRecord = asRecord(record.turn);
+  const turnWithSafeItems = turnRecord && Array.isArray(turnRecord.items)
+    ? { ...turnRecord, items: turnRecord.items.map((value) => {
+      const item = asRecord(value);
+      return item ? withoutAgentMemoryInput(item) : value;
+    }) }
+    : undefined;
   const failedTurn = normalizeFailedTurnCompletedNotification(
     method,
-    record,
+    turnWithSafeItems ? { ...record, turn: turnWithSafeItems } : record,
     metadata,
     guardianDenialLimitMessage,
   );
@@ -1693,6 +1701,7 @@ function normalizeServerNotification(
     method: method as AppServerNotification["method"],
     params: {
       ...record,
+      ...(turnWithSafeItems ? { turn: turnWithSafeItems } : {}),
       ...(configWarningMetadata ?? {}),
       ...(blockedError ? { error: blockedError } : {}),
       ...(normalizedItem ? {
@@ -1823,7 +1832,7 @@ function extractConfigWarningMetadata(
 function normalizeLiveNotificationItem(
   item: Record<string, unknown>
 ): Record<string, unknown> {
-  const normalized = { ...item };
+  const normalized = { ...withoutAgentMemoryInput(item) };
   if (item.type === "agentMessage") {
     const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
     if (phase) normalized.phase = phase;
@@ -2793,11 +2802,35 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
   return [];
 }
 
+function stripAgentMemoryText(text: string): string {
+  return stripAgentMemoryChunk(text).text.trim();
+}
+
+function withoutAgentMemoryInput(item: Record<string, unknown>): Record<string, unknown> {
+  const role = normalizeConversationRole(pickString(item, ["type"]))
+    ?? normalizeConversationRole(pickString(item, ["role", "author", "speaker", "source"]));
+  if (role !== "user") return item;
+  const isSynthetic = (value: unknown) => {
+    const part = asRecord(value);
+    return typeof value === "string" ? isAgentMemoryContext(value)
+      : (part?.type === "text" || part?.type === "input_text")
+        && typeof part.text === "string" && isAgentMemoryContext(part.text);
+  };
+  const result = { ...item };
+  for (const field of ["content", "parts", "input", "text", "message", "messages"]) {
+    const value = result[field];
+    if (Array.isArray(value)) result[field] = value.filter((part) => !isSynthetic(part));
+    else if (isSynthetic(value)) delete result[field];
+  }
+  return result;
+}
+
 /** The text and parts a replay message gets from one raw message item. */
-export function buildMessageContent(record: Record<string, unknown>): {
+export function buildMessageContent(item: Record<string, unknown>): {
   parts?: AppServerThreadMessagePart[];
   text: string;
 } {
+  const record = withoutAgentMemoryInput(item);
   const structuredParts = [
     ...extractStructuredMessageParts(record.content),
     ...extractStructuredMessageParts(record.parts),
@@ -5777,8 +5810,9 @@ function extractThreadNameRecordFromValue(
       pickString(record, ["threadName", "thread_name", "name", "title"]) ??
         pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"])
     );
-  const indexName =
-    rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+  const cleanPreview = stripAgentMemoryText(preview ?? "");
+  const cleanName = stripAgentMemoryText(rawName ?? "");
+  const indexName = cleanName || (cleanPreview ? shortenDerivedThreadTitle(cleanPreview) ?? cleanPreview : undefined);
   return {
     id: threadId,
     threadName: indexName?.trim() || "Untitled thread",
@@ -6592,12 +6626,13 @@ function* threadSummariesFromValue(value: unknown, textCache: ThreadListTextCach
           "first_user_message",
         ]);
     const text = textCache.read(threadId, [rawExplicitTitle, rawDerivedTitle, rawSummary], () => {
-      const titleInfo = getThreadTitleInfo(rawExplicitTitle, rawDerivedTitle);
-      const summary = normalizeThreadSummary(rawSummary);
+      const derivedTitle = stripAgentMemoryText(rawDerivedTitle ?? "") || undefined;
+      const titleInfo = getThreadTitleInfo(stripAgentMemoryText(rawExplicitTitle ?? "") || undefined, derivedTitle);
+      const summary = normalizeThreadSummary(stripAgentMemoryText(rawSummary ?? "") || undefined);
       return {
         ...titleInfo,
         summary: summary === titleInfo.title
-          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(rawDerivedTitle))
+          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(derivedTitle))
           ? undefined : summary,
       };
     });
@@ -11524,6 +11559,7 @@ export class CodexAppServerClient {
       threadId: string;
       turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message: string } };
     }) => void;
+    agentMemoryContext?: string;
     /** Delegation attribution only. */
     parentTurnId?: string;
     rootTurnId?: string;
@@ -11680,7 +11716,9 @@ export class CodexAppServerClient {
         buildTurnStartPayload(
           {
             threadId: params.threadId,
-            input: codexInput,
+            input: params.agentMemoryContext
+              ? [...codexInput, { type: "text", text: params.agentMemoryContext, text_elements: [] }]
+              : codexInput,
             parentTurnId: params.parentTurnId,
             rootTurnId: params.rootTurnId,
             cwd: params.cwd,

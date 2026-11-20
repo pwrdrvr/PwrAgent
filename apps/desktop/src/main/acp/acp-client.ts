@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption, stripAgentMemoryChunk } from "@pwragent/shared";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
@@ -181,6 +181,8 @@ type AcpActiveTurn = {
   assistantText: string;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
+  sentAgentMemory?: boolean;
+  cancelBeforePrompt?: () => void;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
@@ -1136,6 +1138,7 @@ export class AcpAgentClient {
      * text. Undefined leaves the prompt alone.
      */
     agentInstructions?: string;
+    readAgentMemory?: () => Promise<string | undefined>;
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
@@ -1163,6 +1166,7 @@ export class AcpAgentClient {
       sessionId: params.sessionId,
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
+      readAgentMemory: params.readAgentMemory,
     });
     void promptRequest
       .then((result) => {
@@ -1227,6 +1231,11 @@ export class AcpAgentClient {
   }
 
   private async cancelSessionOperation(sessionId: string): Promise<void> {
+    const cancelBeforePrompt = this.activeTurns.get(sessionId)?.cancelBeforePrompt;
+    if (cancelBeforePrompt) {
+      cancelBeforePrompt();
+      return;
+    }
     if (!this.options.transport.notify) {
       throw new Error("ACP transport does not support notifications");
     }
@@ -1755,7 +1764,9 @@ export class AcpAgentClient {
         touchActivity: !fromSessionLoad,
       });
     }
-    if (!fromSessionLoad) {
+    // PwrAgent already saved the original prompt before sending it. The
+    // provider echo can contain the index and belongs only in the live filter.
+    if (!fromSessionLoad && !(activeTurn?.sentAgentMemory && updateKind === "user_message_chunk")) {
       this.appendHistoryUpdate(sessionId, receivedAt, update);
     }
     const normalizer = this.normalizerFor(sessionId);
@@ -2214,6 +2225,7 @@ export class AcpAgentClient {
     sessionId: string;
     turnId: string;
     agentInstructions?: string;
+    readAgentMemory?: () => Promise<string | undefined>;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
     const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
@@ -2231,7 +2243,16 @@ export class AcpAgentClient {
         timer.unref?.();
       };
     });
+    const cancelled = { stopReason: "cancelled" };
+    let cancelledBeforePrompt = false;
+    const localCancellation = new Promise<typeof cancelled>((resolve) => {
+      if (activeTurn) activeTurn.cancelBeforePrompt = () => {
+        cancelledBeforePrompt = true;
+        resolve(cancelled);
+      };
+    });
     const sendPrompt = async () => {
+      if (cancelledBeforePrompt) return cancelled;
       // The agent keeps the block in the session's history, so a session
       // loaded again (after an idle close or an app restart) is not sent it
       // a second time. The stored record says what this agent session holds.
@@ -2244,13 +2265,21 @@ export class AcpAgentClient {
           this.options.backendId,
           params.sessionId,
         )?.agentInstructionsDigest;
+      const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
+      if (cancelledBeforePrompt) return cancelled;
+      if (activeTurn) {
+        activeTurn.cancelBeforePrompt = undefined;
+        activeTurn.sentAgentMemory = Boolean(memory);
+      }
       const result = await this.options.transport.request(
         "session/prompt",
         {
           sessionId: params.protocolSessionId,
-          prompt: sendInstructions
-            ? [...textPrompt(buildAcpAgentInstructionBlock(instructions)), ...params.prompt]
-            : params.prompt,
+          prompt: [
+            ...(sendInstructions ? textPrompt(buildAcpAgentInstructionBlock(instructions)) : []),
+            ...params.prompt,
+            ...(memory ? textPrompt(memory) : []),
+          ],
         },
         ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
       );
@@ -2271,6 +2300,7 @@ export class AcpAgentClient {
     return Promise.race([
       reload ? reload.then(sendPrompt) : sendPrompt(),
       terminalResponseGuard,
+      localCancellation,
     ]);
   }
 
@@ -2443,7 +2473,7 @@ export class AcpAgentClient {
     receivedAt: number,
     options: AcpSessionMetadataUpdateOptions = {},
   ): string | undefined {
-    const title = readAcpTopicTitle(update);
+    const title = stripAgentMemoryChunk(readAcpTopicTitle(update) ?? "").text;
     if (!title) {
       return undefined;
     }

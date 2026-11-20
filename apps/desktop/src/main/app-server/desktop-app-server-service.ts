@@ -1,3 +1,4 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
 import { DesktopDirectoryGitStatus } from "./desktop-directory-git-status";
 import { ThreadPullRequestLookup } from "./thread-pull-request-lookup";
 import {
@@ -6867,6 +6868,14 @@ class DesktopAppServerService {
       threadId: request.threadId,
       pinnedRank: overlay.pinnedRank,
     };
+  }
+
+  async accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
+    const { federationTarget, ...ownerRequest } = request;
+    if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).accessAgentMemory(ownerRequest);
+    }
+    return await getDesktopBackendRegistry().accessAgentMemorySettings(ownerRequest);
   }
 
   async setThreadAgent(

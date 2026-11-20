@@ -439,6 +439,7 @@ export const NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL =
   "navigation:acknowledge-thread-environment-failure";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
+export const AGENT_MEMORY_CHANNEL = "agent-memory:access";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =
@@ -891,6 +892,7 @@ export const SETTINGS_PICK_GLAB_COMMAND_CHANNEL =
 export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
   "settings:pick-git-command";
 export const SETTINGS_RECEIVING_FOLDER_CHANNEL = "settings:receiving-folder";
+export const SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL = "settings:worktree-folder-check";
 export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =
   "settings:refresh-git-discovery";
 export const SETTINGS_MANAGED_GIT_ACTION_CHANNEL =

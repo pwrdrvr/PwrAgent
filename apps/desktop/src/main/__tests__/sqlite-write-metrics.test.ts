@@ -15,6 +15,7 @@ import type {
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY, projectActiveThreadSubAgents } from "@pwragent/shared";
+import type { AutomationRunSourceMetadata } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
@@ -3079,6 +3080,69 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       scenario: "automation-daily-limit-skips",
       note: "One pause at the daily run limit, then 101 skipped triggers: the pause, the first skip and one count write per minute. A channel flooding a paused automation costs at most one commit a minute (~1,440 commits, ~47 MB/day at the measured ~33 KB a commit), and nothing while no trigger arrives.",
+      writes,
+    });
+  });
+
+  it("bounds writes for a burst of inbound messages the hourly run cap drops", async () => {
+    const automationStore = new AutomationStore(stateDb);
+    const automation = automationStore.createAutomation({
+      id: "automation-throttle",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Busy channel",
+      taskPrompt: "Answer",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 1,
+      triggers: [{
+        id: "trigger-inbound",
+        kind: "inbound_message",
+        conversation: { channel: "slack", conversationId: "C1" },
+      }],
+      now: 0,
+    });
+    // The hour's one allowed run has already started and finished.
+    automationStore.createRun({ id: "admitted", automationId: automation.id, trigger: "inbound_message", now: 0 });
+    automationStore.markRunTerminal({ runId: "admitted", status: "completed", now: 1 });
+    let now = 10;
+    const timers: Array<() => void> = [];
+    const scheduler = new AutomationScheduler({
+      store: automationStore,
+      runner: { async submitRun() { throw new Error("no run may start"); } },
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        timers.push(callback);
+        return 0;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+    const source = (key: number) => ({
+      kind: "messaging",
+      sourceEventKey: `event-${key}`,
+      receivedAt: now,
+      matchedTriggerId: "trigger-inbound",
+      actor: { platformUserId: "B1", isBot: true },
+      conversation: { channel: "slack", conversationId: "C1" },
+      message: { text: "ERROR" },
+    }) as unknown as AutomationRunSourceMetadata;
+
+    const { writes } = await measureSqliteWrites(async () => {
+      // 100 dropped messages inside one minute: the first creates the hour's
+      // marker, the rest only grow its count in memory.
+      for (let index = 0; index < 100; index += 1) {
+        now += 100;
+        await scheduler.runFromInboundEvent({ automation, source: source(index), now });
+      }
+      // The window's timer writes the count once.
+      for (const fire of timers.splice(0)) fire();
+      // A drop a minute later is written at once.
+      now += 60_000;
+      await scheduler.runFromInboundEvent({ automation, source: source(100), now });
+    });
+    expect(automationStore.getRun("automation-throttle:automation-throttle:0")?.coalescedCount).toBe(101);
+    expectSqliteWriteBudget({
+      scenario: "automation-throttle-marker-burst",
+      note: "100 inbound messages dropped by the hourly run cap within one minute, then one more a minute later: the marker's creation, one count write for the minute and one for the later drop. A channel flooding past the cap costs at most one commit a minute per automation (~1,440 commits, ~57 MB/day at the ~40 KB a commit measured here) instead of one per message (~86,400 commits, ~3.4 GB/day at one message a second).",
       writes,
     });
   });

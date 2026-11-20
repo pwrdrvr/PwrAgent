@@ -1,5 +1,6 @@
 import { codexAuthState } from "../../codex-auth-state";
 import { registerReceivingFolderIpc } from "./receiving-folder";
+import { registerWorktreeFolderIpc } from "./worktree-folder";
 import { CodexAppServerClient } from "../../codex-app-server/desktop-client";
 import { validateGlabCommand } from "../../settings/glab-discovery";
 import { validateCodexModelProviders } from "@pwragent/shared";
@@ -1637,6 +1638,7 @@ export function registerSettingsIpcHandlers(
   },
 ): void {
   registerReceivingFolderIpc();
+  registerWorktreeFolderIpc(() => getService(service).resolveWorktreeFolder());
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.handle(

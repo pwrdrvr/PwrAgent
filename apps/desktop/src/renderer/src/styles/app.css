@@ -14991,6 +14991,26 @@ a.button {
   flex: 1 1 auto;
 }
 
+.worktree-folder__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.worktree-folder__row .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-folder__row .button,
+.worktree-folder__row .settings-pathrow__chip {
+  flex: 0 0 auto;
+}
+
 .incoming-files-folder__browse {
   flex: 0 0 auto;
   min-height: 32px;
@@ -56687,4 +56707,74 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   margin: 0;
   color: var(--danger-text);
   font-size: 12px;
+}
+
+.agent-memory-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Field labels and controls take the Automations field type: without it they
+   fell to the 16px document size and outranked the 14px section heading. */
+.agent-memory-editor__field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-memory-editor :is(.context-list__meta, .context-empty) {
+  margin: 0;
+  font-size: 12px;
+}
+
+.agent-memory-editor__file {
+  flex: 1 1 140px;
+}
+
+.agent-memory-editor__new {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-memory-editor :is(input, .select-trigger, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 500;
+}
+
+.agent-memory-editor .agent-memory-editor__text {
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.agent-memory-editor :is(input, .select-trigger, textarea):focus-visible {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.agent-memory-editor input[aria-invalid="true"] {
+  border-color: var(--danger-border);
+}
+
+.agent-memory-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
 }

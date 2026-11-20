@@ -474,6 +474,7 @@ export class ClaudeTurnActiveError extends Error {}
 type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
+  readAgentMemory?: () => Promise<string | undefined>;
   mcpServers?: Options["mcpServers"];
   strictMcpConfig?: boolean;
   /**
@@ -1218,7 +1219,10 @@ export class ClaudeBackend {
         // Claude's own wake-ups and crons keep this process, which runs them, open.
         // A lock holds a turn Claude starts on its own until the thread is unlocked.
         hooks: mergeClaudeHooks(
-          claudeSelfStartedTurnHooks(async (input) => await this.holdSelfStartedTurn(current, input)),
+          claudeSelfStartedTurnHooks(
+            async (input) => await this.holdSelfStartedTurn(current, input),
+            params.readAgentMemory,
+          ),
           claudeReportFindingsHooks(),
           claudeMonitorSuggestionHooks(async (request) => {
             const turnId = current.turn?.turnId;

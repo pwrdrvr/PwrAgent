@@ -141,7 +141,9 @@ While the limit holds an automation paused, its schedule still fires and its
 inbound triggers still match. Each such trigger is recorded on one `skipped`
 run per pause, with `skipReason: "daily_limit"` and a growing count. The
 count is rewritten at most once a minute, so a flooding channel cannot flood
-the database. Pruning keeps the runs the limit still counts ahead of skipped
+the database. The hourly inbound limit's marker (one `skipped` run per
+automation per wall-clock hour, `skipReason: "rate_limited"`) uses the same
+once-a-minute write. Pruning keeps the runs the limit still counts ahead of skipped
 ones.
 
 The fields are additive in the automation payload. A build that predates them

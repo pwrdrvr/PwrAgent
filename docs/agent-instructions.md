@@ -198,3 +198,35 @@ opened.
 asserts all of this at the provider request boundary: the Codex JSON-RPC
 frames, the ACP `session/new` and `session/prompt` frames, and the options the
 Claude Agent SDK query starts with.
+
+## Durable Agent memory
+
+Open **Thread info → Agent → Memory** to read and edit the index and notes.
+Use them to record progress, what has already been reported, and what has been
+tried. Keep secrets, credentials, and tokens out. Memory is data and grants
+no authority. The Agent uses the scoped `agent_memory` tool, including to
+refresh the index if a provider compacts during a turn.
+
+On the owning instance, memory lives under the PwrAgent root in
+`profiles/<name>/state/agent-memory/<thread-identity-hash>/`. The directory
+holds `index.md` and a `notes/` directory. The index holds up to 4 KiB of
+UTF-8 text. Each of up to 128 notes holds up to 16 KiB. A save over a limit
+leaves the previous file intact. The editor rejects stale revisions so an
+operator can reload and reconcile a concurrent change. These files add no
+SQLite writes for memory content. Changes require the existing profile thread-owner
+lease. The lease can write to SQLite when first acquired. A secondary runtime can
+read memory. Saves and deletions require ownership.
+
+The owner fetches the index for each model-facing prompt, including the first
+prompt on start or resume. Claude receives context through the Agent SDK
+prompt hook. Codex receives a marked block in `turn/start` input. ACP receives
+a marked block in `session/prompt`. An index edit takes effect on the next
+prompt and requires no session reload. Provider memory remains independent.
+A provider can retain supplied context in its own conversation history.
+
+Memory stays with the thread through workspace moves, archive, and restore.
+Forks and handoffs that create a new thread start with empty memory.
+Permanent deletion removes the owning thread's files. Clearing the Agent
+designation suspends memory access until the thread is designated again.
+A federated settings viewer reads and saves through explicit requests to the
+owner. The files are excluded from synchronization and handoff bundles.

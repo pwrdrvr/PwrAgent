@@ -74,6 +74,7 @@ import type {
   DesktopUpdateSelectionSource,
   DesktopUpdateSettingsSnapshot,
   DesktopUpdateTrain,
+  DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
   ThreadTodoMergeMethod,
@@ -1863,7 +1864,10 @@ export class DesktopSettingsService {
         agentTools: this.resolveForgeAgentToolSettings(config.git?.agentTools),
       },
       worktrees: {
-        ...this.resolveWorktrees(config.worktrees?.storage),
+        ...this.resolveWorktrees(config.worktrees?.storage, config.worktrees?.baseDirectory),
+        ...(config.worktrees?.baseDirectory && config.worktrees.baseDirectoryIncludesCodex
+          ? { baseDirectoryIncludesCodex: true }
+          : {}),
         archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
         hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate),
       },
@@ -2166,6 +2170,15 @@ export class DesktopSettingsService {
     const storage = this.configStore.read("worktrees").storage;
     return this.resolveWorktrees(storage)
       .storage.value;
+  }
+
+  /** The operator's worktree folder, replacing the home folder for `user-home`. */
+  resolveWorktreeFolder(): DesktopWorktreeFolder | undefined {
+    const worktrees = this.configStore.read("worktrees");
+    const directory = worktrees.baseDirectory?.trim();
+    return directory
+      ? { directory, includeCodex: worktrees.baseDirectoryIncludesCodex === true }
+      : undefined;
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
@@ -4959,9 +4972,11 @@ export class DesktopSettingsService {
 
   private resolveWorktrees(
     configValue: DesktopWorktreeStorageLocation | undefined,
+    baseDirectoryValue?: string,
   ): {
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
+    baseDirectory?: string;
   } {
     const envValue = readEnvWorktreeStorage(this.env);
     const resolved: DesktopSettingsValue<DesktopWorktreeStorageLocation> =
@@ -4976,12 +4991,16 @@ export class DesktopSettingsService {
             source: configValue === undefined ? "default" : "config",
             error: envValue.error,
           };
+    const baseDirectory = baseDirectoryValue?.trim() || undefined;
     return {
       storage: resolved,
       effectivePath:
         resolved.value === "user-home"
-          ? toForwardSlashes(userHomeWorktreesRoot())
+          ? toForwardSlashes(userHomeWorktreesRoot(baseDirectory))
           : ".worktrees",
+      // Availability is checked on demand (settings:worktree-folder), never
+      // here: a stat on a stale network mount would block the main process.
+      ...(baseDirectory ? { baseDirectory } : {}),
     };
   }
 
@@ -5150,3 +5169,4 @@ function parseCodexModelProviderKeys(value: string | undefined): Record<string, 
 function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {
   return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
 }
+

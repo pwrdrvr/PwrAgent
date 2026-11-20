@@ -20,11 +20,9 @@ describe("model settings recents store", () => {
     stateDb.close();
   });
 
-  it("starts empty", () => {
+  it("starts empty and returns the most recent settings first", () => {
     expect(listModelSettingsRecents(stateDb, "review")).toEqual([]);
-  });
 
-  it("returns most recent first", () => {
     recordModelSettingsRecent(stateDb, "review", {
       backend: "codex",
       model: "gpt-5.6-sol",

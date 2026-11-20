@@ -17,11 +17,9 @@ afterEach(() => {
 });
 
 describe("recent-file-references-store", () => {
-  it("returns an empty list before anything is recorded", () => {
+  it("starts empty and prepends new records most-recent-first", () => {
     expect(listRecentFileReferencePaths(stateDb)).toEqual([]);
-  });
 
-  it("prepends new records most-recent-first", () => {
     recordRecentFileReferencePaths(stateDb, ["/a.md"]);
     recordRecentFileReferencePaths(stateDb, ["/b.md", "/c.md"]);
 

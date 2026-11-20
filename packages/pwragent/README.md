@@ -83,10 +83,10 @@ standard profile SQLite database directly.
 
 ## Unattended execution
 
-An Outpost is a headless PwrAgent instance and a full member of its
-federation. The host enables only Codex. Default mode is read-only; Auto mode
-can also write the thread's workspace. Unless the operator widens them, Full
-Access is unavailable and tool network access is disabled.
+An Outpost is a headless PwrAgent instance that can join a federation. The host
+enables only Codex. Default mode is read-only. Auto mode can also write the
+thread's workspace. By default, Full Access is unavailable and tool network
+access is disabled.
 
 The operator sets these environment variables when the Outpost starts, for
 example with `docker run -e`. Agents cannot change the running owner's
@@ -99,10 +99,17 @@ environment. An unknown value stops startup instead of falling back.
 | `PWRAGENT_OUTPOST_APPROVALS` | `ask` or `never` | `ask` |
 | `PWRAGENT_OUTPOST_FEDERATION_ROLE` | `contained` or `full` | `contained` |
 
-With `full-access` allowed, those turns run without the Codex sandbox, so the
+Execution mode and federation role are independent. A contained Outpost
+supports Auto with workspace writes and operator-controlled approvals. With
+`full-access` allowed, those turns run without the Codex sandbox, so the
 container is the only boundary on files and network: agents can read
 everything in it, including the Outpost's own keys. See "What holds in each
 mode" below before allowing it for a model you do not trust.
+
+The allowlist applies to all threads owned by the Outpost. To change it on an
+existing Docker Outpost, back up its named volume and recreate the container
+with the updated environment and the same volume attached. The volume holds
+the Outpost's enrollment, threads, and workspaces.
 
 ### Approvals
 
