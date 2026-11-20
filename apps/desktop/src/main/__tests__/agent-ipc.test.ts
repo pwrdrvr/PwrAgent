@@ -11,6 +11,7 @@ import type {
   CancelThreadPrAutoDispatchRequest,
   CheckThreadBranchDriftRequest,
   CompactThreadRequest,
+  DismissFailedSubAgentsRequest,
   ForkThreadRequest,
   InterruptTurnRequest,
   ListBackendsRequest,
@@ -160,6 +161,9 @@ const registry = {
     threadId: request.threadId,
     turnId: request.turnId,
   })),
+  dismissFailedSubAgents: vi.fn(async (request: DismissFailedSubAgentsRequest) => ({
+    dismissedCount: request.attempts.length,
+  })),
   stopSubAgent: vi.fn(async (request: StopSubAgentRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -285,6 +289,9 @@ const federationMock = vi.hoisted(() => {
       backend: request.backend,
       threadId: request.threadId,
       turnId: request.turnId,
+    })),
+    dismissFailedSubAgents: vi.fn(async (request: DismissFailedSubAgentsRequest) => ({
+      dismissedCount: request.attempts.length,
     })),
     stopSubAgent: vi.fn(async (request: StopSubAgentRequest) => ({
       backend: request.backend,
@@ -1205,6 +1212,29 @@ describe("agent ipc", () => {
     expect(registry.applyThreadModelMigration).not.toHaveBeenCalled();
 
     disposeAgentIpcHandlers();
+  });
+
+  it("sends a failed sub-agent dismissal only to the owning instance", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = createAgentIpcHarness();
+    const { AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL } = await import("../../shared/ipc");
+    const request = { backend: "codex", threadId: "thread-1", attempts: [
+      { monitorId: "failed-1", attemptId: "1" }, { monitorId: "failed-2", attemptId: "2" },
+    ] };
+    const target = { scope: "remote", instanceId: "client_one" };
+    registry.dismissFailedSubAgents.mockClear();
+    federationMock.remoteBackend.dismissFailedSubAgents.mockClear();
+    registerAgentIpcHandlers();
+    try {
+      const handler = handlers.get(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL)!;
+      await expect(handler({}, { ...request, federationTarget: target })).resolves.toEqual({ dismissedCount: 2 });
+      expect(federationMock.remoteBackend.dismissFailedSubAgents).toHaveBeenCalledExactlyOnceWith(request);
+      expect(registry.dismissFailedSubAgents).not.toHaveBeenCalled();
+      await expect(handler({}, request)).resolves.toEqual({ dismissedCount: 2 });
+      expect(registry.dismissFailedSubAgents).toHaveBeenCalledExactlyOnceWith(request);
+      expect(federationMock.remoteBackend.dismissFailedSubAgents).toHaveBeenCalledOnce();
+    } finally {
+      disposeAgentIpcHandlers();
+    }
   });
 
   it("registers backend and agent handlers and broadcasts backend-tagged events", async () => {

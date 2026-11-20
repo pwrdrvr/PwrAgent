@@ -50,6 +50,7 @@ export function projectActiveThreadSubAgents(
     .filter((agent) => agent.status === "failed" || agent.status === "failure" || !hasTerminalEvidence(agent))
     .map((agent) => ({
       monitorId: agent.monitorId,
+      ...(agent.attemptId ? { attemptId: agent.attemptId } : {}),
       task: agent.task,
       status: agent.status,
       createdAt: agent.createdAt,

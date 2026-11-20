@@ -292,6 +292,7 @@ export const CODEX_MCP_SERVER_LOGIN_CHANNEL = "codex-mcp-server:login";
 export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
+export const AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL = "agent:dismiss-failed-sub-agents";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
 export const AGENT_REWIND_THREAD_CHANNEL = "agent:rewind-thread";
 export const AGENT_PREVIEW_THREAD_REWIND_CHANNEL = "agent:preview-thread-rewind";

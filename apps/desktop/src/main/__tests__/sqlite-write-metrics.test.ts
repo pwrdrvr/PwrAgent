@@ -11,9 +11,10 @@ import type {
   AppServerThreadMessageOrigin,
   StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
+  ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY, projectActiveThreadSubAgents } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
@@ -47,6 +48,14 @@ import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-sto
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
+import {
+  FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FederationRemoteBackendClient,
+  registerFederationBackendHandlers,
+  type FederationBackendOperations,
+} from "../federation/federation-backend-bridge";
+import { FederationRouter } from "../federation/federation-router";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 // Keep the real Git runner by default. Replay verified observations at its
 // boundary so fixture budgets do not depend on platform-specific launchers.
@@ -504,6 +513,80 @@ describe("sqlite write metrics", () => {
       expectSqliteWriteBudget({ scenario: "claude-subagent-cards",
         note: "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent, ~24.7 KB WAL each; ~1 MB/day at 20 sub-agents/day, ~10 MB/day at 200; zero idle", writes });
     } finally { await registry.close(); }
+  });
+
+  it("persists a federated bulk dismissal in one commit and retains the original cards", async () => {
+    const identity = { backend: "codex", threadId: "parent" } as const;
+    const otherIdentity = { ...identity, backend: "claude" } as const;
+    const failures: ThreadSubAgentSummary[] = Array.from({ length: 102 }, (_, index) => ({
+      monitorId: `monitor-${index}`, task: `Task ${index}`, createdAt: index + 1, updatedAt: index + 1,
+      status: index % 2 === 0 ? "failed" : "failure", completedAt: index + 1,
+    }));
+    const running: ThreadSubAgentSummary = { ...failures[0]!, monitorId: "running", status: "running", completedAt: undefined };
+    const newFailure = { ...failures[0]!, monitorId: "new-failure" };
+    await store.upsertThreadSubAgents({ ...identity, subAgents: failures });
+    await store.upsertThreadSubAgents({ ...otherIdentity, subAgents: [failures[0]!] });
+    // Simulate existing cards written before this schema change.
+    stateDb.raw.exec("DROP TABLE thread_sub_agent_failure_dismissals");
+    const dbPath = path.join(tempDir, "state.db");
+    StateDb.open(dbPath).close();
+    const request = { ...identity, attempts: [...failures, running].map(({ monitorId, createdAt }) => ({
+      monitorId, attemptId: String(createdAt),
+    })) };
+
+    const registry = createDesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const events = vi.fn();
+    const unsubscribe = registry.onEvent(events);
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    const backend = { dismissFailedSubAgents: registry.dismissFailedSubAgents.bind(registry) };
+    registerFederationBackendHandlers({ router, backend: backend as FederationBackendOperations });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const connect = (capabilities: Parameters<typeof router.registerConnection>[0]["capabilities"]) =>
+      router.registerConnection({ peerId: "viewer", capabilities, sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    try {
+      await registry["subAgentStartupReconciliation"];
+      await store.upsertThreadSubAgent({ ...identity, subAgent: running });
+      connect(["thread_detail"]);
+      await expect(client.dismissFailedSubAgents(request)).rejects.toThrow();
+      expect(projectActiveThreadSubAgents(await store.listActiveThreadSubAgents(identity))).toHaveLength(103);
+      await store.upsertThreadSubAgent({ ...identity, subAgent: newFailure });
+      connect(["thread_detail", "turn_control"]);
+
+      const { writes } = await measureSqliteWrites(async () => {
+        await expect(client.dismissFailedSubAgents(request)).resolves.toEqual({ dismissedCount: 102 });
+      });
+      expectSqliteWriteBudget({ scenario: "failed-subagent-bulk-dismissal",
+        note: "One operator dismissal of 102 failures: 4,120 bytes per click, ~0.04 MB/day at 10 such dismissals/day, zero idle writes.", writes });
+      expect(events.mock.calls.map(([event]) => event.notification)).toEqual([
+        { method: "thread/subAgentFailures/dismissed", params: { threadId: "parent" } },
+      ]);
+      const retry = await measureSqliteWrites(() => client.dismissFailedSubAgents(request));
+      expect(retry.result).toEqual({ dismissedCount: 0 });
+      // Metrics count the implicit transaction even when UPDATE changes no rows.
+      expect(retry.writes).toMatchObject({ rowsChanged: 0, walBytes: 0 });
+      expect(events).toHaveBeenCalledOnce();
+
+      // An update from the provider can replace the card body after dismissal.
+      const revised = { ...failures[0]!, updatedAt: 200, lastMessage: "Final result" };
+      await store.upsertThreadSubAgent({ ...identity, subAgent: revised });
+      const reopened = StateDb.open(dbPath);
+      try {
+        const reopenedStore = new SqliteOverlayStore(reopened);
+        const active = projectActiveThreadSubAgents(await reopenedStore.listActiveThreadSubAgents(identity));
+        expect(active.map((card) => card.monitorId).sort()).toEqual([newFailure.monitorId, running.monitorId].sort());
+        expect(await reopenedStore.listThreadSubAgents(identity)).toHaveLength(104);
+        expect(await reopenedStore.getThreadSubAgent({ ...identity, monitorId: revised.monitorId })).toEqual(revised);
+        expect(await reopenedStore.listActiveThreadSubAgents(otherIdentity)).toEqual([failures[0]]);
+      } finally { reopened.close(); }
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
   });
 
   it("budgets the origin a to-do card's Start thread records on its first prompt", async () => {

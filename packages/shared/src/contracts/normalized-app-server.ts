@@ -2881,6 +2881,10 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/subAgentFailures/dismissed";
+      params: { threadId: string };
+    }
+  | {
       method: "automation/run/updated";
       params: {
         threadId: string;

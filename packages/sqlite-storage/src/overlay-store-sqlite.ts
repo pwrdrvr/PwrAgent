@@ -104,6 +104,7 @@ import type {
   StarMapWorkspaceState,
   ThreadQuestionnaireActivity,
   SubAgentLens,
+  FailedSubAgentAttempt,
   ThreadRewindRecord,
   ThreadSubAgentSummary,
   TokenMiserGateAccountingTotals,
@@ -4490,7 +4491,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return result;
   }
 
-  /** Unfinished cards and failures, from a partial index that gate cards never enter. */
+  async dismissFailedThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    attempts: readonly FailedSubAgentAttempt[];
+  }): Promise<number> {
+    if (params.attempts.length === 0) return 0;
+    // As with detail reads, bring any legacy cards into the table first.
+    return this.subAgentTable.dismissFailures(this.subAgentStorageKey(params), params.attempts);
+  }
+
+  /** Unfinished cards and undismissed failures, from the attention index. */
   async listActiveThreadSubAgents(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -12792,6 +12803,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadSubAgent"
   | "listThreadSubAgents"
   | "listActiveThreadSubAgents"
+  | "dismissFailedThreadSubAgents"
   | "listArchiveActiveSubAgentThreadIds"
   | "readThreadSubAgentRevision"
   | "listThreadSubAgentsByMonitorIdPrefix"

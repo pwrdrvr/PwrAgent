@@ -48,6 +48,8 @@ import {
   type MaterializeDirectoryLaunchpadResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
+  type DismissFailedSubAgentsRequest,
+  type DismissFailedSubAgentsResponse,
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type LatestCodexConfigWarningResponse,
@@ -144,6 +146,7 @@ import {
   CODEX_MCP_SERVER_LOGIN_CHANNEL,
   CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_LAUNCHPAD_CREATION_CHANNEL,
@@ -1030,6 +1033,20 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL);
+  ipcMain.handle(
+    AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
+    async (_event, request: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse> => {
+      const target = request?.federationTarget;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .dismissFailedSubAgents(stripFederationTarget(request));
+      }
+      return await registry.dismissFailedSubAgents(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.handle(
     AGENT_STOP_SUB_AGENT_CHANNEL,
@@ -1611,6 +1628,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);

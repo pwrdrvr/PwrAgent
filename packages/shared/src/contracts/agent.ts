@@ -571,6 +571,22 @@ export type StopSubAgentResponse = {
   stoppedAt: number;
 };
 
+export type FailedSubAgentAttempt = {
+  monitorId: string;
+  attemptId: string;
+};
+
+export type DismissFailedSubAgentsRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  attempts: FailedSubAgentAttempt[];
+};
+
+export type DismissFailedSubAgentsResponse = {
+  dismissedCount: number;
+};
+
 export type CompactThreadRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
