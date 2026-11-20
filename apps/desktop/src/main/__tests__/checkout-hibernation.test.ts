@@ -684,6 +684,42 @@ describe("idle checkout hibernation and restore", () => {
 // HEAD on a detached HEAD with its saved edits, the branch stays where it
 // was, the message goes ahead, and the final event says why, once.
 describe("hibernated restore when the branch can't be put back", () => {
+  it.each(["clean", "dirty"] as const)("recreates a %s hibernated checkout detached at its saved commit after branch deletion", ownFixtureTest(async (state) => {
+    const fixture = await createFixture();
+    const file = path.join(fixture.worktree, "file.txt");
+    await writeFile(file, "committed edit\n");
+    await git(fixture.worktree, ["commit", "-am", "change on the worktree branch"]);
+    const head = (await git(fixture.worktree, ["rev-parse", "HEAD"])).trim();
+    if (state === "dirty") {
+      await writeFile(file, "uncommitted edit\n");
+      await writeFile(path.join(fixture.worktree, "new.txt"), "untracked file\n");
+    }
+    const readStatus = () => git(fixture.worktree, ["status", "--porcelain"]);
+    const status = await readStatus();
+    const contents = await readFile(file, "utf8");
+    const { registry, store } = fixture.open();
+    await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: fixture.directory });
+    await sweep(registry);
+    const snapshot = await snapshotOf(store);
+    expect(snapshot).toMatchObject({ state: "hibernated", sourceHead: head });
+    const savedHead = state === "clean" ? snapshot!.snapshotCommit
+      : (await git(fixture.repo, ["rev-parse", `${snapshot!.snapshotCommit}^1`])).trim();
+    expect(savedHead).toBe(head);
+    await git(fixture.repo, ["branch", "-D", "owned"]);
+
+    const request = { ...identity, worktreePath: fixture.worktree };
+    await expect(registry.recreateThreadWorktree(request)).resolves.toMatchObject({ status: "failed", reason: "branch-missing" });
+    await expect(registry.recreateThreadWorktree({ ...request, detached: true })).resolves.toMatchObject({ status: "recreated" });
+
+    // Hibernation must round-trip Git's original HEAD and working-tree state.
+    expect((await git(fixture.worktree, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect(await readStatus()).toBe(status);
+    expect(await readFile(file, "utf8")).toBe(contents);
+    if (state === "dirty") expect(await readFile(path.join(fixture.worktree, "new.txt"), "utf8")).toBe("untracked file\n");
+    expect(await git(fixture.worktree, ["branch", "--show-current"])).toBe("");
+    expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+  }));
+
   it.each([
     ["in-use", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
       await git(fixture.repo, ["worktree", "add", path.join(fixture.root, "elsewhere"), "owned"]);
@@ -727,6 +763,26 @@ describe("hibernated restore when the branch can't be put back", () => {
     expect(events.at(-1)).toBe(withOutcome[0]);
   }));
 });
+
+it.each(["owned", "detached"] as const)("restores a clean hibernated merge commit from a %s checkout", ownFixtureTest(async (checkout) => {
+  const fixture = await createFixture();
+  await writeFile(path.join(fixture.repo, "merged.txt"), "committed on main\n");
+  await git(fixture.repo, ["add", "merged.txt"]);
+  await git(fixture.repo, ["commit", "-m", "change on main"]);
+  await git(fixture.worktree, ["merge", "--no-ff", "-m", "merge main", "main"]);
+  if (checkout === "detached") await git(fixture.worktree, ["switch", "--detach"]);
+  const head = (await git(fixture.worktree, ["rev-parse", "HEAD"])).trim();
+  const { registry, store } = fixture.open();
+  await sweep(registry);
+  const snapshot = await snapshotOf(store);
+  expect(snapshot).toMatchObject({ state: "hibernated", snapshotCommit: head, sourceHead: head });
+
+  await expect(registry.restoreWorktree({ ...identity, worktreePath: fixture.worktree, snapshotRef: snapshot!.snapshotRef }))
+    .resolves.toMatchObject({ snapshot: { state: "restored" } });
+  expect((await git(fixture.worktree, ["rev-parse", "HEAD"])).trim()).toBe(head);
+  expect((await git(fixture.worktree, ["branch", "--show-current"])).trim()).toBe(checkout === "owned" ? "owned" : "");
+  expect(await git(fixture.worktree, ["status", "--porcelain"])).toBe("");
+}));
 
 describe("Restore now and Keep it awake", () => {
   type HibernationEvent = { workspace?: { restoring?: boolean; restorePhase?: string; runsSetup?: boolean } | null; keepAwake?: boolean };

@@ -115,19 +115,22 @@ describe("MissingWorktreeCard", () => {
     expect(onRecreate).toHaveBeenCalledWith({});
   });
 
-  it("offers a detached worktree when the branch is checked out elsewhere", async () => {
+  it.each([
+    ["branch-checked-out", "fix/retry-backoff is checked out in /elsewhere."],
+    ["branch-moved", "The branch fix/retry-backoff no longer contains the saved commit."],
+  ] as const)("offers a detached worktree after a %s refusal", async (reason, message) => {
     const onRecreate = vi.fn()
-      .mockResolvedValueOnce(refused("branch-checked-out", "fix/retry-backoff is checked out in /elsewhere."))
+      .mockResolvedValueOnce(refused(reason, message))
       .mockResolvedValueOnce(recreated({ branch: undefined }));
     const onRecovered = vi.fn();
     render(<MissingWorktreeCard missing={missing} onRecreate={onRecreate} onMoveToMainCheckout={vi.fn()} onRecovered={onRecovered} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Recreate" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("checked out in /elsewhere");
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
     expect(screen.getByRole("list", { name: "Steps" })).toHaveTextContent("Failed: Add the worktree on fix/retry-backoff");
     // The alert carries the reason; the failed step does not repeat it.
-    expect(screen.getAllByText(/checked out in \/elsewhere/)).toHaveLength(1);
+    expect(screen.getAllByText(message)).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Recreate Detached" }));
     await waitFor(() => expect(onRecreate).toHaveBeenLastCalledWith({ detached: true }));
     await waitFor(() => expect(onRecovered).toHaveBeenCalled());

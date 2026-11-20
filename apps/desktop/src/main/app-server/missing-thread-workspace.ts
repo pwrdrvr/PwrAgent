@@ -97,6 +97,7 @@ export async function detectMissingThreadWorkspace(
           checkpoint: {
             snapshotRef: snapshot.snapshotRef,
             snapshotCommit: snapshot.snapshotCommit,
+            ...(snapshot.sourceHead ? { sourceHead: snapshot.sourceHead } : {}),
             ...((snapshot.archivedAt ?? snapshot.hibernatedAt) !== undefined
               ? { archivedAt: snapshot.archivedAt ?? snapshot.hibernatedAt } : {}),
           },
