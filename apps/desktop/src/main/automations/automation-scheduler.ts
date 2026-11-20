@@ -18,6 +18,7 @@ import {
   collectDueAutomationWindows,
 } from "./automation-schedule.js";
 import { getMainLogger } from "../log.js";
+import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry.js";
 import type { AutomationGateRunner } from "./automation-gate-runner.js";
 import type {
   AutomationRunner,
@@ -34,6 +35,7 @@ export type AutomationSchedulerOptions = {
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+  admitResumedRun?: () => boolean;
   /**
    * Ends runs whose owning process is proved dead and returns the
    * automations whose running run that freed. Only the process that ended a
@@ -55,6 +57,13 @@ export type AutomationSchedulerOptions = {
    * asked to stop. Reports it the way any failed run is reported.
    */
   onRunTimedOut?: (run: AutomationRunSummary) => Promise<void> | void;
+};
+
+type DailyLimitNotice = Parameters<NonNullable<AutomationSchedulerOptions["onDailyLimitReached"]>>[0];
+
+type RunAdmissionResult = {
+  run?: AutomationRunSummary;
+  dailyLimitNotice?: DailyLimitNotice;
 };
 
 type InboundCoalesceWindow = {
@@ -122,7 +131,11 @@ export function runTimeoutMessage(timeoutMs: number): string {
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private stopped = false;
   private dispatchPauseCount = 0;
+  private readonly pausedDispatchWaiters = new Set<(proceed: boolean) => void>();
+  private readonly leaseBlockedLanes = new Set<string>();
+  private providerRetryTimer?: ReturnType<typeof setTimeout>;
   private readonly sessionStartedAt: number;
   private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
   /**
@@ -146,6 +159,7 @@ export class AutomationScheduler {
   }
 
   start(): void {
+    this.stopped = false;
     if (this.running) {
       this.scheduleNextTimer();
       return;
@@ -155,7 +169,12 @@ export class AutomationScheduler {
   }
 
   stop(): void {
+    this.stopped = true;
     this.running = false;
+    clearTimeout(this.providerRetryTimer);
+    this.providerRetryTimer = undefined;
+    this.leaseBlockedLanes.clear();
+    this.releasePausedDispatchWaiters(false);
     if (this.timer) {
       this.clearTimer(this.timer);
       this.timer = null;
@@ -176,9 +195,8 @@ export class AutomationScheduler {
   /**
    * Hold new launches while the operator decides whether to quit. Existing
    * turns continue, and triggers still become queued runs so staying open can
-   * resume them without losing inbound work. The queued rows do not survive a
-   * completed quit: the store's reconcileStartup cancels them at the next
-   * start.
+   * resume them without losing inbound work. Startup can recover a queued
+   * run that has never begun execution.
    */
   quiesceDispatch(): () => Promise<void> {
     this.dispatchPauseCount += 1;
@@ -192,6 +210,8 @@ export class AutomationScheduler {
       released = true;
       this.dispatchPauseCount = Math.max(0, this.dispatchPauseCount - 1);
       if (this.dispatchPauseCount > 0) return;
+      this.releasePausedDispatchWaiters(true);
+      this.scheduleProviderRetry();
       this.scheduleNextTimer();
       await this.resumePendingRuns();
     };
@@ -252,6 +272,7 @@ export class AutomationScheduler {
     const run = await this.admitRun(automation, {
       automationId,
       trigger: "manual",
+      recoverOnRestart: true,
       scheduledWindows: [],
       now,
     });
@@ -289,6 +310,7 @@ export class AutomationScheduler {
     const run = await this.admitRun(automation, {
       automationId: automation.id,
       trigger: "manual",
+      recoverOnRestart: true,
       scheduledWindows: [],
       source: params.source,
       now,
@@ -394,7 +416,7 @@ export class AutomationScheduler {
       return undefined;
     }
 
-    const run = await this.admitRun(params.automation, inboundRun);
+    const run = await this.admitRun(params.automation, { ...inboundRun, recoverOnRestart: true });
     if (!run) return undefined;
 
     if (active) {
@@ -612,105 +634,80 @@ export class AutomationScheduler {
     automation: AutomationRecord,
     now: number,
   ): Promise<void> {
-    if (!automation.schedule) {
-      this.options.store.updateAutomation(automation.id, {
-        nextRunAt: null,
-        now,
-      });
-      return;
-    }
-    const firstDueAt = Math.max(automation.nextRunAt ?? now, this.sessionStartedAt);
-    const windows = collectDueAutomationWindows({
-      schedule: automation.schedule,
-      firstDueAt,
+    const schedule = automation.schedule;
+    const windows = schedule ? collectDueAutomationWindows({
+      schedule,
+      firstDueAt: Math.max(automation.nextRunAt ?? now, this.sessionStartedAt),
       through: now,
-    });
-    if (windows.length === 0) {
-      this.options.store.updateAutomation(automation.id, {
-        nextRunAt: computeNextAutomationRunAt(automation.schedule, now),
-        now,
-      });
-      return;
-    }
-
-    if (automation.backlogPolicy === "drop_missed") {
-      if (this.options.store.findActiveRunForAutomation(automation.id)) {
-        this.options.store.createRun({
-          automationId: automation.id,
-          trigger: "scheduled",
-          status: "skipped",
-          scheduledFor: windows[0]?.scheduledFor,
-          scheduledWindows: windows.slice(0, 1),
-          completedAt: now,
-          errorMessage:
-            windows.length === 1
-              ? "The automation execution lane was busy when this schedule fired."
-              : `Dropped ${windows.length} missed schedule windows because the automation execution lane was busy.`,
-          now,
-        });
-        this.options.store.updateAutomation(automation.id, {
-          nextRunAt: computeNextAutomationRunAt(automation.schedule, now),
-          now,
-        });
-        return;
-      }
-      await this.enqueueScheduledRun({ automation, windows: [windows[0]!], now });
-    } else {
-      const existing = this.options.store.findPendingScheduledRun(automation.id);
-      if (existing) {
-        // The run's input is built from its windows when it starts, so the
-        // merged windows need no other delivery.
-        this.options.store.coalescePendingScheduledRun({
-          automationId: automation.id,
-          scheduledWindows: windows,
-          now,
-        });
-      } else if (this.options.store.findActiveRunForAutomation(automation.id)) {
-        const run = await this.admitRun(automation, {
-          automationId: automation.id,
-          trigger: "scheduled",
-          scheduledFor: windows[0]?.scheduledFor,
-          scheduledWindows: windows,
-          now,
-        });
-        if (run) {
-          this.options.store.markRunQueued({
-            runId: run.id,
-            queueEntryId: buildLaneQueueEntryId(run.id),
-            queuedAt: now,
-            now,
-          });
-        }
-      } else {
-        await this.enqueueScheduledRun({ automation, windows, now });
-      }
-    }
-
-    this.options.store.updateAutomation(automation.id, {
-      nextRunAt: computeNextAutomationRunAt(automation.schedule, now),
+    }) : [];
+    const evaluation = this.options.store.commitScheduledEvaluation({
+      automationId: automation.id,
+      dueAt: automation.nextRunAt,
+      nextRunAt: schedule ? computeNextAutomationRunAt(schedule, now) : null,
       now,
-    });
+    }, () => this.recordScheduledWindows(automation, windows, now));
+    if (evaluation?.dailyLimitNotice) {
+      await this.options.onDailyLimitReached?.(evaluation.dailyLimitNotice);
+    }
+    const run = evaluation?.run;
+    if (run) {
+      await this.submitRun({ automation, runId: run.id, windows: run.scheduledWindows, now });
+    }
   }
 
-  private async enqueueScheduledRun(params: {
-    automation: AutomationRecord;
-    windows: AutomationRunWindow[];
-    now: number;
-  }): Promise<AutomationRunSubmissionResult | undefined> {
-    const run = await this.admitRun(params.automation, {
-      automationId: params.automation.id,
+  /** Record the backlog decision inside the schedule advance transaction. */
+  private recordScheduledWindows(
+    automation: AutomationRecord,
+    windows: AutomationRunWindow[],
+    now: number,
+  ): RunAdmissionResult | undefined {
+    const first = windows[0];
+    if (!first) return undefined;
+
+    const store = this.options.store;
+    const active = store.findActiveRunForAutomation(automation.id);
+    const dropMissed = automation.backlogPolicy === "drop_missed";
+    if (dropMissed && active) {
+      store.createRun({
+        automationId: automation.id,
+        trigger: "scheduled",
+        status: "skipped",
+        scheduledWindows: [first],
+        completedAt: now,
+        errorMessage:
+          windows.length === 1
+            ? "The automation execution lane was busy when this schedule fired."
+            : `Dropped ${windows.length} missed schedule windows because the automation execution lane was busy.`,
+        now,
+      });
+      return undefined;
+    }
+    if (!dropMissed && store.findPendingScheduledRun(automation.id)) {
+      // The run builds its input from the merged windows when it starts.
+      store.coalescePendingScheduledRun({
+        automationId: automation.id,
+        scheduledWindows: windows,
+        now,
+      });
+      return undefined;
+    }
+
+    const evaluation = this.recordRunAdmission(automation, {
+      automationId: automation.id,
       trigger: "scheduled",
-      scheduledFor: params.windows[0]?.scheduledFor,
-      scheduledWindows: params.windows,
-      now: params.now,
+      recoverOnRestart: true,
+      scheduledWindows: dropMissed ? [first] : windows,
+      now,
     });
-    if (!run) return undefined;
-    return await this.submitRun({
-      automation: params.automation,
+    const run = evaluation?.run;
+    if (!run || !active) return evaluation;
+    store.markRunQueued({
       runId: run.id,
-      windows: params.windows,
-      now: params.now,
+      queueEntryId: buildLaneQueueEntryId(run.id),
+      queuedAt: now,
+      now,
     });
+    return undefined;
   }
 
   private async submitRun(params: {
@@ -720,7 +717,7 @@ export class AutomationScheduler {
     now: number;
   }): Promise<AutomationRunSubmissionResult | undefined> {
     const run = this.options.store.getRun(params.runId);
-    if (!run) return undefined;
+    if (!run || this.stopped) return undefined;
 
     if (this.dispatchPauseCount > 0) {
       const queued = this.options.store.markRunQueued({
@@ -735,6 +732,19 @@ export class AutomationScheduler {
       });
     }
 
+    // Admission can be denied during the previous provider owner's lease
+    // grace period. Keep the run queued, with no execution claim or gate work.
+    if (run.resumedAt !== undefined && !this.canDispatchResumedRun(run.automationId)) {
+      return buildLaneQueuedResult({ run, position: 1 });
+    }
+    // The claim covers both the shell gate and the provider call. Either
+    // can have side effects before acknowledging that work began.
+    const claimed = this.options.store.claimRunForDispatch(run.id, Math.max(params.now, this.now()));
+    if (!claimed) {
+      const current = this.options.store.getRun(run.id);
+      if (current?.status !== "pending" && current?.status !== "queued") return undefined;
+      return buildLaneQueuedResult({ run: current, position: 1 });
+    }
     try {
       const gateResult = await this.runGateIfNeeded({
         automation: params.automation,
@@ -744,26 +754,19 @@ export class AutomationScheduler {
       if (gateResult?.status === "skip" || gateResult?.status === "failed") {
         return undefined;
       }
-      // A gate can outlive the moment quit quiescing begins. Nothing awaits
-      // between this check and submitRun, so once it passes the launch is
-      // atomic with respect to another main-process event pausing dispatch.
-      if (this.dispatchPauseCount > 0) {
-        const queued = this.options.store.markRunQueued({
-          runId: run.id,
-          queueEntryId: run.queueEntryId ?? buildLaneQueueEntryId(run.id),
-          queuedAt: params.now,
-          now: params.now,
-        });
-        return buildLaneQueuedResult({
-          run: queued ?? run,
-          position: 1,
-        });
+      // Hold the claimed lane across quit confirmation. If the operator
+      // stays, continue with this gate result and never invoke the gate again.
+      while (!this.stopped && this.dispatchPauseCount > 0) {
+        const proceed = await new Promise<boolean>((resolve) => this.pausedDispatchWaiters.add(resolve));
+        if (!proceed) return undefined;
       }
+      if (this.stopped) return undefined;
+      const priorRuns = this.collectPriorRunContext(params.automation, run.id, params.now);
       const result = await this.options.runner.submitRun({
         automation: params.automation,
         gateResult,
-        priorRuns: this.collectPriorRunContext(params.automation, run.id, params.now),
-        run,
+        priorRuns,
+        run: claimed,
       });
       const started = this.options.store.markRunStarted({
         runId: params.runId,
@@ -778,7 +781,7 @@ export class AutomationScheduler {
       if (started?.status === "running") {
         this.armRunTimeout(params.automation, params.runId);
       }
-      automationSchedulerLog.info("automation run submitted", {
+      const metadata = {
         automationId: params.automation.id,
         automationName: params.automation.name,
         backend: params.automation.backend,
@@ -788,7 +791,9 @@ export class AutomationScheduler {
         threadId: params.automation.threadId,
         turnId: result.turnId,
         windowCount: params.windows.length,
-      });
+      };
+      if (claimed.resumedAt === undefined) automationSchedulerLog.info("automation run submitted", metadata);
+      else automationSchedulerLog.debug("resumed automation run submitted", metadata);
       return result;
     } catch (error) {
       automationSchedulerLog.warn("automation run submission failed", {
@@ -800,15 +805,56 @@ export class AutomationScheduler {
         threadId: params.automation.threadId,
         windowCount: params.windows.length,
       });
+      const completedAt = Math.max(params.now, this.now());
       this.options.store.markRunTerminal({
         runId: params.runId,
         status: "failed",
-        completedAt: params.now,
+        completedAt,
         errorMessage: error instanceof Error ? error.message : String(error),
-        now: params.now,
+        now: completedAt,
       });
       return undefined;
     }
+  }
+
+  private releasePausedDispatchWaiters(proceed: boolean): void {
+    for (const resolve of this.pausedDispatchWaiters) resolve(proceed);
+    this.pausedDispatchWaiters.clear();
+  }
+
+  private canDispatchResumedRun(automationId: string): boolean {
+    try {
+      if (this.options.admitResumedRun?.() !== false) return true;
+    } catch (error) {
+      automationSchedulerLog.debug("automation provider admission unavailable", {
+        automationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.leaseBlockedLanes.add(automationId);
+    this.scheduleProviderRetry();
+    return false;
+  }
+
+  private scheduleProviderRetry(): void {
+    if (this.providerRetryTimer || this.stopped || this.dispatchPauseCount > 0 || this.leaseBlockedLanes.size === 0) return;
+    this.providerRetryTimer = setTimeout(() => {
+      this.providerRetryTimer = undefined;
+      if (this.stopped || this.dispatchPauseCount > 0) return;
+      const lanes = [...this.leaseBlockedLanes];
+      this.leaseBlockedLanes.clear();
+      for (const automationId of lanes) {
+        void this.startNextQueuedRun(automationId).catch((error: unknown) => {
+          automationSchedulerLog.warn("automation provider admission retry failed", {
+            automationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.leaseBlockedLanes.add(automationId);
+          this.scheduleProviderRetry();
+        });
+      }
+    }, RUNTIME_LEASE_RETRY_MS);
+    this.providerRetryTimer.unref?.();
   }
 
   /**
@@ -864,11 +910,8 @@ export class AutomationScheduler {
     runId: string;
     now: number;
   }): Promise<AutomationGateRunResult | undefined> {
-    if (!params.automation.gate) return undefined;
-    const gateResult = await this.options.gateRunner?.runGate(params.automation.gate);
-    if (!gateResult) {
-      return undefined;
-    }
+    if (!params.automation.gate || !this.options.gateRunner) return undefined;
+    const gateResult = await this.options.gateRunner.runGate(params.automation.gate);
     if (gateResult.status === "proceed") {
       return gateResult;
     }
@@ -922,9 +965,21 @@ export class AutomationScheduler {
     automation: AutomationRecord,
     input: CreateAutomationRunInput,
   ): Promise<AutomationRunSummary | undefined> {
+    const evaluation = this.recordRunAdmission(automation, input);
+    if (evaluation?.dailyLimitNotice) {
+      await this.options.onDailyLimitReached?.(evaluation.dailyLimitNotice);
+    }
+    return evaluation?.run;
+  }
+
+  /** Record admission or a daily-limit pause before publishing its notice. */
+  private recordRunAdmission(
+    automation: AutomationRecord,
+    input: CreateAutomationRunInput,
+  ): RunAdmissionResult | undefined {
     const admission = this.options.store.admitRun(input);
     if (!admission) return undefined;
-    if (admission.status === "admitted") return admission.run;
+    if (admission.status === "admitted") return { run: admission.run };
     const now = input.now ?? this.now();
     automationSchedulerLog.info("automation run refused by its daily run limit", {
       automationId: automation.id,
@@ -942,12 +997,14 @@ export class AutomationScheduler {
       now,
     });
     if (pause?.paused && skipped) {
-      await this.options.onDailyLimitReached?.({
-        automation: current,
-        limit: admission.limit,
-        runsInWindow: admission.runsInWindow,
-        skippedRunId: skipped.id,
-      });
+      return {
+        dailyLimitNotice: {
+          automation: current,
+          limit: admission.limit,
+          runsInWindow: admission.runsInWindow,
+          skippedRunId: skipped.id,
+        },
+      };
     }
     return undefined;
   }
@@ -1107,30 +1164,37 @@ export class AutomationScheduler {
   }
 
   /** Starts a lane's next run after this process ended its running run. */
-  async startNextQueuedRun(automationId: string): Promise<void> {
-    await this.startNextPendingRun(automationId, this.now());
+  async startNextQueuedRun(automationId: string, adoptedRunIds?: ReadonlySet<string>): Promise<void> {
+    await this.startNextPendingRun(automationId, this.now(), adoptedRunIds);
   }
 
   private async startNextPendingRun(
     automationId: string | undefined,
     now: number,
+    adoptedRunIds?: ReadonlySet<string>,
   ): Promise<void> {
-    if (!automationId || this.dispatchPauseCount > 0) return;
+    if (!automationId) return;
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return;
-    const pending = this.options.store.findPendingRunForAutomation(automationId);
-    if (!pending) return;
-    if (this.startingPendingRunIds.has(pending.id)) return;
-    this.startingPendingRunIds.add(pending.id);
-    try {
-      await this.submitRun({
-        automation,
-        runId: pending.id,
-        windows: pending.scheduledWindows,
-        now,
-      });
-    } finally {
-      this.startingPendingRunIds.delete(pending.id);
+    while (!this.stopped && this.dispatchPauseCount === 0) {
+      if (this.options.store.findActiveRunForAutomation(automationId)?.status === "running") return;
+      const pending = this.options.store.findPendingRunForAutomation(automationId);
+      if (!pending || this.startingPendingRunIds.has(pending.id)) return;
+      if (adoptedRunIds && !adoptedRunIds.has(pending.id)) return;
+      this.startingPendingRunIds.add(pending.id);
+      try {
+        const result = await this.submitRun({
+          automation,
+          runId: pending.id,
+          windows: pending.scheduledWindows,
+          now,
+        });
+        // A rejected submission or gate can end this run without a provider
+        // completion event to release the next queued run.
+        if (result || this.options.store.findPendingRunForAutomation(automationId)?.id === pending.id) return;
+      } finally {
+        this.startingPendingRunIds.delete(pending.id);
+      }
     }
   }
 
@@ -1138,8 +1202,6 @@ export class AutomationScheduler {
     if (!this.running || this.dispatchPauseCount > 0) return;
     const now = this.now();
     for (const automation of this.options.store.listAutomations()) {
-      const active = this.options.store.findActiveRunForAutomation(automation.id);
-      if (active?.status === "running") continue;
       await this.startNextPendingRun(automation.id, now);
     }
   }

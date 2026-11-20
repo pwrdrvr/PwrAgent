@@ -122,6 +122,8 @@ export type CreateAutomationRunInput = {
   source?: AutomationRunSourceMetadata;
   queuedAt?: number;
   queueEntryId?: string;
+  /** The dispatch path persists running before beginning execution. */
+  recoverOnRestart?: boolean;
   /**
    * With a terminal `status`, the run is recorded finished in one insert. A
    * skipped marker never passes through `pending`, so it cannot collide with
@@ -137,6 +139,7 @@ export type CreateAutomationRunInput = {
 
 export type StartupReconciliationInput = {
   now?: number;
+  resumeUnstartedRuns?: boolean;
   /**
    * Next run for each enabled schedule, computed from now. Written only where
    * the stored time is missing, already due, or later than this value, so a
@@ -153,6 +156,8 @@ export type StartupReconciliationInput = {
 };
 
 export type StartupReconciliationResult = {
+  /** Runs adopted and queued by this call. */
+  resumedRuns: AutomationRunSummary[];
   /** Runs this call moved from pending, queued or running to interrupted. */
   interruptedRuns: AutomationRunSummary[];
   /** Unfinished runs left alone because their owner is alive. */
@@ -213,6 +218,10 @@ export interface AutomationStorage {
     paused: boolean;
   } | undefined;
   createRun(input: CreateAutomationRunInput): AutomationRunSummary | undefined;
+  commitScheduledEvaluation<T>(
+    params: { automationId: string; dueAt?: number; nextRunAt: number | null; now: number },
+    recordWindow: () => T,
+  ): T | undefined;
   /**
    * Create a run only if the automation's daily run limit allows it. The
    * count and the insert share one write transaction, so two instances on a
@@ -238,6 +247,7 @@ export interface AutomationStorage {
     sinceMs: number;
   }): number;
   findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined;
+  claimRunForDispatch(runId: string, now: number): AutomationRunSummary | undefined;
   markRunQueued(params: {
     runId: string;
     queueEntryId: string;

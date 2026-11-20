@@ -935,7 +935,7 @@ describe("AutomationStore", () => {
     expect(store.reconcileStartup({
       now: 20_000,
       nextRunAtByAutomationId: { "automation-1": 320_000 },
-    })).toEqual({ interruptedRuns: [], liveOwnerRunCount: 0, rescheduledAutomationCount: 0 });
+    })).toEqual({ interruptedRuns: [], resumedRuns: [], liveOwnerRunCount: 0, rescheduledAutomationCount: 0 });
     expect(store.getAutomation("automation-1")?.nextRunAt).toBe(30_000);
   });
 

@@ -385,7 +385,7 @@ export function AutomationRunHistoryItem(props: {
           <ChevronRightIcon aria-hidden="true" size={13} />
         </button>
         <span className={`automation-run-status automation-run-status--${props.run.status}`}>
-          {formatRunStatus(props.run.status, props.run.failureReason)}
+          {formatRunStatus(props.run.status, props.run.failureReason, props.run.resumedAt)}
         </span>
         <span>
           {props.run.trigger}
