@@ -180,6 +180,8 @@ export class ManagedGitUnavailableError extends Error {
   }
 }
 
+class ManagedGitMissingAssetError extends Error {}
+
 function settings(options: ManagedGitOptions) {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
@@ -244,7 +246,9 @@ async function downloadBytes(
   });
   if (!response.ok) {
     const name = url.slice(url.lastIndexOf("/") + 1);
-    throw new Error(`GitHub could not serve ${name} (HTTP ${response.status}).`);
+    const message = `GitHub could not serve ${name} (HTTP ${response.status}).`;
+    if (response.status === 404 || response.status === 410) throw new ManagedGitMissingAssetError(message);
+    throw new Error(message);
   }
   const declared = Number(response.headers.get("content-length"));
   if (declared > MAX_METADATA_BYTES) {
@@ -393,6 +397,8 @@ export async function checkManagedGitReleases(
         verified = await verifyReleaseMetadata(release, options, options.signal);
       } catch (error) {
         options.signal?.throwIfAborted();
+        // Incomplete refreshes retain the last verified offers and check time.
+        if (!(error instanceof ManagedGitTrustError || error instanceof ManagedGitMissingAssetError)) throw error;
         const reason = describeCheckError(error);
         for (const track of open) {
           tracks[track].blocked ??= { version: release.version, reason };

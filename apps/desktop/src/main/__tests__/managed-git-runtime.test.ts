@@ -120,6 +120,7 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
       fileURLToPath(new URL("./fixtures/managed-git-install-permissions.ts", import.meta.url)),
       rootDir, mask,
     ]);
+    expect(readFileSync(path.join(rootDir, "logs", "main.log"), "utf8")).toContain("managed_git_installed");
   });
 
   it("rejects an archive whose bytes differ from the published checksum, leaving nothing behind", async () => {
@@ -190,6 +191,38 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
       reason: "GitHub could not serve runtime-manifest.json (HTTP 404).",
     });
     expect(check?.tracks.latest.available?.version).toBe(promoted.version);
+  });
+
+  it.each([
+    { asset: "runtime-manifest.json", failure: "HTTP 503" },
+    { asset: "SHA256SUMS", failure: "HTTP 503" },
+    { asset: "runtime-manifest.json", failure: "timeout" },
+    { asset: "SHA256SUMS", failure: "timeout" },
+  ])("keeps the last verified offers and check time when $asset fails temporarily ($failure)", async ({ asset, failure }) => {
+    // An incomplete refresh leaves the last successful answers and timestamp intact.
+    const prerelease = buildRelease("2.56.0-dev-pwrgit.6");
+    const promoted = buildRelease("2.56.0-dev-pwrgit.5");
+    const gh = fakeGithub([prerelease, promoted], [githubRelease(prerelease), githubRelease(promoted, { prerelease: false })]);
+    const { options } = setup(gh);
+    const verified = await checkManagedGitReleases({ ...options, manual: true, now: () => 1_000 });
+    expect(verified?.tracks.latest.available?.tag).toBe(promoted.tag);
+    expect(verified?.tracks.prerelease.available?.tag).toBe(prerelease.tag);
+
+    const failed = await checkManagedGitReleases({
+      ...options,
+      manual: true,
+      now: () => 2_000,
+      fetch: async (url, init) => {
+        if (!String(url).endsWith(`/${prerelease.tag}/${asset}`)) return gh.fetch(url, init);
+        if (failure === "HTTP 503") return new Response(null, { status: 503 });
+        throw new DOMException("The request timed out", "TimeoutError");
+      },
+    });
+    const reason = failure === "HTTP 503"
+      ? `GitHub could not serve ${asset} (HTTP 503).`
+      : "GitHub could not be reached.";
+    expect(failed).toEqual({ ...verified, error: reason });
+    await expect(readManagedGitCheck(options)).resolves.toEqual(failed);
   });
 
   it("refuses an archive with an absolute member before extracting anything", async () => {
