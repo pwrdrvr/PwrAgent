@@ -615,13 +615,22 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     directoryThreadsCollapseAnchorRef.current = undefined;
     list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
   });
-  // Brings a project's section to the top of the lane, from its divider.
-  const scrollDirectoryToTop = (divider: HTMLElement): void => {
+  // Scrolls a project back to the start of its Directory threads: the divider
+  // resting right under the stuck project header, the first unpinned row
+  // below it. While the divider is stuck its box says where it sticks, not
+  // where it sits in the list, so it is measured unstuck for one synchronous
+  // layout read (nothing paints in between).
+  const scrollToDirectoryThreads = (divider: HTMLElement): void => {
     const list = directoryListRef.current;
-    const section = divider.closest<HTMLElement>(".directory-row");
-    if (!list || !section) return;
-    const offset = section.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    list.scrollTo({ top: list.scrollTop + offset, behavior: "smooth" });
+    const header = divider.closest(".directory-row")
+      ?.querySelector<HTMLElement>(":scope > .directory-row__header");
+    if (!list || !header) return;
+    const position = divider.style.position;
+    divider.style.position = "static";
+    const restingTop = divider.getBoundingClientRect().top;
+    divider.style.position = position;
+    const stuckTop = list.getBoundingClientRect().top + header.getBoundingClientRect().height;
+    list.scrollTo({ top: list.scrollTop + restingTop - stuckTop, behavior: "smooth" });
   };
   // A pointer press on the Directory threads bar beside its label. Only a
   // real press sets it, so keyboard, assistive-technology, and scripted
@@ -2010,11 +2019,11 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             }
                             // The label (chevron, name, count) toggles the
                             // list. A pointer press on the rest of the bar,
-                            // the rules either side, scrolls the project
-                            // back to its top: from deep in a long list that
-                            // is the other way out.
+                            // the rules either side, scrolls back to the
+                            // start of the Directory threads: from deep in a
+                            // long list that is the other way out.
                             if (pressedBar) {
-                              scrollDirectoryToTop(event.currentTarget);
+                              scrollToDirectoryThreads(event.currentTarget);
                               return;
                             }
                             directoryThreadsCollapseAnchorRef.current = directoryThreadsCollapsed

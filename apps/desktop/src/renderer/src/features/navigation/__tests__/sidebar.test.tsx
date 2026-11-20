@@ -6488,10 +6488,11 @@ describe("Sidebar", () => {
     expect(scrollTop).toBe(500);
   });
 
-  it("keeps the Directory threads count open or closed, and scrolls to the project's top from the bar", async () => {
+  it("keeps the Directory threads count open or closed, and scrolls to the start of the threads from the bar", async () => {
     // The count showed only while closed, so the label and the rules beside
     // it changed width on every toggle. And from deep in a long list the bar
-    // beside the label is the way back to the project's top; the label (and
+    // beside the label is the way back to the start of the Directory
+    // threads (not the project's top, above its pins); the label (and
     // the keyboard) still toggles.
     const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
@@ -6526,16 +6527,23 @@ describe("Sidebar", () => {
 
     const list = container.querySelector<HTMLElement>(".directory-list")!;
     const section = container.querySelector<HTMLElement>(".directory-row")!;
+    const header = section.querySelector<HTMLElement>(".directory-row__header")!;
     const scrollTo = vi.fn();
     list.scrollTo = scrollTo as typeof list.scrollTo;
     Object.defineProperty(list, "scrollTop", { configurable: true, value: 900 });
-    const rectAt = (top: number) => ({
-      x: 0, y: top, top, bottom: top + 400, left: 0, right: 300, width: 300, height: 400,
+    const rectAt = (top: number, height: number) => ({
+      x: 0, y: top, top, bottom: top + height, left: 0, right: 300, width: 300, height,
       toJSON: () => ({}),
     }) as DOMRect;
-    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rectAt(80));
-    vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rectAt(-620));
+    // The lane at y=80; the project's top far above it, its header stuck
+    // (24px) and the divider stuck under it at 104. In the flow, where it
+    // rests, the divider is 500px above the lane.
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rectAt(80, 400));
+    vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rectAt(-620, 2000));
+    vi.spyOn(header, "getBoundingClientRect").mockReturnValue(rectAt(80, 24));
     const divider = screen.getByRole("button", { name: "Hide directory threads for PwrAgent" });
+    vi.spyOn(divider, "getBoundingClientRect").mockImplementation(() =>
+      divider.style.position === "static" ? rectAt(-500, 24) : rectAt(104, 24));
 
     const label = divider.querySelector<HTMLElement>(".directory-row__thread-divider-label")!;
     const press = async (target: HTMLElement, detail = 1) => {
@@ -6545,9 +6553,12 @@ describe("Sidebar", () => {
       });
     };
 
-    // A pointer click on the bar itself, beside the label.
+    // A pointer click on the bar itself, beside the label, rests the
+    // divider right under the header: 900 + -500 - (80 + 24). It stays
+    // sticky afterwards.
     await press(divider);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 200, behavior: "smooth" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 296, behavior: "smooth" });
+    expect(divider.style.position).toBe("");
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
 
     // A pointer click on the label toggles.
