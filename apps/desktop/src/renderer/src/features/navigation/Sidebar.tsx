@@ -181,7 +181,10 @@ import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapsho
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatReviewThreadCount,
+  getThreadRowStatus,
+  isThreadRemoteWorkHere,
 } from "./ThreadRowStatus";
+import { SelectedThreadDock } from "./SelectedThreadDock";
 import {
   AttentionReviewReadout,
   AttentionTurnReadouts,
@@ -1140,6 +1143,16 @@ function SidebarContent(props: SidebarProps) {
         && (props.browseMode !== "directories"
           || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
   );
+  // The open thread's row, for the dock that stands in for it once it has
+  // scrolled out of the list. The row's project header scrolls away with it,
+  // so the dock names the project: the one that row sits under in
+  // Directories, the thread's first project in the flat lenses.
+  const dockedThread = props.selectedItemKey ? presentedByKey.get(props.selectedItemKey) : undefined;
+  const dockedThreadProjectLabel = (directoryKey: string | undefined): string | undefined => {
+    const key = directoryKey ?? props.selectedThreadDirectoryKeys?.[0];
+    return (key ? props.directories.find((directory) => directory.key === key)?.label : undefined)
+      ?? dockedThread?.linkedDirectories[0]?.label;
+  };
   // The project index: every project in the order Directories draws them,
   // pinned first. It stays in every lens, so the list keeps one width when
   // the lens changes; only Directories is in project order to follow.
@@ -3876,6 +3889,16 @@ function SidebarContent(props: SidebarProps) {
                   onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
                 />
               )
+            )}
+            {listStatus ? null : (
+              <SelectedThreadDock
+                regionRef={lensScroll.ref}
+                thread={dockedThread}
+                threadKey={dockedThread ? selectedItemKey : undefined}
+                status={dockedThread ? getThreadRowStatus(dockedThread, props.thinkingThreadKeys) : undefined}
+                remoteWork={dockedThread ? isThreadRemoteWorkHere(dockedThread) : false}
+                projectLabel={dockedThreadProjectLabel}
+              />
             )}
           </div>
         </section>

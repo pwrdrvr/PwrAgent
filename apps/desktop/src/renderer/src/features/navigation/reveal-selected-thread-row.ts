@@ -1,8 +1,10 @@
 /**
- * Scrolls a thread row into the sidebar list. Two callers share it:
+ * Scrolls a thread row into the sidebar list. Three callers share it:
  *
  * - The thread title click and the jump palette center the selected row
  *   (`revealSelectedSidebarThreadRow`).
+ * - The selected thread's dock centers the row it stands in for
+ *   (`centerSidebarThreadRow`).
  * - ThreadRow's reveal effect brings the row to the nearest edge
  *   (`revealThreadRowAtNearestEdge`), including after a collapsed container
  *   opens and mounts it.
@@ -34,6 +36,11 @@ export function revealSelectedSidebarThreadRow(options?: { instant?: boolean }):
   if (!row) {
     return;
   }
+  centerSidebarThreadRow(row, options);
+}
+
+/** Centers one given row. The selected thread's dock names its own. */
+export function centerSidebarThreadRow(row: HTMLElement, options?: { instant?: boolean }): void {
   const placement = measure(row);
   if (placement && isInFullView(placement)) {
     return;
@@ -80,7 +87,7 @@ type Placement = {
 };
 
 function measure(row: HTMLElement): Placement | undefined {
-  const scroller = scrollerOf(row);
+  const scroller = sidebarLaneOf(row);
   if (!scroller) {
     return undefined;
   }
@@ -124,7 +131,7 @@ function stickyDividerAbove(row: HTMLElement): HTMLElement | undefined {
 
 // The region clips the lens; the lane inside it (`.sidebar-list--dense`,
 // `.directory-groups`) is what scrolls.
-function scrollerOf(row: HTMLElement): HTMLElement | undefined {
+export function sidebarLaneOf(row: HTMLElement): HTMLElement | undefined {
   const region = row.closest<HTMLElement>(REGION);
   if (!region) {
     return undefined;
