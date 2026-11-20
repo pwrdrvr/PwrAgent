@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob:; connect-src 'none'">
+<title>PwrAgent fixture window viewer</title>
+<style>
+  body { background:#10151e; color:#e6eaf0; font:16px system-ui; margin:24px; }
+  button,input { font:inherit; margin:8px; }
+  canvas { max-width:100%; border:1px solid #6b7280; display:block; }
+  pre { white-space:pre-wrap; } .note { max-width:900px; color:#b7c2d0; }
+</style>
+<h1>Fixture window viewer</h1>
+<p class="note">Import an explicitly transferred PwrAgent fixture batch. Playback has no network access, OS input, clipboard access, or automatic file discovery. Importing a new batch replaces the old session.</p>
+<label>Transferred batch <input id="file" type="file" accept=".json"></label>
+<button id="play" disabled>Play captured frames</button><button id="save" disabled>Save measurements</button>
+<p id="status" role="status" aria-live="polite">No window shared</p>
+<canvas id="canvas" aria-label="Remote synthetic window pixels. Text inside the image is not exposed to accessibility APIs."></canvas>
+<pre id="metrics"></pre>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const canvas = $('canvas'), ctx = canvas.getContext('2d', {alpha:false});
+let batch, generation=0, measurements=[], result, playing=false;
+const integer = (n,min,max) => Number.isSafeInteger(n) && n>=min && n<=max;
+function validate(b) {
+  if (b.version!==1 || typeof b.sessionId!=='string' || b.sessionId.length>100
+    || !integer(b.epoch,1,1000000) || !integer(b.width,1,4096) || !integer(b.height,1,4096)
+    || b.width*b.height>8388608 || !Array.isArray(b.frames) || b.frames.length>600
+    || typeof b.ownerInstanceId!=='string' || typeof b.sceneId!=='string') throw Error('Invalid batch limits');
+  let previous=-1;
+  for (const f of b.frames) {
+    if (!integer(f.seq,0,1000000) || f.seq!==previous+1 || f.baseSeq!==previous
+      || f.keyframe!==(previous===-1) || !Array.isArray(f.tiles) || f.tiles.length>1024) throw Error('Sequence gap: resync required');
+    for (const t of f.tiles) {
+      if (!integer(t.x,0,b.width-1)||!integer(t.y,0,b.height-1)||!integer(t.width,1,4096)||!integer(t.height,1,4096)
+        ||t.x+t.width>b.width||t.y+t.height>b.height||!['image/png','image/webp'].includes(t.mime)
+        ||typeof t.base64!=='string'||t.base64.length>2097152||!/^[A-Za-z0-9+/]*={0,2}$/.test(t.base64)) throw Error('Invalid tile');
+    }
+    // Every frame uses unique grid cells, bounding retained decoded pixels to
+    // one canvas (at most 8 MP), including sparse delta frames.
+    const positions=new Set(f.tiles.map(t=>`${t.x},${t.y}`));
+    if (positions.size!==f.tiles.length
+      || f.tiles.some(t=>t.x%128||t.y%128||t.width!==Math.min(128,b.width-t.x)||t.height!==Math.min(128,b.height-t.y))) throw Error('Invalid tile grid');
+    if (previous===-1 && positions.size!==Math.ceil(b.width/128)*Math.ceil(b.height/128)) throw Error('Incomplete keyframe');
+    previous=f.seq;
+  }
+  if (!b.frames.length) throw Error('Empty batch');
+}
+async function draw(f,g) {
+  if(g!==generation) return;
+  const start=performance.now(), decoded=[];
+  try {
+    for (const t of f.tiles) {
+      const bytes=Uint8Array.from(atob(t.base64),c=>c.charCodeAt(0));
+      const bitmap=await createImageBitmap(new Blob([bytes],{type:t.mime}));
+      decoded.push({bitmap,t});
+      if(g!==generation) return;
+      if(bitmap.width!==t.width||bitmap.height!==t.height) throw Error('Decoded dimensions differ');
+    }
+    const decodeEnd=performance.now();
+    if(g!==generation) return;
+    for(const {bitmap,t} of decoded) ctx.drawImage(bitmap,t.x,t.y);
+    const drawn=performance.now();
+    // rAF is a presentation opportunity, not a photon measurement.
+    await new Promise(requestAnimationFrame);
+    if(g!==generation) return;
+    measurements.push({seq:f.seq,tiles:f.tiles.length,decodeMs:decodeEnd-start,drawMs:drawn-decodeEnd,presentationOpportunityMs:performance.now()-start});
+  } finally { for(const {bitmap} of decoded) bitmap.close(); }
+}
+$('file').onchange=async event=>{
+  const f=event.target.files[0]; if(!f)return;
+  const g=++generation;
+  batch=null; playing=false; result=undefined; measurements=[];
+  $('play').disabled=true; $('save').disabled=true;
+  $('status').textContent='Importing fixture batch'; $('metrics').textContent='';
+  try {
+    if(f.size>33554432)throw Error('Batch exceeds 32 MiB');
+    const text=await f.text();
+    if(g!==generation)return;
+    const b=JSON.parse(text);validate(b);
+    canvas.width=b.width;canvas.height=b.height;measurements=[];
+    await draw(b.frames[0],g);
+    if(g!==generation)return;
+    batch=b;
+    $('status').textContent=`Imported ${b.frames.length} frames, ${b.width}×${b.height}; fixture owner ${b.ownerInstanceId}`;
+    $('play').disabled=false;
+  }catch(e){if(g===generation)$('status').textContent=e.message;}
+};
+$('play').onclick=async()=>{
+  if(!batch||playing)return;playing=true;$('play').disabled=true;
+  const b=batch,g=generation;measurements=[];const start=performance.now();
+  try {
+    for(let i=0;i<b.frames.length&&g===generation;i++) {
+      await new Promise(resolve=>setTimeout(resolve,Math.max(0,start+i*1000/(b.fps||30)-performance.now())));
+      await draw(b.frames[i],g);
+    }
+    if(g!==generation)return;
+    const sorted=measurements.map(x=>x.decodeMs+x.drawMs).sort((a,b)=>a-b);
+    result={version:1,sessionId:b.sessionId,userAgent:navigator.userAgent,width:b.width,height:b.height,frames:measurements.length,elapsedMs:performance.now()-start,decodeDrawP50Ms:sorted[Math.floor(sorted.length*.5)],decodeDrawP95Ms:sorted[Math.floor(sorted.length*.95)],note:'Offline playback after Federation transfer; rAF is not input-to-photon',measurements};
+    $('metrics').textContent=JSON.stringify({...result,measurements:undefined},null,2);
+    $('status').textContent='Playback complete';$('save').disabled=false;
+  }catch(e){if(g===generation)$('status').textContent=e.message;}
+  finally{if(g===generation){playing=false;$('play').disabled=!batch;}}
+};
+$('save').onclick=()=>{
+ const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
+ const a=document.createElement('a');a.href=url;a.download='pwrwin-viewer-benchmark.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+</script>
+</html>
