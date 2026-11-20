@@ -15,6 +15,8 @@ import {
 import {
   isRemoteLaunchpadStorageKey,
   type FederationTarget,
+  type ReadThreadWorktreeLockRequest,
+  type ReadThreadWorktreeLockResponse,
 } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
@@ -87,9 +89,10 @@ import type {
 import {
   ThreadInfoStore,
 } from "./thread-info-store";
-import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
+import { GitWorkspaceHandoffService, lockedSourceKeptWarning } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
+import { readWorktreeLockAt, WorktreeLockedError } from "./worktree-volume-lock";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import { getMainLogger } from "../log";
@@ -519,20 +522,15 @@ export class ThreadWorkspaceService {
     // archiving the thread still checkpoints and removes it.
     // Spell it the way the handoff service spells worktree paths, so a later
     // move back into it matches and drops it.
-    const retainedPath = request.baseRef?.trim()
-      && request.direction === "worktree-to-worktree"
+    // A source worktree kept because someone else locked it stays tracked
+    // too, so archiving the thread asks about it again.
+    const retainedPath = ((request.baseRef?.trim() && request.direction === "worktree-to-worktree") || result.keptSourceWorktree)
       && !sourceWorktreeIsExternal
       && sourcePath
       ? toForwardSlashes(await realpath(sourcePath).catch(() => sourcePath))
       : undefined;
     const retainWorktree: LinkedDirectorySummary | undefined = retainedPath
-      ? {
-          id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${retainedPath}`,
-          kind: "worktree",
-          label: result.linkedDirectory.label,
-          path: result.repositoryPath,
-          worktreePath: retainedPath,
-        }
+      ? retainedWorktreeLink(request, result.linkedDirectory.label, result.repositoryPath, retainedPath)
       : undefined;
     const resultBranch =
       result.strategy === "detached-changes"
@@ -719,16 +717,26 @@ export class ThreadWorkspaceService {
       const worktreePath = directory.worktreePath ?? request.worktreePath;
       const warnings: string[] = [];
       let archivedWorktree: MoveThreadToMainCheckoutResponse["archivedWorktree"];
+      let keptWorktree: MoveThreadToMainCheckoutResponse["keptWorktree"];
       if (await pathExists(worktreePath)) {
         if (directory.worktreeOwnership === "external") {
           warnings.push("The worktree was created outside PwrAgent, so it was left on disk.");
         } else {
-          archivedWorktree = await this.host().worktreeArchiveService.archive({
-            backend: request.backend,
-            threadId: request.threadId,
-            repositoryPath,
-            worktreePath,
-          });
+          try {
+            archivedWorktree = await this.host().worktreeArchiveService.archive({
+              backend: request.backend,
+              threadId: request.threadId,
+              repositoryPath,
+              worktreePath,
+              ...(request.approvedLockReason !== undefined ? { approvedLockReason: request.approvedLockReason } : {}),
+            });
+          } catch (error) {
+            // Someone else's lock keeps the worktree; the thread still moves.
+            // The archive refuses before it writes anything.
+            if (!(error instanceof WorktreeLockedError)) throw error;
+            keptWorktree = { reason: "worktree-locked", worktreePath, lockReason: error.lockReason };
+            warnings.push(lockedSourceKeptWarning(error.lockReason));
+          }
         }
       } else {
         // Git's record of a deleted folder keeps its branch checked out.
@@ -750,6 +758,9 @@ export class ThreadWorkspaceService {
         threadId: request.threadId,
         directory: linkedDirectory,
         gitBranch: branch,
+        // A kept locked worktree stays tracked, so archiving the thread asks again.
+        ...(keptWorktree ? { retainWorktree: retainedWorktreeLink(request, directory.label, repositoryPath,
+          toForwardSlashes(await realpath(worktreePath).catch(() => worktreePath))) } : {}),
       });
       try {
         await this.updateThreadWorkspaceCwd({
@@ -803,10 +814,34 @@ export class ThreadWorkspaceService {
         ...(branch ? { branch } : {}),
         linkedDirectory,
         ...(archivedWorktree ? { archivedWorktree } : {}),
+        ...(keptWorktree ? { keptWorktree } : {}),
         warnings,
         completedAt: Date.now(),
       };
     });
+  }
+
+  /**
+   * Git's lock on one of the thread's worktrees, so the operator can be asked
+   * before a handoff removes it. Only someone else's lock is reported.
+   */
+  async readThreadWorktreeLock(request: ReadThreadWorktreeLockRequest): Promise<ReadThreadWorktreeLockResponse> {
+    const thread = this.host().getCachedThreadSummary(request) ?? await this.host().resolveThread(request);
+    const overlay = await this.context.stores.threads.getThreadOverlayState(request);
+    const requested = normalizeWorktreePathForComparison(request.worktreePath);
+    const directory = [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])]
+      .find((candidate) => candidate.kind === "worktree"
+        && normalizeWorktreePathForComparison(candidate.worktreePath ?? candidate.path) === requested);
+    if (!directory) {
+      throw new Error("This thread no longer works in that worktree. Reopen the thread to see its current workspace.");
+    }
+    const lock = await readWorktreeLockAt(request.worktreePath).catch(() => ({ holder: "none" as const }));
+    return {
+      worktreePath: request.worktreePath,
+      ...(lock.holder === "other"
+        ? { lock: { reason: "worktree-locked" as const, worktreePath: request.worktreePath, lockReason: lock.reason ?? "" } }
+        : {}),
+    };
   }
 
   /**
@@ -3102,4 +3137,19 @@ export class ThreadWorkspaceService {
       },
     };
   }
+}
+
+function retainedWorktreeLink(
+  request: { backend: AppServerBackendKind; threadId: string },
+  label: string,
+  repositoryPath: string,
+  worktreePath: string,
+): LinkedDirectorySummary {
+  return {
+    id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${worktreePath}`,
+    kind: "worktree",
+    label,
+    path: repositoryPath,
+    worktreePath,
+  };
 }

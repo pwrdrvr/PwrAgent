@@ -1748,7 +1748,7 @@ export class MessagingCallbackHandlers {
       await this.context.host().presentHandoffConfirmation(binding, event);
       return;
     }
-    if (actionId === "handoff:confirm") {
+    if (actionId === "handoff:confirm" || actionId === "handoff:confirm-unlock") {
       await this.context.host().executeHandoff(binding, event);
       return;
     }

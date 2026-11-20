@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import {
+  type AppServerBackendKind,
   defaultThreadMaintenanceRules,
   normalizeCheckoutHibernationPolicy,
   normalizeThreadArchivePolicy,
@@ -66,6 +67,8 @@ import {
 } from "./thread-maintenance-run-state";
 import {
   hasRunItems,
+  itemAfterUnlockAndRemove,
+  offersUnlockAndRemove,
   outcomeText,
   problemsWithoutItems,
   runItemCounts,
@@ -342,7 +345,7 @@ export function ThreadMaintenanceDialog(props: {
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
-            <RunView run={run} scan={scan} mode={mode} steps={steps}
+            <RunView run={run} scan={scan} mode={mode} steps={steps} desktopApi={api}
               // Open thread minimizes a hosted session, so a live run keeps going.
               onOpenThread={busy && !canMinimize ? undefined : props.onOpenThread} />
           ) : null}
@@ -1486,13 +1489,15 @@ function RunView(props: {
   scan?: ThreadMaintenanceScan;
   mode: ThreadMaintenanceMode;
   steps: readonly ReviewStep[];
+  desktopApi?: DesktopApi;
   onOpenThread?: OpenThread;
 }) {
   const { run, mode } = props;
   // A run an agent started may include steps this dialog's plan does not.
   const railSteps = THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => props.steps.includes(step) || run.current?.step === step
     || run.steps.some((result) => result.step === step && result.ran));
-  const items = hasRunItems(run.items) ? run.items : undefined;
+  const unlock = useUnlockAndRemove(run, props.desktopApi);
+  const items = hasRunItems(run.items) ? unlock.items(run.items) : undefined;
   // An item row already says what happened to it; only the rest are cards.
   const problems = problemsWithoutItems(run.problems, items);
   // Empty-folder progress is one batch row; its path-specific problems
@@ -1521,7 +1526,8 @@ function RunView(props: {
       )}
       {run.running ? <Rail steps={railSteps} phase="running" run={run} /> : null}
       {items ? (
-        <RunItems run={run} items={items} onOpenThread={props.onOpenThread}>{problemCards}</RunItems>
+        <RunItems run={run} items={items} onOpenThread={props.onOpenThread}
+          unlock={unlock.available ? unlock : undefined}>{problemCards}</RunItems>
       ) : problemCards}
       {run.running && run.current && !items ? (
         <div className="thread-maintenance__progress-card" role="status">
@@ -1588,6 +1594,7 @@ function RunItems(props: {
   run: ThreadMaintenanceRun;
   items: ThreadMaintenanceRunItem[];
   onOpenThread?: OpenThread;
+  unlock?: UnlockAndRemove;
   children?: ReactNode;
 }) {
   const { run } = props;
@@ -1635,7 +1642,8 @@ function RunItems(props: {
         <RunItemGroup tone="failed" title={`Failed · ${view.failed.length}`} items={view.failed} onOpenThread={props.onOpenThread} />
       ) : null}
       {view.kept.length ? (
-        <RunItemGroup tone="kept" title={`Kept · ${view.kept.length}`} items={view.kept} onOpenThread={props.onOpenThread} />
+        <RunItemGroup tone="kept" title={`Kept · ${view.kept.length}`} items={view.kept} onOpenThread={props.onOpenThread}
+          unlock={props.unlock} />
       ) : null}
       {view.done.length ? (
         <RunItemGroup tone="done" title={`Done · ${view.done.length}`} items={view.done} onOpenThread={props.onOpenThread} />
@@ -1691,6 +1699,7 @@ function RunItemGroup(props: {
   title: string;
   items: ThreadMaintenanceRunItem[];
   onOpenThread?: OpenThread;
+  unlock?: UnlockAndRemove;
 }) {
   return (
     <section ref={props.ref} className={`thread-maintenance__run-group is-${props.tone}`} aria-label={props.title}>
@@ -1698,15 +1707,65 @@ function RunItemGroup(props: {
         <p className="thread-maintenance__eyebrow">{props.title}</p>
       </div>
       <ul className="thread-maintenance__run-rows">
-        {props.items.map((item) => <RunItemRow key={item.itemId} item={item} onOpenThread={props.onOpenThread} />)}
+        {props.items.map((item) => <RunItemRow key={item.itemId} item={item} onOpenThread={props.onOpenThread}
+          unlock={props.unlock} />)}
       </ul>
     </section>
   );
 }
 
-function RunItemRow(props: { item: ThreadMaintenanceRunItem; onOpenThread?: OpenThread }) {
+/**
+ * Unlock and Remove for checkouts the run kept because someone else's Git
+ * lock holds them. The approval is the lock text the row shows; main keeps
+ * the checkout if the lock says anything else by then. Results replace the
+ * row here: the finished run snapshot main published does not change.
+ */
+type UnlockAndRemove = {
+  available: boolean;
+  pending: ReadonlySet<string>;
+  items: (items: ThreadMaintenanceRunItem[]) => ThreadMaintenanceRunItem[];
+  start: (item: ThreadMaintenanceRunItem & { lockReason: string; backend: string; threadId: string; path: string }) => void;
+};
+
+function useUnlockAndRemove(run: ThreadMaintenanceRun, api: DesktopApi | undefined): UnlockAndRemove {
+  const [results, setResults] = useState<{ runId: string; rows: ReadonlyMap<string, ThreadMaintenanceRunItem> }>(
+    () => ({ runId: run.runId, rows: new Map() }));
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  const rows = results.runId === run.runId ? results.rows : undefined;
+  const items = useCallback((source: ThreadMaintenanceRunItem[]) => rows?.size
+    ? source.map((item) => rows.get(item.itemId) ?? item) : source, [rows]);
+  const remove = api?.removeLockedThreadWorktree;
+  const start = useCallback<UnlockAndRemove["start"]>((item) => {
+    if (!remove) return;
+    const runId = run.runId;
+    setPending((current) => new Set(current).add(item.itemId));
+    void remove({ backend: item.backend as AppServerBackendKind, threadId: item.threadId, worktreePath: item.path,
+      approvedLockReason: item.lockReason })
+      .then((response) => response, (error: unknown) => ({ status: "error" as const,
+        message: error instanceof Error ? error.message : String(error) }))
+      .then((outcome) => {
+        setResults((current) => {
+          const next = new Map(current.runId === runId ? current.rows : []);
+          const order = Math.max(0, ...(run.items ?? []).map((row) => row.finishedOrder ?? 0),
+            ...[...next.values()].map((row) => row.finishedOrder ?? 0)) + 1;
+          next.set(item.itemId, itemAfterUnlockAndRemove(item, outcome, order, Date.now()));
+          return { runId, rows: next };
+        });
+        setPending((current) => {
+          const next = new Set(current);
+          next.delete(item.itemId);
+          return next;
+        });
+      });
+  }, [remove, run.runId, run.items]);
+  return { available: Boolean(remove) && !run.running, pending, items, start };
+}
+
+function RunItemRow(props: { item: ThreadMaintenanceRunItem; onOpenThread?: OpenThread; unlock?: UnlockAndRemove }) {
   const { item } = props;
   const finished = item.status === "done" || item.status === "kept" || item.status === "failed";
+  const unlockable = props.unlock && offersUnlockAndRemove(item) ? item : undefined;
+  const unlocking = unlockable ? props.unlock!.pending.has(item.itemId) : false;
   return (
     <li className={`is-${item.status}`}>
       <div className="thread-maintenance__run-text">
@@ -1718,7 +1777,19 @@ function RunItemRow(props: { item: ThreadMaintenanceRunItem; onOpenThread?: Open
           </p>
         ) : null}
         {item.path && item.path !== item.object ? <p className="thread-maintenance__path">{item.path}</p> : null}
+        {item.status === "kept" && item.lockReason !== undefined ? (
+          <p className="thread-maintenance__run-meta">
+            {item.lockReason ? <>Git has it locked: <span className="thread-maintenance__mono">{item.lockReason}</span></> : "Git has it locked, with no reason given."}
+          </p>
+        ) : null}
       </div>
+      {unlockable ? (
+        <button className="button button--ghost thread-maintenance__button" type="button" disabled={unlocking}
+          aria-label={`Unlock and remove ${item.object}`}
+          onClick={() => props.unlock!.start(unlockable)}>
+          {unlocking ? "Removing…" : "Unlock and Remove"}
+        </button>
+      ) : null}
       {item.status === "running" ? (
         <span className="thread-maintenance__run-stage">
           {stageText(item)}{item.startedAt !== undefined ? <Elapsed since={item.startedAt} /> : null}

@@ -22,6 +22,7 @@ import {
   type AppServerThreadSummary,
   type AppServerToolRequestUserInputResponse,
   type ArchiveThreadRequest,
+  type WorktreeLockedKept,
   type FederationInstanceId,
   type GetThreadStatusToolArgs,
   type HandoffThreadWorkspaceRequest,
@@ -1678,13 +1679,17 @@ export class ThreadInspectionTools {
       }
     }
 
+    let keptWorktrees: WorktreeLockedKept[] = [];
     if (mutateLocally && archive !== undefined && !dryRun) {
       try {
         if (archive) {
           const archiveThread = this.host().agentThreadActions?.archiveThread
             ?? (async (request: ArchiveThreadRequest) =>
               await this.host().archiveThread(request));
-          await archiveThread({ backend: args.backend, threadId });
+          // An agent never sends an unlock approval: someone else's lock
+          // keeps the worktree, and the result says so.
+          const archived = await archiveThread({ backend: args.backend, threadId });
+          keptWorktrees = (archived?.cleanup ?? []).flatMap((item) => item.kept ? [item.kept] : []);
         } else {
           await this.host().restoreThread({ backend: args.backend, threadId });
         }
@@ -1811,6 +1816,12 @@ export class ThreadInspectionTools {
           ...(remoteOwner ?? {}),
           dryRun,
           changes,
+          ...(keptWorktrees.length ? {
+            keptWorktrees,
+            notes: keptWorktrees.map((kept) => `${kept.lockReason
+              ? `The worktree was kept because Git has it locked: ${kept.lockReason}`
+              : "The worktree was kept because Git has it locked"}. The operator can unlock and remove it from the archive notice in PwrAgent: ${kept.worktreePath}`),
+          } : {}),
         },
       },
     };

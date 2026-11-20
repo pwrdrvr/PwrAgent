@@ -185,6 +185,10 @@ export const APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL =
   "app-server:recreate-thread-worktree";
 export const APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL =
   "app-server:move-thread-to-main-checkout";
+export const APP_SERVER_READ_THREAD_WORKTREE_LOCK_CHANNEL =
+  "app-server:read-thread-worktree-lock";
+export const APP_SERVER_REMOVE_LOCKED_THREAD_WORKTREE_CHANNEL =
+  "app-server:remove-locked-thread-worktree";
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const THREAD_MIGRATION_LIST_SOURCES_CHANNEL =
   "thread-migration:list-sources";

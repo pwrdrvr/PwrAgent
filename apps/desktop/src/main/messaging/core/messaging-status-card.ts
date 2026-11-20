@@ -1306,7 +1306,23 @@ export function buildHandoffConfirmationIntent(params: {
   strategy?: HandoffThreadWorkspaceRequest["strategy"];
   /** Only worktree-to-worktree differs from the workspace's own default. */
   direction?: HandoffThreadWorkspaceRequest["direction"];
+  /**
+   * Someone else's Git lock on the source worktree: Confirm splits into
+   * Hand Off, Keep Worktree and Unlock and Hand Off. `lockReason` is Git's
+   * lock text, "" when it has none.
+   */
+  worktreeLock?: { lockReason: string };
+  /**
+   * The requesting actor holds both `thread.control.handoff` and
+   * `thread.control.archive`. Without it, Unlock and Hand Off is not offered.
+   * The card is built for the actor who asked for it; the callback re-checks
+   * whoever clicks.
+   */
+  canUnlockWorktree?: boolean;
 }): MessagingConfirmationIntent {
+  // Only a handoff that leaves a worktree can archive it.
+  const lock = !params.targetPath && params.context.workspaceKind === "worktree" ? params.worktreeLock : undefined;
+  const unlock = Boolean(lock && params.canUnlockWorktree);
   const direction =
     params.targetPath ? "to-project"
       : params.direction === "worktree-to-worktree" && params.context.workspaceKind === "worktree"
@@ -1332,9 +1348,28 @@ export function buildHandoffConfirmationIntent(params: {
       ? `Leave Local on: ${formatHandoffBranchChoiceLabel(params.leaveLocalBranch)}`
       : undefined,
     params.strategy ? `Strategy: ${params.strategy}` : undefined,
+    lock
+      ? lock.lockReason
+        ? `Git has the worktree locked: \`${lock.lockReason}\``
+        : "Git has the worktree locked."
+      : undefined,
+    lock
+      ? unlock
+        ? "Hand Off, Keep Worktree leaves it on disk, still locked. Unlock and Hand Off removes the lock if it still says this, and archives the worktree."
+        : "The handoff leaves it on disk, still locked."
+      : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+  const confirmValue: Record<string, MessagingJsonValue> = {
+    ...handoffValue(params.context),
+    ...(params.targetPath ? { direction, targetPath: params.targetPath } : {}),
+    ...(direction === "worktree-to-worktree" ? { direction } : {}),
+    ...(params.strategy ? { strategy: params.strategy } : {}),
+    ...(params.leaveLocalBranch
+      ? { leaveLocalBranch: params.leaveLocalBranch }
+      : {}),
+  };
 
   return {
     id: params.id,
@@ -1348,25 +1383,29 @@ export function buildHandoffConfirmationIntent(params: {
     targetSurface: params.binding.statusSurface,
     title: params.targetPath ? "Confirm Move to Project" : "Confirm Handoff",
     body,
-    fallbackText: "Reply Confirm, Back, or Cancel.",
+    fallbackText: lock
+      ? unlock ? "Reply Keep, Unlock, Back, or Cancel." : "Reply Keep, Back, or Cancel."
+      : "Reply Confirm, Back, or Cancel.",
     actions: applyActionCapabilityLimits(
       [
         {
           id: "handoff:confirm",
-          label: "Confirm",
-          fallbackText: "confirm",
+          label: lock ? "Hand Off, Keep Worktree" : "Confirm",
+          fallbackText: lock ? "keep" : "confirm",
           style: "primary",
           priority: 1,
-          value: {
-            ...handoffValue(params.context),
-            ...(params.targetPath ? { direction, targetPath: params.targetPath } : {}),
-            ...(direction === "worktree-to-worktree" ? { direction } : {}),
-            ...(params.strategy ? { strategy: params.strategy } : {}),
-            ...(params.leaveLocalBranch
-              ? { leaveLocalBranch: params.leaveLocalBranch }
-              : {}),
-          },
+          value: confirmValue,
         },
+        ...(lock && unlock
+          ? [{
+              id: "handoff:confirm-unlock",
+              label: "Unlock and Hand Off",
+              fallbackText: "unlock",
+              style: "secondary" as const,
+              priority: 2,
+              value: { ...confirmValue, approvedLockReason: lock.lockReason },
+            }]
+          : []),
         {
           id: params.targetPath ? "handoff:projects" : params.context.workspaceKind === "local"
             ? params.strategy === "move-branch"
@@ -1376,7 +1415,7 @@ export function buildHandoffConfirmationIntent(params: {
           label: "Back",
           fallbackText: "back",
           style: "secondary",
-          priority: 2,
+          priority: unlock ? 4 : 2,
           value: { ...handoffValue(params.context), ...(params.targetPath ? { pageIndex: params.projectPageIndex ?? 0 } : {}) },
         },
         {
@@ -1439,6 +1478,9 @@ export function handoffRequestFromValue(
       typeof value.leaveLocalBranch === "string" ? value.leaveLocalBranch : undefined,
     newBranchName:
       typeof value.newBranchName === "string" ? value.newBranchName : undefined,
+    // Only Unlock and Hand Off carries it; the workflow requires the archive
+    // permission whenever it is present.
+    ...(typeof value.approvedLockReason === "string" ? { approvedLockReason: value.approvedLockReason } : {}),
   };
 }
 

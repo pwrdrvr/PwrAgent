@@ -69,22 +69,72 @@ export function isPwrAgentWorktreeLock(record: WorktreeLockRecord): boolean {
 }
 
 /**
- * Who holds the lock in a worktree's own Git directory. `pwragent` is only
+ * A worktree's lock, from its own Git directory. `pwragent` is only
  * PwrAgent's drive lock: PwrAgent's removal clears it first, so it must never
  * stop archiving or hibernation. `other` is an operator's or another tool's
- * hold, which must. A `locked` entry that cannot be read as a file counts as
- * `other`.
+ * hold, which must, unless the operator approved unlocking it while it said
+ * exactly `reason`. `reason` is Git's lock text, trimmed ("" when the lock
+ * has none), and undefined when the `locked` entry cannot be read as a file:
+ * such a lock is never approvable.
  */
-export async function readWorktreeLockHolder(gitDirectory: string): Promise<"none" | "pwragent" | "other"> {
+export type WorktreeLock =
+  | { holder: "none" }
+  | { holder: "pwragent" }
+  | { holder: "other"; reason: string | undefined };
+
+export async function readWorktreeLock(gitDirectory: string): Promise<WorktreeLock> {
   let reason: string;
   try {
     reason = await readFile(path.join(gitDirectory, "locked"), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "none";
-    if ((error as NodeJS.ErrnoException).code === "EISDIR") return "other";
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { holder: "none" };
+    if ((error as NodeJS.ErrnoException).code === "EISDIR") return { holder: "other", reason: undefined };
     throw error;
   }
-  return reason.trim() === PWRAGENT_WORKTREE_LOCK_REASON ? "pwragent" : "other";
+  const trimmed = reason.trim();
+  return trimmed === PWRAGENT_WORKTREE_LOCK_REASON ? { holder: "pwragent" } : { holder: "other", reason: trimmed };
+}
+
+/** Who holds the lock in a worktree's own Git directory; see `readWorktreeLock`. */
+export async function readWorktreeLockHolder(gitDirectory: string): Promise<"none" | "pwragent" | "other"> {
+  return (await readWorktreeLock(gitDirectory)).holder;
+}
+
+/** A linked worktree's own Git directory, from its `.git` pointer file. */
+export async function readWorktreeGitDirectory(worktreePath: string): Promise<string | undefined> {
+  const pointer = await readFile(path.join(worktreePath, ".git"), "utf8");
+  const gitDirectory = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
+  return gitDirectory ? path.resolve(worktreePath, gitDirectory) : undefined;
+}
+
+/** The lock of the worktree checked out at `worktreePath`. */
+export async function readWorktreeLockAt(worktreePath: string): Promise<WorktreeLock> {
+  const gitDirectory = await readWorktreeGitDirectory(worktreePath);
+  return gitDirectory ? await readWorktreeLock(gitDirectory) : { holder: "none" };
+}
+
+/**
+ * True when someone else's lock may be cleared: the operator approved it
+ * while Git's lock text was exactly what it is now. A lock that was
+ * relocked, given a new reason, or cannot be read keeps the worktree.
+ */
+export function lockApprovalMatches(lock: WorktreeLock, approvedLockReason: string | undefined): boolean {
+  return lock.holder === "other"
+    && approvedLockReason !== undefined
+    && lock.reason !== undefined
+    && lock.reason === approvedLockReason.trim();
+}
+
+/**
+ * Someone other than PwrAgent has the worktree locked, and nobody approved
+ * unlocking it with its current reason, so PwrAgent kept it. Callers turn
+ * this into the typed `worktree-locked` result instead of matching text.
+ */
+export class WorktreeLockedError extends Error {
+  constructor(readonly worktreePath: string, readonly lockReason: string) {
+    super(`Refusing to archive a locked worktree: ${worktreePath}`);
+    this.name = "WorktreeLockedError";
+  }
 }
 
 /**
@@ -99,10 +149,7 @@ export async function unlockPwrAgentWorktreeLock(params: {
   git: GitRunner;
 }): Promise<boolean> {
   try {
-    const pointer = await readFile(path.join(params.worktreePath, ".git"), "utf8");
-    const gitDirectory = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
-    if (!gitDirectory) return false;
-    if (await readWorktreeLockHolder(path.resolve(params.worktreePath, gitDirectory)) !== "pwragent") return false;
+    if ((await readWorktreeLockAt(params.worktreePath)).holder !== "pwragent") return false;
     await params.git(["worktree", "unlock", params.worktreePath]);
     return true;
   } catch {

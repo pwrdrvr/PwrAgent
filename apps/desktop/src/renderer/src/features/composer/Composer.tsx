@@ -206,6 +206,7 @@ import {
   ReviewPullRequestPicker,
 } from "./ReviewPullRequestPicker";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { handoffLockApproval, HandoffWorktreeLockNotice, useHandoffWorktreeLock } from "./HandoffWorktreeLockNotice";
 import { isScheduledThreadAction } from "../../lib/useScheduledThreadActionProjection";
 import {
   agentEventMatchesThread,
@@ -691,7 +692,8 @@ export type ComposerProps = {
   ) => Promise<void>;
   /** Handoff to Local that leaves the main checkout on its own branch. */
   onMoveThreadToMainCheckout?: (
-    worktreePath: string
+    worktreePath: string,
+    options?: { approvedLockReason?: string },
   ) => Promise<MoveThreadToMainCheckoutResponse>;
   onBeforeStartTurn?: (signal?: AbortSignal) => Promise<boolean>;
   onSetThreadModelSettings?: (
@@ -11846,6 +11848,7 @@ function useComposerController(props: ComposerProps) {
     submitHandoff,
     openWorkspaceApplication,
     handoffDisabled,
+    handoffWorktreeLock,
     dismissAutocomplete,
     handleAutocompleteKeyDown,
     composerDisabled,
@@ -12635,6 +12638,15 @@ function useComposerController(props: ComposerProps) {
     const toNewWorktree = handoffDialog === "local-to-worktree"
       || handoffDialog === "worktree-to-worktree";
     const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
+    // Only these archive the worktree being left; a fresh start keeps it.
+    const handoffArchivesSource = Boolean(threadWorkspace?.mode === "worktree"
+      && (handoffDialog === "worktree-to-local"
+        || (fromWorktreeToNew && localHandoffStrategy !== "fresh-from-base")));
+    const handoffWorktreeLock = useHandoffWorktreeLock({
+      desktopApi: props.desktopApi,
+      thread: props.thread,
+      worktreePath: handoffArchivesSource ? threadWorkspace?.sourcePath : undefined,
+    });
     const openHandoffDialog = (
       direction: HandoffThreadWorkspaceRequest["direction"]
     ): void => {
@@ -12686,7 +12698,7 @@ function useComposerController(props: ComposerProps) {
           return;
         }
         if (keepLocalBranchSelected && props.onMoveThreadToMainCheckout) {
-          await props.onMoveThreadToMainCheckout(threadWorkspace.sourcePath);
+          await props.onMoveThreadToMainCheckout(threadWorkspace.sourcePath, handoffLockApproval(handoffWorktreeLock));
           setHandoffDialog(undefined);
           return;
         }
@@ -12702,7 +12714,7 @@ function useComposerController(props: ComposerProps) {
           ...(toNewWorktree && handoffStrategy === "new-branch"
             ? { newBranchName: (freshFromBase ? freshBranchName.trim() : newLocalBranch) || undefined }
             : {}),
-          ...(freshFromBase ? { baseRef: freshBaseRef } : {}),
+          ...(freshFromBase ? { baseRef: freshBaseRef } : handoffLockApproval(handoffWorktreeLock)),
         });
         setHandoffDialog(undefined);
       } catch (error) {
@@ -13394,6 +13406,7 @@ function useComposerController(props: ComposerProps) {
       submitHandoff,
       openWorkspaceApplication,
       handoffDisabled,
+      handoffWorktreeLock,
       dismissAutocomplete,
       handleAutocompleteKeyDown,
       composerDisabled,
@@ -16715,6 +16728,7 @@ function useComposerController(props: ComposerProps) {
                   Ignored files are not moved by handoff.
                 </p>
               ) : null}
+              <HandoffWorktreeLockNotice disabled={handoffSubmitting} state={handoffWorktreeLock} />
               {handoffError ? (
                 <p className="workspace-handoff-dialog__error">{handoffError}</p>
               ) : null}

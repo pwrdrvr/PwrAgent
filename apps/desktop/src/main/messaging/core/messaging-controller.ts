@@ -462,6 +462,8 @@ export class MessagingController {
       deliverAndStoreStatusSubmode: (...args) => this.bindingService.deliverAndStoreStatusSubmode(...args),
       updateBindingAfterHandoff: (...args) => this.bindingService.updateBindingAfterHandoff(...args),
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
+      actorHasPermission: (...args) => this.accessControl.actorHasPermission(...args),
+      requirePermission: (event, permission, auditAction) => this.accessControl.requirePermission(event, permission, auditAction),
     });
     const readSettingsAccess = () => this.accessControl;
     const readSettingsBindings = () => this.bindingService;

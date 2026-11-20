@@ -17,6 +17,8 @@ import type {
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   HandoffThreadWorkspaceRequest,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
@@ -259,6 +261,10 @@ export type MessagingBackendBridge = {
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  /** Someone else's Git lock on a thread's worktree, so a handoff can ask first. */
+  readThreadWorktreeLock?(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse>;
   ensureDirectoryLaunchpad?(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse>;

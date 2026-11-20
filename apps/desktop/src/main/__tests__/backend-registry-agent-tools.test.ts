@@ -42,6 +42,7 @@ import type {
   AgentEvent,
   AppServerPendingRequestNotification,
   AppServerThreadSummary,
+  ArchiveThreadCleanupResult,
   ArchiveThreadRequest,
   HandoffThreadWorkspaceResponse,
   MarkThreadSeenRequest,
@@ -2813,7 +2814,7 @@ describe("DesktopBackendRegistry", () => {
         backend: request.backend,
         threadId: request.threadId,
         archivedAt: 1,
-        cleanup: [],
+        cleanup: [] as ArchiveThreadCleanupResult[],
       }));
       const setThreadPin = vi.fn(async (request: SetThreadPinRequest) => ({
         backend: request.backend ?? "codex",
@@ -3128,6 +3129,24 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "target-thread",
       });
+      await registry.close();
+    });
+
+    it("reports a worktree archive kept because Git has it locked, and never asks to unlock", async () => {
+      const { archiver, call, registry } = await setup();
+      const kept = { reason: "worktree-locked" as const, worktreePath: "/contrived/worktrees/orbit", lockReason: "release prep, do not remove" };
+      archiver.mockResolvedValueOnce({
+        backend: "codex", threadId: "target-thread", archivedAt: 1,
+        cleanup: [{ worktreePath: kept.worktreePath, removedWorktree: false, deletedBranch: false, skippedReason: "Locked worktree", kept }],
+      });
+
+      const result = await call({ archive: true });
+
+      expect(result.success).toBe(true);
+      expect(result.payload.mutation.keptWorktrees).toEqual([kept]);
+      expect(result.payload.mutation.notes.join("\n")).toContain("Git has it locked: release prep, do not remove");
+      expect(archiver).toHaveBeenCalledWith({ backend: "codex", threadId: "target-thread" });
+      expect(archiver.mock.calls[0]?.[0]).not.toHaveProperty("approvedLockReason");
       await registry.close();
     });
 

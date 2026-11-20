@@ -220,6 +220,10 @@ import type {
   HandoffThreadWorkspaceResponse,
   MoveThreadToMainCheckoutRequest,
   MoveThreadToMainCheckoutResponse,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
+  RemoveLockedThreadWorktreeRequest,
+  RemoveLockedThreadWorktreeResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
@@ -1208,6 +1212,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   moveThreadToMainCheckout?: (
     request: MoveThreadToMainCheckoutRequest
   ) => Promise<MoveThreadToMainCheckoutResponse>;
+  readThreadWorktreeLock?: (
+    request: ReadThreadWorktreeLockRequest
+  ) => Promise<ReadThreadWorktreeLockResponse>;
+  removeLockedThreadWorktree?: (
+    request: RemoveLockedThreadWorktreeRequest
+  ) => Promise<RemoveLockedThreadWorktreeResponse>;
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;

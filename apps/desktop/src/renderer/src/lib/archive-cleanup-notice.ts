@@ -19,9 +19,15 @@ export type ArchiveThreadNotice = AppNoticeToastNotice;
 export function formatArchiveCleanupNotice(
   cleanup: ArchiveThreadCleanupResult[],
   context: ThreadActionErrorContext = {},
+  options: {
+    /** A worktree kept because Git has it locked by someone else is reported
+     * by the locked-worktree notice, which offers Unlock and Remove. */
+    excludeLocked?: boolean;
+  } = {},
 ): ArchiveThreadNotice | undefined {
   const failures = cleanup.filter(
-    (item) => (item.error || (!item.skippedReason?.startsWith("Worktree is still used by")
+    (item) => !(options.excludeLocked && item.kept)
+      && (item.error || (!item.skippedReason?.startsWith("Worktree is still used by")
       && item.skippedReason !== "Worktree directory no longer exists."))
       && (!item.removedWorktree || item.error || item.skippedReason)
   );
@@ -35,7 +41,9 @@ export function formatArchiveCleanupNotice(
   const message = "Thread archived. The worktree cleanup did not complete.";
   const facts = failures.map((failure, index) => ({
     label: failure.worktreePath ? `Worktree ${index + 1}` : `Cleanup ${index + 1}`,
-    value: [failure.worktreePath, failure.error ?? failure.skippedReason ?? "cleanup was skipped"].filter(Boolean).join("\n"),
+    value: [failure.worktreePath, failure.kept
+      ? failure.kept.lockReason ? `Git has it locked: ${failure.kept.lockReason}` : "Git has it locked."
+      : failure.error ?? failure.skippedReason ?? "cleanup was skipped"].filter(Boolean).join("\n"),
   }));
 
   return withThreadActionErrorContext({
