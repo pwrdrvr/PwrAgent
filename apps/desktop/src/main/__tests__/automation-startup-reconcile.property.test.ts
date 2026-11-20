@@ -1,7 +1,8 @@
 import fc from "fast-check";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AutomationRunOwner, AutomationRunSummary } from "@pwragent/shared";
 import { AutomationStore } from "../storage/automation-store";
+import { AutomationScheduler } from "../automations/automation-scheduler";
 import type { StateDb } from "../state/state-db";
 import {
   createTempStateDb,
@@ -133,7 +134,9 @@ it("starting another instance leaves every live instance's runs unchanged", () =
         const id = `run-${created.length}`;
         // A second pending scheduled run per automation is refused by a
         // unique index, so the model uses manual runs.
-        instance.store.createRun({ id, automationId: `automation-${next.automation}`, trigger: "manual", now });
+        instance.store.createRun({
+          id, automationId: `automation-${next.automation}`, trigger: "manual", recoverOnRestart: true, now,
+        });
         created.push({ id, instance: instances.indexOf(instance) });
         continue;
       }
@@ -150,10 +153,12 @@ it("starting another instance leaves every live instance's runs unchanged", () =
       live.add(owner.instanceId);
       const result = launched.store.reconcileStartup({
         now,
+        resumeUnstartedRuns: true,
         isOwnerAlive: (candidate) => live.has(candidate.instanceId),
       });
       instances.push(launched);
       expect(result?.interruptedRuns ?? []).toEqual([]);
+      expect(result.resumedRuns).toEqual([]);
       expect(allRuns(instances[0]!.store)).toEqual(before);
     }
 
@@ -258,4 +263,159 @@ it("names the shrunk case: a second instance on the profile does not cancel the 
   expect(first.store.getRun("run-live")).toEqual(before);
   first.store.markRunTerminal({ runId: "run-live", status: "completed", now: 4 });
   expect(first.store.getRun("run-live")?.status).toBe("completed");
+});
+
+const recoverableRun = { recoverOnRestart: true };
+const firstCrashPoint = fc.constantFrom("created", "queued", "gate", "started", "completed");
+const secondCrashPoint = fc.constantFrom("queued", "started", "completed");
+
+function checkTwoRestarts(
+  firstCrash: "created" | "queued" | "gate" | "started" | "completed",
+  secondCrash: "queued" | "started" | "completed",
+): void {
+  resetProfile();
+  const first = openInstance(ownerOf(0)).store;
+  first.createRun({
+    id: "run-recovery",
+    automationId: "automation-0",
+    trigger: "manual",
+    ...recoverableRun,
+    now: 1,
+  });
+  if (firstCrash === "queued") advance(first, "run-recovery", "queue", 2);
+  if (firstCrash === "gate") {
+    expect(first.claimRunForDispatch("run-recovery", 2)).toMatchObject({ status: "running" });
+  }
+  if (firstCrash === "started" || firstCrash === "completed") {
+    // A provider that never acknowledged the request may still be running it.
+    expect(first.claimRunForDispatch("run-recovery", 3)).toMatchObject({ status: "running" });
+  }
+  if (firstCrash === "completed") advance(first, "run-recovery", "completed", 4);
+
+  const second = openInstance(ownerOf(1)).store;
+  const firstRecovery = { now: 5, resumeUnstartedRuns: true };
+  const recovered = second.reconcileStartup(firstRecovery);
+  const shouldResume = firstCrash === "created" || firstCrash === "queued";
+  if (shouldResume) {
+    expect(recovered).toMatchObject({ resumedRuns: [{ id: "run-recovery" }], interruptedRuns: [] });
+    expect(second.getRun("run-recovery")).toMatchObject({
+      status: "queued", owner: ownerOf(1), resumedAt: 5,
+    });
+    if (secondCrash === "started" || secondCrash === "completed") {
+      expect(second.claimRunForDispatch("run-recovery", 6)).toMatchObject({ status: "running" });
+    }
+    if (secondCrash === "completed") advance(second, "run-recovery", "completed", 7);
+  } else {
+    expect(second.getRun("run-recovery")).toMatchObject(firstCrash === "completed"
+      ? { status: "completed", completedAt: 4 }
+      : { status: "failed", failureReason: "interrupted", completedAt: 5 });
+  }
+
+  const third = openInstance(ownerOf(2)).store;
+  const secondRecovery = { now: 8, resumeUnstartedRuns: true };
+  expect(third.reconcileStartup(secondRecovery)).toMatchObject({ resumedRuns: [] });
+  expect(third.listRunsForAutomation("automation-0")).toHaveLength(1);
+  if (shouldResume) {
+    expect(third.getRun("run-recovery")).toMatchObject(secondCrash === "completed"
+      ? { status: "completed", completedAt: 7, resumedAt: 5 }
+      : { status: "failed", failureReason: "interrupted", completedAt: 8, resumedAt: 5 });
+  }
+}
+
+it("adopts a run interrupted just after creation and interrupts it if recovery also stops before dispatch", () => {
+  checkTwoRestarts("created", "queued");
+});
+
+it("only resumes a proven unstarted run, once, across every lifecycle crash point", () => {
+  fc.assert(fc.property(firstCrashPoint, secondCrashPoint, checkTwoRestarts), {
+    examples: [["created", "queued"]],
+    numRuns: 30,
+  });
+});
+
+it("two launches that scanned the same dead owner can adopt its run only once", () => {
+  resetProfile();
+  const previous = openInstance(ownerOf(0)).store;
+  const firstLaunch = openInstance(ownerOf(1)).store;
+  const secondLaunch = openInstance(ownerOf(2)).store;
+  previous.createRun({
+    id: "run-race", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now: 1,
+  });
+  const result = secondLaunch.reconcileStartup({
+    resumeUnstartedRuns: true,
+    now: 3,
+    isOwnerAlive: () => {
+      // Another launch gets the write lock just after this launch's scan.
+      expect(firstLaunch.reconcileStartup({ resumeUnstartedRuns: true, now: 2 }).resumedRuns).toHaveLength(1);
+      return false;
+    },
+  });
+
+  expect(result).toMatchObject({ resumedRuns: [], interruptedRuns: [] });
+  expect(secondLaunch.getRun("run-race")).toMatchObject({ status: "queued", owner: ownerOf(1), resumedAt: 2 });
+});
+
+it("competing schedulers execute an adopted run's shell gate once", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (recoveringSchedulerFirst) => {
+    resetProfile();
+    const previous = openInstance(ownerOf(0)).store;
+    const recovering = openInstance(ownerOf(1)).store;
+    const other = openInstance(ownerOf(2)).store;
+    previous.updateAutomation("automation-0", { gate: { command: "side effect" }, now: 1 });
+    previous.createRun({
+      id: "gated", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now: 1,
+    });
+    recovering.reconcileStartup({ resumeUnstartedRuns: true, now: 2 });
+    const runGate = vi.fn(async ({ command }: { command: string }) => ({
+      status: "proceed" as const, command, durationMs: 0, output: "",
+    }));
+    const submitRun = vi.fn(async () => ({ status: "started" as const, queueEntryId: "entry", turnId: "turn" }));
+    const start = (store: AutomationStore) => new AutomationScheduler({
+      store, runner: { submitRun }, gateRunner: { runGate }, now: () => 3,
+    }).startNextQueuedRun("automation-0", store === recovering ? new Set(["gated"]) : undefined);
+    await Promise.all(recoveringSchedulerFirst ? [start(recovering), start(other)] : [start(other), start(recovering)]);
+    expect(runGate).toHaveBeenCalledOnce();
+    expect(submitRun).toHaveBeenCalledOnce();
+    expect(recovering.getRun("gated")).toMatchObject({ status: "running", resumedAt: 2 });
+  }), { examples: [[false], [true]], numRuns: 4 });
+});
+
+it("queueing cannot overwrite a dispatch claim on a second connection", () => {
+  fc.assert(fc.property(fc.boolean(), (initiallyQueued) => {
+    resetProfile();
+    const queueing = new AutomationStore(template, { runOwner: ownerOf(0) });
+    const claiming = openInstance(ownerOf(1)).store;
+    connections[0]!.raw.pragma("busy_timeout = 0");
+    queueing.createRun({
+      id: "handoff", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now: 1,
+    });
+    if (initiallyQueued) advance(queueing, "handoff", "queue", 2);
+    let blocked = false;
+    const prepare = template.raw.prepare.bind(template.raw);
+    const hook = vi.spyOn(template.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql !== "SELECT * FROM automation_runs WHERE run_id = ?") return statement;
+      const get = statement.get.bind(statement);
+      statement.get = (...args: unknown[]) => {
+        const row = get(...args);
+        try {
+          expect(claiming.claimRunForDispatch("handoff", 3)?.status).toBe("running");
+        } catch (error) {
+          if ((error as { code?: string }).code !== "SQLITE_BUSY") throw error;
+          blocked = true;
+        }
+        return row;
+      };
+      return statement;
+    });
+    try {
+      queueing.markRunQueued({ runId: "handoff", queueEntryId: "queue-updated", now: 4 });
+    } finally {
+      hook.mockRestore();
+    }
+    if (blocked) expect(claiming.claimRunForDispatch("handoff", 5)?.status).toBe("running");
+    expect(queueing.getRun("handoff")).toMatchObject({
+      status: "running", owner: ownerOf(1), recoverOnRestart: undefined,
+    });
+  }), { examples: [[false], [true]], numRuns: 4 });
 });

@@ -22,8 +22,8 @@ import { CodexEnvironmentHydrationStore } from "../storage/codex-environment-hyd
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../storage/automation-store";
-import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { AutomationScheduler } from "../automations/automation-scheduler";
+import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
@@ -3194,6 +3194,7 @@ describe("sqlite write metrics", () => {
     const idle = await measureSqliteWrites(() => {
       expect(launching.reconcileStartup({ ...input, now: 2_000 })).toEqual({
         interruptedRuns: [],
+        resumedRuns: [],
         liveOwnerRunCount: 2,
         rescheduledAutomationCount: 0,
       });
@@ -3253,6 +3254,110 @@ describe("sqlite write metrics", () => {
     } finally {
       service.dispose();
     }
+  });
+
+  it("adopts multiple unstarted runs in a single startup commit", async () => {
+    const previous = new AutomationStore(stateDb, {
+      runOwner: { instanceId: "runtime-v2-previous", processId: 4_242, startedAt: 1 },
+    });
+    const owner = { instanceId: "runtime-v2-current", processId: 4_243, startedAt: 2 };
+    const launching = new AutomationStore(stateDb, { runOwner: owner });
+    previous.createAutomation({
+      id: "automation-resume",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      nextRunAt: 60_000,
+      now: 0,
+    });
+    for (let index = 0; index < 3; index += 1) {
+      previous.createRun({
+        id: `resume-${index}`,
+        automationId: "automation-resume",
+        trigger: "manual",
+        recoverOnRestart: true,
+        now: index,
+      });
+    }
+    const input = {
+      now: 1_000,
+      isOwnerAlive: (candidate: { instanceId: string }) => candidate.instanceId === owner.instanceId,
+      resumeUnstartedRuns: true,
+      nextRunAtByAutomationId: { "automation-resume": 301_000 },
+    };
+    const { writes } = await measureSqliteWrites(() => {
+      const { resumedRuns, interruptedRuns } = launching.reconcileStartup(input);
+      expect(resumedRuns).toHaveLength(3);
+      expect(interruptedRuns).toEqual([]);
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-resume-unstarted-runs",
+      note: "Three unstarted runs adopted and queued in one startup transaction.",
+      writes,
+    });
+    const idle = await measureSqliteWrites(() => {
+      expect(launching.reconcileStartup(input)).toMatchObject({ resumedRuns: [], liveOwnerRunCount: 3 });
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-resume-nothing-lost",
+      note: "No unstarted run eligible for startup recovery and no schedule to adjust. Zero recurring writes.",
+      writes: idle.writes,
+    });
+
+    const scheduler = new AutomationScheduler({
+      store: launching,
+      now: () => input.now,
+      runner: {
+        submitRun: async () => ({ status: "started", turnId: "turn-resumed", queueEntryId: "queue-resumed" }),
+      },
+    });
+    const dispatch = await measureSqliteWrites(() => scheduler.startNextQueuedRun("automation-resume"));
+    expect(launching.getRun("resume-0")).toMatchObject({ resumedAt: input.now, backendTurnId: "turn-resumed" });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-resume-dispatch",
+      note: "One adopted run claims its lane and stores the provider acknowledgement.",
+      writes: dispatch.writes,
+    });
+  });
+
+  it.each([false, true])("budgets dispatch of a scheduled run (gate enabled: %s)", async (gated) => {
+    let now = 0;
+    const automationStore = new AutomationStore(stateDb);
+    automationStore.createAutomation({
+      id: "automation-dispatch",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: gated ? { command: "echo ready" } : undefined,
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      nextRunAt: 300_000,
+      now,
+    });
+    const scheduler = new AutomationScheduler({
+      store: automationStore,
+      now: () => now,
+      runner: {
+        submitRun: async () => ({ status: "started", turnId: "turn-1", queueEntryId: "queue-1" }),
+      },
+      gateRunner: {
+        runGate: async ({ command }) => ({ status: "proceed", command, durationMs: 0, output: "ready" }),
+      },
+    });
+    now = 300_000;
+    const { writes } = await measureSqliteWrites(() => scheduler.evaluateDueAutomations());
+    expect(automationStore.listRunsForAutomation("automation-dispatch")).toMatchObject([
+      { status: "running", backendTurnId: "turn-1" },
+    ]);
+    expectSqliteWriteBudget({
+      scenario: gated ? "automation-scheduled-gated-dispatch" : "automation-scheduled-dispatch",
+      note: gated
+        ? "Schedule advance and run creation, one dispatch claim before the shell gate, and provider acknowledgement."
+        : "Schedule advance and run creation in one commit, followed by dispatch claim and provider acknowledgement.",
+      writes,
+    });
   });
 
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {

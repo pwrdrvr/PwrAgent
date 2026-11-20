@@ -6,6 +6,8 @@ export interface ThreadOwnerAdmission {
   close(): void;
 }
 
+export class ThreadOwnerUnavailableError extends Error {}
+
 /** Shares Outpost's existing PID-owned lease without coupling it to services. */
 export class ProfileThreadOwnerAdmission implements ThreadOwnerAdmission {
   private closed = false;
@@ -18,7 +20,7 @@ export class ProfileThreadOwnerAdmission implements ThreadOwnerAdmission {
     if (this.closed) throw new Error("Profile thread owner is closed");
     const result = this.getManager().acquire("federation", "thread_owner");
     if (!result.acquired) {
-      throw new Error(`Profile thread ownership is held by another PwrAgent runtime (${result.holder.instanceId}); stop that owner before starting local work`);
+      throw new ThreadOwnerUnavailableError(`Profile thread ownership is held by another PwrAgent runtime (${result.holder.instanceId}); stop that owner before starting local work`);
     }
     this.admitted = true;
   }

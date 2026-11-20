@@ -760,6 +760,23 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return undefined;
   }
 
+  async readThreadAssistantReply(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<string | undefined> {
+    const response = await this.readThread({
+      backend: request.backend,
+      federationTarget: request.federationTarget,
+      threadId: request.threadId,
+      countsAsActivity: false,
+      limit: 50,
+    });
+    return findAssistantEntryText(response.replay, request.turnId, request.itemId);
+  }
+
   async resolveAssistantMessageImages(request: AssistantImageRequest): Promise<MessagingImagePart[]> {
     const target = request.federationTarget;
     const key = [
@@ -1444,6 +1461,26 @@ function findLastAssistantEntryReply(
       text,
       ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
     };
+  }
+  return undefined;
+}
+
+/** The text of one assistant item of a turn, or undefined when not in the page. */
+export function findAssistantEntryText(
+  replay: AppServerThreadReplay,
+  turnId: string,
+  itemId: string,
+): string | undefined {
+  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+    const entry = replay.entries[index];
+    if (
+      entry?.type === "message"
+      && entry.role === "assistant"
+      && entry.id === itemId
+      && (!entry.turn?.id || entry.turn.id === turnId)
+    ) {
+      return entry.text.trim() || undefined;
+    }
   }
   return undefined;
 }

@@ -1215,7 +1215,7 @@ export type AutomationRunSkipReason = "lane_busy" | "rate_limited" | "daily_limi
 export type AutomationRunFailureReason = "interrupted" | "timed_out";
 
 /**
- * The process that created a run: the identity its profile runtime marker
+ * The process responsible for a run: the identity its profile runtime marker
  * carries. Startup changes another process's run only after this identity is
  * proved dead. A run without one cannot prove a live owner.
  */
@@ -1260,6 +1260,8 @@ export type AutomationRunSummary = {
   queuedAt?: number;
   queueEntryId?: string;
   startedAt?: number;
+  /** When startup adopted this run for its one automatic resume. */
+  resumedAt?: number;
   completedAt?: number;
   backendThreadId?: string;
   backendTurnId?: string;
@@ -1268,7 +1270,7 @@ export type AutomationRunSummary = {
   skipReason?: AutomationRunSkipReason;
   /** Set on `failed` runs that PwrAgent ended; absent for provider failures. */
   failureReason?: AutomationRunFailureReason;
-  /** Process that created the run. Absent on runs older builds wrote. */
+  /** Process responsible for this run. Absent on runs older builds wrote. */
   owner?: AutomationRunOwner;
   /**
    * How many inbound messages a `rate_limited` throttle marker has absorbed by

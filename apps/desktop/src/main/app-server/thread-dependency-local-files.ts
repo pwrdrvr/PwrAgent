@@ -1,20 +1,44 @@
-import { lstat, realpath } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { ThreadDependencyLocalFile } from "@pwragent/shared";
+import { nativeRelayPath } from "../native-relay-path";
 
 export const LOCAL_FILE_CHECK_INTERVAL_MS = 30_000;
 
+const runProbe = promisify(execFile);
+const WINDOWS_FILESYSTEM_ROOT = /^\\\\\?\\(?:[a-z]:\\|Volume\{[\da-f-]{36}\}\\|UNC\\[^\\/:]+\\[^\\/:]+\\)/i;
+
+function markerPathParts(filename: string): [root: string, relative: string] {
+  if (process.platform === "win32") {
+    // Reject drive-relative, device and dot-component paths before passing a
+    // volume or share root to Win32. The helper validates each relative name.
+    if (path.isAbsolute(filename) && path.parse(filename).root.length > 1
+      && !filename.split(/[\\/]/).some((name) => name === "." || name === "..")) {
+      const namespaced = path.toNamespacedPath(filename);
+      const root = WINDOWS_FILESYSTEM_ROOT.exec(namespaced)?.[0];
+      if (root) return [root, namespaced.slice(root.length)];
+    }
+  } else if (filename.startsWith("/")) {
+    return ["/", filename.slice(1)];
+  }
+  throw new Error("The watcher marker path is unsafe.");
+}
+
 async function authorizePath(filename: string, workspace: string): Promise<string> {
   if (!path.isAbsolute(filename)) throw new Error("Use an absolute watcher marker path in the waiting thread's workspace.");
+  const name = path.basename(filename);
+  if (!name || name === "." || name === "..") throw new Error("The watcher marker path is unsafe.");
   const parent = await realpath(path.dirname(filename));
   const relative = path.relative(workspace, parent);
   if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
     throw new Error("The watcher marker must be inside the waiting thread's workspace.");
   }
-  return path.join(parent, path.basename(filename));
+  return path.join(parent, name);
 }
 
-/** Pin the existing directory of an authorized marker, which may not exist yet. */
+/** Canonicalize the existing parent of an authorized marker that may not exist yet. */
 export async function authorizeLocalFile(
   cwd: string | undefined,
   file: ThreadDependencyLocalFile,
@@ -29,16 +53,25 @@ export async function authorizeLocalFile(
 }
 
 async function markerReady(filename: string, since: number): Promise<boolean> {
+  const parts = markerPathParts(filename);
   try {
-    const parent = path.dirname(filename);
-    if (await realpath(parent) !== parent) throw new Error("The watcher marker directory changed.");
-    // Check metadata only. Symlinks, directories and special files are not results.
-    const info = await lstat(filename);
-    return info.isFile() && info.mtimeMs >= since;
+    const { stdout } = await runProbe(nativeRelayPath(), ["--local-file-marker", ...parts], {
+      env: process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {},
+      maxBuffer: 1024,
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    const value = stdout.trim();
+    const mtime = Number(value);
+    if (value && Number.isFinite(mtime)) return mtime >= since;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
+    // Native exit status 2 means a missing or nonregular marker. An absent
+    // executable has a string error code and is a failed inspection.
+    const code = (error as { code?: number | string }).code;
+    if (code === 2) return false;
+    if (code === 3) throw new Error("The watcher marker directory changed.");
   }
+  throw new Error("The watcher marker metadata could not be verified.");
 }
 
 export async function readLocalFile(file: ThreadDependencyLocalFile): Promise<"result" | "exited" | undefined> {

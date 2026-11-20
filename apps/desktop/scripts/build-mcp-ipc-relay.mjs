@@ -22,7 +22,7 @@ function compileMcpIpcRelay({ arch = process.arch, outputRoot = root, packaged =
     if (arch !== process.arch) throw new Error("Build the Windows IPC relay on its target architecture.");
     command = "cl.exe";
     args = ["/nologo", "/W4", "/WX", "/O2", "/MT", "/DUNICODE", "/D_UNICODE", source,
-      `/Fo${join(directory, "main.obj")}`, `/Fe${output}`, "/link", "Advapi32.lib"];
+      `/Fo${join(directory, "main.obj")}`, `/Fe${output}`, "/link", "Advapi32.lib", "ntdll.lib"];
     // Packaging and CI need not inherit a developer prompt. Locate the
     // installed toolchain using Microsoft's own locator; never download one.
     if (!process.env.VCINSTALLDIR) {

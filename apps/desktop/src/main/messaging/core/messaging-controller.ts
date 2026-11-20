@@ -1,5 +1,7 @@
 import { MessagingThreadSettings } from "./messaging-thread-settings";
-import { MessagingOutboundDelivery, type MessagingControllerDeliveryBudgetEvent } from "./messaging-outbound-delivery";
+import { MessagingOutboundDelivery, type MessagingControllerDeliveryBudgetEvent, type MessagingReplyReceiptRequest } from "./messaging-outbound-delivery";
+import type { MessagingDeliveryRecord, MessagingReplyReceipt, MessagingReplyReceiptReason } from "./messaging-migrations";
+import { OPEN_REPLY_RECEIPT_PREFIX, claimReplyReceipt, decideOpenReplyReceipt, isAcceptedDeliveryOutcome, releaseReplyReceipt } from "./messaging-reply-receipts";
 import { MessagingAssistantStreams } from "./messaging-assistant-streams";
 import { MessagingPendingRequestWorkflow } from "./messaging-pending-request-workflow";
 import type { MessagingPendingRequestHost } from "./messaging-pending-request-context";
@@ -176,7 +178,31 @@ export type MessagingControllerOptions = {
    */
   outboundFileAccess?: () => MessagingOutboundFileAccess;
   originalAttachmentStore?: MessagingOriginalAttachmentStore;
+  /**
+   * Raises a reminder card on a local thread when a final reply or approval
+   * card may not have reached its conversation. Re-raising a key updates
+   * that card in place.
+   */
+  raiseDeliveryCheck?: (params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    key: string;
+    title: string;
+    detail: string;
+  }) => void | Promise<void>;
 };
+
+/** Counts from one pass over a channel's open delivery receipts. */
+export type MessagingReceiptRecoverySummary = {
+  open: number;
+  resent: number;
+  /** Resends the provider did not accept; their receipts settled again. */
+  unsent: number;
+  flagged: number;
+  withdrawn: number;
+};
+
+let receiptRecoveryLoggedThisProcess = false;
 
 export class MessagingController {
   private readonly backendEventRouter: MessagingBackendEventRouter;
@@ -516,6 +542,7 @@ export class MessagingController {
       desktopActivityLog: () => this.desktopActivityLog(),
       recordBindingTransition: (...args) => this.bindingService.recordBindingTransition(...args),
       notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
+      flagDeliveryCheck: (...args) => this.flagDeliveryCheck(...args),
     });
     this.logger = options.logger ?? messagingControllerLog;
     this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
@@ -1757,6 +1784,7 @@ export class MessagingController {
     images: MessagingImagePart[] = [],
     identity?: AssistantMessageDeliveryIdentity,
     deliveryClaimed = false,
+    finalReply = false,
   ): Promise<void> {
     if (
       !deliveryClaimed
@@ -1778,6 +1806,23 @@ export class MessagingController {
       `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${messageImages.length} preview="${compactLogPreview(text)}"`,
     );
     const attribution = await this.responseAttributionForBinding(binding);
+    // A final reply keeps a delivery receipt naming the backend item, so a
+    // send the adapter could not make is read back and sent on its next start.
+    const turnId = identity?.turnId ?? turnIdForBackendEvent(event);
+    const itemId = identity?.itemId ?? assistantItemIdForBackendEvent(event);
+    const receipt: MessagingReplyReceiptRequest | undefined =
+      finalReply && turnId && itemId
+        ? {
+            identity: {
+              kind: "assistant-final",
+              backend: binding.backend,
+              bindingId: binding.id,
+              threadId: binding.threadId,
+              turnId,
+              itemId,
+            },
+          }
+        : undefined;
 
     await this.deliver(
       {
@@ -1797,7 +1842,238 @@ export class MessagingController {
         ],
       },
       binding,
+      undefined,
+      undefined,
+      receipt,
     );
+  }
+
+  /**
+   * Looks at this channel's open delivery receipts once the adapter is
+   * running. Only a reply proved never sent is sent again, after rechecking
+   * its binding and reading its text back from the backend; an interrupted
+   * or expired one is flagged for the operator.
+   */
+  async recoverDeliveryReceipts(): Promise<MessagingReceiptRecoverySummary> {
+    const summary: MessagingReceiptRecoverySummary = { open: 0, resent: 0, unsent: 0, flagged: 0, withdrawn: 0 };
+    const store = this.options.store;
+    if (!store.listDeliveriesWithIdPrefix || !store.settleDelivery || this.disposed) {
+      return summary;
+    }
+    let rows: MessagingDeliveryRecord[];
+    try {
+      rows = await store.listDeliveriesWithIdPrefix(OPEN_REPLY_RECEIPT_PREFIX);
+    } catch (error) {
+      this.logger.warn?.("messaging delivery receipts could not be read", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return summary;
+    }
+    for (const row of rows) {
+      if (this.disposed) break;
+      const receipt = row.receipt;
+      const bindingId = row.bindingId;
+      if (!receipt || !bindingId) continue;
+      if (this.options.channel && row.channel !== this.options.channel) continue;
+      summary.open += 1;
+      const decision = decideOpenReplyReceipt({ openId: row.id, receipt, now: this.now() });
+      if (decision.action === "skip" || !claimReplyReceipt(row.id)) continue;
+      try {
+        const outcome = await this.recoverDeliveryReceipt({ ...row, bindingId }, receipt, decision);
+        summary[outcome] += 1;
+      } catch (error) {
+        this.logger.warn?.("messaging delivery receipt recovery failed", {
+          bindingId: row.bindingId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        releaseReplyReceipt(row.id);
+      }
+    }
+    const fields = { channel: this.options.channel, ...summary };
+    // One lifecycle line per launch; later adapter restarts stay at debug
+    // unless they find something to do.
+    if (!receiptRecoveryLoggedThisProcess || summary.open > 0) {
+      receiptRecoveryLoggedThisProcess = true;
+      this.logger.info?.("messaging delivery receipts checked", fields);
+    } else {
+      this.logger.debug?.("messaging delivery receipts checked", fields);
+    }
+    return summary;
+  }
+
+  private async recoverDeliveryReceipt(
+    row: MessagingDeliveryRecord & { bindingId: string },
+    receipt: MessagingReplyReceipt,
+    decision: { action: "resend" } | { action: "flag"; reason: MessagingReplyReceiptReason },
+  ): Promise<"resent" | "unsent" | "flagged" | "withdrawn"> {
+    const settle = async (
+      state: "unknown" | "withdrawn",
+      reason: MessagingReplyReceiptReason,
+    ): Promise<"flagged" | "withdrawn"> => {
+      await this.outboundDelivery.settleOpenReceipt(row, state, reason);
+      this.logger.debug?.("messaging delivery receipt settled by recovery", {
+        bindingId: row.bindingId,
+        kind: receipt.kind,
+        reason,
+        state,
+        threadId: receipt.threadId,
+        turnId: receipt.turnId,
+      });
+      return state === "unknown" ? "flagged" : "withdrawn";
+    };
+    const pendingIntent = receipt.kind === "approval" && receipt.pendingIntentId
+      ? await this.options.store.getPendingIntent(receipt.pendingIntentId, { now: this.now() })
+      : undefined;
+    // A resolved approval needs nothing, whatever its receipt says.
+    if (receipt.kind === "approval" && !pendingIntent) {
+      return await settle("withdrawn", "approval-resolved");
+    }
+    if (decision.action === "flag") {
+      return await settle("unknown", decision.reason);
+    }
+    // Recheck the binding and the actor allowlist at send time.
+    const binding = await this.options.store.getBinding(row.bindingId);
+    if (
+      !binding
+      || binding.revokedAt !== undefined
+      || binding.backend !== receipt.backend
+      || binding.threadId !== receipt.threadId
+      || !this.isChannelInScope(binding.channel)
+      || !this.accessControl.admitsAnyActor(binding.authorizedActorIds)
+    ) {
+      return await settle("unknown", "binding-inactive");
+    }
+    const request: MessagingReplyReceiptRequest = {
+      identity: {
+        kind: receipt.kind,
+        backend: receipt.backend,
+        bindingId: binding.id,
+        threadId: receipt.threadId,
+        ...(receipt.turnId ? { turnId: receipt.turnId } : {}),
+        ...(receipt.itemId ? { itemId: receipt.itemId } : {}),
+        ...(receipt.pendingIntentId ? { pendingIntentId: receipt.pendingIntentId } : {}),
+      },
+      markedAt: receipt.markedAt,
+      attempts: receipt.attempts,
+      claimed: true,
+    };
+    if (pendingIntent) {
+      if ((await this.readBackendThreadStatus(binding)) === "idle") {
+        return await settle("withdrawn", "approval-resolved");
+      }
+      const delivery = await this.deliver(pendingIntent.intent, binding, undefined, undefined, request);
+      if (delivery.surface) {
+        await this.options.store.upsertPendingIntent({ ...pendingIntent, surface: delivery.surface });
+      }
+      return isAcceptedDeliveryOutcome(delivery.outcome) ? "resent" : "unsent";
+    }
+    const text = receipt.turnId && receipt.itemId
+      ? (await this.options.backend.readThreadAssistantReply?.({
+          backend: binding.backend,
+          federationTarget: federationTargetForBinding(binding),
+          threadId: binding.threadId,
+          turnId: receipt.turnId,
+          itemId: receipt.itemId,
+        }))?.trim()
+      : undefined;
+    if (!text) {
+      return await settle("unknown", "reply-unavailable");
+    }
+    // The images the original reply carried, found again by turn and item.
+    let images: MessagingImagePart[] = [];
+    try {
+      images = selectAssistantImagesForCapability(
+        await this.options.backend.resolveAssistantMessageImages?.({
+          backend: binding.backend,
+          federationTarget: federationTargetForBinding(binding),
+          itemId: receipt.itemId,
+          text,
+          threadId: binding.threadId,
+          turnId: receipt.turnId,
+        }) ?? [],
+        this.capabilityProfile,
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging delivery receipt image resolution failed", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+    }
+    const delivery = await this.deliver(
+      {
+        id: this.newIntentId("assistant-message"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "assistant",
+        attribution: await this.responseAttributionForBinding(binding),
+        parts: [{ type: "text", text, markdown: "markdown" }, ...images],
+      },
+      binding,
+      undefined,
+      undefined,
+      request,
+    );
+    return isAcceptedDeliveryOutcome(delivery.outcome) ? "resent" : "unsent";
+  }
+
+  /**
+   * A final reply or approval card may not have reached its conversation:
+   * record it in the messaging activity log and raise a reminder card on
+   * the thread. Nothing is sent to the conversation.
+   */
+  private async flagDeliveryCheck(params: {
+    bindingId: string;
+    receipt: MessagingReplyReceipt;
+    reason: MessagingReplyReceiptReason;
+  }): Promise<void> {
+    const { bindingId, receipt, reason } = params;
+    const binding = await this.options.store.getBinding(bindingId);
+    const platform = binding?.channel.channel ?? this.options.channel;
+    const what = receipt.kind === "approval" ? "An approval card" : "A final reply";
+    const where = binding?.channel.conversation.title
+      ? `"${binding.channel.conversation.title}"`
+      : "its messaging conversation";
+    const why = describeDeliveryCheckReason(reason);
+    this.logger.debug?.("messaging delivery check raised", {
+      bindingId,
+      kind: receipt.kind,
+      reason,
+      threadId: receipt.threadId,
+      turnId: receipt.turnId,
+    });
+    if (platform) {
+      try {
+        this.desktopActivityLog()?.record({
+          platform,
+          kind: "diagnostic",
+          backend: binding?.backend,
+          threadId: receipt.threadId,
+          bindingId,
+          conversationId: binding?.channel.conversation.id,
+          conversationTitle: binding?.channel.conversation.title,
+          summary: `Check delivery: ${what.toLowerCase()} may not have reached ${where}`,
+          payload: {
+            receiptKind: receipt.kind,
+            reason,
+            turnId: receipt.turnId,
+            attempts: receipt.attempts,
+          },
+        });
+      } catch {
+        // The activity log is observability; the card below still goes up.
+      }
+    }
+    // A peer's thread has its own owner; the activity log row covers it here.
+    if (binding?.federatedThread || !this.options.raiseDeliveryCheck) return;
+    await this.options.raiseDeliveryCheck({
+      backend: binding?.backend ?? receipt.backend,
+      threadId: receipt.threadId,
+      key: `messaging-delivery-check:${bindingId}`,
+      title: "Check that a reply reached its messaging conversation",
+      detail: `${what} for this thread may not have reached ${where} on ${platform ?? "messaging"}. ${why} PwrAgent does not send it again automatically, so check the conversation and resend it if it is missing.`,
+    });
   }
 
   private async deliverAssistantImages(
@@ -3863,8 +4139,9 @@ export class MessagingController {
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
     guard?: MessagingDeliveryGuard,
+    receipt?: MessagingReplyReceiptRequest,
   ): Promise<MessagingDeliveryResult> {
-    return this.outboundDelivery.deliver(intent, binding, event, guard);
+    return this.outboundDelivery.deliver(intent, binding, event, guard, receipt);
   }
 
   private async markWorkingCardWaiting(
@@ -4580,6 +4857,24 @@ function readNumberField(
 
 function formatContextUsageNumber(value: number): string {
   return Math.round(value).toLocaleString();
+}
+
+function describeDeliveryCheckReason(reason: MessagingReplyReceiptReason): string {
+  switch (reason) {
+    case "interrupted":
+      return "PwrAgent stopped while it was being sent.";
+    case "expired":
+      return "It could not be sent within 24 hours.";
+    case "send-failed":
+    case "send-threw":
+      return "The messaging platform reported an error, and it may still have arrived.";
+    case "binding-inactive":
+      return "The conversation is no longer bound to this thread.";
+    case "reply-unavailable":
+      return "Its text could not be read back from the Agent.";
+    default:
+      return "Its delivery could not be confirmed.";
+  }
 }
 
 function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HeadlessAutomationRunner,
   type HeadlessAutomationLauncher,
@@ -13,6 +14,8 @@ import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 type HeadlessLaunch = Parameters<HeadlessAutomationLauncher["startAutomationHeadlessTurn"]>[0];
+const scheduleLanes = ["idle", "busy", "queued", "drop"] as const;
+type ScheduleLane = (typeof scheduleLanes)[number];
 
 /**
  * Stands in for the registry behind the production runner. Each call is one
@@ -99,6 +102,90 @@ function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationSch
 }
 
 describe("AutomationScheduler", () => {
+  it("persists running before invoking the provider, even before it acknowledges the turn", async () => {
+    const automation = createIntervalAutomation();
+    const provider = vi.spyOn(launcher, "startAutomationHeadlessTurn")
+      .mockImplementation(async ({ automationRunId }) => {
+        expect(store.getRun(automationRunId)?.status).toBe("running");
+        return {
+          headlessThreadId: "headless-1",
+          queueEntryId: "queue-1",
+          threadId: automation.threadId,
+          turnId: "turn-1",
+        };
+      });
+
+    expect((await buildScheduler().runNow(automation.id))?.status).toBe("started");
+    expect(provider).toHaveBeenCalledOnce();
+  });
+
+  async function expectSingleScheduledWindow(
+    priorLane: ScheduleLane,
+    crashAfterWrite: number,
+  ): Promise<void> {
+    const scheduler = buildScheduler();
+    const automation = createIntervalAutomation();
+    const window = 5 * 60 * 1000;
+    if (priorLane !== "idle") await scheduler.runNow(automation.id);
+    if (priorLane === "drop") {
+      store.updateAutomation(automation.id, { backlogPolicy: "drop_missed", now });
+    }
+    if (priorLane === "queued") {
+      now = window;
+      await scheduler.evaluateDueAutomations();
+    }
+    now += window;
+    const scheduledFor = now;
+    let writes = 0;
+    // Inject before the next SQL write. A thrown fault rolls back an open
+    // transaction while any earlier commits remain visible to recovery.
+    const prepare = stateDb.raw.prepare.bind(stateDb.raw);
+    const fault = vi.spyOn(stateDb.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      const run = statement.run.bind(statement);
+      statement.run = (...args: unknown[]) => {
+        if (++writes > crashAfterWrite) throw new Error("simulated crash");
+        return run(...args);
+      };
+      return statement;
+    });
+    try {
+      await scheduler.evaluateDueAutomations();
+    } finally {
+      fault.mockRestore();
+    }
+
+    // Another instance can reconcile runs without advancing schedule
+    // windows, as startup without the scheduling lease does.
+    store.reconcileStartup({ now });
+    const restarted = buildScheduler();
+    now = scheduledFor;
+    await restarted.evaluateDueAutomations();
+    const matchingRuns = store.listRunsForAutomation(automation.id).filter((run) =>
+      run.scheduledWindows.some((candidate) => candidate.scheduledFor === scheduledFor));
+    expect(matchingRuns.map((run) => run.status)).toHaveLength(1);
+  }
+
+  it("a crash after inserting a scheduled run cannot create a second run for that window", async () => {
+    await expectSingleScheduledWindow("idle", 1);
+  });
+
+  it("consumes each schedule window once across the writes of every backlog path", async () => {
+    const writeBoundaries = Array.from({ length: 10 }, (_, index) => index + 1);
+    const examples = scheduleLanes.flatMap((lane) =>
+      writeBoundaries.map((boundary): [ScheduleLane, number] => [lane, boundary]));
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(...scheduleLanes),
+      fc.integer({ min: 1, max: 10 }),
+      async (priorLane, crashAfterWrite) => {
+        stateDb.raw.exec("DELETE FROM automation_runs; DELETE FROM automations;");
+        launcher.started.length = 0;
+        now = 0;
+        await expectSingleScheduledWindow(priorLane, crashAfterWrite);
+      },
+    ), { examples });
+  });
+
   it.each(["started", "failed"] as const)(
     "preserves completion when a %s submission result arrives after lifecycle events",
     async (submissionStatus) => {
@@ -142,7 +229,7 @@ describe("AutomationScheduler", () => {
       const [run] = store.listRunsForAutomation(automation.id);
       expect(run).toMatchObject({
         status: "completed",
-        startedAt: 500,
+        startedAt: 0,
         completedAt: 1_000,
         backendTurnId: "turn-1",
       });
@@ -737,7 +824,7 @@ describe("AutomationScheduler", () => {
     });
   });
 
-  it("queues a run when quit quiescing begins while its gate is in progress", async () => {
+  it("keeps the gate's claim during quit confirmation and uses its result if quit is canceled", async () => {
     createIntervalAutomation({
       backend: "codex",
       threadId: "thread-1",
@@ -778,16 +865,17 @@ describe("AutomationScheduler", () => {
     await Promise.resolve();
     const resume = scheduler.quiesceDispatch();
     releaseFirstGate();
-    await evaluating;
+    await Promise.resolve();
 
     expect(launcher.started).toHaveLength(0);
     expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
-      status: "queued",
+      status: "running",
     });
 
     await resume();
+    await evaluating;
 
-    expect(gateCalls).toBe(2);
+    expect(gateCalls).toBe(1);
     expect(launcher.started).toHaveLength(1);
     expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
       status: "running",
@@ -1596,7 +1684,8 @@ describe("AutomationScheduler run timeout", () => {
 });
 
 describe("AutomationScheduler daily run limit", () => {
-  it("pauses at the limit, raises one card and records later triggers as skipped", async () => {
+  it.each(["manual", "scheduled"] as const)("pauses at the limit on a %s trigger and reports one card", async (trigger) => {
+    const interval = 60 * 60 * 1000;
     store.createAutomation({
       id: "automation-1",
       backend: "codex",
@@ -1616,6 +1705,12 @@ describe("AutomationScheduler daily run limit", () => {
       setTimer: (() => 0) as unknown as typeof setTimeout,
       clearTimer: () => undefined,
       onDailyLimitReached: ({ limit, runsInWindow }) => {
+        if (trigger === "scheduled") {
+          // The notice must observe the committed pause and schedule advance.
+          expect(store.getAutomation("automation-1")).toMatchObject({
+            status: "paused", nextRunAt: now + interval,
+          });
+        }
         cards.push({ limit, runsInWindow });
       },
     });
@@ -1637,7 +1732,12 @@ describe("AutomationScheduler daily run limit", () => {
     expect(launcher.started).toHaveLength(2);
 
     // The third trigger is refused at admission.
-    await scheduler.runNow("automation-1", now);
+    if (trigger === "scheduled") {
+      now = interval;
+      await scheduler.evaluateDueAutomations();
+    } else {
+      await scheduler.runNow("automation-1", now);
+    }
     expect(launcher.started).toHaveLength(2);
     expect(store.getAutomation("automation-1")).toMatchObject({
       status: "paused",
@@ -1646,7 +1746,7 @@ describe("AutomationScheduler daily run limit", () => {
     expect(cards).toEqual([{ limit: 2, runsInWindow: 2 }]);
 
     // A schedule window while paused is skipped, not run, and adds no card.
-    now = 60 * 60 * 1000;
+    now += interval;
     await scheduler.evaluateDueAutomations();
     expect(launcher.started).toHaveLength(2);
     expect(cards).toHaveLength(1);
@@ -1659,7 +1759,7 @@ describe("AutomationScheduler daily run limit", () => {
       errorMessage:
         "The automation reached its daily run limit of 2 in the last 24 hours and was paused; 2 triggers skipped.",
     });
-    expect(store.getAutomation("automation-1")?.nextRunAt).toBe(2 * 60 * 60 * 1000);
+    expect(store.getAutomation("automation-1")?.nextRunAt).toBe(now + interval);
   });
 });
 

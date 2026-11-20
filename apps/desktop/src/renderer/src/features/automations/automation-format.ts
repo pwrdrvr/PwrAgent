@@ -49,17 +49,16 @@ export function formatAutomationStatus(status: AutomationStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-/**
- * A run a restart ended is a failed run that reads "interrupted" in history,
- * and one its timeout ended reads "timed out".
- */
+/** Show the outcome and any restart recovery in run history. */
 export function formatRunStatus(
   status: AutomationRunStatus,
   failureReason?: AutomationRunFailureReason,
+  resumedAt?: number,
 ): string {
-  if (status === "failed" && failureReason === "interrupted") return "interrupted";
-  if (status === "failed" && failureReason === "timed_out") return "timed out";
-  return status.replace("_", " ");
+  let label = status.replace("_", " ");
+  if (status === "failed" && failureReason === "interrupted") label = "interrupted";
+  if (status === "failed" && failureReason === "timed_out") label = "timed out";
+  return resumedAt === undefined ? label : `${label} · resumed`;
 }
 
 export function formatScheduleKind(schedule: AutomationScheduleDefinition): string {

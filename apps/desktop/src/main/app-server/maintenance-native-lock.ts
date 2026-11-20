@@ -1,25 +1,14 @@
-import { runtimeResourcesPath, isDevelopmentRuntime } from "../runtime-resources";
 import { spawn } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { nativeRelayPath } from "../native-relay-path";
 
 export type MaintenanceLock = { assertHeld: () => void; release: () => Promise<void> };
 
-/** Same packaged native helper as local MCP IPC; this mode only holds an
- * existing file lock. stdin lifetime owns the lock, including parent crashes. */
-export function maintenanceLockHelperPath(): string {
-  const filename = `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`;
-  const resources = runtimeResourcesPath();
-  return !isDevelopmentRuntime() && resources
-    ? path.join(resources, "mcp-ipc-relay", filename)
-    : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../build/mcp-ipc-relay", `${process.platform}-${process.arch}`, filename);
-}
-
 /** Undefined means a competing shared or exclusive lock. Missing helpers,
- * unsupported locks and changed files are errors, never permission to clean. */
+ * unsupported locks and changed files are errors, never permission to clean.
+ * stdin lifetime owns the helper's lock, including parent crashes. */
 export async function acquireMaintenanceLock(
   lockPath: string,
-  helperPath = maintenanceLockHelperPath(),
+  helperPath = nativeRelayPath(),
 ): Promise<MaintenanceLock | undefined> {
   const child = spawn(helperPath, ["--maintenance-lock", lockPath], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   child.stdin.on("error", () => { child.kill(); });

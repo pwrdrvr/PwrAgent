@@ -12,6 +12,7 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
+import type { AppServerBackendKind } from "@pwragent/shared";
 import {
   MESSAGING_TOOL_UPDATE_MODES,
   normalizeMessagingBindingTargetKind,
@@ -32,7 +33,53 @@ export type MessagingDeliveryRecord = MessagingDeliveryResult & {
   id: string;
   bindingId?: string;
   intentId?: string;
+  /** Present on final replies and approval cards; see messaging-reply-receipts. */
+  receipt?: MessagingReplyReceipt;
 };
+
+/**
+ * The delivery receipt of a final assistant reply or an approval card. It
+ * names the reply by identity only; message text never enters SQLite.
+ */
+export type MessagingReplyReceipt = {
+  kind: "assistant-final" | "approval";
+  state: MessagingReplyReceiptState;
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId?: string;
+  /** The final assistant item, for `assistant-final`. */
+  itemId?: string;
+  /** The pending intent holding the card, for `approval`. */
+  pendingIntentId?: string;
+  markedAt: number;
+  attempts: number;
+  reason?: MessagingReplyReceiptReason;
+};
+
+/**
+ * `pending` and `owed` rows are open. `pending` is written before the send;
+ * one found by a later launch is ambiguous. `owed` proves the send never
+ * reached the provider. The rest are settled and never sent again.
+ */
+export type MessagingReplyReceiptState =
+  | "pending"
+  | "owed"
+  | "sent"
+  | "unknown"
+  | "withdrawn";
+
+export type MessagingReplyReceiptReason =
+  | "adapter-stopped"
+  | "rate-limited"
+  | "budget-dropped"
+  | "send-failed"
+  | "send-threw"
+  | "interrupted"
+  | "expired"
+  | "reply-unavailable"
+  | "binding-inactive"
+  | "approval-resolved"
+  | "cancelled";
 
 export type MessagingStoreData = {
   version: number;
