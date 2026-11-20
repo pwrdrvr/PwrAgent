@@ -844,7 +844,8 @@ export type ThreadViewProps = {
    * that needs authorization, or that an operator turned off for every
    * thread, cannot be repaired from the panel itself.
    */
-  onOpenPluginSettings?: () => void;
+  /** Opens Settings → Plugins, at one connection's row when it is named. */
+  onOpenPluginSettings?: (connectionId?: string) => void;
   onRevealSelectedThreadInList?: () => void;
   /** Show the breadcrumb's project in the Directories lens. */
   onRevealSelectedProjectInList?: (directory: NavigationDirectorySummary) => void;
@@ -1766,10 +1767,11 @@ export function ThreadView(props: ThreadViewProps) {
   const openMcpConnectionSettings = useMemo(
     () =>
       onOpenPluginSettings
-        ? () => {
+        ? (connectionId?: string) => {
             setLaunchpadMcpAccessOpen(false);
             setThreadMcpAccessOpen(false);
-            onOpenPluginSettings();
+            // A click handler's event is not a connection.
+            onOpenPluginSettings(typeof connectionId === "string" ? connectionId : undefined);
           }
         : undefined,
     [onOpenPluginSettings],
@@ -4492,10 +4494,10 @@ function renderThreadViewHeader({
 }
 
 // Stable component identity while connection selections update in either dock.
-function LaunchpadConnectionTiles({ view, launchpad, onOpenSettings }: {
+function LaunchpadConnectionTiles({ view, launchpad, onOpenSettings: openSettings }: {
   view: ThreadViewProps;
   launchpad: NavigationLaunchpadDraft;
-  onOpenSettings: (() => void) | undefined;
+  onOpenSettings: ((connectionId?: string) => void) | undefined;
 }) {
   return (
     <>
@@ -4575,7 +4577,7 @@ function LaunchpadConnectionTiles({ view, launchpad, onOpenSettings }: {
             },
           );
         }}
-        onOpenSettings={onOpenSettings}
+        onOpenSettings={openSettings ? () => openSettings(BOAT_MCP_CONNECTION_ID) : undefined}
       />
       <SandboxerConnectionPrompt
         backend={launchpad.backend}
@@ -4597,7 +4599,7 @@ function LaunchpadConnectionTiles({ view, launchpad, onOpenSettings }: {
             },
           );
         }}
-        onOpenSettings={onOpenSettings}
+        onOpenSettings={openSettings ? () => openSettings(SANDBOXER_MCP_CONNECTION_ID) : undefined}
       />
     </>
   );

@@ -237,7 +237,24 @@ export type BoatAccountSummary = {
   blockedReason?: string;
 };
 
+/** How the operator proves who they are on Boat's sign-in page. */
+export const BOAT_SIGN_IN_METHODS = ["github", "google"] as const;
+export type BoatSignInMethod = (typeof BOAT_SIGN_IN_METHODS)[number];
+
+export function isBoatSignInMethod(value: unknown): value is BoatSignInMethod {
+  return BOAT_SIGN_IN_METHODS.some((method) => method === value);
+}
+
+/**
+ * A browser sign-in PwrAgent is running, or why the last one failed. The
+ * code is the one Boat's page asks for; it is not a credential.
+ */
+export type BoatSignInProgress =
+  | { state: "waiting"; method: BoatSignInMethod; userCode: string; expiresAt: number }
+  | { state: "failed"; error: string };
+
 export type ConnectBoatRequest = { apiKey: string };
+export type StartBoatSignInRequest = { method: BoatSignInMethod };
 export type SetBoatSandboxPolicyRequest = { policy: Partial<BoatSandboxPolicy> };
 export type SetBoatCleanupOnPrCloseRequest = { enabled: boolean };
 export type OpenBoatLinkRequest = { target: BoatLinkTarget };
@@ -546,6 +563,10 @@ export type McpConnectionStatus = McpConnectionRecord & {
   sandboxerAccount?: SandboxerAccountSummary;
   /** The Boat account behind the stored key. Settings only, as above. */
   boatAccount?: BoatAccountSummary;
+  /** Boat only: its CLI is installed here, so browser sign-in can run. */
+  boatCliAvailable?: boolean;
+  /** Boat only: a browser sign-in in flight, or the last one's failure. */
+  boatSignIn?: BoatSignInProgress;
   /**
    * A `github` connection's account as last checked: its state, login and
    * scopes. Shown in Settings only; federation strips it, as it does the
@@ -586,6 +607,8 @@ export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpCo
   return connections.map(({
     sandboxerAccount: _account,
     boatAccount: _boatAccount,
+    boatCliAvailable: _boatCliAvailable,
+    boatSignIn: _boatSignIn,
     githubAccount: _githubAccount,
     stdio: _stdio,
     ...connection

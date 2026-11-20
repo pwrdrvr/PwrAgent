@@ -16,6 +16,7 @@ is the only holder of the Boat API key.
 | `BoatApi` | `apps/desktop/src/main/mcp-connections/boat-api.ts` | The one place the key is attached to a request |
 | `BoatTools` | `apps/desktop/src/main/mcp-connections/boat-tools.ts` | The tool list and every rule below |
 | `BoatConnection` | `apps/desktop/src/main/mcp-connections/boat-connection.ts` | Key storage, account status, one MCP server per session |
+| `BoatSignIn` | `apps/desktop/src/main/mcp-connections/boat-sign-in.ts` | Browser sign-in through Boat's CLI, in a throwaway home |
 
 A session is an MCP SDK `Server` joined to the gateway's client by
 `InMemoryTransport.createLinkedPair()`. From there Boat is an ordinary
@@ -23,11 +24,39 @@ gateway connection: thread selection, tool approval, tool search, and the
 owner broker work as they do for any other. The SDK is loaded lazily through
 `mcp-sdk.ts`, as for every owner-side use.
 
+## Signing in
+
+Boat has no OAuth for third-party apps. Its CLI has a browser sign-in and can
+create scoped, expiring API keys, so `BoatSignIn`
+(`apps/desktop/src/main/mcp-connections/boat-sign-in.ts`) drives the CLI:
+
+1. `boat login --json` answers a `login_url` event: a URL on boat.dev, a short
+   code, and an expiry. PwrAgent opens the URL and shows the code in Settings.
+2. `boat login --wait --json` returns once the operator has approved it.
+3. `boat api-key create PwrAgent --preset full-sandbox --ttl 90d --json` mints
+   the key. It is read from the CLI's output into the encrypted store.
+4. `boat logout` revokes the session the CLI opened.
+
+Every step runs with a throwaway directory as the CLI's home (`HOME`,
+`XDG_CONFIG_HOME`, `APPDATA`), deleted when the attempt ends however it ends.
+This matters because the CLI keeps its session token in a plain file
+(`~/Library/Application Support/ascii/boat/config.json` on macOS, mode `600`):
+that file exists only inside the throwaway home, between steps 2 and 4. The
+operator's own CLI login is never read or changed.
+
+Only a URL on Boat's own origin is opened. The key expires after 90 days;
+Boat then refuses it and the row asks for sign-in again. Sign-in needs the
+Boat CLI installed. Without it, Settings offers the key field alone.
+
+A launchpad tile's button opens Settings at its own row through a
+`connection:<id>` Plugins route (`features/settings/plugins-route.ts`).
+
 ## The key
 
-- The operator pastes a key in Settings → Plugins. Main checks it with
-  `GET /limits`, then stores it in the encrypted stdio secret vault under
-  `BOAT_API_KEY`. A key Boat refuses is not stored.
+- Sign-in stores the key it mints. The operator can instead paste one in
+  Settings → Plugins. Either way main checks it with `GET /limits`, then
+  stores it in the encrypted stdio secret vault under `BOAT_API_KEY`. A key
+  Boat rejects is not stored; one that is only too narrow to read limits is.
 - The key is never written to `config.toml`, returned over IPC, sent to a
   federation peer, placed in a tool result, or put in a sandbox.
 - Requests go only to Boat's fixed API address and refuse redirects.
@@ -87,5 +116,5 @@ the store calls the `thread-sandbox-record-created` and
 
 ## Not built yet
 
-`forward_port` (a localhost tunnel), workspace push and pull, browser sign-in,
-and per-sandbox cost in the thread panel. Each has a to-do card.
+`forward_port` (a localhost tunnel), workspace push and pull, and per-sandbox
+cost in the thread panel. Each has a to-do card.

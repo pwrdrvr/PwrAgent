@@ -2,6 +2,8 @@ import { ipcMain } from "electron";
 import {
   isMcpConnectionToolApproval,
   isBoatLinkTarget,
+  isBoatSignInMethod,
+  type StartBoatSignInRequest,
   isSandboxerLinkTarget,
   isSandboxerTransport,
   type ConnectBoatRequest,
@@ -77,6 +79,8 @@ import {
   MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
   MCP_CONNECTION_BOAT_CONNECT_CHANNEL,
   MCP_CONNECTION_BOAT_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
@@ -346,6 +350,26 @@ export function registerMcpConnectionIpcHandlers(
         throw new Error("Paste a Boat API key.");
       }
       const connection = await service.connectBoat(request.apiKey);
+      return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
+    async (event, request: StartBoatSignInRequest): Promise<MutateMcpConnectionResponse> => {
+      // The browser that signs in, and the key that results, are this machine's.
+      requireLocalOwner(event);
+      if (!isBoatSignInMethod(request?.method)) throw new Error("Choose how to sign in to Boat.");
+      const connection = await service.startBoatSignIn(request.method);
+      return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
+    async (event): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      const connection = await service.cancelBoatSignIn();
       return { connectionId: connection.id, connection };
     },
   );
@@ -776,6 +800,8 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_CONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_OPEN_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);

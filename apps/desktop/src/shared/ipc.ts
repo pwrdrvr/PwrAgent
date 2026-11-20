@@ -406,6 +406,8 @@ export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
   "mcp-connection:set-sandboxer-cleanup-on-pr-close";
 export const MCP_CONNECTION_BOAT_CONNECT_CHANNEL = "mcp-connection:boat-connect";
 export const MCP_CONNECTION_BOAT_OPEN_CHANNEL = "mcp-connection:boat-open";
+export const MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL = "mcp-connection:boat-sign-in";
+export const MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL = "mcp-connection:boat-sign-in-cancel";
 export const MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL =
   "mcp-connection:set-boat-sandbox-policy";
 export const MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL =

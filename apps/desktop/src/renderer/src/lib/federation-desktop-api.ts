@@ -92,6 +92,8 @@ export function scopeDesktopApiToFederationTarget(
     openSandboxerLink: undefined,
     // A Boat key is stored on the machine whose threads use it.
     connectBoat: undefined,
+    startBoatSignIn: undefined,
+    cancelBoatSignIn: undefined,
     setBoatSandboxPolicy: undefined,
     setBoatCleanupOnPrClose: undefined,
     openBoatLink: undefined,

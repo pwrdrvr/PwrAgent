@@ -326,6 +326,7 @@ import type {
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
   BoatLinkTarget,
+  BoatSignInMethod,
   ConnectBoatRequest,
   OpenBoatLinkResponse,
   SetBoatCleanupOnPrCloseRequest,
@@ -1135,6 +1136,8 @@ import {
   MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
   MCP_CONNECTION_BOAT_CONNECT_CHANNEL,
   MCP_CONNECTION_BOAT_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
@@ -1588,6 +1591,10 @@ const desktopApi = Object.freeze({
     ),
   connectBoat: async (request: ConnectBoatRequest): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_BOAT_CONNECT_CHANNEL, request),
+  startBoatSignIn: async (method: BoatSignInMethod): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL, { method }),
+  cancelBoatSignIn: async (): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL),
   setBoatSandboxPolicy: async (
     request: SetBoatSandboxPolicyRequest,
   ): Promise<MutateMcpConnectionResponse> =>

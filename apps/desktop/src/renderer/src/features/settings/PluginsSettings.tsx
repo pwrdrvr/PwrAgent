@@ -278,6 +278,8 @@ export function PluginsSettings(props: {
   desktopApi?: DesktopApi;
   /** Section the Settings nav asked to open, by `sectionId`. */
   focusSectionId?: string;
+  /** A connection whose row the route asked for: scrolled to and focused. */
+  revealConnectionId?: string;
   saving?: boolean;
   snapshot: DesktopSettingsSnapshot;
   onMcpGatewayEnabledChange: (enabled: boolean) => Promise<void>;
@@ -1302,7 +1304,9 @@ export function PluginsSettings(props: {
     if (!row) return;
     setHighlightConnectionId(revealConnectionId);
     row.scrollIntoView?.({ block: "nearest" });
-    row.querySelector<HTMLElement>("button")?.focus();
+    // The row's own next step when it marks one, else its first control.
+    (row.querySelector<HTMLElement>("[data-reveal-focus]:not(:disabled)")
+      ?? row.querySelector<HTMLElement>("button"))?.focus();
   }, [connections, revealConnectionId, storeView]);
 
   // Sandboxer's store page closes onto its row once it works, as adding
@@ -1315,6 +1319,20 @@ export function PluginsSettings(props: {
     setStoreView(undefined);
     setRevealConnectionId(sandboxerConfiguredId);
   }, [sandboxerConfiguredId, storeView]);
+
+  // A route that names a row is honored once the list has loaded, and once
+  // per route: a later reload must not pull focus back to it.
+  const routeRevealRef = useRef<string | undefined>(undefined);
+  const routeRevealConnectionId = props.revealConnectionId;
+  useEffect(() => {
+    if (!routeRevealConnectionId) {
+      routeRevealRef.current = undefined;
+      return;
+    }
+    if (connectionsLoading || routeRevealRef.current === routeRevealConnectionId) return;
+    routeRevealRef.current = routeRevealConnectionId;
+    setRevealConnectionId(routeRevealConnectionId);
+  }, [connectionsLoading, routeRevealConnectionId]);
 
   useEffect(() => {
     if (!highlightConnectionId) return;

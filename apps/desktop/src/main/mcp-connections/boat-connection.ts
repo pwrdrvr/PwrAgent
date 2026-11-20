@@ -127,10 +127,9 @@ export class BoatConnection {
       if (error instanceof BoatApiError && error.kind === "rejected") {
         throw new Error("Boat rejected that API key. Check that it was copied whole and has not expired.");
       }
-      if (error instanceof BoatApiError && error.code === "api_key_action_forbidden") {
-        throw new Error("That Boat API key is not allowed to read account limits, which PwrAgent uses to check it. Create a key that can.");
-      }
-      if (error instanceof BoatApiError && error.kind === "failed") {
+      // Boat knew the key and refused only the limits read: the key is
+      // good, and narrower than this check. It is stored.
+      if (error instanceof BoatApiError && error.kind === "failed" && error.code !== "api_key_action_forbidden") {
         throw new Error(`Boat could not check that key (${error.code ?? error.status ?? "error"}). Try again.`);
       }
       // A full plan or an outage says nothing against the key itself.
@@ -224,6 +223,12 @@ export class BoatConnection {
       if (error instanceof BoatApiError && error.kind === "rejected") {
         this.rejected = true;
         return REJECTED;
+      }
+      if (error instanceof BoatApiError && error.code === "api_key_action_forbidden") {
+        return {
+          configured: true, state: "ready",
+          detail: "Connected with an API key stored in this profile. The key cannot read account limits, so the plan is not shown here.",
+        };
       }
       if (error instanceof BoatApiError && error.kind === "limited") {
         // The key works; the account is at a limit. Threads keep list and stop.

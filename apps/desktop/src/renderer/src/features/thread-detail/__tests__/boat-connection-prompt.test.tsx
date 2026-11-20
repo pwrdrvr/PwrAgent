@@ -61,9 +61,9 @@ describe("BoatConnectionPrompt", () => {
   it("advertises Boat until a key is stored, and sends setup to Settings", async () => {
     const onOpenSettings = vi.fn();
     renderTile(listing(boat({ configured: false, enabled: false, state: "disconnected" })), { onOpenSettings });
-    fireEvent.click(await screen.findByRole("button", { name: "Set up Boat in Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connect Boat in Settings" }));
     expect(onOpenSettings).toHaveBeenCalledOnce();
-    expect(screen.getByText("Cloud Linux machines for your agent · paid service")).toBeInTheDocument();
+    expect(screen.getByText("Build and test on a cloud Linux VM · sign in to start")).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
@@ -80,7 +80,8 @@ describe("BoatConnectionPrompt", () => {
       listing(boat({ configured: false, state: "reauthorization_required" })),
       { onOpenSettings: () => undefined },
     );
-    expect(await screen.findByText("Boat rejected the stored key · reconnect in Settings")).toBeInTheDocument();
+    expect(await screen.findByText("Boat stopped accepting the stored key · sign in again")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reconnect Boat in Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
@@ -125,7 +126,7 @@ describe("BoatSetupDetail", () => {
     const input = screen.getByLabelText("Boat API key");
     expect(input).toHaveAttribute("type", "password");
     fireEvent.change(input, { target: { value: `  ${KEY}  ` } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect Boat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect with key" }));
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
     expect(connectBoat).toHaveBeenCalledExactlyOnceWith({ apiKey: KEY });
     expect(input).toHaveValue("");
@@ -137,7 +138,7 @@ describe("BoatSetupDetail", () => {
     const connectBoat = vi.fn();
     renderDetail(connectBoat);
     fireEvent.change(screen.getByLabelText("Boat API key"), { target: { value: "ghp_someOtherToken0123456789" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect Boat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect with key" }));
     expect(connectBoat).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent("That is not a Boat API key");
   });
@@ -150,12 +151,12 @@ describe("BoatSetupDetail", () => {
     fireEvent.change(screen.getByLabelText("Boat API key"), { target: { value: KEY } });
     fireEvent.keyDown(screen.getByLabelText("Boat API key"), { key: "Enter" });
     expect(await screen.findByRole("alert")).toHaveTextContent("Boat rejected that API key");
-    expect(screen.getByRole("button", { name: "Connect Boat" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Connect with key" })).toBeEnabled();
   });
 
   it("says the stored key was rejected, beside the field for a new one", () => {
     renderDetail(vi.fn(), boat({ configured: false, state: "reauthorization_required" }));
-    expect(screen.getByText(/Boat rejected the stored key/)).toBeInTheDocument();
+    expect(screen.getByText(/Boat stopped accepting the stored key/)).toBeInTheDocument();
     expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
   });
 
@@ -165,6 +166,65 @@ describe("BoatSetupDetail", () => {
     }));
     expect(screen.getByText("pro plan · 1 of 5 sandboxes running")).toBeInTheDocument();
     expect(screen.queryByLabelText("Boat API key")).not.toBeInTheDocument();
+  });
+});
+
+describe("BoatSetupDetail sign-in", () => {
+  function renderSignIn(connection: McpConnectionStatus, api: Partial<DesktopApi>) {
+    const onChanged = vi.fn();
+    render(
+      <BoatSetupDetail
+        connection={connection}
+        desktopApi={api as DesktopApi}
+        detail=""
+        disabled={false}
+        onChanged={onChanged}
+        onNotice={() => undefined}
+      />,
+    );
+    return { onChanged };
+  }
+  const signedOut = (patch: Partial<McpConnectionStatus> = {}) =>
+    boat({ configured: false, state: "disconnected", boatCliAvailable: true, ...patch });
+
+  it("leads with browser sign-in and keeps the key field behind a choice", async () => {
+    const startBoatSignIn = vi.fn(async () => ({ connectionId: BOAT_MCP_CONNECTION_ID, connection: signedOut() }));
+    const { onChanged } = renderSignIn(signedOut(), { startBoatSignIn, connectBoat: vi.fn() });
+    expect(screen.getByRole("heading", { name: "Give your agent a cloud Linux machine" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Boat API key")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with GitHub" }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    expect(startBoatSignIn).toHaveBeenCalledExactlyOnceWith("github");
+    fireEvent.click(screen.getByRole("button", { name: "Use an API key instead" }));
+    expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
+  });
+
+  it("shows the code Boat's page asks for while it waits, and a way out", async () => {
+    const cancelBoatSignIn = vi.fn(async () => ({ connectionId: BOAT_MCP_CONNECTION_ID, connection: signedOut() }));
+    renderSignIn(
+      signedOut({ boatSignIn: { state: "waiting", method: "github", userCode: "DADA-MAMA", expiresAt: 1 } }),
+      { startBoatSignIn: vi.fn(), cancelBoatSignIn },
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("DADA-MAMA");
+    expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    await waitFor(() => expect(cancelBoatSignIn).toHaveBeenCalledOnce());
+  });
+
+  it("says why a sign-in failed and offers it again", () => {
+    renderSignIn(
+      signedOut({ boatSignIn: { state: "failed", error: "Boat sign-in did not finish." } }),
+      { startBoatSignIn: vi.fn() },
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Boat sign-in did not finish.");
+    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeEnabled();
+  });
+
+  it("offers the key field at once when Boat's CLI is not installed", () => {
+    renderSignIn(signedOut({ boatCliAvailable: false }), { startBoatSignIn: vi.fn(), connectBoat: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Get the Boat CLI" })).toBeInTheDocument();
   });
 });
 

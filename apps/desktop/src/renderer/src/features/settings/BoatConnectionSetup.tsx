@@ -7,6 +7,7 @@ import {
   normalizeBoatApiKey,
   type BoatLinkTarget,
   type BoatSandboxPolicy,
+  type BoatSignInMethod,
   type BoatSandboxType,
   type McpConnectionStatus,
 } from "@pwragent/shared/contracts/mcp-connections";
@@ -86,12 +87,13 @@ function accountLine(connection: McpConnectionStatus): string | undefined {
 }
 
 /**
- * Boat's place in its Settings row: what it is and the key field until a key
- * is stored, then the account the key belongs to.
+ * Boat's place in its Settings row. Until Boat is connected: what it is, and
+ * the one step that connects it. Then the account behind the connection.
  *
- * The key is write-only here. It goes to main once, main checks it against
- * Boat and stores it encrypted, and nothing sends it back: not to this
- * window, not to an agent, not to a sandbox.
+ * The step is a browser sign-in when Boat's CLI is installed: main runs it,
+ * this window shows the code Boat's page asks for, and the key that results
+ * never comes here. Pasting a key is the other way in. That field is
+ * write-only: the key goes to main once and nothing sends it back.
  */
 export function BoatSetupDetail(props: {
   connection: McpConnectionStatus;
@@ -105,6 +107,9 @@ export function BoatSetupDetail(props: {
   const [invalid, setInvalid] = useState<string>();
   const [connecting, setConnecting] = useState(false);
   const connectingRef = useRef(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string>();
+  const [keyOpen, setKeyOpen] = useState(false);
   const errorId = useId();
   const hintId = useId();
   const connect = props.desktopApi?.connectBoat;
@@ -162,21 +167,21 @@ export function BoatSetupDetail(props: {
     );
   }
 
-  return (
+  const signIn = props.connection.boatSignIn;
+  const startSignIn = props.desktopApi?.startBoatSignIn;
+  const cancelSignIn = props.desktopApi?.cancelBoatSignIn;
+  const canSignIn = props.connection.boatCliAvailable === true && startSignIn !== undefined;
+  const begin = (method: BoatSignInMethod) => {
+    if (!startSignIn || signingIn) return;
+    setSigningIn(true);
+    setSignInError(undefined);
+    void startSignIn(method).then(
+      () => props.onChanged(),
+      (error: unknown) => setSignInError(errorText(error)),
+    ).finally(() => setSigningIn(false));
+  };
+  const keyForm = (
     <>
-      <div className="settings-sandboxer-about">
-        <p>
-          <strong>Boat</strong> runs cloud Linux machines your agent can build and test
-          on, while the thread stays on this computer. It is a separate paid service,
-          billed per second while a machine runs.
-        </p>
-        {links}
-      </div>
-      {rejected ? (
-        <p className="settings-mcp-row__error">
-          Boat rejected the stored key. Paste a new one to reconnect.
-        </p>
-      ) : null}
       <div className="settings-boat-key">
         <input
           aria-describedby={invalid ? `${errorId} ${hintId}` : hintId}
@@ -184,6 +189,8 @@ export function BoatSetupDetail(props: {
           aria-label="Boat API key"
           autoComplete="off"
           className="settings-input"
+          // The row's next step when there is no browser sign-in to offer.
+          data-reveal-focus={canSignIn ? undefined : ""}
           disabled={props.disabled || connecting || !connect}
           placeholder="boat_…"
           spellCheck={false}
@@ -206,7 +213,7 @@ export function BoatSetupDetail(props: {
           type="button"
           onClick={() => void submit()}
         >
-          {connecting ? "Checking key..." : "Connect Boat"}
+          {connecting ? "Checking key..." : "Connect with key"}
         </button>
       </div>
       {invalid ? (
@@ -218,6 +225,106 @@ export function BoatSetupDetail(props: {
         tools, never the key.
       </p>
     </>
+  );
+
+  return (
+    <div className="settings-boat-setup">
+      <div className="settings-boat-setup__pitch">
+        <h4 className="settings-boat-setup__title">
+          Give your agent a cloud Linux machine
+        </h4>
+        <p>
+          Boat starts an Ubuntu VM in seconds. Your agent builds, tests, and runs
+          the app there while the thread stays on this computer. Boat bills per
+          second while a machine runs; it is a separate paid service.
+        </p>
+        <ul className="settings-boat-setup__points">
+          <li>PwrAgent holds the sign-in. The agent gets sandbox tools, never a key.</li>
+          <li>Sandboxes start without your GitHub token, secrets, or model keys.</li>
+          <li>Agents cannot make a sandbox port public.</li>
+        </ul>
+      </div>
+      {rejected ? (
+        <p className="settings-mcp-row__error">
+          Boat stopped accepting the stored key. Keys from sign-in last 90 days.
+          Sign in again to reconnect.
+        </p>
+      ) : null}
+      {signIn?.state === "waiting" ? (
+        <div className="settings-boat-code" role="status">
+          <span className="settings-boat-code__label">
+            Enter this code on the Boat page that opened in your browser
+          </span>
+          <span className="settings-boat-code__value">{signIn.userCode}</span>
+          <span className="settings-boat-code__hint">
+            Waiting for you to approve it. PwrAgent finishes on its own.
+          </span>
+          {cancelSignIn ? (
+            <button
+              className="button button--ghost"
+              data-reveal-focus=""
+              type="button"
+              onClick={() => void cancelSignIn().then(
+                () => props.onChanged(),
+                (error: unknown) => setSignInError(errorText(error)),
+              )}
+            >
+              Cancel sign-in
+            </button>
+          ) : null}
+        </div>
+      ) : canSignIn ? (
+        <div className="settings-boat-setup__actions">
+          <button
+            className="button button--primary"
+            data-reveal-focus=""
+            disabled={props.disabled || signingIn}
+            type="button"
+            onClick={() => begin("github")}
+          >
+            {signingIn ? "Opening Boat..." : "Sign in with GitHub"}
+          </button>
+          <button
+            className="button button--secondary"
+            disabled={props.disabled || signingIn}
+            type="button"
+            onClick={() => begin("google")}
+          >
+            Sign in with Google
+          </button>
+          <span className="settings-mcp-row__state">
+            Opens boat.dev. No key to copy: PwrAgent stores a 90-day key encrypted
+            on this computer and leaves nothing in a file.
+          </span>
+        </div>
+      ) : (
+        <p className="settings-mcp-row__state">
+          Browser sign-in uses Boat&rsquo;s CLI, which is not installed on this
+          computer. Install it and come back, or connect with an API key below.
+          {" "}
+          <BoatLink desktopApi={props.desktopApi} label="Get the Boat CLI" target="docs" onNotice={props.onNotice} />
+        </p>
+      )}
+      {signInError ?? (signIn?.state === "failed" ? signIn.error : undefined) ? (
+        <p className="settings-mcp-row__error" role="alert">
+          {signInError ?? (signIn?.state === "failed" ? signIn.error : "")}
+        </p>
+      ) : null}
+      {canSignIn && signIn?.state !== "waiting" ? (
+        <>
+          <button
+            aria-expanded={keyOpen}
+            className="settings-sandboxer-link"
+            type="button"
+            onClick={() => setKeyOpen((open) => !open)}
+          >
+            {keyOpen ? "Hide API key" : "Use an API key instead"}
+          </button>
+          {keyOpen ? keyForm : null}
+        </>
+      ) : signIn?.state === "waiting" ? null : keyForm}
+      {links}
+    </div>
   );
 }
 

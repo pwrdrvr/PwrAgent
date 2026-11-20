@@ -12,7 +12,7 @@ import { SettingsSwitch } from "../settings/SettingsSwitch";
 import { PwrSuiteTile, type PwrSuiteTileLineTone } from "./PwrSuiteTile";
 import { usePwrSuiteConnectionStatus } from "./usePwrSuiteConnectionStatus";
 
-const PITCH = "Cloud Linux machines for your agent · paid service";
+const PITCH = "Build and test on a cloud Linux VM · sign in to start";
 
 function about(cleanupOnPrClose: boolean, keepCredentialsOut: boolean) {
   return {
@@ -38,10 +38,10 @@ function about(cleanupOnPrClose: boolean, keepCredentialsOut: boolean) {
 /**
  * The launchpad's Boat tile: an ad until a key is stored, then a switch.
  *
- * The key is pasted in Settings → Plugins, so every unfinished step sends
- * the operator there. Status comes from the connection list; it is read
- * again on window focus, after a failed read, and when main announces a
- * Boat change.
+ * Sign-in happens in Settings → Plugins, so every unfinished step sends the
+ * operator to Boat's row there. Status comes from the connection list; it
+ * is read again on window focus, after a failed read, and when main
+ * announces a Boat change.
  */
 export function BoatConnectionPrompt(props: {
   backend: AppServerBackendKind;
@@ -93,10 +93,12 @@ export function BoatConnectionPrompt(props: {
     [line, tone] = [readError, "error"];
   } else if (!connection) {
     // Checking; the pitch says what this is meanwhile.
+  } else if (connection.boatSignIn?.state === "waiting") {
+    [line, tone] = [`Enter ${connection.boatSignIn.userCode} on Boat’s page in your browser`, "state"];
   } else if (rejected) {
-    [line, tone] = ["Boat rejected the stored key · reconnect in Settings", "state"];
+    [line, tone] = ["Boat stopped accepting the stored key · sign in again", "state"];
   } else if (needsKey) {
-    // An ad: the pitch, and Set up.
+    // An ad: the pitch, and Connect Boat.
   } else if (!connection.enabled) {
     [line, tone] = ["Turned off for every thread", "state"];
   } else if (account?.canStart === false) {
@@ -135,12 +137,15 @@ export function BoatConnectionPrompt(props: {
   } else if (props.onOpenSettings) {
     action = (
       <button
-        aria-label="Set up Boat in Settings"
-        className="button button--secondary"
+        aria-label={rejected ? "Reconnect Boat in Settings" : "Connect Boat in Settings"}
+        // The one tile that asks for something: it reads as the next step.
+        className={"button " + (connection.enabled || needsKey ? "button--primary" : "button--secondary")}
         type="button"
         onClick={props.onOpenSettings}
       >
-        Set up
+        {connection.boatSignIn?.state === "waiting"
+          ? "Finish sign-in"
+          : rejected ? "Reconnect" : needsKey ? "Connect Boat" : "Set up"}
       </button>
     );
   }

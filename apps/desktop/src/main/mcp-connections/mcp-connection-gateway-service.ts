@@ -33,6 +33,7 @@ import { listedMcpSkills, offersMcpSkills, skillsAwareInstructions } from "./mcp
 import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import { BoatConnection, type BoatSessionScope } from "./boat-connection";
+import { BoatSignIn } from "./boat-sign-in";
 import {
   McpStdioLaunchError,
   OwnedStdioClientTransport,
@@ -72,8 +73,10 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
   BOAT_MCP_CONNECTION_ID,
+  isBoatSignInMethod,
   type BoatLinkTarget,
   type BoatSandboxPolicy,
+  type BoatSignInMethod,
   type OpenBoatLinkResponse,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
@@ -355,6 +358,8 @@ type FetchLike = (
 
 export type McpConnectionGatewayServiceOptions = {
   sandboxer?: SandboxerConnection;
+  /** Test seam: Boat's browser sign-in, which runs Boat's CLI. */
+  boatSignIn?: BoatSignIn;
   /** Test seam: the sandbox rows PwrAgent's Boat server reads and writes. */
   threadSandboxes?: Pick<ThreadSandboxStorage, "recordCreated" | "pendingForThread" | "markOutcome">;
   /**
@@ -797,6 +802,7 @@ export class McpConnectionGatewayService {
 
   private readonly sandboxer: SandboxerConnection;
   private readonly boat: BoatConnection;
+  private readonly boatSignIn: BoatSignIn;
   private readonly threadSandboxes: NonNullable<McpConnectionGatewayServiceOptions["threadSandboxes"]>;
   private readonly changeListeners = new Set<(event: McpConnectionsChangedEvent) => void>();
   private readonly stdioSecrets: McpStdioSecretVault;
@@ -898,6 +904,15 @@ export class McpConnectionGatewayService {
       // A rejected or removed key ends what every open session could do.
       this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
       this.announceChanged([BOAT_MCP_CONNECTION_ID]);
+    });
+    this.boatSignIn = options.boatSignIn ?? new BoatSignIn({
+      storeKey: async (key) => {
+        await this.closeConnectionSessions(BOAT_MCP_CONNECTION_ID);
+        await this.boat.connect(key);
+        this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
+      },
+      openExternal: this.openExternal,
+      onChanged: () => this.announceChanged([BOAT_MCP_CONNECTION_ID]),
     });
     this.stdioSpawn = options.stdioSpawn;
     this.resolveStdioSearchEnv = options.resolveStdioSearchEnv
@@ -1521,6 +1536,33 @@ export class McpConnectionGatewayService {
     return this.announced(await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID)));
   }
 
+  /**
+   * Starts a browser sign-in to Boat and opens its page. The status that
+   * comes back carries the code Boat's page asks for; the key that results
+   * goes straight to the encrypted store.
+   */
+  async startBoatSignIn(method: BoatSignInMethod): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/boat-sign-in", { method },
+      ));
+    }
+    await this.boatSignIn.start(method);
+    return this.announced(await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID)));
+  }
+
+  async cancelBoatSignIn(): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/boat-sign-in-cancel", {},
+      ));
+    }
+    await this.boatSignIn.cancel();
+    return this.announced(await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID)));
+  }
+
   /** Changes what Boat's tools may do. The next tool call reads it. */
   async setBoatSandboxPolicy(policy: Partial<BoatSandboxPolicy>): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
@@ -1640,7 +1682,7 @@ export class McpConnectionGatewayService {
       return this.announced(await this.connectionStatus(connection));
     }
     if (connection.kind === "boat") {
-      // Nothing to sign in to here: connecting is pasting a key. This is
+      // Sign-in has its own request, which names a method. This is
       // Refresh status.
       await this.boat.readStatus(true);
       return this.announced(await this.connectionStatus(connection));
@@ -1977,6 +2019,7 @@ export class McpConnectionGatewayService {
     if (connection.kind === "boat") {
       // Removes PwrAgent's copy of the key. It stays valid at Boat until the
       // operator revokes it there, and running sandboxes keep running.
+      await this.boatSignIn.cancel();
       await this.boat.disconnect();
       this.invalidateConnectionTools(connectionId);
       return this.announced(await this.connectionStatus(connection));
@@ -2505,6 +2548,7 @@ export class McpConnectionGatewayService {
   }
 
   async close(): Promise<void> {
+    await this.boatSignIn.cancel();
     this.grants.clear();
     this.relayGrantEpochs.clear();
     this.threadRegistrations.clear();
@@ -3134,9 +3178,17 @@ export class McpConnectionGatewayService {
       // As for Sandboxer: a defaults read never waits on Boat's API.
       if (cachedLocalStatus && connection.enabled) void this.boat.readStatus().catch(() => undefined);
       const status = cachedLocalStatus ? this.boat.cachedStatus() : await this.boat.readStatus();
+      const boatSignIn = this.boatSignIn.progress();
+      // Asked only while there is no key: that is when sign-in is offered.
+      // A defaults read takes the last answer instead of touching the disk.
+      const boatCliAvailable = status.configured
+        ? undefined
+        : cachedLocalStatus ? this.boatSignIn.cliAvailableCached() : await this.boatSignIn.cliAvailable();
       return {
         ...connection,
         ...status,
+        ...(boatCliAvailable === undefined ? {} : { boatCliAvailable }),
+        ...(boatSignIn ? { boatSignIn } : {}),
         discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
       };
     }
@@ -4663,6 +4715,11 @@ export class McpConnectionGatewayService {
       }
       return await this.setBoatSandboxPolicy(values.policy as Partial<BoatSandboxPolicy>);
     }
+    if (operation === "broker/boat-sign-in") {
+      if (!isBoatSignInMethod(values.method)) throw new Error("Invalid Boat sign-in request.");
+      return await this.startBoatSignIn(values.method);
+    }
+    if (operation === "broker/boat-sign-in-cancel") return await this.cancelBoatSignIn();
     if (operation === "broker/set-boat-cleanup-on-pr-close") {
       if (typeof values.enabled !== "boolean") throw new Error("Invalid Boat cleanup on PR close request.");
       return await this.setBoatCleanupOnPrClose(values.enabled);

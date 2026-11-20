@@ -320,6 +320,7 @@ import type {
   OpenPwrGitResponse,
   OpenSandboxerLinkResponse,
   BoatLinkTarget,
+  BoatSignInMethod,
   ConnectBoatRequest,
   OpenBoatLinkResponse,
   SetBoatCleanupOnPrCloseRequest,
@@ -862,6 +863,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<MutateMcpConnectionResponse>;
   /** Checks a pasted Boat API key and stores it encrypted on this machine. */
   connectBoat?: (request: ConnectBoatRequest) => Promise<MutateMcpConnectionResponse>;
+  /** Opens Boat's sign-in page; the status carries the code it asks for. */
+  startBoatSignIn?: (method: BoatSignInMethod) => Promise<MutateMcpConnectionResponse>;
+  cancelBoatSignIn?: () => Promise<MutateMcpConnectionResponse>;
   setBoatSandboxPolicy?: (
     request: SetBoatSandboxPolicyRequest,
   ) => Promise<MutateMcpConnectionResponse>;
