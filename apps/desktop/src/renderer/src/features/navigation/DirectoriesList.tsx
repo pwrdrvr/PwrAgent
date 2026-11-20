@@ -483,8 +483,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     if (!element || typeof ResizeObserver === "undefined") return undefined;
     directoryHeaderObserverRef.current ??= new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const height = entry.borderBoxSize[0]?.blockSize
-          ?? entry.target.getBoundingClientRect().height;
+        const height = entry.borderBoxSize[0]?.blockSize;
+        if (height === undefined) continue;
         (entry.target.parentElement as HTMLElement | null)?.style.setProperty(
           "--directory-row-header-height",
           `${height}px`,
@@ -495,37 +495,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     observer.observe(element);
     return () => observer.unobserve(element);
   }, []);
-  // Collapsing Directory threads from its stuck position removes every row
-  // below it. Left alone, the list would land on later projects with this
-  // one scrolled out of view, so the divider is held where it was on screen,
-  // right under its header. Collapse is applied by the owner, so this waits
-  // for the render that shows it.
-  const directoryThreadsCollapseAnchorRef = useRef<
-    { directoryKey: string; top: number; at: number } | undefined
-  >(undefined);
-  useLayoutEffect(() => {
-    const anchor = directoryThreadsCollapseAnchorRef.current;
-    const list = directoryListRef.current;
-    if (!anchor || !list) return;
-    if (Date.now() - anchor.at > DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS) {
-      directoryThreadsCollapseAnchorRef.current = undefined;
-      return;
-    }
-    const section = [...list.querySelectorAll<HTMLElement>(".directory-row")]
-      .find((element) => element.dataset.directoryKey === anchor.directoryKey);
-    const divider = section?.querySelector<HTMLElement>(".directory-row__thread-divider");
-    if (!divider || divider.getAttribute("aria-expanded") !== "false") return;
-    directoryThreadsCollapseAnchorRef.current = undefined;
-    list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
-  });
-  // Brings a project's section to the top of the lane, from its divider.
-  const scrollDirectoryToTop = (divider: HTMLElement): void => {
-    const list = directoryListRef.current;
-    const section = divider.closest<HTMLElement>(".directory-row");
-    if (!list || !section) return;
-    const offset = section.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    list.scrollTo({ top: list.scrollTop + offset, behavior: "smooth" });
-  };
 
   // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
   // Updated and Created so all of them edit the one global pin order the same way.
@@ -623,6 +592,41 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
+  // Collapsing Directory threads from its stuck position removes every row
+  // below it. Left alone, the list would land on later projects with this
+  // one scrolled out of view, so the divider is held where it was on screen,
+  // right under its header. Collapse is applied by the owner, so this waits
+  // for the render that shows it.
+  const directoryThreadsCollapseAnchorRef = useRef<
+    { directoryKey: string; top: number; at: number } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    const anchor = directoryThreadsCollapseAnchorRef.current;
+    const list = directoryListRef.current;
+    if (!anchor || !list) return;
+    if (Date.now() - anchor.at > DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS) {
+      directoryThreadsCollapseAnchorRef.current = undefined;
+      return;
+    }
+    const divider = projectHeaders.current.get(anchor.directoryKey)
+      ?.closest(".directory-row")
+      ?.querySelector<HTMLElement>(".directory-row__thread-divider");
+    if (!divider || divider.getAttribute("aria-expanded") !== "false") return;
+    directoryThreadsCollapseAnchorRef.current = undefined;
+    list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
+  });
+  // Brings a project's section to the top of the lane, from its divider.
+  const scrollDirectoryToTop = (divider: HTMLElement): void => {
+    const list = directoryListRef.current;
+    const section = divider.closest<HTMLElement>(".directory-row");
+    if (!list || !section) return;
+    const offset = section.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    list.scrollTo({ top: list.scrollTop + offset, behavior: "smooth" });
+  };
+  // A pointer press on the Directory threads bar beside its label. Only a
+  // real press sets it, so keyboard, assistive-technology, and scripted
+  // clicks (whatever their `detail` or target) always toggle.
+  const directoryDividerBarPressRef = useRef<EventTarget | undefined>(undefined);
   const handledProjectReveal = useRef<ProjectRevealRequest | undefined>(undefined);
   const [flashedProjectKey, setFlashedProjectKey] = useState<string>();
   useEffect(() => {
@@ -1982,7 +1986,21 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             directoryUnconfigured
                             || !props.onSetDirectoryThreadsCollapsed
                           }
+                          onPointerDown={(event) => {
+                            directoryDividerBarPressRef.current =
+                              event.button === 0
+                              && (event.target as Element).closest(
+                                ".directory-row__thread-divider-label",
+                              ) === null
+                                ? event.currentTarget
+                                : undefined;
+                          }}
                           onClick={(event) => {
+                            // `detail` 0 is the keyboard, even after a stray
+                            // press that never became a click.
+                            const pressedBar = event.detail > 0
+                              && directoryDividerBarPressRef.current === event.currentTarget;
+                            directoryDividerBarPressRef.current = undefined;
                             if (
                               directoryUnconfigured
                               || Date.now() - lastDirectoryThreadDropAtRef.current <
@@ -1991,15 +2009,11 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                               return;
                             }
                             // The label (chevron, name, count) toggles the
-                            // list, and so does the keyboard (`detail` 0).
-                            // The rest of the bar, the rules either side,
-                            // scrolls the project back to its top: from deep
-                            // in a long list that is the other way out.
-                            const onLabel = event.detail === 0
-                              || (event.target as Element).closest(
-                                ".directory-row__thread-divider-label",
-                              ) !== null;
-                            if (!onLabel) {
+                            // list. A pointer press on the rest of the bar,
+                            // the rules either side, scrolls the project
+                            // back to its top: from deep in a long list that
+                            // is the other way out.
+                            if (pressedBar) {
                               scrollDirectoryToTop(event.currentTarget);
                               return;
                             }

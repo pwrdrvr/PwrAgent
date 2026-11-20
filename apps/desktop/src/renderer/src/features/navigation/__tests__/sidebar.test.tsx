@@ -6535,22 +6535,92 @@ describe("Sidebar", () => {
     vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rectAt(-620));
     const divider = screen.getByRole("button", { name: "Hide directory threads for PwrAgent" });
 
+    const label = divider.querySelector<HTMLElement>(".directory-row__thread-divider-label")!;
+    const press = async (target: HTMLElement, detail = 1) => {
+      await act(async () => {
+        fireEvent.pointerDown(target, { button: 0 });
+        fireEvent.click(target, { detail });
+      });
+    };
+
     // A pointer click on the bar itself, beside the label.
-    await act(async () => {
-      fireEvent.click(divider, { detail: 1 });
-    });
+    await press(divider);
     expect(scrollTo).toHaveBeenCalledWith({ top: 200, behavior: "smooth" });
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
 
     // A pointer click on the label toggles.
-    await act(async () => {
-      fireEvent.click(divider.querySelector(".directory-row__thread-divider-label")!, { detail: 1 });
-    });
-    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledWith(
+    await press(label);
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledTimes(1);
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenLastCalledWith(
       expect.objectContaining({ key: directories[0].key }),
       true,
     );
+
+    // A click with no pointer press (assistive technology, a script) on the
+    // button itself toggles, whatever its `detail`.
+    await act(async () => {
+      fireEvent.click(divider, { detail: 1 });
+    });
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledTimes(2);
+
+    // So does the keyboard after a press that never became a click.
+    await act(async () => {
+      fireEvent.pointerDown(divider, { button: 0 });
+    });
+    await act(async () => {
+      fireEvent.click(divider, { detail: 0 });
+    });
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledTimes(3);
     expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes each project header's height for the sticky divider's offset", () => {
+    // The divider sticks at `--directory-row-header-height`. Without it, it
+    // sits at the 24px fallback and overlaps or gaps a taller header at the
+    // larger title sizes.
+    const observed: Element[] = [];
+    let notify: ResizeObserverCallback | undefined;
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        notify = callback;
+      }
+      observe(element: Element) {
+        observed.push(element);
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const { container } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          directories={directories}
+          inboxThreads={[sharedThread]}
+          loading={false}
+          creatingThread={undefined}
+          threads={[sharedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      const header = container.querySelector(".directory-row__header")!;
+      expect(observed).toContain(header);
+      act(() => {
+        notify?.(
+          [{ target: header, borderBoxSize: [{ blockSize: 31, inlineSize: 300 }] } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(
+        container.querySelector<HTMLElement>(".directory-row")!.style.getPropertyValue("--directory-row-header-height"),
+      ).toBe("31px");
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   it("puts a flat lens's load more right under its last row, inside the scrolling lane", () => {
