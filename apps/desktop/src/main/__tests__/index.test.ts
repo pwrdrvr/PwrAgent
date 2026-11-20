@@ -35,6 +35,7 @@ const registerAudioTranscriptionIpcMock = vi.fn();
 const installPermissionPolicyMock = vi.fn();
 const nativeVoiceMediaRulesFixture = { check: vi.fn(), request: vi.fn() };
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
+const pruneOperatorRequestsMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
 const closeDesktopSettingsCommandDiscoveryMock = vi.fn<() => Promise<void>>();
 const registerAgentIpcHandlersMock = vi.fn();
@@ -676,6 +677,7 @@ vi.mock("../state/app-state", () => ({
 
 vi.mock("../storage/desktop-runtime-storage", async () => ({
   ...await vi.importActual<typeof import("../storage/desktop-runtime-storage")>("../storage/desktop-runtime-storage"),
+  createThreadReviewStorage: () => ({ trackingStartedAt: () => 1 }),
   createResearchStorage: () => ({
     activeRuns: () => [],
     get: vi.fn(),
@@ -683,6 +685,10 @@ vi.mock("../storage/desktop-runtime-storage", async () => ({
     create: vi.fn(() => { throw new Error("Startup must not create research work"); }),
     append: vi.fn(() => { throw new Error("Startup has no active research runs"); }),
   }),
+}));
+
+vi.mock("../storage/desktop-operator-request-storage", () => ({
+  createOperatorRequestStorage: () => ({ prune: pruneOperatorRequestsMock }),
 }));
 
 vi.mock("../storage-maintenance", () => ({
@@ -772,6 +778,8 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     canManagePwrAgent: vi.fn(async () => false),
     prepareAgentRestartVerification: vi.fn(async () => () => {}),
     setPwrAgentStarMapHandler: setPwrAgentStarMapHandlerMock,
+    setPwrAgentThreadTodoHandler: vi.fn(),
+    listPendingServerRequests: vi.fn(() => []),
     setPwrAgentOpenAIDecisionsHandler: setPwrAgentOpenAIDecisionsHandlerMock,
     setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
     setAgentCreatedThreadObserver: vi.fn(),
@@ -917,6 +925,7 @@ describe("bootstrapApp", () => {
       ...recordCall("setInboundPreviewSink", previewSpy),
       ...recordCall("state.initialize", initializeAppStateMock),
       ...recordCall("maintenance.start", runStartupStorageMaintenanceMock),
+      ...recordCall("operatorRequests.prune", pruneOperatorRequestsMock),
       ...recordCall("navigation.start", startAppServerOwnerNavigationMock),
       ...recordCall("scheduled.start", startScheduledThreadActionServiceMock),
       ...recordCall("automations.start", startDesktopAutomationServiceMock),
@@ -934,11 +943,12 @@ describe("bootstrapApp", () => {
       || ["setBundledGitLfsAdvisory", "setNavigationDetailPendingWakesProjector", "setManagedGrokSignatureRejectionReporter",
         "setFederationMessagingPlatformStatusReader", "setInboundPreviewSink"].includes(name);
     const legacyHandlers = legacy.filter(isHandler);
-    // Preserve the recorded bindings and include the additive research tools.
-    const handlers = legacyHandlers.flatMap((name) => name === "registry.setPwrAgentOpenAIDecisionsHandler"
+    // The owner now also binds research and the To-do runtime.
+    const coreHandlers = legacyHandlers.flatMap((name) => name === "registry.setPwrAgentOpenAIDecisionsHandler"
       ? [name, "registry.setResearchHandler"] : [name]);
+    const handlers = [...coreHandlers, "registry.setPwrAgentThreadTodoHandler"];
     expect(events.filter(isHandler)).toEqual(handlers);
-    // Subscriber order is unchanged; the maintenance job waits for all bindings.
+    // Core subscribers retain their recorded order.
     const coreSubscriber = /^(maintenance|working|renderer)\.subscribe$/;
     expect(events.filter((name) => coreSubscriber.test(name)))
       .toEqual(legacy.filter((name) => coreSubscriber.test(name)));
@@ -959,7 +969,10 @@ describe("bootstrapApp", () => {
     expect(events.filter((name) => name.startsWith("registry.on"))).toEqual([
       "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",
     ]);
-    assertOwnerHooksBeforeWork(events, [...handlers, "research.subscribe"], ["maintenance.start", "navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
+    assertOwnerHooksBeforeWork(events, [...coreHandlers, "research.subscribe"], ["maintenance.start"]);
+    assertOwnerHooksBeforeWork(events, [
+      ...handlers, "research.subscribe", "threadTodos.subscribe", "operatorRequests.subscribe", "operatorRequests.prune",
+    ], ["navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
     // The unmodified boot recording exposes the ordering defect this extraction fixes.
     expect(() => assertOwnerHooksBeforeWork(legacy, legacyHandlers, ["federation.restart"]))
       .toThrow(/setMessagingArchiveCleaner/);

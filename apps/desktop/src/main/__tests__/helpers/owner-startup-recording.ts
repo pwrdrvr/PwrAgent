@@ -20,6 +20,8 @@ export function recordOwnerCalls(getter: unknown, prefix: string, names: RegExp)
           label = source.includes("interruptStartupStorageMaintenance") ? "maintenance.subscribe"
             : source.includes("handleAgentEventForWorkingState") ? "working.subscribe"
             : source.includes("research.observeStart") ? "research.subscribe"
+            : source.includes("liveFeed.handleBackendEvent") ? "threadTodos.subscribe"
+            : source.includes("this.handleEvent(event)") ? "operatorRequests.subscribe"
             : "renderer.subscribe";
         }
         records.push({ name: label, order });
