@@ -316,6 +316,11 @@ docker compose start outpost
 
 ## Full Access
 
+Execution mode controls the Codex sandbox inside the Outpost. The federation
+role controls what the gateway lets the Outpost do on other instances.
+Auto supports workspace writes on a contained Outpost and can still ask the
+operator for approval.
+
 Full Access turns run with no Codex sandbox. The model can read and change
 everything in the container: the Outpost's federation keys, its local control
 secret, the state database, the Codex home and every repository. It can
