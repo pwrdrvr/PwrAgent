@@ -90,6 +90,11 @@ export function scopeDesktopApiToFederationTarget(
     openPwrGitDownload: undefined,
     // The dashboard link signs in with the viewer's own CLI login.
     openSandboxerLink: undefined,
+    // A Boat key is stored on the machine whose threads use it.
+    connectBoat: undefined,
+    setBoatSandboxPolicy: undefined,
+    setBoatCleanupOnPrClose: undefined,
+    openBoatLink: undefined,
     // Installers download onto the viewer's machine, which is never where a
     // remote thread's tools run.
     readPwrSuiteInstaller: undefined,

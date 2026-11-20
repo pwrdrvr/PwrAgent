@@ -94,7 +94,11 @@ export class BoatConnection {
     if (!refresh && this.cached && now - this.cached.at < STATUS_CACHE_MS) return this.cached.value;
     if (this.pending) return await this.pending;
     const pending = this.probe().then((value) => {
-      const changed = JSON.stringify(this.cached?.value) !== JSON.stringify(value);
+      // The first answer is news only when a key is stored: until then every
+      // reader already shows Boat as not connected.
+      const changed = this.cached
+        ? JSON.stringify(this.cached.value) !== JSON.stringify(value)
+        : value.configured;
       this.cached = { at: this.options.now?.() ?? Date.now(), value };
       if (changed) for (const listener of this.statusListeners) listener();
       return value;

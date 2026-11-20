@@ -93,6 +93,7 @@ import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation"
 import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
+  BOAT_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
 } from "@pwragent/shared/contracts/mcp-connections";
@@ -212,6 +213,7 @@ import {
   PwrGitConnectionPrompt,
   pwrGitConnectionIds,
 } from "./PwrGitConnectionPrompt";
+import { BoatConnectionPrompt, boatConnectionIds } from "./BoatConnectionPrompt";
 import {
   SandboxerConnectionPrompt,
   sandboxerConnectionIds,
@@ -4553,8 +4555,28 @@ function LaunchpadConnectionTiles({ view, launchpad, onOpenSettings }: {
           );
         }}
       />
-      {/* A third-party service, advertised until set up. Its remote
-          owner's CLI is invisible here, so a remote thread shows none. */}
+      {/* Third-party services, advertised until set up. A remote owner's
+          key or CLI is invisible here, so a remote thread shows neither. */}
+      <BoatConnectionPrompt
+        backend={launchpad.backend}
+        desktopApi={view.desktopApi}
+        enabled={
+          launchpad.mcpConnectionIds?.includes(BOAT_MCP_CONNECTION_ID) === true
+        }
+        remote={view.activeFederationTarget !== undefined}
+        onEnabledChange={async (enabled) => {
+          await view.onUpdateLaunchpad?.(
+            launchpad.directoryKey,
+            {
+              mcpConnectionIds: boatConnectionIds(
+                launchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+        onOpenSettings={onOpenSettings}
+      />
       <SandboxerConnectionPrompt
         backend={launchpad.backend}
         desktopApi={view.desktopApi}

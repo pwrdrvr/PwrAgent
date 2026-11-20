@@ -319,6 +319,11 @@ import type {
   ConnectPwrGitResponse,
   OpenPwrGitResponse,
   OpenSandboxerLinkResponse,
+  BoatLinkTarget,
+  ConnectBoatRequest,
+  OpenBoatLinkResponse,
+  SetBoatCleanupOnPrCloseRequest,
+  SetBoatSandboxPolicyRequest,
   SandboxerLinkTarget,
   PwrGitConnectionStatus,
   OpenPwrSnapResponse,
@@ -855,6 +860,15 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setSandboxerCleanupOnPrClose?: (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  /** Checks a pasted Boat API key and stores it encrypted on this machine. */
+  connectBoat?: (request: ConnectBoatRequest) => Promise<MutateMcpConnectionResponse>;
+  setBoatSandboxPolicy?: (
+    request: SetBoatSandboxPolicyRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setBoatCleanupOnPrClose?: (
+    request: SetBoatCleanupOnPrCloseRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  openBoatLink?: (target: BoatLinkTarget) => Promise<OpenBoatLinkResponse>;
   setLinearPasteImages?: (request: SetLinearPasteImagesRequest) => Promise<void>;
   /** Images in text pasted from Linear, read through a Linear connection. */
   fetchLinearPastedImages?: (

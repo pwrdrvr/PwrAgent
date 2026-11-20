@@ -8394,7 +8394,7 @@ class DesktopAppServerService {
           if (report === "timeout") {
             return [
               "",
-              "Sandboxer cleanup by PwrAgent is still running; its result will appear in PR activity.",
+              "Sandbox cleanup by PwrAgent is still running; its result will appear in PR activity.",
             ];
           }
           return formatSandboxCleanupLines(report);

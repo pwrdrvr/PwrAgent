@@ -322,6 +322,8 @@
   --theme-swatch-tangerine-dark-sidebar: #050505;
   --theme-swatch-tangerine-dark-accent: #ff8a1f;
   --theme-swatch-tangerine-dark-text: #f7f3eb;
+  /* Behind a third-party mark published for a light page, in every theme. */
+  --brand-mark-plate: #ffffff;
   --theme-swatch-tangerine-light-app: #ffffff;
   --theme-swatch-tangerine-light-sidebar: #f7f4ef;
   --theme-swatch-tangerine-light-accent: #b74c00;
@@ -25602,6 +25604,46 @@ a.button {
   height: 40px;
   border-radius: 8px;
   box-shadow: 0 6px 16px var(--shadow-tint-medium);
+}
+
+/* A transparent, non-square mark: fitted whole onto a light plate. */
+.mcp-connection__icon--plate,
+.plugin-store__tile-icon--plate {
+  box-sizing: border-box;
+  padding: 5px;
+  background: var(--brand-mark-plate);
+  object-fit: contain;
+}
+
+.plugin-store__tile-icon--plate {
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.settings-boat-key {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-boat-key .settings-input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.settings-boat-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.settings-boat-limit {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .mcp-connection__copy {

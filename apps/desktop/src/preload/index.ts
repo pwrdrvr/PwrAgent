@@ -325,6 +325,11 @@ import type {
   SetMcpConnectionProjectToolApprovalRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  BoatLinkTarget,
+  ConnectBoatRequest,
+  OpenBoatLinkResponse,
+  SetBoatCleanupOnPrCloseRequest,
+  SetBoatSandboxPolicyRequest,
   SetLinearPasteImagesRequest,
   FetchLinearPastedImagesRequest,
   FetchLinearPastedImagesResponse,
@@ -1128,6 +1133,10 @@ import {
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_CONNECT_CHANNEL,
+  MCP_CONNECTION_BOAT_OPEN_CHANNEL,
+  MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CREATE_CHANNEL,
@@ -1577,6 +1586,18 @@ const desktopApi = Object.freeze({
       MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
       request,
     ),
+  connectBoat: async (request: ConnectBoatRequest): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_CONNECT_CHANNEL, request),
+  setBoatSandboxPolicy: async (
+    request: SetBoatSandboxPolicyRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL, request),
+  setBoatCleanupOnPrClose: async (
+    request: SetBoatCleanupOnPrCloseRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL, request),
+  openBoatLink: async (target: BoatLinkTarget): Promise<OpenBoatLinkResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_OPEN_CHANNEL, { target }),
   setLinearPasteImages: async (request: SetLinearPasteImagesRequest): Promise<void> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL, request),
   fetchLinearPastedImages: async (

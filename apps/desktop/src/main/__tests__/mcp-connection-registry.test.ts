@@ -156,6 +156,36 @@ describe("McpConnectionRegistry", () => {
     expect(registry.get("pwrgit")?.sandboxerCleanupOnPrClose).toBeUndefined();
   });
 
+  it("synthesizes Boat off, approval-gated, and held to a policy that keeps its own invariants", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("builtin:boat")).toMatchObject({
+      kind: "boat",
+      authMode: "api_key",
+      enabled: false,
+      toolApproval: "approve",
+      boatCleanupOnPrClose: true,
+      boatPolicy: {
+        keepCredentialsOut: true, defaultType: "small", defaultTtlMinutes: 60, maxType: "large", maxTtlMinutes: 480,
+      },
+    });
+    // A cap below the default pulls the default down with it.
+    expect(registry.setBoatSandboxPolicy({ defaultType: "large", maxType: "default", maxTtlMinutes: 30 }).boatPolicy)
+      .toMatchObject({ defaultType: "default", maxType: "default", defaultTtlMinutes: 30, maxTtlMinutes: 30 });
+    expect(registry.setBoatCleanupOnPrClose(false).boatCleanupOnPrClose).toBe(false);
+    const reread = new McpConnectionRegistry({ configPath: target }).get("builtin:boat");
+    expect(reread?.boatPolicy).toMatchObject({ maxType: "default", maxTtlMinutes: 30 });
+    expect(reread?.boatCleanupOnPrClose).toBe(false);
+    // A hand-written value Boat does not offer falls back; it never widens.
+    fs.writeFileSync(target, "[mcp_connections]\nboat_max_type = \"huge\"\nboat_keep_credentials_out = \"no\"\n");
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:boat")?.boatPolicy)
+      .toMatchObject({ maxType: "large", keepCredentialsOut: true });
+    // No key is ever written to the config file.
+    expect(fs.readFileSync(target, "utf8")).not.toMatch(/api_key|boat_live/);
+    // Only Boat carries the policy.
+    expect(registry.get("builtin:sandboxer")?.boatPolicy).toBeUndefined();
+  });
+
   it("marks Linear connections with the profile's pasted-image setting", () => {
     const target = configPath();
     const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "id" });
@@ -337,6 +367,7 @@ updated_at = 456
       { id: "pwrsnap", kind: "pwrsnap" },
       { id: "pwrgit", kind: "pwrgit" },
       { id: "builtin:sandboxer", kind: "sandboxer" },
+      { id: "builtin:boat", kind: "boat" },
       {
         id: "atlassian-rovo",
         kind: "remote",
@@ -350,6 +381,7 @@ updated_at = 456
       "pwrsnap",
       "pwrgit",
       "builtin:sandboxer",
+      "builtin:boat",
     ]);
     expect(fs.readFileSync(target, "utf8")).toContain("theme = \"dark\"");
   });
@@ -421,7 +453,7 @@ updated_at = 456
     });
 
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer", "acme"]);
+      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer", "builtin:boat", "acme"]);
 
     registry.setEnabled("acme", false);
 
@@ -475,7 +507,7 @@ updated_at = 456
 
     expect(registry.remove("acme")).toBe(true);
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer"]);
+      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer", "builtin:boat"]);
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 

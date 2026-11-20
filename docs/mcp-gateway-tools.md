@@ -55,8 +55,9 @@ Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
 Default and Auto access follow the connection's tool-approval policy. The
-built-in Sandboxer defaults to allowing tools: enabling and selecting remote
-compute authorizes sandbox commands, file writes and lifecycle operations.
+built-in Sandboxer and [Boat](boat-remote-compute.md) default to allowing
+tools: enabling and selecting remote compute authorizes sandbox commands, file
+writes and lifecycle operations.
 Other connections default to the server's annotation-based policy, which runs
 read-only tools without confirmation. An explicit `prompt` policy also asks
 for reads; an explicit `approve` policy allows every tool on that connection.

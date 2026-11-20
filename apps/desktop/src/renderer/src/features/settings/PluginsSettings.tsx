@@ -71,6 +71,7 @@ import {
   type ManagedMcpToolInventory,
 } from "./mcp-server-health";
 import { SettingsCopyValue } from "./SettingsCopyValue";
+import { BoatPolicyControls, BoatSetupDetail } from "./BoatConnectionSetup";
 import {
   SandboxerCompactRow,
   SandboxerDrawerDetail,
@@ -3187,6 +3188,7 @@ function ManagedMcpConnectionRow(props: {
   const toolApproval = connection.toolApproval ?? "auto";
   const sandboxer = connection.kind === "sandboxer";
   const localSandboxer = sandboxer && connection.authMode === "local_cli";
+  const boat = connection.kind === "boat";
   const [transportBusy, setTransportBusy] = useState(false);
   const stdio = connection.kind === "stdio";
   const github = connection.kind === "github";
@@ -3424,7 +3426,7 @@ function ManagedMcpConnectionRow(props: {
                   onChanged={refreshStatus}
                   onNotice={props.onNotice}
                 />
-              ) : stdio || ipc || github ? null : (
+              ) : stdio || ipc || github || boat ? null : (
                 <button
                   className="button button--secondary"
                   disabled={props.disabled}
@@ -3518,6 +3520,16 @@ function ManagedMcpConnectionRow(props: {
             connection={connection}
             desktopApi={props.desktopApi}
             detail={setup.detail}
+            onNotice={props.onNotice}
+          />
+        ) : boat ? (
+          // The key field stands where another row shows its URL.
+          <BoatSetupDetail
+            connection={connection}
+            desktopApi={props.desktopApi}
+            detail={setup.detail}
+            disabled={disabled}
+            onChanged={props.onChanged}
             onNotice={props.onNotice}
           />
         ) : (
@@ -3708,6 +3720,15 @@ function ManagedMcpConnectionRow(props: {
               </span>
             </div>
           ) : null}
+          {boat ? (
+            <BoatPolicyControls
+              connection={connection}
+              desktopApi={props.desktopApi}
+              disabled={disabled}
+              onChanged={props.onChanged}
+              onNotice={props.onNotice}
+            />
+          ) : null}
           {/*
             * A choice of three, not a switch: each mode is a different
             * question about every tool, and its line under the field says
@@ -3730,8 +3751,8 @@ function ManagedMcpConnectionRow(props: {
                   onChange={props.onToolApprovalChange}
                 />
                 <span className="settings-mcp-row__policy-hint" id={toolApprovalHintId}>
-                  {sandboxer && toolApproval === "approve"
-                    ? "Selecting Sandboxer in a conversation allows its sandbox tools, including commands and file writes. Creating or resuming starts billing."
+                  {(sandboxer || boat) && toolApproval === "approve"
+                    ? `Selecting ${connection.displayName} in a conversation allows its sandbox tools, including commands and file writes. Creating or resuming starts billing.`
                     : TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
                   {" "}Full Access threads never ask.
                 </span>

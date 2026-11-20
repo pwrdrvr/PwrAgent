@@ -1,8 +1,14 @@
 import { ipcMain } from "electron";
 import {
   isMcpConnectionToolApproval,
+  isBoatLinkTarget,
   isSandboxerLinkTarget,
   isSandboxerTransport,
+  type ConnectBoatRequest,
+  type OpenBoatLinkRequest,
+  type OpenBoatLinkResponse,
+  type SetBoatCleanupOnPrCloseRequest,
+  type SetBoatSandboxPolicyRequest,
   type AuthorizeMcpConnectionRequest,
   type AuthorizeMcpConnectionResponse,
   type CancelMcpConnectionAuthorizationRequest,
@@ -69,6 +75,10 @@ import {
   MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_CONNECT_CHANNEL,
+  MCP_CONNECTION_BOAT_OPEN_CHANNEL,
+  MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
@@ -324,6 +334,60 @@ export function registerMcpConnectionIpcHandlers(
           request.toolApproval,
         );
       return { connectionId: request.connectionId, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_CONNECT_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_CONNECT_CHANNEL,
+    async (event, request: ConnectBoatRequest): Promise<MutateMcpConnectionResponse> => {
+      // The key is stored on this machine, for this machine's threads.
+      requireLocalOwner(event);
+      if (typeof request?.apiKey !== "string" || request.apiKey.length > 1_024) {
+        throw new Error("Paste a Boat API key.");
+      }
+      const connection = await service.connectBoat(request.apiKey);
+      return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_OPEN_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_OPEN_CHANNEL,
+    async (event, request: OpenBoatLinkRequest): Promise<OpenBoatLinkResponse> => {
+      // The page opens in this machine's browser, signed in as its operator.
+      if (federationWindowTargetForWebContents(event.sender)) {
+        return {
+          opened: false,
+          error: "Open Boat from the machine that owns this window.",
+        };
+      }
+      if (!isBoatLinkTarget(request?.target)) {
+        return { opened: false, error: "Unknown Boat page." };
+      }
+      return await service.openBoatLink(request.target);
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
+    async (event, request: SetBoatSandboxPolicyRequest): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (!request?.policy || typeof request.policy !== "object" || Array.isArray(request.policy)) {
+        throw new Error("Choose Boat sandbox limits.");
+      }
+      const connection = await service.setBoatSandboxPolicy(request.policy);
+      return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
+    async (event, request: SetBoatCleanupOnPrCloseRequest): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (typeof request?.enabled !== "boolean") {
+        throw new Error("Choose whether Boat cleans up when PRs close.");
+      }
+      const connection = await service.setBoatCleanupOnPrClose(request.enabled);
+      return { connectionId: connection.id, connection };
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
@@ -710,6 +774,10 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_CONNECT_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_OPEN_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
