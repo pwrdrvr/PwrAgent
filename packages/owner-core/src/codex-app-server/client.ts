@@ -50,6 +50,7 @@ import {
   buildProviderResponseBlockEntry,
   detectProviderResponseBlock,
   formatWebSearchLabel,
+  isCodexHardwareKeyReauthenticationRequired,
   isToolManagedWorktreePath,
   navigationQueryEventRequiresRefresh,
   normalizeCodexAsyncQuestions,
@@ -124,6 +125,9 @@ import type {
   ConfigValueWriteParams as CodexConfigValueWriteParams,
   Model as CodexModel,
   ModelListParams as CodexModelListParams,
+  ModelReroutedNotification as CodexModelReroutedNotification,
+  ModelSafetyBufferingUpdatedNotification as CodexModelSafetyBufferingUpdatedNotification,
+  ModelVerificationNotification as CodexModelVerificationNotification,
   ModelListResponse as CodexModelListResponse,
   SandboxMode as CodexSandboxMode,
   SandboxPolicy as CodexSandboxPolicy,
@@ -631,6 +635,9 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "hook/completed",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
+  "model/safetyBuffering/updated",
+  "model/rerouted",
+  "model/verification",
 ]);
 const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
   "item/commandExecution/requestApproval",
@@ -1464,6 +1471,11 @@ function normalizeFailedTurnCompletedNotification(
     pickStringAllowEmpty(turnError, ["message"]) ?? guardianDenialLimitMessage,
   );
   const block = detectProviderResponseBlock(turnError);
+  // The provider's text is the instruction; the tag only lets the owner offer
+  // a fresh Codex sign-in beside it.
+  const recovery = status === "failed" && isCodexHardwareKeyReauthenticationRequired(turnError)
+    ? "codexHardwareKeySignIn" as const
+    : undefined;
   const startedAt = normalizeEpochTimestamp(
     pickNumber(turn, ["startedAt", "started_at"]),
   );
@@ -1485,9 +1497,83 @@ function normalizeFailedTurnCompletedNotification(
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
-        error: { message, ...(block ? { block } : {}) },
+        error: {
+          message,
+          ...(recovery ? { recovery } : {}),
+          ...(block ? { block } : {}),
+        },
       },
     },
+  };
+}
+
+/**
+ * Codex's model-routing notifications, aliased to PwrAgent's turn notices.
+ * Each reports something different about one turn:
+ * - `model/safetyBuffering/updated`: output is held for a safety review, or
+ *   the hold ended. `fasterModel` is only a hint; nothing switches models.
+ * - `model/rerouted`: a different model answered than the one requested.
+ * - `model/verification`: the account is asked to complete a verification.
+ * A payload without its thread, turn, or required fields is dropped rather
+ * than forwarded half-formed.
+ */
+function normalizeModelRoutingNotification(
+  method: string,
+  record: Record<string, unknown>,
+): AppServerNotification | null | undefined {
+  if (
+    method !== "model/safetyBuffering/updated"
+    && method !== "model/rerouted"
+    && method !== "model/verification"
+  ) {
+    return undefined;
+  }
+  const threadId = pickString(record, ["threadId"]);
+  const turnId = pickString(record, ["turnId"]);
+  if (!threadId || !turnId) return null;
+  if (method === "model/safetyBuffering/updated") {
+    const params = record as Partial<CodexModelSafetyBufferingUpdatedNotification>;
+    const model = typeof params.model === "string" ? params.model.trim() : "";
+    if (!model || typeof params.showBufferingUi !== "boolean") return null;
+    const fasterModel = typeof params.fasterModel === "string" ? params.fasterModel.trim() : "";
+    return {
+      method: "turn/safetyBuffering/updated",
+      params: {
+        threadId,
+        turnId,
+        model,
+        buffering: params.showBufferingUi,
+        ...(fasterModel ? { fasterModel } : {}),
+      },
+    };
+  }
+  if (method === "model/rerouted") {
+    const params = record as Partial<CodexModelReroutedNotification>;
+    const fromModel = typeof params.fromModel === "string" ? params.fromModel.trim() : "";
+    const toModel = typeof params.toModel === "string" ? params.toModel.trim() : "";
+    if (!fromModel || !toModel) return null;
+    return {
+      method: "turn/modelRerouted",
+      params: {
+        threadId,
+        turnId,
+        fromModel,
+        toModel,
+        reason: typeof params.reason === "string" ? params.reason : "",
+      },
+    };
+  }
+  const params = record as Partial<CodexModelVerificationNotification>;
+  const verifications = Array.isArray(params.verifications)
+    // Kept as strings: a newer Codex can send values this schema lacks.
+    ? [...new Set((params.verifications as unknown[]).filter(
+      (value): value is string => typeof value === "string" && value.trim() !== "",
+    ))]
+    : [];
+  if (verifications.length === 0) return null;
+  return {
+    method: "turn/verificationRequested",
+    params: { threadId, turnId, verifications },
   };
 }
 
@@ -8210,7 +8296,15 @@ export class CodexAppServerClient {
         for (const listener of this.realtimeListeners) listener(event);
         return;
       }
-      const normalized = normalizeServerNotification(
+      const modelRouting = normalizeModelRoutingNotification(method, asRecord(params) ?? {});
+      if (modelRouting === null) {
+        this.host.logger.warn("malformed codex model routing notification", {
+          method,
+          ...describePayloadShape(params),
+        });
+        return;
+      }
+      const normalized = modelRouting ?? normalizeServerNotification(
         method,
         params,
         this.liveMessagePhases,

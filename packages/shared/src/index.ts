@@ -124,7 +124,11 @@ export * from "./subagent-kind";
 export * from "./subagent-activity";
 
 export * from "./forge-product";
-export { isCodexAuthenticationFailure } from "./codex-authentication";
+export {
+  isCodexAuthenticationFailure,
+  isCodexHardwareKeyReauthenticationRequired,
+} from "./codex-authentication";
+export * from "./model-routing";
 export { isClaudeAuthenticationFailure } from "./claude-authentication";
 
 export * from "./local-model-pricing";

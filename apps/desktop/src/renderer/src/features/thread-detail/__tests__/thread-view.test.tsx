@@ -5996,6 +5996,254 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps MCP status, warning and reroute rows side by side, and keeps the warning and reroute when the turn fails", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Too many skills",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    const liveTranscriptEntries: AppServerThreadEntry[] = [];
+
+    render(
+      <ThreadView
+        activeTurnId="turn-1"
+        onLiveTranscriptEntry={(entry) => {
+          liveTranscriptEntries.push(entry);
+        }}
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Start with many skills."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    const send = async (notification: AppServerNotification) => {
+      await act(async () => {
+        agentEventHandler?.({ backend: "codex", notification });
+      });
+    };
+    await send({
+      method: "mcpServer/startupStatus/updated",
+      params: { name: "playwright", status: "ready", error: null },
+    } as AppServerNotification);
+    await send({
+      method: "warning",
+      params: { threadId: "thread-2", message: "Warning: Low disk space" },
+    } as AppServerNotification);
+    await send({
+      method: "turn/modelRerouted",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-1",
+        fromModel: "gpt-6.2-sol",
+        toModel: "gpt-6-luna",
+        reason: "highRiskCyberActivity",
+      },
+    } as AppServerNotification);
+
+    expect(screen.getByText("MCP playwright ready")).toBeInTheDocument();
+    expect(screen.getByText("Warning: Low disk space")).toBeInTheDocument();
+    expect(screen.getByText(/^Rerouted from gpt-6\.2-sol to gpt-6-luna/)).toBeInTheDocument();
+
+    await send({
+      method: "turn/failed",
+      params: { threadId: "thread-2", turnId: "turn-1" },
+    } as AppServerNotification);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(liveTranscriptEntries.map((entry) => entry.type === "activity" ? entry.summary : entry.id)).toEqual([
+      "Warning: Low disk space",
+      expect.stringMatching(/^Rerouted from gpt-6\.2-sol to gpt-6-luna/),
+    ]);
+  });
+
+  it("defers a warning that arrives in the same batch as the turn failure", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Too many skills",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    const liveTranscriptEntries: AppServerThreadEntry[] = [];
+
+    render(
+      <ThreadView
+        activeTurnId="turn-1"
+        onLiveTranscriptEntry={(entry) => {
+          liveTranscriptEntries.push(entry);
+        }}
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Start with many skills."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    // One React batch: the failure handler runs before the warning's
+    // state update commits.
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "warning",
+          params: { threadId: "thread-2", message: "Warning: Low disk space" },
+        } as AppServerNotification,
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/failed",
+          params: { threadId: "thread-2", turnId: "turn-1" },
+        } as AppServerNotification,
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(liveTranscriptEntries.map((entry) => entry.type === "activity" ? entry.summary : entry.id)).toEqual([
+      "Warning: Low disk space",
+    ]);
+    expect(screen.queryByText("Warning: Low disk space")).not.toBeInTheDocument();
+  });
+
   it("submits a non-terminal decline for an incomplete Codex approval list", async () => {
     const submitServerRequest = vi.fn(async () => ({
       backend: "codex" as const,
@@ -7834,7 +8082,7 @@ describe("ThreadView", () => {
       await waitFor(() => {
         expect(onPublished).toHaveBeenCalledWith(
           expect.objectContaining({
-            id: "live-mcp-protocol-status",
+            id: "live-mcp-protocol-status@turn-1",
             turn: expect.objectContaining({
               id: "turn-1",
               status: "completed",

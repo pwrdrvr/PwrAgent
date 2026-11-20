@@ -2259,6 +2259,49 @@ export type AppServerNotification =
     }
   | {
       /**
+       * The provider is holding this turn's output for a safety review.
+       * `buffering: false` ends the review. `fasterModel` is the provider's
+       * hint about a quicker model; it is informational and never changes the
+       * thread's model or retries the turn.
+       */
+      method: "turn/safetyBuffering/updated";
+      params: {
+        threadId: string;
+        turnId: string;
+        model: string;
+        buffering: boolean;
+        fasterModel?: string;
+      };
+    }
+  | {
+      /**
+       * The provider answered this turn with a different model than the one
+       * requested. The thread's selected model is unchanged.
+       */
+      method: "turn/modelRerouted";
+      params: {
+        threadId: string;
+        turnId: string;
+        fromModel: string;
+        toModel: string;
+        /** Provider reason id, such as `highRiskCyberActivity`. */
+        reason: string;
+      };
+    }
+  | {
+      /**
+       * The provider recommends additional account verification, such as
+       * `trustedAccessForCyber`. Nothing in the turn waits on it.
+       */
+      method: "turn/verificationRequested";
+      params: {
+        threadId: string;
+        turnId: string;
+        verifications: string[];
+      };
+    }
+  | {
+      /**
        * The model answered again after the backend reported a retry
        * (`error` with `willRetry`). ACP backends send this because their
        * first answer can be output the transcript hides, such as Grok's
@@ -2289,8 +2332,12 @@ export type AppServerNotification =
              * A way forward the client can offer.
              * `claudeSessionGone` resumes the thread in a new session.
              * `claudeSignIn` means the owner can renew the account this turn used.
+             * `codexHardwareKeySignIn` means Codex withheld the response until
+             * the account signs in again with a hardware key; the message is
+             * the provider's instruction. A later successful sign-in proves
+             * only ordinary account authentication, not the hardware key.
              */
-            recovery?: "claudeSessionGone" | "claudeSignIn";
+            recovery?: "claudeSessionGone" | "claudeSignIn" | "codexHardwareKeySignIn";
             /** Set when the provider refused the response, not a transport fault. */
             block?: ProviderResponseBlock;
           };

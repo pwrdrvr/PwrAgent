@@ -5,6 +5,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
+  CodexAuthProfileLoginDialog,
 } from "../CodexAuthProfileSelect";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 
@@ -104,5 +105,56 @@ describe("Log in to Codex profile dialog, keyboard", () => {
     pressEscape();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Login" }));
+  });
+});
+
+describe("Sign in to Codex again dialog", () => {
+  function open() {
+    const startCodexAuthProfileLogin = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/profiles/work/codex",
+      started: false,
+      authenticated: true,
+      detail: "Logged in using ChatGPT",
+    }));
+    const onCancel = vi.fn();
+    const desktopApi = {
+      startCodexAuthProfileLogin,
+      checkCodexAuthProfileStatus: vi.fn(async () => ({ authenticated: true })),
+    } as unknown as DesktopApi;
+    render(
+      <CodexAuthProfileLoginDialog
+        desktopApi={desktopApi}
+        displayName="work"
+        profile="work"
+        reauthenticate
+        onCancel={onCancel}
+      />,
+    );
+    return { startCodexAuthProfileLogin, onCancel };
+  }
+
+  it("waits for the owner, because signing in again ends the current session", async () => {
+    const { startCodexAuthProfileLogin, onCancel } = open();
+    await act(async () => undefined);
+    const dialog = screen.getByRole("dialog", { name: "Sign in to Codex again" });
+    expect(dialog).toHaveTextContent("ends the current Codex session");
+    expect(startCodexAuthProfileLogin).not.toHaveBeenCalled();
+    act(() => screen.getByRole("button", { name: "Cancel" }).click());
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(startCodexAuthProfileLogin).not.toHaveBeenCalled();
+  });
+
+  it("reports a completed sign-in as ordinary account authentication", async () => {
+    const { startCodexAuthProfileLogin } = open();
+    await act(async () => {
+      screen.getByRole("button", { name: "Sign in again" }).click();
+    });
+    expect(startCodexAuthProfileLogin).toHaveBeenCalledWith({ profile: "work" });
+    const dialog = screen.getByRole("dialog", { name: "Sign in to Codex again" });
+    expect(dialog).toHaveTextContent("work is signed in.");
+    // Codex reports no hardware-key signal for a sign-in, so none is claimed.
+    expect(dialog).not.toHaveTextContent(/hardware|security key|verified/i);
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
 });
