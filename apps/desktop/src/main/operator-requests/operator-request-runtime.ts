@@ -26,6 +26,11 @@ export function installOperatorRequestService(current: OperatorRequestService): 
   service = current;
 }
 
+export function disposeOperatorRequestService(): void {
+  service?.stop();
+  service = undefined;
+}
+
 function localService(request: OperatorQuestionThreadRequest): OperatorRequestService {
   if (!isAppServerBackendKind(request?.backend)
     || typeof request.threadId !== "string" || !request.threadId

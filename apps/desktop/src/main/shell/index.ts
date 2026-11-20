@@ -1389,11 +1389,9 @@ export function bootstrapApp(): void {
     registerAudioTranscriptionIpc(nativeVoiceBusy);
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
-    // A to-do's "Start thread on" runs through the same federation tools,
-    // with the card's origin on the started thread's prompt.
-    registerThreadTodoIpcHandlers(ownerServices.todoFederation);
+    registerThreadTodoIpcHandlers(ownerServices.queues.events);
     registerCodexEnvironmentEditorIpcHandlers();
-    registerOperatorRequestIpcHandlers();
+    registerOperatorRequestIpcHandlers(ownerServices.queues);
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
