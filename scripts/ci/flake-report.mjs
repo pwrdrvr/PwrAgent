@@ -66,7 +66,9 @@ export function parseNotRun(value) {
   return [...new Set(pairs)];
 }
 
-export function aggregateSlices({ slices, samples = 1, notRun = [], runId, attempt, sha, headSha, warnings = [] }) {
+// `lanes` lists the lanes a pull request's test plan ran for a `kind-platform`
+// pair. A lane it left out is not expected either.
+export function aggregateSlices({ slices, samples = 1, notRun = [], lanes = {}, runId, attempt, sha, headSha, warnings = [] }) {
   const inventory = expectedSlices(samples);
   const skipped = new Set(notRun);
   const byKey = new Map();
@@ -76,7 +78,10 @@ export function aggregateSlices({ slices, samples = 1, notRun = [], runId, attem
     if (byKey.has(slice.key)) throw new Error(`Duplicate slice: ${slice.key}`);
     byKey.set(slice.key, slice);
   }
-  const expected = inventory.filter((slice) => !skipped.has(`${slice.kind}-${slice.platform}`));
+  const expected = inventory.filter((slice) => {
+    const pair = `${slice.kind}-${slice.platform}`;
+    return !skipped.has(pair) && (!lanes[pair] || lanes[pair].includes(slice.lane));
+  });
   const missingSlices = expected.filter((slice) => !byKey.has(slice.key));
   const ordered = inventory.filter((slice) => byKey.has(slice.key)).map((slice) => byKey.get(slice.key));
   const failures = ordered.flatMap((slice) => slice.failures);

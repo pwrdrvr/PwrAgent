@@ -28,13 +28,13 @@ export type RecreateWorktreeParams = {
   /** Branch to put back. Undefined, or `detached`, adds a detached HEAD. */
   branch?: string;
   /** The checkpoint PwrAgent recorded when it archived this worktree. */
-  checkpoint?: { snapshotRef: string; snapshotCommit: string };
+  checkpoint?: { snapshotRef: string; snapshotCommit: string; sourceHead?: string };
   skipCheckpoint?: boolean;
   detached?: boolean;
   /** Refuse unless the branch still points here. A hibernated checkout comes
    * back only onto the commit it was saved on. */
   expectedHead?: string;
-  /** With `detached`: the commit to check out, ahead of the checkpoint's parent. */
+  /** With `detached`: explicitly choose the commit to check out. */
   startPoint?: string;
   now?: number;
 };
@@ -110,8 +110,8 @@ function parseRecords(output: string): RecordedWorktree[] {
 
 /**
  * Puts a deleted worktree back where a thread recorded it, and releases
- * Git's record of a worktree a thread is leaving. Every check runs before the
- * first write, so a refusal leaves the repository as it found it.
+ * Git's record of a worktree a thread is leaving. Preflight checks run before
+ * the first write, and a clean checkpoint is verified again after checkout.
  */
 export class WorktreeRecoveryService {
   constructor(private readonly options: { gitEnv?: NodeJS.ProcessEnv } = {}) {}
@@ -141,16 +141,17 @@ export class WorktreeRecoveryService {
       }
       mark("check-path", "done");
 
+      const ownPath = await comparablePath(worktreePath);
       const checkpoint = params.skipCheckpoint
         ? undefined
-        : await this.resolveCheckpoint(repositoryPath, worktreePath, params);
+        : await this.resolveCheckpoint(repositoryPath, new Set([worktreePath, ownPath]), params);
       mark(
         "find-checkpoint",
         checkpoint ? "done" : "skipped",
         checkpoint ? undefined : params.skipCheckpoint ? "Skipped on request." : "No checkpoint was saved.",
       );
+      const cleanCommit = checkpoint && checkpoint.base === checkpoint.commit ? checkpoint.commit : undefined;
 
-      const ownPath = await comparablePath(worktreePath);
       const recorded = await this.listRecords(repositoryPath);
       const ownRecord = (await Promise.all(recorded.map(async (record) => ({
         record, same: (await comparablePath(record.path)) === ownPath,
@@ -176,7 +177,7 @@ export class WorktreeRecoveryService {
       let startPoint: string;
       if (detached) {
         startPoint = params.startPoint
-          ?? checkpoint?.parent
+          ?? checkpoint?.base
           ?? (params.branch ? await this.resolveCommit(repositoryPath, `refs/heads/${params.branch}`) : undefined)
           ?? await this.resolveCommit(repositoryPath, "HEAD")
           ?? "HEAD";
@@ -192,6 +193,9 @@ export class WorktreeRecoveryService {
             "add-worktree",
             `${branch} moved since its checkout was hibernated. The saved changes are kept in ${checkpoint?.ref ?? "a snapshot"}.`,
           );
+        }
+        if (cleanCommit && tip !== cleanCommit) {
+          await this.assertCleanCheckpointInHistory(repositoryPath, cleanCommit, tip, branch);
         }
         const elsewhere = recorded.find((record) => record !== ownRecord && record.branch === branch);
         if (elsewhere) {
@@ -226,12 +230,24 @@ export class WorktreeRecoveryService {
         addArgs: detached ? ["--detach", worktreePath, startPoint] : [worktreePath, startPoint],
         git: (args) => this.git(repositoryPath, args),
       });
+      if (cleanCommit && !detached) {
+        try {
+          // A branch can move between preflight and Git's worktree add.
+          await this.assertCleanCheckpointInHistory(worktreePath, cleanCommit, "HEAD", startPoint);
+        } catch (error) {
+          // Let Git refuse removal if anything has already edited the new checkout.
+          await removeManagedWorktree({ worktreePath, git: (args) => this.git(repositoryPath, args) });
+          throw error;
+        }
+      }
       mark("add-worktree", "done");
 
       const warnings: string[] = [];
       let checkpointResult: Extract<RecreateThreadWorktreeResponse, { status: "recreated" }>["checkpoint"];
       if (checkpoint) {
-        const applied = await this.applyCheckpoint(worktreePath, checkpoint.commit);
+        const applied = checkpoint.base === checkpoint.commit
+          ? { restored: true, changedFileCount: 0 }
+          : await this.applyCheckpoint(worktreePath, checkpoint.commit);
         if (applied.restored) {
           mark("apply-checkpoint", "done");
         } else {
@@ -302,9 +318,9 @@ export class WorktreeRecoveryService {
 
   private async resolveCheckpoint(
     repositoryPath: string,
-    worktreePath: string,
+    worktreePaths: ReadonlySet<string>,
     params: RecreateWorktreeParams,
-  ): Promise<{ ref: string; commit: string; parent?: string } | undefined> {
+  ): Promise<{ ref: string; commit: string; base: string } | undefined> {
     if (params.checkpoint) {
       const commit = await this.resolveCommit(repositoryPath, params.checkpoint.snapshotRef);
       if (commit !== params.checkpoint.snapshotCommit) {
@@ -314,18 +330,57 @@ export class WorktreeRecoveryService {
           "The checkpoint saved when this worktree was archived is gone, so its uncommitted changes cannot come back.",
         );
       }
-      return { ref: params.checkpoint.snapshotRef, commit, parent: await this.resolveCommit(repositoryPath, `${commit}^1`) };
+      // Clean snapshots pin the saved HEAD itself. Dirty snapshots add a
+      // commit on top of it. Older records may only have the snapshot commit.
+      const base = params.checkpoint.sourceHead ?? await this.inferCheckpointBase(repositoryPath, commit, worktreePaths);
+      return { ref: params.checkpoint.snapshotRef, commit, base };
     }
     // A checkpoint written by an archive whose record was lost is still
     // found by the deterministic ref the archive names after the path.
-    for (const candidate of new Set([worktreePath, await comparablePath(worktreePath)])) {
+    for (const candidate of worktreePaths) {
       const ref = worktreeArchiveInternals.snapshotRefForBackend(params.backend, candidate);
       const commit = await this.resolveCommit(repositoryPath, ref);
       if (commit) {
-        return { ref, commit, parent: await this.resolveCommit(repositoryPath, `${commit}^1`) };
+        return { ref, commit, base: await this.inferCheckpointBase(repositoryPath, commit, worktreePaths) };
       }
     }
     return undefined;
+  }
+
+  private async inferCheckpointBase(repositoryPath: string, commit: string, worktreePaths: ReadonlySet<string>): Promise<string> {
+    // The archive writes paths as UTF-8. Read the commit without log recoding.
+    const { stdout } = await this.git(repositoryPath, ["cat-file", "commit", commit]);
+    const messageStart = stdout.indexOf("\n\n");
+    if (messageStart === -1) return commit;
+    const parents = stdout.slice(0, messageStart).split("\n").filter((line) => line.startsWith("parent "));
+    if (parents.length !== 1) return commit;
+    const parent = parents[0]!.slice("parent ".length);
+    const message = stdout.slice(messageStart + 2).trimEnd();
+    const subjectEnd = message.indexOf("\n");
+    const subjectPrefix = worktreeArchiveInternals.snapshotCommitSubjectPrefix;
+    if (subjectEnd === -1 || !message.startsWith(subjectPrefix)) return commit;
+    if (!message.slice(subjectPrefix.length, subjectEnd).includes(":")) return commit;
+
+    // A synthetic snapshot names this checkout and its single parent. Keep
+    // the pinned commit intact when those fields do not identify saved edits.
+    const body = message.slice(subjectEnd + 1);
+    for (const worktreePath of worktreePaths) {
+      const worktreeLine = `Worktree: ${worktreePath}\n`;
+      if (!body.startsWith(worktreeLine)) continue;
+      const details = body.slice(worktreeLine.length);
+      const source = details.startsWith("Branch: ") ? details.slice(details.indexOf("\n") + 1) : details;
+      if (source === `Source HEAD: ${parent}`) return parent;
+    }
+    return commit;
+  }
+
+  private async assertCleanCheckpointInHistory(cwd: string, commit: string, tip: string, branch: string): Promise<void> {
+    try {
+      await this.git(cwd, ["merge-base", "--is-ancestor", commit, tip]);
+    } catch (error) {
+      if ((error as { code?: number }).code !== 1) throw error;
+      throw new RecoveryRefusal("branch-moved", "add-worktree", `The branch ${branch} no longer contains the saved commit.`);
+    }
   }
 
   private async applyCheckpoint(

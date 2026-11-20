@@ -570,7 +570,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(completedAt(acpTurnId)).toBeGreaterThanOrEqual(beforeClose);
     });
 
-    it("keeps the shutdown deadline while an answered ACP terminal is still adopting its branch", async () => {
+    it.each(["before", "during"] as const)("keeps the shutdown deadline for an ACP terminal emitted %s shutdown", async (ingress) => {
       const registry = createRegistry();
       const internal = registry as unknown as {
         adoptThreadBranchChangeFromActiveTurn(params: { backend: AppServerBackendKind; threadId: string }): Promise<void>;
@@ -584,7 +584,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       let terminal: Promise<void> | undefined;
       vi.spyOn(internals(registry).acpBackend, "cancelRunningSession")
         .mockImplementation(async () => {
-          terminal = internals(registry).emit(acpCancelled(acpTurnId));
+          if (ingress === "during") terminal = internals(registry).emit(acpCancelled(acpTurnId));
           return true;
         });
       await runTurn(registry, "acp:grok", acpTurnId);
@@ -595,6 +595,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       vi.useFakeTimers();
       try {
         let stopped = false;
+        if (ingress === "before") terminal = internals(registry).emit(acpCancelled(acpTurnId));
         const stop = registry.stopRunningTurnsForShutdown().then(() => { stopped = true; });
         await entered;
         expect(registryModules(registry).turnState.registeredTurnCount).toBe(0);

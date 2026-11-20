@@ -22,6 +22,7 @@ const execute = promisify(execFile);
 
 async function cleanupScenario(options: {
   additionalExists: boolean; activeOwner: boolean; external: boolean; disappearsDuringArchive?: boolean;
+  stalePrimaryRegistration?: boolean;
   missingGitMarker?: "removed-with-checkout" | "marker-only" | "during-probe"; residualFile?: string; nested?: boolean;
 }) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-cleanup-presence-")));
@@ -40,34 +41,39 @@ async function cleanupScenario(options: {
     messagingStore: null, threadTitleGenerationService: null });
   let gitProbe: ReturnType<typeof vi.spyOn> | undefined;
   try {
-    await mkdir(repositoryPath);
     const git = async (args: string[]) => await execute("git", ["-C", repositoryPath, ...args]);
-    await git(["init", "-b", "main"]);
-    await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture"]);
-    for (const worktree of [primary, additional]) await git(["worktree", "add", "--detach", worktree]);
     const contents = options.residualFile ?? "unsaved work\n";
-    await writeFile(path.join(additional, "keep.txt"), contents);
-    // Git created both checkouts. Their folders and repository can disappear
-    // independently; the filesystem, not the thread's primary link, is the oracle.
-    await rm(primary, { recursive: true });
-    if (options.missingGitMarker === "removed-with-checkout") {
-      await git(["worktree", "remove", "--force", additional]);
-      await mkdir(additional);
+    // The presence matrix uses provider links for missing checkouts. The
+    // retained additional folder needs a Git-created marker for the orphan/residual checks.
+    if (options.additionalExists) {
+      await mkdir(repositoryPath);
+      await git(["init", "-b", "main"]);
+      await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture"]);
+      await git(["worktree", "add", "--detach", additional]);
+      if (options.stalePrimaryRegistration) {
+        // Delete the folder directly so Git still lists the absent checkout.
+        await git(["worktree", "add", "--detach", primary]);
+        await rm(primary, { recursive: true });
+      }
       await writeFile(path.join(additional, "keep.txt"), contents);
-    } else if (options.missingGitMarker === "marker-only") {
-      await rm(path.join(additional, ".git"));
-    } else if (options.missingGitMarker === "during-probe") {
-      const runGit = gitBoundary.runGitCommand;
-      gitProbe = vi.spyOn(gitBoundary, "runGitCommand").mockImplementation(async (cwd, args, settings) => {
-        if (cwd === additional && args[0] === "rev-parse" && args[1] === "--absolute-git-dir") {
-          await rm(path.join(additional, ".git"));
-        }
-        return await runGit(cwd, args, settings);
-      });
-    } else {
-      await rm(repositoryPath, { recursive: true });
+      if (options.missingGitMarker === "removed-with-checkout") {
+        await git(["worktree", "remove", "--force", additional]);
+        await mkdir(additional);
+        await writeFile(path.join(additional, "keep.txt"), contents);
+      } else if (options.missingGitMarker === "marker-only") {
+        await rm(path.join(additional, ".git"));
+      } else if (options.missingGitMarker === "during-probe") {
+        const runGit = gitBoundary.runGitCommand;
+        gitProbe = vi.spyOn(gitBoundary, "runGitCommand").mockImplementation(async (cwd, args, settings) => {
+          if (cwd === additional && args[0] === "rev-parse" && args[1] === "--absolute-git-dir") {
+            await rm(path.join(additional, ".git"));
+          }
+          return await runGit(cwd, args, settings);
+        });
+      } else {
+        await rm(repositoryPath, { recursive: true });
+      }
     }
-    if (!options.additionalExists) await rm(additional, { recursive: true });
     ArchiveWorktreeTransport.threads = [{ id: "owner", cwd: primary, source: "cli" },
       ...(options.activeOwner ? [{ id: "active-sibling", cwd: path.join(primary, "nested"), source: "cli" }] : [])];
     if (options.external) await store.addLinkedDirectory({ backend: "codex", threadId: "owner",
@@ -132,7 +138,7 @@ it("keeps files in a residual folder after Git removed its checkout", async () =
 });
 
 it("keeps a Git-less folder inside the repository where Git discovers the primary checkout", async () => {
-  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "marker-only", nested: true });
+  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "marker-only", nested: true, stalePrimaryRegistration: true });
 });
 
 it("reports and preserves Git-less worktree folders regardless of remaining registration", async () => {

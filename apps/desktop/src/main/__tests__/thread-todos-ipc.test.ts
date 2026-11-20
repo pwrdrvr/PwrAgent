@@ -1,12 +1,12 @@
+import { EventEmitter } from "node:events";
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import type { OwnerQueueEvents } from "../owner-queue-services";
 import type {
   ThreadTodo,
   ThreadTodoFeedDelta,
   ThreadTodoFeedSnapshot,
-  ThreadTodosChangedEvent,
 } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL, THREAD_TODOS_DELTA_EVENT_CHANNEL, THREAD_TODOS_LIST_CHANNEL,
@@ -29,15 +29,9 @@ const fixture = vi.hoisted(() => {
     localSnapshot: vi.fn(async (): Promise<ThreadTodoFeedSnapshot> => ({ epoch: "local", revision: 0, todos: [] })),
     supportsFeed: vi.fn(() => false),
     watchFeeds: vi.fn(),
-    publishDelta: vi.fn(),
-    feedDelta: undefined as ((delta: ThreadTodoFeedDelta) => void) | undefined,
     remote: vi.fn(async (_target: unknown, operation: string) => operation === "listTodos" ? { todos: [card] } : { todo: card }),
-    publish: vi.fn(),
     peerStatusListener: undefined as (() => void) | undefined,
     remoteListener: undefined as ((event: AgentEvent) => void) | undefined,
-    broadcast: undefined as ((event: ThreadTodosChangedEvent) => void) | undefined,
-    listProjects: undefined as (() => Promise<unknown[]>) | undefined,
-    loadIndex: vi.fn(),
   };
 });
 
@@ -46,35 +40,22 @@ vi.mock("electron", () => ({ ipcMain: {
   handle: (channel: string, handler: (event: unknown, request?: unknown) => Promise<unknown>) => fixture.handlers.set(channel, handler),
 } }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
-  requestThreadTodoOperation: fixture.remote, publishThreadTodosChanged: fixture.publish,
-  publishThreadTodoDelta: fixture.publishDelta, remotePeerSupportsTodoFeed: fixture.supportsFeed,
+  requestThreadTodoOperation: fixture.remote, remotePeerSupportsTodoFeed: fixture.supportsFeed,
   setTodoFeedWatches: fixture.watchFeeds,
   onPeerStatusChanged: (listener: () => void) => { fixture.peerStatusListener = listener; return () => {}; },
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
 }) }));
 vi.mock("../thread-todos/thread-todo-operations", () => ({ localThreadTodoOperations: {
   listTodos: fixture.localList, resolveTodo: fixture.localResolve, snapshotFeed: fixture.localSnapshot,
-}, listLocalTodoOwnerThreads: async () => [], readManagedTodoThreadKeys: () => new Set() }));
-vi.mock("../thread-todos/thread-todo-runtime", () => ({
-  installThreadTodoRuntime: (options: {
-    broadcast: (event: ThreadTodosChangedEvent) => void;
-    listProjects: () => Promise<unknown[]>;
-    feed: { onDelta: (delta: ThreadTodoFeedDelta) => void };
-  }) => {
-    fixture.broadcast = options.broadcast;
-    fixture.feedDelta = options.feed.onDelta;
-    fixture.listProjects = options.listProjects;
-  },
-}));
+} }));
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
-vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
-vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: () => ({}) }));
-vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: fixture.loadIndex }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
 import { registerThreadTodoIpcHandlers } from "../shell/ipc/thread-todos-ipc";
 import { mainWindowEventChannels } from "../shell/main-window-channels";
 import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../shell/window-channels";
+
+const events: OwnerQueueEvents = new EventEmitter();
 
 // The real registry, fed the channels createMainWindow registers, so a
 // window missing a channel misses its broadcasts here as it does in the app.
@@ -89,7 +70,7 @@ function registerTestWindows(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   registerTestWindows();
-  registerThreadTodoIpcHandlers();
+  registerThreadTodoIpcHandlers(events);
 });
 
 describe("owner-routed To-do IPC", () => {
@@ -142,9 +123,8 @@ describe("owner-routed To-do IPC", () => {
     });
   });
 
-  it("publishes local invalidations to federation without leaking local cards into remote windows", () => {
-    fixture.broadcast!({ backend: "codex", threadId: "local-thread", at: 2 });
-    expect(fixture.publish).toHaveBeenCalledWith({ backend: "codex", threadId: "local-thread", at: 2 });
+  it("sends local invalidations only to local windows", () => {
+    events.emit("threadTodosChanged", { backend: "codex", threadId: "local-thread", at: 2 });
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
   });
@@ -152,13 +132,13 @@ describe("owner-routed To-do IPC", () => {
   // A local provider refresh names no backend. It must not make a viewer
   // re-read its owner's cards over federation.
   it("keeps untargeted local invalidations out of remote windows", () => {
-    fixture.broadcast!({ at: 3 });
+    events.emit("threadTodosChanged", { at: 3 });
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
     expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
   });
 
-  it("serves each window its own view and sends local deltas only to the main window and federation", async () => {
+  it("serves each window its own view and sends local deltas only to the main window", async () => {
     const card: ThreadTodo = { ...fixture.card, id: "local-card" };
     const main = await fixture.handlers.get(THREAD_TODOS_SNAPSHOT_CHANNEL)!({ sender: fixture.windows[0] }) as ThreadTodoFeedSnapshot;
     expect(fixture.localSnapshot).toHaveBeenCalledOnce();
@@ -168,25 +148,11 @@ describe("owner-routed To-do IPC", () => {
     // A relayed owner's feed is followed once it acknowledges this watch.
     expect(fixture.watchFeeds).toHaveBeenLastCalledWith(["owner"]);
     const delta: ThreadTodoFeedDelta = { epoch: "local", revision: 1, backend: "codex", threadId: "thread", upserts: [card] };
-    fixture.feedDelta!(delta);
-    expect(fixture.publishDelta).toHaveBeenCalledWith(delta);
+    events.emit("threadTodoDelta", delta);
     const sent = (window: (typeof fixture.windows)[number]) => window.send.mock.calls
       .filter(([channel]) => channel === THREAD_TODOS_DELTA_EVENT_CHANNEL).map(([, payload]) => payload);
     expect(sent(fixture.windows[0]!)).toEqual([{ epoch: main.epoch, revision: main.revision + 1, upserts: [card] }]);
     expect(sent(fixture.windows[1]!)).toEqual([]);
     expect(sent(fixture.windows[2]!)).toEqual([]);
-  });
-
-  // The Directories lens can hold more projects than one navigation page.
-  // A project past the first page must still be one a card can name.
-  it("lists every local project for a card, past one navigation page", async () => {
-    const directories: NavigationDirectorySummary[] = Array.from({ length: 150 }, (_, index) => ({
-      key: `directory:${index}`, kind: "directory", label: `Project ${index}`, path: `/project/${index}`,
-      threadKeys: [], needsAttentionCount: 0,
-    }));
-    fixture.loadIndex.mockResolvedValue({ directories, threads: [] });
-    const projects = await fixture.listProjects!();
-    expect(projects).toHaveLength(150);
-    expect(projects).toContainEqual({ key: "directory:149", label: "Project 149", kind: "directory", path: "/project/149" });
   });
 });

@@ -6414,7 +6414,9 @@ describe("Sidebar", () => {
       name: "Show directory threads for PwrAgent",
     });
     expect(showDirectoryThreads).toHaveAttribute("aria-expanded", "false");
-    expect(within(showDirectoryThreads).getByText("1")).toBeInTheDocument();
+    expect(
+      showDirectoryThreads.querySelector(".directory-row__thread-divider-count"),
+    ).toHaveAttribute("data-count", "1");
     const collapsedDividerLabel = showDirectoryThreads.querySelector(
       ".directory-row__thread-divider-label",
     );
@@ -6425,6 +6427,219 @@ describe("Sidebar", () => {
     expect(collapsedDividerLabel?.children[1]).toHaveTextContent(
       "Directory threads",
     );
+  });
+
+  it("collapses directory threads from the stuck divider in place", async () => {
+    // The divider sticks under its project header while the unpinned rows
+    // scroll past. Collapsing them from there removes every row below, and
+    // the list landed on later projects with this one scrolled away. The
+    // divider stays where it was clicked, right under the header.
+    const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+    const renderSidebar = (directoryThreadsCollapsed: boolean) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[{ ...directoryWithPinnedThread, directoryThreadsCollapsed }]}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={async () => undefined}
+      />
+    );
+    const { container, rerender } = render(renderSidebar(false));
+    const list = container.querySelector<HTMLElement>(".directory-list")!;
+    let scrollTop = 900;
+    Object.defineProperty(list, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    const divider = screen.getByRole("button", {
+      name: "Hide directory threads for PwrAgent",
+    });
+    const rectAt = (top: number) => ({
+      x: 0, y: top, top, bottom: top + 24, left: 0, right: 300, width: 300, height: 24,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    // Stuck under the header when clicked; back in its place after the
+    // collapse, 400px further up, since the rows below it are gone.
+    vi.spyOn(divider, "getBoundingClientRect")
+      .mockReturnValueOnce(rectAt(26))
+      .mockReturnValue(rectAt(-374));
+
+    await clickElement(divider);
+    // The owner has not applied the collapse yet: nothing moves.
+    expect(scrollTop).toBe(900);
+
+    rerender(renderSidebar(true));
+
+    expect(screen.getByRole("button", {
+      name: "Show directory threads for PwrAgent",
+    })).toBe(divider);
+    expect(scrollTop).toBe(500);
+    // One correction per click: later renders leave the list alone.
+    rerender(renderSidebar(true));
+    expect(scrollTop).toBe(500);
+  });
+
+  it("keeps the Directory threads count open or closed, and scrolls to the start of the threads from the bar", async () => {
+    // The count showed only while closed, so the label and the rules beside
+    // it changed width on every toggle. And from deep in a long list the bar
+    // beside the label is the way back to the start of the Directory
+    // threads (not the project's top, above its pins); the label (and
+    // the keyboard) still toggles.
+    const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
+    const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+    const renderSidebar = (directoryThreadsCollapsed: boolean) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[{ ...directoryWithPinnedThread, directoryThreadsCollapsed }]}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
+      />
+    );
+    const { container, rerender } = render(renderSidebar(false));
+    const countOf = (name: string) => screen.getByRole("button", { name })
+      .querySelector(".directory-row__thread-divider-count")?.getAttribute("data-count");
+    expect(countOf("Hide directory threads for PwrAgent")).toBe("1");
+    rerender(renderSidebar(true));
+    expect(countOf("Show directory threads for PwrAgent")).toBe("1");
+    rerender(renderSidebar(false));
+
+    const list = container.querySelector<HTMLElement>(".directory-list")!;
+    const section = container.querySelector<HTMLElement>(".directory-row")!;
+    const header = section.querySelector<HTMLElement>(".directory-row__header")!;
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo as typeof list.scrollTo;
+    Object.defineProperty(list, "scrollTop", { configurable: true, value: 900 });
+    const rectAt = (top: number, height: number) => ({
+      x: 0, y: top, top, bottom: top + height, left: 0, right: 300, width: 300, height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    // The lane at y=80; the project's top far above it, its header stuck
+    // (24px) and the divider stuck under it at 104. In the flow, where it
+    // rests, the divider is 500px above the lane.
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rectAt(80, 400));
+    vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rectAt(-620, 2000));
+    vi.spyOn(header, "getBoundingClientRect").mockReturnValue(rectAt(80, 24));
+    const divider = screen.getByRole("button", { name: "Hide directory threads for PwrAgent" });
+    vi.spyOn(divider, "getBoundingClientRect").mockImplementation(() =>
+      divider.style.position === "static" ? rectAt(-500, 24) : rectAt(104, 24));
+
+    const label = divider.querySelector<HTMLElement>(".directory-row__thread-divider-label")!;
+    const press = async (target: HTMLElement, detail = 1) => {
+      await act(async () => {
+        fireEvent.pointerDown(target, { button: 0 });
+        fireEvent.click(target, { detail });
+      });
+    };
+
+    // A pointer click on the bar itself, beside the label, rests the
+    // divider right under the header: 900 + -500 - (80 + 24). It stays
+    // sticky afterwards.
+    await press(divider);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 296, behavior: "smooth" });
+    expect(divider.style.position).toBe("");
+    expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
+
+    // A pointer click on the label toggles.
+    await press(label);
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledTimes(1);
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: directories[0].key }),
+      true,
+    );
+
+    // A click with no pointer press (assistive technology, a script) on the
+    // button itself toggles, whatever its `detail`.
+    await act(async () => {
+      fireEvent.click(divider, { detail: 1 });
+    });
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledTimes(2);
+
+    // So does the keyboard after a press that never became a click.
+    await act(async () => {
+      fireEvent.pointerDown(divider, { button: 0 });
+    });
+    await act(async () => {
+      fireEvent.click(divider, { detail: 0 });
+    });
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledTimes(3);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes each project header's height for the sticky divider's offset", () => {
+    // The divider sticks at `--directory-row-header-height`. Without it, it
+    // sits at the 24px fallback and overlaps or gaps a taller header at the
+    // larger title sizes.
+    const observed: Element[] = [];
+    let notify: ResizeObserverCallback | undefined;
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        notify = callback;
+      }
+      observe(element: Element) {
+        observed.push(element);
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const { container } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          directories={directories}
+          inboxThreads={[sharedThread]}
+          loading={false}
+          creatingThread={undefined}
+          threads={[sharedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      const header = container.querySelector(".directory-row__header")!;
+      expect(observed).toContain(header);
+      act(() => {
+        notify?.(
+          [{ target: header, borderBoxSize: [{ blockSize: 31, inlineSize: 300 }] } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(
+        container.querySelector<HTMLElement>(".directory-row")!.style.getPropertyValue("--directory-row-header-height"),
+      ).toBe("31px");
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   it("puts a flat lens's load more right under its last row, inside the scrolling lane", () => {
