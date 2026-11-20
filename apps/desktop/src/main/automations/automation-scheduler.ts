@@ -102,13 +102,14 @@ export function throttleSkipMessage(droppedCount: number): string {
 // busy trigger cannot flood the run history while the operator is away.
 const DAILY_LIMIT_MARKER_PREFIX = "automation-daily-limit:";
 /**
- * The marker's count is rewritten at most this often. The first skip of a
- * pause is written at once; later ones wait in memory. A channel flooding a
- * paused automation then costs at most one commit a minute (~47 MB/day at
+ * A skip marker's count is rewritten at most this often. This covers the
+ * daily-limit marker and the hourly throttle marker. The first skip onto a
+ * marker is written at once; later ones wait in memory. A channel flooding an
+ * automation then costs at most one commit a minute per marker (~47 MB/day at
  * the measured ~33 KB a commit) instead of one per message. A crash loses
  * only the count of the last minute's skips.
  */
-export const DAILY_LIMIT_MARKER_FLUSH_MS = 60 * 1000;
+export const SKIP_MARKER_FLUSH_MS = 60 * 1000;
 
 function dailyLimitMarkerId(automationId: string, pausedAt: number): string {
   return `${DAILY_LIMIT_MARKER_PREFIX}${automationId}:${pausedAt}`;
@@ -128,6 +129,14 @@ export function runTimeoutMessage(timeoutMs: number): string {
   return `Timed out: the run passed its ${span} limit and was stopped.`;
 }
 
+/** A skip marker's count that has not been written yet. */
+type PendingSkipCount = {
+  count: number;
+  skipReason: AutomationRunSkipReason;
+  message: (count: number) => string;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -146,11 +155,7 @@ export class AutomationScheduler {
    */
   private readonly startingPendingRunIds = new Set<string>();
   /** Skip counts waiting for their marker's next write, by marker run id. */
-  private readonly pendingSkipCounts = new Map<string, {
-    count: number;
-    limit: number | undefined;
-    timer?: ReturnType<typeof setTimeout>;
-  }>();
+  private readonly pendingSkipCounts = new Map<string, PendingSkipCount>();
   /** Timeout timers of runs this process started, by run id. */
   private readonly runTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -508,12 +513,6 @@ export class AutomationScheduler {
     source: AutomationRunSourceMetadata,
     now: number,
   ): void {
-    automationSchedulerLog.info("inbound automation run throttled by rate limit", {
-      automationId: automation.id,
-      automationName: automation.name,
-      maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
-    });
-
     // Coalesce every drop in this wall-clock hour onto one deterministic marker,
     // found by primary key (no scan). A bounded count — not a per-message key
     // list — records the size of the drop. The provider adapters already ack and
@@ -521,31 +520,33 @@ export class AutomationScheduler {
     // scheduler and no per-drop idempotency is needed here.
     const markerId = throttleMarkerId(automation.id, now);
     const existing = this.options.store.getRun(markerId);
-    const droppedCount = (existing?.coalescedCount ?? 0) + 1;
+    // The hour's first drop is logged at info; a flood's later drops at debug.
+    const throttled = {
+      automationId: automation.id,
+      automationName: automation.name,
+      maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
+    };
     if (existing) {
-      this.options.store.coalesceRateLimitedRun({
-        runId: markerId,
-        coalescedCount: droppedCount,
-        errorMessage: throttleSkipMessage(droppedCount),
+      automationSchedulerLog.debug("inbound automation run throttled by rate limit", throttled);
+      this.coalesceSkipOntoMarker(existing, {
+        skipReason: "rate_limited",
+        message: throttleSkipMessage,
         now,
       });
       return;
     }
-    const created = this.options.store.createRun({
+    automationSchedulerLog.info("inbound automation run throttled by rate limit", throttled);
+    // One commit: the marker is created already skipped.
+    this.options.store.createRun({
       id: markerId,
       automationId: automation.id,
       trigger: "inbound_message",
-      source,
-      now,
-    });
-    if (!created) return;
-    this.options.store.markRunTerminal({
-      runId: markerId,
       status: "skipped",
       skipReason: "rate_limited",
-      errorMessage: throttleSkipMessage(droppedCount),
+      source,
       completedAt: now,
-      coalescedCount: droppedCount,
+      coalescedCount: 1,
+      errorMessage: throttleSkipMessage(1),
       now,
     });
   }
@@ -1027,20 +1028,12 @@ export class AutomationScheduler {
     const markerId = dailyLimitMarkerId(automation.id, automation.pausedAt ?? now);
     const existing = this.options.store.getRun(markerId);
     if (existing) {
-      const pending = this.pendingSkipCounts.get(markerId);
-      const count = (pending?.count ?? existing.coalescedCount ?? 1) + 1;
-      const writtenAt = existing.completedAt ?? now;
-      if (Math.abs(now - writtenAt) >= DAILY_LIMIT_MARKER_FLUSH_MS) {
-        if (pending?.timer) this.clearTimer(pending.timer);
-        this.pendingSkipCounts.set(markerId, { count, limit: automation.dailyRunLimit });
-        return this.flushSkipCount(markerId, now) ?? existing;
-      }
-      const timer = pending?.timer ?? this.setTimer(() => {
-        this.flushSkipCount(markerId, this.now());
-      }, Math.max(0, writtenAt + DAILY_LIMIT_MARKER_FLUSH_MS - now));
-      timer.unref?.();
-      this.pendingSkipCounts.set(markerId, { count, limit: automation.dailyRunLimit, timer });
-      return existing;
+      const limit = automation.dailyRunLimit;
+      return this.coalesceSkipOntoMarker(existing, {
+        skipReason: "daily_limit",
+        message: (count) => dailyLimitSkipMessage(limit, count),
+        now,
+      });
     }
     return this.options.store.createRun({
       id: markerId,
@@ -1057,6 +1050,47 @@ export class AutomationScheduler {
     });
   }
 
+  /**
+   * Add one skip to a marker that already exists. The count is written at once
+   * when the marker was last written at least SKIP_MARKER_FLUSH_MS ago;
+   * otherwise it waits in memory for one timer that writes the whole window's
+   * count.
+   */
+  private coalesceSkipOntoMarker(
+    marker: AutomationRunSummary,
+    params: {
+      skipReason: AutomationRunSkipReason;
+      message: (count: number) => string;
+      now: number;
+    },
+  ): AutomationRunSummary {
+    const { now } = params;
+    const markerId = marker.id;
+    const pending = this.pendingSkipCounts.get(markerId);
+    const count = (pending?.count ?? marker.coalescedCount ?? 1) + 1;
+    const writtenAt = marker.completedAt ?? now;
+    if (Math.abs(now - writtenAt) >= SKIP_MARKER_FLUSH_MS) {
+      if (pending?.timer) this.clearTimer(pending.timer);
+      this.pendingSkipCounts.set(markerId, {
+        count,
+        skipReason: params.skipReason,
+        message: params.message,
+      });
+      return this.flushSkipCount(markerId, now) ?? marker;
+    }
+    const timer = pending?.timer ?? this.setTimer(() => {
+      this.flushSkipCount(markerId, this.now());
+    }, Math.max(0, writtenAt + SKIP_MARKER_FLUSH_MS - now));
+    timer.unref?.();
+    this.pendingSkipCounts.set(markerId, {
+      count,
+      skipReason: params.skipReason,
+      message: params.message,
+      timer,
+    });
+    return marker;
+  }
+
   private flushSkipCount(markerId: string, now: number): AutomationRunSummary | undefined {
     const pending = this.pendingSkipCounts.get(markerId);
     if (!pending) return undefined;
@@ -1065,8 +1099,8 @@ export class AutomationScheduler {
     return this.options.store.coalesceRateLimitedRun({
       runId: markerId,
       coalescedCount: pending.count,
-      errorMessage: dailyLimitSkipMessage(pending.limit, pending.count),
-      skipReason: "daily_limit",
+      errorMessage: pending.message(pending.count),
+      skipReason: pending.skipReason,
       now,
     });
   }

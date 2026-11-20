@@ -1251,10 +1251,13 @@ describe("AutomationScheduler", () => {
 
     const runs = store.listRunsForAutomation("automation-rl");
     const skipped = runs.filter((run) => run.status === "skipped");
-    // The four drops collapse onto a single throttle marker carrying the count.
+    // The four drops collapse onto a single throttle marker. Its first drop is
+    // written at once; the rest of the minute's count waits in memory.
     expect(skipped).toHaveLength(1);
     expect(skipped[0]?.skipReason).toBe("rate_limited");
-    expect(skipped[0]?.coalescedCount).toBe(4);
+    expect(skipped[0]?.coalescedCount).toBe(1);
+    scheduler.stop();
+    expect(store.getRun(skipped[0]!.id)?.coalescedCount).toBe(4);
     // Exactly one started run plus the single throttle marker.
     expect(runs).toHaveLength(2);
   });
@@ -1311,6 +1314,7 @@ describe("AutomationScheduler", () => {
     // one just because the finished real run is now the newest row.
     now = 3_000;
     await scheduler.runFromInboundEvent({ automation, source: src("drop-2"), now });
+    scheduler.stop();
     const skipped = store
       .listRunsForAutomation("automation-rl")
       .filter((run) => run.status === "skipped");
