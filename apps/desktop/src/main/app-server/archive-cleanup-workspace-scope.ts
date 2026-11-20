@@ -32,8 +32,10 @@ export class ArchiveWorkspaceOwnership {
 
   constructor(private readonly admissions: () => Iterable<ArchiveWorkspaceAdmission>) {}
 
-  beginAdmission(admission: ArchiveWorkspaceAdmission): void {
-    for (const key of this.writers.keys()) admission.invalidateOwnership(key);
+  beginAdmission(admission: ArchiveWorkspaceAdmission, admittingWrite?: string): void {
+    for (const key of this.writers.keys()) {
+      if (key !== admittingWrite) admission.invalidateOwnership(key);
+    }
   }
 
   isControlled(key: string): boolean {

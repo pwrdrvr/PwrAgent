@@ -41,6 +41,10 @@ type ArchiveWorktreeParams = {
   maxSnapshotBytes?: number;
   /** Returns a synchronous admission check for the actual removal dispatch. */
   beforeRemove?: () => Promise<() => void>;
+  /** Revalidate the checkout and its Git admin directory at removal. */
+  verifyCheckoutIdentity?: boolean;
+  /** Keep the previous snapshot ref if admission refuses to remove this checkout. */
+  rollbackSnapshotOnRefusal?: boolean;
   /** A retry must address the same Git registration and directories. */
   expectedCheckout?: CheckoutIdentity;
   onCheckoutVerified?: (checkout: CheckoutIdentity) => void;
@@ -455,7 +459,7 @@ export class WorktreeArchiveService {
       checkoutIdentity: await worktreeDirectoryIdentity(worktreePath),
       gitDirectoryIdentity: await worktreeDirectoryIdentity(gitDirectory),
     });
-    const checkout = params.onCheckoutVerified || params.expectedCheckout ? await readIdentity() : undefined;
+    const checkout = params.verifyCheckoutIdentity || params.onCheckoutVerified || params.expectedCheckout ? await readIdentity() : undefined;
     const changedCheckout = () => new Error("The Git checkout changed during archive cleanup; the worktree was kept.");
     if (params.expectedCheckout && (!checkout || !sameRegisteredWorktree(params.expectedCheckout, checkout))) {
       throw changedCheckout();
@@ -484,7 +488,8 @@ export class WorktreeArchiveService {
       capSnapshotBytes: hibernation?.capSnapshotBytes,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
-    const previousRef = hibernation ? await this.readRef(repositoryPath, snapshotRef) : undefined;
+    const rollbackSnapshotOnRefusal = hibernation || params.rollbackSnapshotOnRefusal;
+    const previousRef = rollbackSnapshotOnRefusal ? await this.readRef(repositoryPath, snapshotRef) : undefined;
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
     let removalStarted = false;
     let assertRemoval: (() => void) | undefined;
@@ -501,7 +506,7 @@ export class WorktreeArchiveService {
     } catch (error) {
       // Nothing was removed. Put back the snapshot an earlier archive or
       // hibernation left under this per-path ref.
-      if (hibernation) await this.resetRef(repositoryPath, snapshotRef, snapshotCommit, previousRef).catch(() => {});
+      if (rollbackSnapshotOnRefusal) await this.resetRef(repositoryPath, snapshotRef, snapshotCommit, previousRef).catch(() => {});
       throw error;
     }
     try {
@@ -514,11 +519,10 @@ export class WorktreeArchiveService {
         onStage: params.onStage,
         onRemovalStarted: () => { removalStarted = true; params.onStage?.("removing"); } });
     } catch (error) {
-      if (!hibernation) throw error;
-      if (!removalStarted) {
+      if (!removalStarted && rollbackSnapshotOnRefusal) {
         await this.resetRef(repositoryPath, snapshotRef, snapshotCommit, previousRef).catch(() => {});
-        throw error;
       }
+      if (!hibernation || !removalStarted) throw error;
       // A removal that stopped partway (Windows can hold files open) may have
       // already deleted work. Keep the checkout only while it is intact;
       // otherwise record the snapshot so the missing-checkout card can
