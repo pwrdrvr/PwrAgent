@@ -423,6 +423,8 @@ type SidebarProps = {
   ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenThreadSearch?: () => void;
+  /** ⌘K's "search all": run this query in the search screen. */
+  onSearchAllThreads?: (query: string) => void;
   /** Quick-jump popup (⌘F while the sidebar is focused), owned by App. */
   threadJumpOpen?: boolean;
   onThreadJumpOpenChange?: (open: boolean) => void;
@@ -756,6 +758,7 @@ export function Sidebar(props: SidebarProps) {
     onForkThread: useStableRowCallback(props.onForkThread),
     onOpenAutomations: useStableRowCallback(props.onOpenAutomations),
     onOpenThreadSearch: useStableRowCallback(props.onOpenThreadSearch),
+    onSearchAllThreads: useStableRowCallback(props.onSearchAllThreads),
     onOpenLaunchpad: useEventCallback(props.onOpenLaunchpad),
     onOpenSettings: useStableRowCallback(props.onOpenSettings),
     onOpenUsageActivity: useStableRowCallback(props.onOpenUsageActivity),
@@ -3441,6 +3444,7 @@ function SidebarContent(props: SidebarProps) {
               setJumpedThread(thread);
               props.onJumpToRemoteThread?.(thread);
             } : undefined}
+            onSearchAllThreads={props.onSearchAllThreads}
             onClose={() => props.onThreadJumpOpenChange?.(false)}
           />
         ) : null}
