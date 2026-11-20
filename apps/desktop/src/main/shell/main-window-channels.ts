@@ -1,4 +1,4 @@
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
   AGENT_EVENT_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,

@@ -2,8 +2,8 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadEntry,
   AppServerThreadMessage,
-} from "@pwragent/shared";
-import { turnUsageEntryTurnId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { isTurnAnswer, lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
 import {
   addTranscriptReviewSegmentToIndex,

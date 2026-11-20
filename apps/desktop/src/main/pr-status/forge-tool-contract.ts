@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, ForgeKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ForgeKind } from "@pwragent/shared/forge-product";
 
 export const FORGE_READ_OPERATIONS = ["get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job", "read_ci_job_log", "get_commit_checks", "list_ci_artifacts", "download_ci_artifact"] as const;
 export type ForgeReadOperation = typeof FORGE_READ_OPERATIONS[number];

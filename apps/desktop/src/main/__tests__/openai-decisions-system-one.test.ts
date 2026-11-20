@@ -2,7 +2,8 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesktopDecisionModelSettings, ThreadUsageLineRecord } from "@pwragent/shared";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { OpenAIDecisionQuestion } from "@pwragent/shared/openai-decisions";
 import {
   readSystemOneTarget,

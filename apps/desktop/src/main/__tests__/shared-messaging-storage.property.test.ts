@@ -1,7 +1,11 @@
 import { createHmac } from "node:crypto";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { MessagingActivityEntry, MessagingChannelKind, MessagingPairingEntry } from "@pwragent/shared";
+import type {
+  MessagingActivityEntry,
+  MessagingChannelKind,
+  MessagingPairingEntry,
+} from "@pwragent/shared/contracts/messaging";
 import { MessagingPairingStore as SharedPairing } from "@pwragent/sqlite-storage/messaging-pairing-store";
 import { MessagingActivityLog as SharedActivity } from "@pwragent/sqlite-storage/messaging-activity-log";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";

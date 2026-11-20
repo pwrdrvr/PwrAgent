@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { resolvePrRollup } from "../pr-rollup";
 import { build, modelOrder, specArb } from "./pr-rollup-order-model";
 

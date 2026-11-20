@@ -6,7 +6,7 @@ import type {
   FederationActivitySeries,
   FederationActivitySnapshot,
   FederationProtocolEnvelope,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 
 const SECOND = 1_000;
 const HOUR = 3_600;

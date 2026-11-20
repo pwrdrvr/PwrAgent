@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import type {
   PendingLaunchpadCreation,

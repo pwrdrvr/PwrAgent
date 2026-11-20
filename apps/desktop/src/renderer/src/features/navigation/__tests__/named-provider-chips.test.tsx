@@ -2,11 +2,8 @@ import "@testing-library/jest-dom/vitest";
 import type { ReactNode } from "react";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  codexModelProviderLabels,
-  type NavigationThreadSummary,
-  type ProviderPickerBackend,
-} from "@pwragent/shared";
+import { codexModelProviderLabels, type ProviderPickerBackend } from "@pwragent/shared/provider-picker";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadRow } from "../ThreadRow";
 import { ThreadHeader } from "../../thread-detail/ThreadHeader";
 import { ThreadProvidersContext } from "../provider-chip-visibility";

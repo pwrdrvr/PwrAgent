@@ -8,14 +8,14 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AgentEvent,
-  AppServerThreadReplay,
   FederationCapability,
   FederationProtocolEnvelope,
   FederationRemoteTarget,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   resetDesktopOverlayStoreForTests,

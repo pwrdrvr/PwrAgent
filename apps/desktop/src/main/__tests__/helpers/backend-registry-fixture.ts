@@ -1,7 +1,7 @@
 import { createDesktopBackendRegistry, registryModules } from "../../app-server/backend-registry-wiring";
 import { getOwnerHostServices, installOwnerHostServices } from "../../owner-host";
 import { isolatedGitKeys, isolateProcessGitEnvironment } from "../helpers/isolated-git";
-import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import { ThreadCorrespondenceStore } from "../../app-server/thread-correspondence-store";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -18,16 +18,12 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import {
-  applyNavigationLaunchpadDefaultsPatch,
-  buildFederatedThreadRef,
-  buildNavigationSnapshot,
-  resolveHelperModel,
-  type HelperModelId,
-} from "@pwragent/shared";
+import { applyNavigationLaunchpadDefaultsPatch } from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
+import { resolveHelperModel, type HelperModelId } from "@pwragent/shared/helper-models";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerAvailableCommandSummary,
@@ -39,25 +35,31 @@ import type {
   AppServerThreadSummary,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
+  ThreadToolAccounting,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   BackendAccountSummary,
   BackendAcpRuntimeCapabilities,
   BackendAcpSessionRuntimeState,
   BackendModelOption,
   BackendRateLimitSummary,
-  CodexThreadEnvironmentRuntime,
-  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/backend";
+import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  ThreadOverlayState,
+  ThreadSubAgentSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type {
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
-  ThreadOverlayState,
-  ThreadPullRequestWatchSummary,
-  ThreadSubAgentSummary,
-  ThreadToolAccounting,
-  ThreadSpendAlert,
-  ThreadUsageLineRecord,
-  WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import type { ThreadSpendAlert, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type {
   ThreadForkParams as CodexThreadForkParams,
@@ -1506,7 +1508,7 @@ export function createOverlayStoreMock(params?: {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      pr: import("@pwragent/shared").PrSummary;
+      pr: import("@pwragent/shared/contracts/navigation").PrSummary;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1568,7 +1570,7 @@ export function createOverlayStoreMock(params?: {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      transition: import("@pwragent/shared").ThreadPermissionTransition;
+      transition: import("@pwragent/shared/contracts/navigation").ThreadPermissionTransition;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1597,7 +1599,7 @@ export function createOverlayStoreMock(params?: {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      transition: import("@pwragent/shared").ThreadMessagingBindingTransition;
+      transition: import("@pwragent/shared/contracts/navigation").ThreadMessagingBindingTransition;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1626,7 +1628,7 @@ export function createOverlayStoreMock(params?: {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      failure: import("@pwragent/shared").ThreadTurnFailure;
+      failure: import("@pwragent/shared/contracts/navigation").ThreadTurnFailure;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1660,7 +1662,7 @@ export function createOverlayStoreMock(params?: {
       threadId: string;
       turnId: string;
       recovery: NonNullable<
-        import("@pwragent/shared").ThreadTurnFailure["codexInvalidIdRecovery"]
+        import("@pwragent/shared/contracts/navigation").ThreadTurnFailure["codexInvalidIdRecovery"]
       >;
     }) => {
       const key = `codex:${threadId}`;

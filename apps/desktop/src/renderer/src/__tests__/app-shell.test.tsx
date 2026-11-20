@@ -15,23 +15,26 @@ import {
   waitFor,
   within
 } from "../test/phase-probes";
-import { resolveNewThreadBackend } from "@pwragent/shared";
+import { resolveNewThreadBackend } from "@pwragent/shared/backend-selection";
 import type {
   AgentEvent,
-  AppServerBackendKind,
-  BackendSummary,
-  CreateScheduledThreadActionRequest,
+  EnsureDirectoryLaunchpadRequest,
+  StartTurnRequest,
+  StartTurnResponse,
+} from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CreateScheduledThreadActionRequest } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
-  EnsureDirectoryLaunchpadRequest,
-  FederationPeerSummary,
-  FederationTarget,
+} from "@pwragent/shared/contracts/settings";
+import type { FederationPeerSummary, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
   NavigationSnapshot,
   NavigationLaunchpadDraft,
   NavigationSelectedDetailRequest,
-  StartTurnRequest,
-  StartTurnResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   App,
@@ -405,7 +408,7 @@ describe("App", () => {
 
   it("names approval notices for threads outside the loaded navigation page and refreshes late titles", async () => {
     let title: string | undefined;
-    let changed: ((event: import("@pwragent/shared").OperatorRequestsChangedEvent) => void) | undefined;
+    let changed: ((event: import("@pwragent/shared/contracts/operator-requests").OperatorRequestsChangedEvent) => void) | undefined;
     const listOperatorRequests = vi.fn(async () => ({
       serverRequests: [{ backend: "codex" as const, createdAt: 1_000, threadTitle: title,
         notification: { method: "item/commandExecution/requestApproval" as const,

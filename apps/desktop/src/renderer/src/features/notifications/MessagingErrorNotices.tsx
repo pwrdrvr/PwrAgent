@@ -3,7 +3,7 @@ import type {
   MessagingChannelKind,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";

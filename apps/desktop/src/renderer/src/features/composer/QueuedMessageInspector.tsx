@@ -1,5 +1,5 @@
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useId, useState } from "react";
-import type { ReadQueuedTurnResponse } from "@pwragent/shared";
+import type { ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { GripVerticalIcon, PauseIcon } from "../../icons";

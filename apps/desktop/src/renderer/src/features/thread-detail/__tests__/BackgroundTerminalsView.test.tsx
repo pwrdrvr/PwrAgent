@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { CodexEnvironmentActionRun } from "@pwragent/shared";
+import type { CodexEnvironmentActionRun } from "@pwragent/shared/contracts/normalized-app-server";
 import { copyText } from "../../../lib/copy-text";
 import { agentCommandDirectoryLabel, agentCommandPreview } from "../BackgroundTerminalsView";
 import { ActionRunsPanel } from "../context-panels/ActionRunsPanel";

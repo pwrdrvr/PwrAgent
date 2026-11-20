@@ -1,5 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import type { AppServerSkillSummary, AppServerThreadEntry } from "@pwragent/shared";
+import type {
+  AppServerSkillSummary,
+  AppServerThreadEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { formatActivityText } from "../activity-path-display";

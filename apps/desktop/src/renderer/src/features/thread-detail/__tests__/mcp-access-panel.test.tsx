@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { McpConnectionStatus } from "@pwragent/shared";
+import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { McpAccessPanel } from "../McpAccessPanel";

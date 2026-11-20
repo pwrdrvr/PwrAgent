@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { TranscriptPrSubscriptions, parseTranscriptPullRequest } from "../pr-status/transcript-pr-subscriptions";
 import { PrPollingScheduler, TIER_CADENCE_MS } from "../pr-status/pr-polling-scheduler";
 

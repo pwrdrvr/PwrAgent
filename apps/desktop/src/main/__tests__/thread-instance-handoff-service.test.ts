@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ThreadHandoffExport, ThreadHandoffPackage, ThreadHandoffProgress } from "@pwragent/shared";
+import type {
+  ThreadHandoffExport,
+  ThreadHandoffPackage,
+  ThreadHandoffProgress,
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 import { computeWorktreePath } from "../app-server/git-directory-service";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_RETRY_NOW_EVENT } from "../federation/thread-instance-handoff-service";

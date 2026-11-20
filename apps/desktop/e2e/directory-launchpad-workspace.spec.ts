@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "./fixtures/electron-test";
 import Database from "better-sqlite3";
-import { canonicalizeNavigationPath } from "@pwragent/shared";
+import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
 

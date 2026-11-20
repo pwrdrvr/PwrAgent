@@ -5,8 +5,8 @@ import {
   buildTierPinRanks,
   comparePinRanks,
   isKeptAtTopRank,
-  type NavigationRelativePinMove,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-pins";
+import { type NavigationRelativePinMove } from "@pwragent/shared/contracts/navigation";
 import { moveRelativePin, relativePinRanks } from "../state/relative-pin-order";
 
 // The oracle has no ranks, timestamps, or implementation helpers: just the

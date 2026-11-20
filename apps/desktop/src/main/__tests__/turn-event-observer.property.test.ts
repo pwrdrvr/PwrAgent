@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { setImmediate as settle } from "node:timers/promises";
 import fc from "fast-check";
 import { afterEach, expect, it } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { TurnEventObservers, type TurnEventObserver } from "../app-server/turn-event-observer";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import type { StateDb } from "../state/state-db";

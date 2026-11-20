@@ -8,20 +8,21 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
-  buildThreadIdentityKey,
-  isRemoteFederationTarget,
   parseThreadSearchQuery,
   threadSearchTextTerms,
   matchesThreadSearchProjects,
-  type AppServerBackendKind,
-  type MessagingChannelKind,
-  type NavigationThreadSummary,
+} from "@pwragent/shared/thread-search-query";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import {
   type ThreadSearchMatchReasonKind,
   type ThreadSearchRemoteInstance,
   type ThreadSearchResponse,
   type ThreadSearchResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-search";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "../app-server/usage-activity-analysis";
 
 const request = { backend: "codex" as const, threadId: "thread", model: "gpt-6-luna", entryLimit: 2, characterLimit: 1000 };

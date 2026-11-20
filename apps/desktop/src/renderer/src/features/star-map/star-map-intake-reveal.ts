@@ -1,7 +1,4 @@
-import {
-  buildThreadIdentityKey,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /**
  * The stand-in `StarMapScreen` uses for this instance until federation

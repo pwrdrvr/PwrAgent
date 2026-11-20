@@ -1,4 +1,4 @@
-import type { DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import {
   applyDesktopSettingsPatch,
   readDesktopSettingsConfig,

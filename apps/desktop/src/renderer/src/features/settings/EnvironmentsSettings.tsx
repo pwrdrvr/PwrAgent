@@ -23,8 +23,8 @@ import {
   type CodexEnvironmentProblem,
   type CodexEnvironmentProject,
   type CodexEnvironmentScriptDocument,
-  type DesktopSettingsValue,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/codex-environment-editor";
+import { type DesktopSettingsValue } from "@pwragent/shared/contracts/settings";
 import {
   CheckIcon,
   MoreVerticalIcon,

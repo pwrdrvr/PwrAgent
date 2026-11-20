@@ -1,8 +1,8 @@
+import type { AppServerThreadPlanEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerThreadPlanEntry,
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import { ThreadMarkdown } from "./ThreadMarkdown";

@@ -2,7 +2,7 @@ import {
   buildPullRequestStatusKey,
   type PrSummary,
   type TranscriptPullRequestStatuses,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useLivePullRequest, usePullRequestLinks } from "./pull-request-links";
 import { type DesktopApi, useDesktopApi } from "./desktop-api";

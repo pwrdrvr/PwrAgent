@@ -1,15 +1,16 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import {
   ThreadWorkspaceService,

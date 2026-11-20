@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 import { ThreadTurnQueue, type ThreadTurnQueueLifecycleEvent } from "@pwragent/owner-core/thread-turn-queue";
-import type { AgentEvent, SteerTurnResponse } from "@pwragent/shared";
+import type { AgentEvent, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { messagingInboundHarness } from "./messaging-inbound-harness";
 

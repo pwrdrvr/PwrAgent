@@ -2,9 +2,16 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import {
-  projectResearchRun, RESEARCH_HARNESS_REVISION, RESEARCH_RUN_ATTENTION_ORDER, researchRunAttention, summarizeResearchRun,
-  type ResearchEvent, type ResearchHarnessState, type ResearchProfileRunsCursor, type ResearchProfileRunsQuery, type ResearchRun,
-} from "@pwragent/shared";
+  projectResearchRun,
+  RESEARCH_RUN_ATTENTION_ORDER,
+  researchRunAttention,
+  summarizeResearchRun,
+  type ResearchEvent,
+  type ResearchProfileRunsCursor,
+  type ResearchProfileRunsQuery,
+  type ResearchRun,
+} from "@pwragent/shared/research";
+import { RESEARCH_HARNESS_REVISION, type ResearchHarnessState } from "@pwragent/shared/research-harness";
 import { ResearchService } from "@pwragent/owner-core/research-service";
 import { MemoryResearchStorage } from "../../../../../packages/owner-core/src/__tests__/fixtures/research-memory-storage";
 import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../packages/shared/src/__tests__/research-journal-arbitraries";

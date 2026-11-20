@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import type { AutomationDetail, NavigationThreadSummary } from "@pwragent/shared";
+import type { AutomationDetail } from "@pwragent/shared/contracts/automations";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import { statusPulseRef } from "../../lib/status-pulse";

@@ -13,14 +13,14 @@ import os from "node:os";
 import path from "node:path";
 import type {
   CodexEnvironmentActionRun,
-  CodexEnvironmentOption,
-  CodexEnvironmentSetupProgressEvent,
   CodexThreadEnvironmentRuntime,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CodexEnvironmentOption } from "@pwragent/shared/contracts/navigation";
+import type { CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
 import {
   applyCodexEnvironmentActionRunUpdate,
   readCodexEnvironmentActionRuns,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-environment-action-runs";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {

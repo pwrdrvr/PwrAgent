@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type {
-  NavigationThreadSummary,
-  PrSummary,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { resolveFetchableDirectoryPaths } from "./resolveFetchableDirectoryPaths";
 import {
   buildThreadOwnerKey,

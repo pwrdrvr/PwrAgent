@@ -4,7 +4,7 @@ import {
   resolveProjectForgeAutomation,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { SegmentedControl } from "../settings/SettingsLayout";
 import { formatForgeAutomationTime, formatHeldWakeupCount } from "./forge-automation-view";

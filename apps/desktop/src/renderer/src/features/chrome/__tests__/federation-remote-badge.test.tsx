@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationHealthStatus } from "@pwragent/shared";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { FederationDisplayLabelsProvider } from "../../../lib/federation-display-label";
 import { FederationRemoteBadge } from "../FederationRemoteBadge";
 

@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import type { AutomationSchedulingStatus } from "@pwragent/shared";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
 import { SearchIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";

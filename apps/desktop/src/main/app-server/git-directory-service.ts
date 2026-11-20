@@ -6,8 +6,12 @@ import type {
   AppServerThreadSummary,
   AppServerBackendKind,
   ArchiveThreadCleanupResult,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
+} from "@pwragent/shared/contracts/settings";
+import type {
   LaunchpadWorkMode,
   LaunchpadWorktreeBase,
   NavigationDirectoryGitStatus,
@@ -15,12 +19,10 @@ import type {
   NavigationGitBranchDetail,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
-} from "@pwragent/shared";
-import {
-  DESKTOP_WORKTREE_STORAGE_DEFAULT,
-  normalizeGitOriginUrl,
-  readStatusWithoutNestedWorktrees,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared/contracts/settings";
+import { normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
+import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { checkWorktreeFolder } from "../settings/worktree-folder-check";
 import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";

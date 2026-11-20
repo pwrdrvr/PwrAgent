@@ -1,4 +1,4 @@
-import { aggregateToolAccounting, type ToolAccountingTotals } from "@pwragent/shared";
+import { aggregateToolAccounting, type ToolAccountingTotals } from "@pwragent/shared/thread-tool-display";
 import { memo, useMemo, useState } from "react";
 import type {
   AppServerThreadActivityDetail,
@@ -7,7 +7,7 @@ import type {
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadToolInvocationSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../../lib/thread-links";

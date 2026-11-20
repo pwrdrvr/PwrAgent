@@ -1,7 +1,7 @@
 import type {
   AppServerThreadMessage,
   AppServerThreadReplay,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * The assistant message a reply is about to be posted for. An item id names

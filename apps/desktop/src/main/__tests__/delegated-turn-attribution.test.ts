@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "../app-server/delegated-turn-attribution";
 
 const origin: AppServerThreadMessageOrigin = {

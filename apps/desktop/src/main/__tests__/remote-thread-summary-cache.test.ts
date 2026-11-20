@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
-  buildThreadIdentityKey,
   type FederationRemoteTarget,
   type FederationThreadSelection,
+} from "@pwragent/shared/contracts/federation";
+import {
+  buildThreadIdentityKey,
   type NavigationSnapshot,
   type NavigationThreadSummary,
   type RemoteThreadPin,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   RemoteThreadSummaryCache,
   type RemoteThreadSummaryPeer,

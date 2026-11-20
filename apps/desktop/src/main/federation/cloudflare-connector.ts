@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { CloudflareSetupStatus } from "@pwragent/shared";
+import type { CloudflareSetupStatus } from "@pwragent/shared/contracts/federation-cloudflare";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverCommands } from "../settings/command-discovery";
 

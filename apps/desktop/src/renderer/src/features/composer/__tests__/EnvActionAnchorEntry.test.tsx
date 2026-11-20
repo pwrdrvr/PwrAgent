@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { CodexEnvironmentActionRun } from "@pwragent/shared";
+import type { CodexEnvironmentActionRun } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EnvActionAnchorList,

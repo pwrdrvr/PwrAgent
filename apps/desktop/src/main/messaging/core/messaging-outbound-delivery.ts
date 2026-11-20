@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { stripCodexGitActionDirectives } from "@pwragent/shared";
-import type { AppServerBackendKind, FederationTarget, ThreadIdentifier } from "@pwragent/shared";
+import { stripCodexGitActionDirectives } from "@pwragent/shared/codex-git-action-directives";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
 import type {
   MessagingBindingRecord,

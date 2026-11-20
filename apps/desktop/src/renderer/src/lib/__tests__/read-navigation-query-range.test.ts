@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { readNavigationQueryRange } from "../read-navigation-query-range";
 
 const request: NavigationQueryRequest = { protocol: 2, consumer: "star-map", query: { kind: "star-map-geometry" } };

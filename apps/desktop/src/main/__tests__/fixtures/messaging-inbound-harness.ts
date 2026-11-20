@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingChannelRef, MessagingInboundTextEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";

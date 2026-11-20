@@ -1,12 +1,12 @@
 import { extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerTurnInputItem,
   ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { getMainLogger } from "../log";

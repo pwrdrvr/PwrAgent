@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReadFederationActivityRequest, ReadFederationActivityResponse } from "@pwragent/shared";
+import type {
+  ReadFederationActivityRequest,
+  ReadFederationActivityResponse,
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /** Local-only polling, active only while a surface is visible; never overlaps reads. */

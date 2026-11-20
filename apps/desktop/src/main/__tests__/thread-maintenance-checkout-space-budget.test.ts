@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import { ThreadMaintenanceService, type ThreadMaintenanceDeps } from "../app-server/thread-maintenance-service";
 

@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import { agentToolFailure, type AgentToolCallContentItems, type AgentToolDefinition } from "./agent-tool-definition";

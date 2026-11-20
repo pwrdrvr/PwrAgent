@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { ReviewPullRequestPicker } from "../ReviewPullRequestPicker";
 import {
   build,

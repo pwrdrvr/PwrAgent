@@ -4,9 +4,9 @@ import path from "node:path";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
-  MaterializeDirectoryLaunchpadRequest,
-  NavigationLaunchpadDraft,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { MaterializeDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
+import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 
 export type PendingEnvironmentLaunch = {
   backend: AppServerBackendKind;

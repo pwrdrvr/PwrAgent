@@ -1,18 +1,18 @@
-import type { FederationReceiverPermissions } from "@pwragent/shared";
+import type { FederationReceiverPermissions } from "@pwragent/shared/contracts/federation";
 import type {
   FederationCapability,
   FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   filterKnownFederationCapabilities,
   isFederationGatewayEndpointUrl,
   isFederationInstanceId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   verifyFederationMessageSignature,
 } from "./federation-identity";
@@ -63,7 +63,7 @@ export function createFederationEnrollmentInvite(params: {
   gatewayInstanceId: FederationInstanceId;
   generatedAt: number;
   expiresAt: number;
-  permissionRole?: import("@pwragent/shared").FederationPeerRole;
+  permissionRole?: import("@pwragent/shared/contracts/federation").FederationPeerRole;
   label?: string;
   role?: FederationInstanceRole;
   endpoint?: string;

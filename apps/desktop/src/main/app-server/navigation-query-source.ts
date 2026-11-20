@@ -1,12 +1,10 @@
-import type {
-  AppServerBackendScope,
-  NavigationDirectorySummary,
-} from "@pwragent/shared";
+import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
   navigationQueryEventRequiresRefresh,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-query-events";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";

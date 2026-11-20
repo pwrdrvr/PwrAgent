@@ -1,4 +1,4 @@
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** PwrAgent's metadata sidecar; SDK/provider sessions and history are separate. */
 export type ClaudeProfileSessionMetadata = {

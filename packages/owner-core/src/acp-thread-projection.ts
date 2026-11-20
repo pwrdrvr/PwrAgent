@@ -1,4 +1,4 @@
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AcpSessionMetadata } from "./acp-storage";
 
 export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =

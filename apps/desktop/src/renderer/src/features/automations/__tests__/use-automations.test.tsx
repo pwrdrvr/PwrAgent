@@ -1,8 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
-import type {
-  AgentEvent,
-  AutomationRunArtifact,
-} from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AutomationRunArtifact } from "@pwragent/shared/contracts/automations";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useAutomationRunArtifact } from "../useAutomations";

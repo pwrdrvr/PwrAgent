@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CodexEnvironmentOption, ThreadTodo } from "@pwragent/shared";
+import type { CodexEnvironmentOption } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
   listThreadTodoDispatchEnvironments,
   resolveThreadTodoStartEnvironment,

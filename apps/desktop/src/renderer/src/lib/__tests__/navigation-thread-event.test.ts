@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { applyCheckoutHibernationUpdate, applyNavigationThreadEvent } from "../navigation-thread-event";
 
 it("applies status updates only to the destination repository when PR numbers overlap", () => {

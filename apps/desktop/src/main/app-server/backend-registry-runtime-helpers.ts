@@ -1,13 +1,13 @@
 import { getOwnerHostServices } from "../owner-host";
-import { PROJECT_PAUSED_ERROR_CODE } from "@pwragent/shared";
+import { PROJECT_PAUSED_ERROR_CODE } from "@pwragent/shared/project-forge-automation";
 import { execFile as execFileCallback } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  type AppServerThreadSummary,
   type PwrAgentThreadOrchestrationErrorCode,
   type PwrAgentThreadOrchestrationResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
 import {
   PROVIDER_IDS,
   type ConfigDomainMap,

@@ -3,7 +3,7 @@ import type {
   DesktopBootInfo,
   WaitForDesktopProfileAliveRequest,
   WaitForDesktopProfileAliveResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   APP_GET_BOOT_INFO_CHANNEL,
   APP_QUIT_CHANNEL,

@@ -1,8 +1,21 @@
 import { federationRefsMatch } from "./messaging-callback-helpers";
 import { bindingMatchesFederationTarget, federationTargetForBinding } from "./messaging-backend-event-helpers";
 import { randomUUID } from "node:crypto";
-import { buildThreadIdentityKey, federatedThreadIdentityKey, normalizeRenamedTitleSource } from "@pwragent/shared";
-import type { AgentEvent, AppServerBackendKind, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceResponse, MessagingBindingTargetKind, MessagingToolUpdateMode, ThreadMessagingBindingTransition, ThreadIdentifier } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  HandoffThreadWorkspaceResponse,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederatedThreadRef, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  MessagingBindingTargetKind,
+  MessagingToolUpdateMode,
+} from "@pwragent/shared/contracts/messaging";
+import type { ThreadMessagingBindingTransition } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord, MessagingChannelRef, MessagingInboundEvent, MessagingAdapterState, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { buildActivityIntent, buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";

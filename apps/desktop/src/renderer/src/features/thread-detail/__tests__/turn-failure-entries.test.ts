@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AppServerThreadEntry,
-  ThreadTurnFailure,
-} from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTurnFailure } from "@pwragent/shared/contracts/navigation";
 import {
   CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX,
   TURN_FAILURE_ENTRY_PREFIX,

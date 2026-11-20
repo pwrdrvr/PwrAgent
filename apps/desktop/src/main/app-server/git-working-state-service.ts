@@ -3,15 +3,17 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
   AppServerThreadActivityDetail,
+  ThreadGitWorkingState,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   EditGroupCommitInput,
   EditGroupCommitState,
   WorktreeUnpublishedCommit,
   WorktreeUnpublishedCommitFile,
-  ThreadGitWorkingState,
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
-} from "@pwragent/shared";
-import { readStatusWithoutNestedWorktrees } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { streamGitCommand, runGitCommand } from "./git-executable";
 

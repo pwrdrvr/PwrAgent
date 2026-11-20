@@ -1,15 +1,12 @@
-import {
-  buildThreadIdentityKey,
-  comparePinnedThreads,
-  isPinnedThread,
-  shortenDerivedThreadTitle,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared/thread-pins";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationRow,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingActiveTurnSummary,
   MessagingBindingRecord,

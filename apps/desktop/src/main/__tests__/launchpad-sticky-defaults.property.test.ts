@@ -1,11 +1,8 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
-import {
-  launchpadStorageKey,
-  type AppServerBackendKind,
-  type FederationTarget,
-  type NavigationLaunchpadDefaults,
-} from "@pwragent/shared";
+import { launchpadStorageKey, type NavigationLaunchpadDefaults } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

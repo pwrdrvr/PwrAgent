@@ -1,4 +1,4 @@
-import type { AutomationRunOwner } from "@pwragent/shared";
+import type { AutomationRunOwner } from "@pwragent/shared/contracts/automations";
 import {
   getProcessRuntimeIdentity,
   isProcessAlive,

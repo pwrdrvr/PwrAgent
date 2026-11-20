@@ -1,5 +1,5 @@
+import type { FederationRequestEnvelope } from "@pwragent/shared/contracts/federation";
 import type {
-  FederationRequestEnvelope,
   NavigationLaunchpadConfigRequest,
   NavigationLaunchpadConfigResponse,
   NavigationQueryPage,
@@ -8,7 +8,7 @@ import type {
   NavigationQueueProjectionRequest,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { FEDERATION_BACKEND_METHODS } from "@pwragent/federation/federation-backend-methods";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcRequestOptions } from "./federation-rpc";

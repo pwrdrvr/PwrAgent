@@ -1,4 +1,4 @@
-import type { ForgeKind } from "@pwragent/shared";
+import type { ForgeKind } from "@pwragent/shared/forge-product";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /** IPC names are behavior, kept out of the shared product catalog. */

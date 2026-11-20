@@ -1,9 +1,7 @@
 import path from "node:path";
-import {
-  formatSearchCommandActionLabel,
-  normalizeToolActivityBurstLabel,
-  type AgentEvent,
-} from "@pwragent/shared";
+import { formatSearchCommandActionLabel } from "@pwragent/shared/command-action-labels";
+import { normalizeToolActivityBurstLabel } from "@pwragent/shared/tool-activity-burst";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
   redactCommandText,
   safeCommandTitle as safeRedactedCommandTitle,

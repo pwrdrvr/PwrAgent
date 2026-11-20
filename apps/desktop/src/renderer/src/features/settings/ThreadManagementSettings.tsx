@@ -6,18 +6,18 @@ import {
   useState,
   type MouseEventHandler,
 } from "react";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import {
-  isToolManagedWorktreePath,
   type ListThreadMigrationSourcesResponse,
   type StartThreadMigrationResponse,
-  type ThreadIdentifier,
   type ThreadMigrationCopyStrategy,
   type ThreadMigrationOperation,
   type ThreadMigrationRunItem,
   type ThreadMigrationSourceProjectGroup,
   type ThreadMigrationSourceThreadSummary,
   type ThreadMigrationSourceProfileSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import { type ThreadIdentifier } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsPanelHead,

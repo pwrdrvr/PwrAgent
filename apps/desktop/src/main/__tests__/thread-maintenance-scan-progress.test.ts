@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { ThreadMaintenanceScanProgress } from "@pwragent/shared";
+import type { ThreadMaintenanceScanProgress } from "@pwragent/shared/thread-maintenance";
 import { createScanProgressSender, SCAN_PROGRESS_INTERVAL_MS } from "../thread-maintenance-scan-progress";
 
 afterEach(() => {

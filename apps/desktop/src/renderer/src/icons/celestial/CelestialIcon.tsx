@@ -1,5 +1,5 @@
 import { memo } from "react";
-import type { CelestialIconId } from "@pwragent/shared";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type { IconProps } from "../icon-types";
 import { CelestialBlackHoleIcon } from "./CelestialBlackHoleIcon";
 import { CelestialMoonIcon } from "./CelestialMoonIcon";

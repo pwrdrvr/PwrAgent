@@ -3,12 +3,13 @@ import {
   buildLegacyEncodedThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   normalizeThreadIdentityKey,
+} from "@pwragent/shared/contracts/navigation";
+import {
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
-  type ThreadSearchFilters,
-  type ThreadSearchResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadSearchFilters, type ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 import type { ThreadSearchProjectionSearchRequest, ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { StateDb } from "./state-db";
 import { buildThreadSearchFtsQuery } from "./thread-search-fts-query";

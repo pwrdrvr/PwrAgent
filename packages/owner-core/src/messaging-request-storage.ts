@@ -1,4 +1,8 @@
-import type { AppServerBackendKind, MessagingCausalSourceRef, PwrAgentMessagingResponse } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  MessagingCausalSourceRef,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentMessagingResponse } from "@pwragent/shared/contracts/messaging-tools";
 
 export type MessagingRequestSource<InboundEvent> = {
   ref: MessagingCausalSourceRef;

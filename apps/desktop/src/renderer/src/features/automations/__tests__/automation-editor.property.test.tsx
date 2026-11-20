@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, it } from "vitest";
-import type { ReadDesktopMessagingSettingsResponse } from "@pwragent/shared";
+import type { ReadDesktopMessagingSettingsResponse } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   codexCatalogArbitrary,

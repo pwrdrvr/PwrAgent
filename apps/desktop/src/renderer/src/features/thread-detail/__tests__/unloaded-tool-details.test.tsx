@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse, AppServerThreadEntry, ThreadToolAccounting } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadEntry,
+  ThreadToolAccounting,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ToolCallsPanel } from "../context-panels/ToolCallsPanel";
 import { useToolInvocationDetails } from "../../../lib/useToolInvocationDetails";
 

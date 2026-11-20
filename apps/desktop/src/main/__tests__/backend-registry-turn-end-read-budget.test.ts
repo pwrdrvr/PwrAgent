@@ -1,8 +1,6 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import type {
-  AgentEvent,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

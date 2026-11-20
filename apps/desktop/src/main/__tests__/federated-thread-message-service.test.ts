@@ -4,7 +4,7 @@ import type {
   ControlActiveTurnResponse,
   StartTurnResponse,
   SteerTurnResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   createFederatedThreadControlHandler,

@@ -5,7 +5,7 @@ import type {
   ThreadMissingWorkspace,
   WorktreeRecoveryStep,
   WorktreeRecoveryStepId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { CheckIcon, CloseIcon, WorktreeIcon } from "../../icons";
 
 type RecreatedResponse = Extract<RecreateThreadWorktreeResponse, { status: "recreated" }>;

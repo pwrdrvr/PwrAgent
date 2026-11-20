@@ -1,5 +1,5 @@
 import type { BrowserWindow, WebContents } from "electron";
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 
 /**
  * Per-window channel-subscription registry.

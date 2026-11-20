@@ -4,11 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  RBAC_BUILT_IN_ROLE_IDS,
-  emptyRbacPolicy,
-  type RbacPolicy,
-} from "@pwragent/shared";
+import { RBAC_BUILT_IN_ROLE_IDS, emptyRbacPolicy, type RbacPolicy } from "@pwragent/shared/contracts/rbac";
 
 import {
   readRbacPolicy,

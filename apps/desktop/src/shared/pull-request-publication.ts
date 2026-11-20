@@ -1,4 +1,4 @@
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 
 /** Provider-observed PR commits were published, regardless of PR lifecycle.
  * Their ancestry remains evidence when local remote refs are stale or deleted.

@@ -2,28 +2,26 @@ import { BrowserWindow, ipcMain } from "electron";
 import type {
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
-  OpenStarMapWindowRequest,
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
-  StarMapCommandResult,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
-  StarMapViewSnapshot,
   WriteStarMapWorkspaceRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
+import type {
+  OpenStarMapWindowRequest,
+  StarMapCommandResult,
+  StarMapViewSnapshot,
+} from "@pwragent/shared/contracts/star-map-tools";
 import {
   MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS,
   type StarMapIntakeDispatchRequest,
 } from "../../../shared/star-map-intake";
-import {
-  isRemoteFederationTarget,
-  isStarMapArrangementEntry,
-  isStarMapCommandResult,
-  isStarMapViewSnapshot,
-  isStarMapWorkspaceSnapshot,
-} from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { isStarMapArrangementEntry, isStarMapWorkspaceSnapshot } from "@pwragent/shared/contracts/star-map";
+import { isStarMapCommandResult, isStarMapViewSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 import {
   STAR_MAP_COMMAND_RESULT_CHANNEL,
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,

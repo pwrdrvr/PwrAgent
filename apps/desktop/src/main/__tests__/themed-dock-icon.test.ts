@@ -1,8 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DesktopAppearanceTheme, DesktopDarkTheme, DesktopLightTheme } from "@pwragent/shared";
-import { DESKTOP_DARK_THEMES, DESKTOP_LIGHT_THEMES } from "@pwragent/shared";
+import type {
+  DesktopAppearanceTheme,
+  DesktopDarkTheme,
+  DesktopLightTheme,
+} from "@pwragent/shared/contracts/settings";
+import { DESKTOP_DARK_THEMES, DESKTOP_LIGHT_THEMES } from "@pwragent/shared/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const electronMocks = vi.hoisted(() => ({

@@ -1,4 +1,5 @@
-import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveReviewProvenance } from "../app-server/review-provenance";
 import {

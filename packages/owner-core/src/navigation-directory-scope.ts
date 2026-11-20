@@ -1,12 +1,12 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
   navigationWorkingStatePath,
   readNavigationDirectoryScope,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-query-events";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 
 /** Membership authority outlives row freshness, but never a membership boundary. */

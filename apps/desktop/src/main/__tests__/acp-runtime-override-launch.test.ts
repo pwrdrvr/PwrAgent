@@ -2,7 +2,7 @@ import type { AcpPathExecutableLister } from "@pwrdrvr/agent-acp/discovery";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";

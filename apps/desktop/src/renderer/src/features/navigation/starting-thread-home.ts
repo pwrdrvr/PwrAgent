@@ -1,13 +1,17 @@
 import {
   findRemoteHomeDirectoryIndex,
-  isRemoteFederationTarget,
   remoteThreadPlaceholderDirectory,
+} from "@pwragent/shared/federation-project-match";
+import {
+  isRemoteFederationTarget,
   type FederationRemoteTarget,
   type FederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import {
   type NavigationDirectorySummary,
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 
 /** What a starting row carries that decides where it renders. */
 export type StartingThreadPlacement = {

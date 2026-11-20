@@ -4,12 +4,12 @@
 // the states and their buttons are the interesting part, and neither needs a
 // DOM to be checked.
 
+import { compareManagedGitVersions } from "@pwragent/shared/managed-git-version";
 import {
-  compareManagedGitVersions,
   type DesktopGitRuntimeChoice,
   type DesktopManagedGitSnapshot,
   type DesktopUpdateChannel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { managedBuildTrackOptions } from "./acp-agent-copy";
 import { formatByteCount } from "../../lib/format-bytes";
 

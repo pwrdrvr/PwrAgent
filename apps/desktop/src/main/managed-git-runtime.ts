@@ -43,7 +43,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { lock } from "proper-lockfile";
-import { DESKTOP_UPDATE_CHANNELS, type DesktopUpdateChannel } from "@pwragent/shared";
+import { DESKTOP_UPDATE_CHANNELS, type DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
 import bundledCatalog from "../../custom-git-runtime.json";
 import {
   fetchGitHubReleaseMetadata,

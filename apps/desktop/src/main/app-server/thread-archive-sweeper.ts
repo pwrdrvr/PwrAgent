@@ -1,16 +1,20 @@
-import type { AppServerBackendKind, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
-  type DesktopCheckoutHibernationPolicy,
   THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepFailure,
   type DesktopThreadArchiveSweepStatus,
-  buildThreadIdentityKey,
-  isCodexChatsDirectory,
-  toolWorktreeRootOwner,
-  type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-archive-policy";
+import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isCodexChatsDirectory } from "@pwragent/shared/directory-navigation";
+import { toolWorktreeRootOwner } from "@pwragent/shared/worktree-paths";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { CheckoutPathOwners, eventLoopPacer } from "./checkout-path-owners";
 import path from "node:path";

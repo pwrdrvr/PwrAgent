@@ -1,5 +1,5 @@
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
-import type { AppServerAvailableCommandSummary } from "@pwragent/shared";
+import type { AppServerAvailableCommandSummary } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Commands whose UI belongs to Claude Code's terminal. A live turn's `init`

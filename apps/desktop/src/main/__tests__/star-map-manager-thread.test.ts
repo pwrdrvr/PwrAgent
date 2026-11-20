@@ -9,7 +9,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STAR_MAP_MANAGER_THREAD_TITLE } from "@pwragent/shared";
+import { STAR_MAP_MANAGER_THREAD_TITLE } from "@pwragent/shared/contracts/star-map";
 import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
 
 let workspace: string;

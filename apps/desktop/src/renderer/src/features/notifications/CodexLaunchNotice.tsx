@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  isValidatedDiscoveryCandidate,
-  parseCodexVersionCore,
-} from "@pwragent/shared";
-import type { DesktopCodexDiscoverySnapshot } from "@pwragent/shared";
+import { isValidatedDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
+import { parseCodexVersionCore } from "@pwragent/shared/codex-version";
+import type { DesktopCodexDiscoverySnapshot } from "@pwragent/shared/contracts/settings";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export const CODEX_LAUNCH_NOTICE_ID = "codex-launch-failed";

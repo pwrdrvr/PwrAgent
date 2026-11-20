@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { ForgeCiClient, redactForgeLog } from "../pr-status/forge-ci-client";
 import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgeReadService, type ForgeReadScope } from "../pr-status/forge-read-service";

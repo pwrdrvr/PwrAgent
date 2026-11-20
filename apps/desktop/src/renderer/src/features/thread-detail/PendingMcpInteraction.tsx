@@ -2,9 +2,9 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   THREAD_TODO_MERGE_METHOD_LABELS,
-  type ForgeApprovalRememberOptionId,
   type ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { type ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
 import { placeListbox, type ListboxPlacement } from "../../components/Select";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";

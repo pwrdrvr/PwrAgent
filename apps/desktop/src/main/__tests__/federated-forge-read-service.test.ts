@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FederationCapability, FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationCapability, FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import { FederationRouter } from "../federation/federation-router";

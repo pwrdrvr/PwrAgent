@@ -1,4 +1,4 @@
-import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { DesktopDirectoryGitStatus } from "./desktop-directory-git-status";
 import { ThreadPullRequestLookup } from "./thread-pull-request-lookup";
 import {
@@ -20,7 +20,7 @@ import {
 } from "../storage/desktop-runtime-storage";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
-import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared";
+import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared/thread-archive-policy";
 import { assertMergeNotHeld, blockingMergeDependencies, resolveMergePullRequest } from "./thread-dependency-merge-hold";
 import {
   appendPeerDependents, collectPeerActiveDependencies, manageRemoteThreadDependencies, readFederationThreadDependenciesRequest,
@@ -38,10 +38,30 @@ import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
-import { THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
-import { isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
-import { type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
-import { findRemoteHomeDirectoryIndex } from "@pwragent/shared";
+import {
+  THREAD_PR_WATCH_HISTORY_MAX_LIMIT,
+  type ThreadPrAutoFixState,
+  type ThreadPrWatchesRequest,
+  type ThreadPrWatchesResponse,
+} from "@pwragent/shared/contracts/thread-pr-watches";
+import { type WatchThreadPullRequestReason } from "@pwragent/shared/contracts/thread-tools";
+import {
+  isThreadDependencyLocalThreadCondition,
+  threadDependencyDeliveryKey,
+  type ManageThreadDependenciesRequest,
+  type ManageThreadDependenciesResponse,
+  type ThreadDependencyCondition,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  type AppServerThreadTurnMetadata,
+  type AppServerNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type ThreadPendingWakesList,
+  type ThreadPendingWakesRequest,
+  type ThreadPendingWakesResponse,
+} from "@pwragent/shared/contracts/thread-pending-wakes";
+import { findRemoteHomeDirectoryIndex } from "@pwragent/shared/federation-project-match";
 import {
   buildThreadPendingWakes,
   stopThreadPendingWake,
@@ -62,17 +82,32 @@ import { threadArtifactDirectory } from "../app-server/thread-assets";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
 import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
-import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
-import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
+import type {
+  ReadUsageActivityRequest,
+  ReadUsageActivityResponse,
+  AnalyzeUsageActivityRequest,
+  AnalyzeUsageActivityResponse,
+} from "@pwragent/shared/contracts/usage-activity";
+import type {
+  ReadThreadFamilyPricingRequest,
+  ReadThreadFamilyPricingResponse,
+} from "@pwragent/shared/thread-family-pricing";
+import { summarizeThreadAgentChange } from "@pwragent/shared/navigation-state";
+import { type PrActivitySnapshot } from "@pwragent/shared/contracts/pr-activity";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { readRemoteNavigationPageWithinBudget } from "../federation/federation-navigation-query";
 import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
-import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
-import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared/contracts/navigation";
+import type {
+  MarkNavigationDirectorySeenRequest,
+  MarkNavigationDirectorySeenResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
-import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import type {
+  RemoveNavigationDirectoryRequest,
+  RemoveNavigationDirectoryResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -85,59 +120,12 @@ import type {
 } from "../storage/desktop-overlay-store";
 import {
   type AgentEvent,
-  type AppServerBackendKind,
-  type AppServerBackendScope,
-  type AppServerThreadSummary,
-  type ArchiveWorktreeRequest,
-  type ArchiveWorktreeResponse,
-  type ArchiveThreadRequest,
-  type ArchiveThreadResponse,
-  type AppServerListSkillsRequest,
-  type AppServerListSkillsResponse,
-  type AppServerListThreadsRequest,
-  type AppServerListThreadsResponse,
-  type AttachDirectoryToThreadRequest,
-  type AttachDirectoryToThreadResponse,
-  type DetachDirectoryFromThreadRequest,
-  type DetachDirectoryFromThreadResponse,
-  type CheckThreadPullRequestStatusToolArgs,
-  type WatchThreadPullRequestToolArgs,
-  type WatchThreadPullRequestResult,
-  type ThreadPullRequestWatchListResult,
-  type ThreadPullRequestAutomationStatus,
-  type ThreadPullRequestWatchEvent,
-  type ThreadPullRequestWatchSummary,
-  type ThreadPullRequestWatchBaseline,
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type SetEligibleThreadsPrAutoDispatchRequest,
   type SetEligibleThreadsPrAutoDispatchResponse,
-  type ThreadSearchRequest,
-  type ThreadSearchResponse,
-  type PersistThreadUsageActivityRequest,
-  type PersistThreadUsageActivityResponse,
-  type AppServerReadThreadRequest,
-  type AppServerReadThreadResponse,
-  type InspectTokenMiserOutputRequest,
-  type InspectTokenMiserOutputResponse,
-  type AnalyzeThreadToolHistoryRequest,
-  type AnalyzeThreadToolHistoryResponse,
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
-  type FocusedDiffAnalysisRequest,
-  type FocusedDiffAnalysisResponse,
-  type GetNavigationSnapshotRequest,
-  type HandoffThreadWorkspaceRequest,
-  type HandoffThreadWorkspaceResponse,
-  type MoveThreadToMainCheckoutRequest,
-  type MoveThreadToMainCheckoutResponse,
-  type RecreateThreadWorktreeRequest,
-  type RecreateThreadWorktreeResponse,
-  type GetGhStatusRequest,
-  type GetGlabStatusRequest,
-  type GlabStatus,
-  type GhStatus,
-  type LinkedDirectorySummary,
   type ListModelSettingsRecentsRequest,
   type ListModelSettingsRecentsResponse,
   type ListRecentFileReferencesRequest,
@@ -149,6 +137,63 @@ import {
   type RenderComposerPdfPreviewRequest,
   type RenderComposerPdfPreviewResponse,
   type RecordRecentFileReferencesRequest,
+  type RegisterDirectoryFromDiskRequest,
+  type RegisterDirectoryFromDiskResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type ListThreadMigrationSourceThreadsRequest,
+  type ListThreadMigrationSourceThreadsResponse,
+  type ListThreadMigrationSourcesResponse,
+  type RetryThreadMigrationRequest,
+  type StartThreadMigrationRequest,
+  type StartThreadMigrationResponse,
+  type ResetDirectoryLaunchpadRequest,
+  type ResetDirectoryLaunchpadResponse,
+  type UpdateDirectoryLaunchpadRequest,
+  type UpdateDirectoryLaunchpadResponse,
+} from "@pwragent/shared/contracts/agent";
+import {
+  type AppServerBackendKind,
+  type AppServerBackendScope,
+  type AppServerThreadSummary,
+  type ArchiveWorktreeRequest,
+  type ArchiveWorktreeResponse,
+  type ArchiveThreadRequest,
+  type ArchiveThreadResponse,
+  type AppServerListSkillsRequest,
+  type AppServerListSkillsResponse,
+  type AppServerListThreadsRequest,
+  type AppServerListThreadsResponse,
+  type PersistThreadUsageActivityRequest,
+  type PersistThreadUsageActivityResponse,
+  type AppServerReadThreadRequest,
+  type AppServerReadThreadResponse,
+  type HandoffThreadWorkspaceRequest,
+  type HandoffThreadWorkspaceResponse,
+  type MoveThreadToMainCheckoutRequest,
+  type MoveThreadToMainCheckoutResponse,
+  type RecreateThreadWorktreeRequest,
+  type RecreateThreadWorktreeResponse,
+  type LinkedDirectorySummary,
+  type RenameThreadRequest,
+  type RenameThreadResponse,
+  type RestoreWorktreeRequest,
+  type RestoreWorktreeResponse,
+  type ResolveMissingCodexThreadsRequest,
+  type ResolveMissingCodexThreadsResponse,
+  type RestoreThreadRequest,
+  type RestoreThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type AttachDirectoryToThreadRequest,
+  type AttachDirectoryToThreadResponse,
+  type DetachDirectoryFromThreadRequest,
+  type DetachDirectoryFromThreadResponse,
+  type GetNavigationSnapshotRequest,
+  type GetGhStatusRequest,
+  type GetGlabStatusRequest,
+  type GlabStatus,
+  type GhStatus,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
@@ -161,8 +206,6 @@ import {
   type SetTranscriptPullRequestsRequest,
   type TranscriptPullRequestStatuses,
   type RefreshThreadPullRequestsResponse,
-  type RegisterDirectoryFromDiskRequest,
-  type RegisterDirectoryFromDiskResponse,
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type NavigationDirectoryGitStatus,
@@ -173,20 +216,14 @@ import {
   type NavigationLaunchpadConfigRequest,
   type NavigationLaunchpadConfigResponse,
   type NavigationLaunchpadDraft,
-  type BackendSummary,
   type NavigationSelectedDetailRequest,
   type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
   type NavigationThreadSummary,
-  type AutomationThreadSummary,
   type PrSummary,
-  type PrAutoDispatchBudgetConfig,
-  type PrAutoDispatchBudgetStatus,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
-  type FederatedThreadRef,
   type FederationJumpSearchProgress,
-  type FederationRemoteTarget,
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
@@ -204,21 +241,6 @@ import {
   type SetDirectoryPinResponse,
   type SetDirectoryThreadsCollapsedRequest,
   type SetDirectoryThreadsCollapsedResponse,
-  type SetProjectForgeAutomationRequest,
-  type SetProjectForgeAutomationResponse,
-  type ListProjectHeldWakeupsRequest,
-  type ListProjectHeldWakeupsResponse,
-  type ResolveProjectHeldWakeupsRequest,
-  type ResolveProjectHeldWakeupsResponse,
-  type ProjectForgeAutomation,
-  buildProjectPrDependencyNotice,
-  buildProjectPrWatchRefusal,
-  isDefaultProjectForgeAutomation,
-  PROJECT_PAUSED_ERROR_CODE,
-  projectAllowsAutoFixKind,
-  projectAllowsForgePolling,
-  projectAllowsPrWatches,
-  resolveProjectForgeAutomation,
   type SetThreadParentRequest,
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
@@ -235,10 +257,6 @@ import {
   type SetThreadCheckoutHibernationRequest,
   type SetThreadCheckoutHibernationResponse,
   type SetThreadLockResponse,
-  type SetThreadToolIncidentNoticeRequest,
-  type SetThreadToolIncidentNoticeResponse,
-  type ContinueThreadEnvironmentStartupRequest,
-  type ContinueThreadEnvironmentStartupResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
   type AcknowledgeThreadEnvironmentFailureResponse,
   type ListPendingThreadSpendAlertsRequest,
@@ -246,24 +264,11 @@ import {
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
-  type NavigationResumeState,
   type SetNavigationBrowseModeResponse,
   type SetPinnedGroupCollapsedRequest,
   type SetPinnedGroupCollapsedResponse,
   type RecentThreadLockNotesResponse,
   type ThreadLockNoteRequest,
-  type ListThreadMigrationSourceThreadsRequest,
-  type ListThreadMigrationSourceThreadsResponse,
-  type ListThreadMigrationSourcesResponse,
-  type RetryThreadMigrationRequest,
-  type StartThreadMigrationRequest,
-  type StartThreadMigrationResponse,
-  type ResetDirectoryLaunchpadRequest,
-  type ResetDirectoryLaunchpadResponse,
-  type RenameThreadRequest,
-  type RenameThreadResponse,
-  type RestoreWorktreeRequest,
-  type RestoreWorktreeResponse,
   type ResolveEditCommitStatesRequest,
   type ResolveEditCommitStatesResponse,
   type ListWorktreeOtherChangesRequest,
@@ -276,41 +281,90 @@ import {
   type GetWorktreeUnpublishedCommitDiffResponse,
   type ReadWorktreeImageRequest,
   type ReadWorktreeImageResponse,
-  type ResolveMissingCodexThreadsRequest,
-  type ResolveMissingCodexThreadsResponse,
-  type RestoreThreadRequest,
-  type RestoreThreadResponse,
   type ThreadOverlayState,
   type ThreadPrAutoDispatchPending,
-  type UpdateDirectoryLaunchpadRequest,
-  type UpdateDirectoryLaunchpadResponse,
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  type CheckThreadPullRequestStatusToolArgs,
+  type WatchThreadPullRequestToolArgs,
+  type WatchThreadPullRequestResult,
+  type ThreadPullRequestWatchListResult,
+  type ThreadPullRequestAutomationStatus,
+  type ThreadPullRequestWatchEvent,
+  type ThreadPullRequestWatchSummary,
+  type ThreadPullRequestWatchBaseline,
   type PwrAgentThreadInspectionResponse,
   type PwrAgentThreadInspectionContext,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import {
+  type ThreadSearchRequest,
+  type ThreadSearchResponse,
+} from "@pwragent/shared/contracts/thread-search";
+import {
+  type InspectTokenMiserOutputRequest,
+  type InspectTokenMiserOutputResponse,
+  type AnalyzeThreadToolHistoryRequest,
+  type AnalyzeThreadToolHistoryResponse,
+  type SetThreadToolIncidentNoticeRequest,
+  type SetThreadToolIncidentNoticeResponse,
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import {
+  type FocusedDiffAnalysisRequest,
+  type FocusedDiffAnalysisResponse,
+} from "@pwragent/shared/contracts/diff-focus";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type AutomationThreadSummary } from "@pwragent/shared/contracts/automations";
+import {
+  type PrAutoDispatchBudgetConfig,
+  type PrAutoDispatchBudgetStatus,
+} from "@pwragent/shared/contracts/settings";
+import { type FederatedThreadRef, type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import {
+  type SetProjectForgeAutomationRequest,
+  type SetProjectForgeAutomationResponse,
+  type ListProjectHeldWakeupsRequest,
+  type ListProjectHeldWakeupsResponse,
+  type ResolveProjectHeldWakeupsRequest,
+  type ResolveProjectHeldWakeupsResponse,
+  type ProjectForgeAutomation,
+  buildProjectPrDependencyNotice,
+  buildProjectPrWatchRefusal,
+  isDefaultProjectForgeAutomation,
+  PROJECT_PAUSED_ERROR_CODE,
+  projectAllowsAutoFixKind,
+  projectAllowsForgePolling,
+  projectAllowsPrWatches,
+  resolveProjectForgeAutomation,
+} from "@pwragent/shared/project-forge-automation";
+import { type NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+} from "@pwragent/shared/contracts/settings";
+import {
   DEFAULT_PULL_REQUEST_PROVIDER,
-  buildPrependPinRank,
-  buildFederatedThreadRef,
-  expandNavigationRemoteOwner,
   buildThreadIdentityKey,
-  federatedThreadIdentityKey,
   isAppServerBackendKind,
-  isThreadPendingWakeInvalidation,
+  parseThreadIdentityKey,
+} from "@pwragent/shared/contracts/navigation";
+import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
+import {
+  buildFederatedThreadRef,
+  federatedThreadIdentityKey,
   isFederationInstanceId,
   isRemoteFederationTarget,
   type FederationTarget,
-  mergeThreadLinkedDirectories,
-  parseThreadIdentityKey,
-  rankInboxThreadKeys,
-  resolveNewThreadBackend,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
+import { isThreadPendingWakeInvalidation } from "@pwragent/shared/contracts/thread-pending-wakes";
+import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
+import { rankInboxThreadKeys } from "@pwragent/shared/inbox";
+import { resolveNewThreadBackend } from "@pwragent/shared/backend-selection";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { readWorktreeImage } from "../app-server/worktree-image-reader";
 import {
@@ -3905,7 +3959,7 @@ class DesktopAppServerService {
 
   async watchThreadPullRequestForTool(
     args: WatchThreadPullRequestToolArgs,
-    provenance?: import("@pwragent/shared").CausalMessagingContext,
+    provenance?: import("@pwragent/shared/messaging-causal-context").CausalMessagingContext,
   ): Promise<PwrAgentThreadInspectionResponse> {
     const action = args.action ?? "watch";
     if (action === "list" || action === "cancel") {
@@ -3994,7 +4048,7 @@ class DesktopAppServerService {
    */
   private async armThreadPrWatch(
     args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
-    provenance?: import("@pwragent/shared").CausalMessagingContext,
+    provenance?: import("@pwragent/shared/messaging-causal-context").CausalMessagingContext,
   ): Promise<
     | { ok: true; result: WatchThreadPullRequestResult }
     | {
@@ -8464,7 +8518,7 @@ class DesktopAppServerService {
     threadId: string;
     input: { type: "text"; text: string }[];
     origin: "automation";
-    messageOrigin: import("@pwragent/shared").AppServerThreadMessageOrigin;
+    messageOrigin: import("@pwragent/shared/contracts/normalized-app-server").AppServerThreadMessageOrigin;
   }): Promise<{ status: "started" | "queued" | "busy" | "held" | "discarded"; turnId?: string }> {
     const registry = getDesktopBackendRegistry();
     const project = this.resolveThreadForgeProject(request);
@@ -8555,7 +8609,7 @@ class DesktopAppServerService {
    * machines keep on this thread.
    */
   async manageThreadDependencies(request: ManageThreadDependenciesRequest,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    provenance?: Pick<import("@pwragent/shared/contracts/normalized-app-server").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
     actor = "operator"): Promise<ManageThreadDependenciesResponse> {
     // A peer's window reads its owner's registrations, not this machine's.
     if (request?.action === "active" && request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
@@ -8594,7 +8648,7 @@ class DesktopAppServerService {
    * waits anyway; `active` leaves continuations out, as it does for a window.
    */
   async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined,
-    provenance?: import("@pwragent/shared").CausalMessagingContext): Promise<ManageThreadDependenciesResponse> {
+    provenance?: import("@pwragent/shared/messaging-causal-context").CausalMessagingContext): Promise<ManageThreadDependenciesResponse> {
     const owned = readFederationThreadDependenciesRequest(request);
     if (!owned) throw new Error("Unknown Continue After action.");
     if (owned.action === "active") {
@@ -8610,7 +8664,7 @@ class DesktopAppServerService {
   }
 
   private async manageLocalThreadDependencies(request: ManageThreadDependenciesRequest,
-    provenance: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous"> | undefined,
+    provenance: Pick<import("@pwragent/shared/contracts/normalized-app-server").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous"> | undefined,
     actor: string): Promise<ManageThreadDependenciesResponse> {
     if (typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
       throw new Error("A local backend and waiting threadId are required.");
@@ -8807,7 +8861,7 @@ class DesktopAppServerService {
       && ["started", "cancelled", "terminal"].includes(notification.params.status)) {
       const coordinator = this.getThreadDependencyCoordinator();
       const { status, threadId, turnId } = notification.params;
-      const dependencyId = (notification.params.messageOrigin as import("@pwragent/shared").AppServerThreadMessageOrigin | undefined)?.dependencyId;
+      const dependencyId = (notification.params.messageOrigin as import("@pwragent/shared/contracts/normalized-app-server").AppServerThreadMessageOrigin | undefined)?.dependencyId;
       // A continuation that waited in the queue is delivered by its own event.
       const progress = dependencyId && (status === "started" || status === "cancelled")
         ? coordinator.handleDeliveryProgress({ backend: event.backend, threadId, dependencyId, status,

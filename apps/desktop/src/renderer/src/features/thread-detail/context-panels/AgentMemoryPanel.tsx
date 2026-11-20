@@ -6,7 +6,7 @@ import {
   AGENT_MEMORY_NOTE_ID_PATTERN,
   type AgentMemoryArgs,
   type AgentMemoryResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent-memory";
 
 type MemoryDocument = Extract<AgentMemoryResult, { revision: string }>;
 

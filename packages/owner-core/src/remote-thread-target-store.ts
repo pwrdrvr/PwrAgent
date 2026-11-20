@@ -1,8 +1,8 @@
 import type {
   AppServerBackendKind,
-  FederationInstanceId,
   ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 
 /**
  * Durable viewer-side knowledge of which federation instance owns a thread.

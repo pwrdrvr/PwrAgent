@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary } from "../../../shared/integrated-terminal";
 import type { DesktopApi } from "./desktop-api";
 

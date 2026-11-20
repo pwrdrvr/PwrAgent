@@ -1,7 +1,8 @@
 import { Session } from "node:inspector";
 import { writeFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type AppServerThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";

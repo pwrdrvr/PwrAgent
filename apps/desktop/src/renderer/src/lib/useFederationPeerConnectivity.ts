@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   FederationConnectionState,
   FederationRemoteTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "./desktop-api";
 
 export type FederationPeerConnectivity = {

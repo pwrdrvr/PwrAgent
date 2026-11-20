@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  NavigationThreadSummary,
-  PrSummary,
-  ThreadSearchResponse,
-  ThreadSearchResult,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadSearchResponse, ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 import {
   mergeAgentMatches,
   mergePrNumberMatches,

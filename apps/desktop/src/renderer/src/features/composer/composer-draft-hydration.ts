@@ -1,9 +1,6 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
-import {
-  findSharedSkillNames,
-  isSharedSkillName,
-  type AppServerSkillSummary,
-} from "@pwragent/shared";
+import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
+import { type AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseInstanceReferenceUrl } from "../../lib/instance-references";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";

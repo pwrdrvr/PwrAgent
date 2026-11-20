@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type Dispatch, type SetStateAction, type RefObject } from "react";
-import type { NavigationResumeState } from "@pwragent/shared";
+import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
 import { navigationThreadSelectionKey } from "./navigation-query-state";
 
 /** Window-owned disclosure survives lens unmounts and determines explicit directory demand. */

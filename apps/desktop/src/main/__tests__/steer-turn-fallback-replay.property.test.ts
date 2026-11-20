@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { SteerTurnRequest } from "@pwragent/shared";
+import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";

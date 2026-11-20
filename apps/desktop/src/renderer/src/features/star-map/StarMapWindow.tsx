@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { getDesktopApi, useDesktopApi } from "../../lib/desktop-api";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useRecoverableComposerDraftStore } from "../../lib/RendererRecoveryState";

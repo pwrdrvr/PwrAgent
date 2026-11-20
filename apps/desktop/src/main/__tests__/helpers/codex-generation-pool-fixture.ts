@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  AppServerPendingRequestNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { CodexAppServerClient } from "../../codex-app-server/desktop-client";
 import type { CodexExecutableIdentity } from "../../codex-app-server/executable-identity";
 import {

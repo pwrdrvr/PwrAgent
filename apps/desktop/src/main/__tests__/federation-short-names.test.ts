@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationInstanceShortName } from "@pwragent/shared";
+import type { FederationInstanceShortName } from "@pwragent/shared/contracts/federation-short-names";
 import {
   FEDERATION_SHORT_NAME_QUIET_MS,
   FEDERATION_SHORT_NAME_RETRY_MS,

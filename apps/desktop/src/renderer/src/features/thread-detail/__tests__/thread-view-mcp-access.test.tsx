@@ -2,7 +2,9 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type McpConnectionStatus, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import {

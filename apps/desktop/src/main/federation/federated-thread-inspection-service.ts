@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import {
   PwrAgentFederatedThreadInspectionError,

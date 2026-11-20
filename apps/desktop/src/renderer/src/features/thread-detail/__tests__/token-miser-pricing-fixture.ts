@@ -1,9 +1,9 @@
 import type {
   AppServerReadThreadResponse,
   ThreadTokenMiserAccounting,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
-import { aggregateUsageLines } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { aggregateUsageLines } from "@pwragent/shared/thread-pricing-display";
 
 /** Contrived usage: $20.19 recorded, $12.26 historical gap, $7.71 saved. */
 export function buildTokenMiserPricingFixture() {

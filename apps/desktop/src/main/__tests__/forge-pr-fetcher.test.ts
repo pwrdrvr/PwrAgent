@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { FORGE_KINDS, type ForgeKind, type PrSummary } from "@pwragent/shared";
+import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared/forge-product";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { ForgePrFetcher, parseForgePrRefFromUrl, type ForgePrProvider } from "../pr-status/forge-pr-fetcher";
 
 const urls = {

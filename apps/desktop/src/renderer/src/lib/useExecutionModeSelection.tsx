@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import type { ThreadExecutionMode } from "@pwragent/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "./desktop-api";
 import { useModalDialog } from "./useModalDialog";
 

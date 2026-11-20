@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 

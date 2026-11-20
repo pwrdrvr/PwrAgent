@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ComposerFilePushProgress, PushComposerFileResult } from "@pwragent/shared";
+import type {
+  ComposerFilePushProgress,
+  PushComposerFileResult,
+} from "@pwragent/shared/contracts/composer-file-push";
 
 vi.mock("electron", () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: vi.fn() }));

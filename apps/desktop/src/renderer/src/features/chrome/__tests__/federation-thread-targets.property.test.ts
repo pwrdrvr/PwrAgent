@@ -4,7 +4,7 @@ import type {
   FederationCapability,
   FederationConnectionState,
   FederationHealthStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   buildFederationThreadTargets,
   listedFederationPeerTargets,

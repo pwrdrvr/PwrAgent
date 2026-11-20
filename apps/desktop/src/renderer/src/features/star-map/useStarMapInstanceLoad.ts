@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { FederationLoadStatus } from "@pwragent/shared";
+import type { FederationLoadStatus } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

@@ -1,5 +1,5 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   ThreadTodoModelSettings,
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -11,18 +11,19 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodoFeedSnapshot,
+  ListThreadTodoDispatchEnvironmentsRequest,
+  ListThreadTodoDispatchEnvironmentsResponse,
+  RaiseThreadTodoPlanRequest,
+} from "@pwragent/shared/contracts/thread-todos";
+import type {
   DisarmReviewAutoFixRequest,
   ListThreadReviewsRequest,
   ReadReviewAutoFixRequest,
   UpdateThreadReviewRequest,
-  ListThreadTodoDispatchEnvironmentsRequest,
-  ListThreadTodoDispatchEnvironmentsResponse,
-  CodexSpeed,
-  RaiseThreadTodoPlanRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
-  isAppServerBackendKind,
   parseThreadTodoItemTexts,
   parseThreadTodoMessageTarget,
   THREAD_TODO_TITLE_MAX_LENGTH,
@@ -30,8 +31,8 @@ import {
   isThreadTodoResolution,
   isThreadTodoSeenExecutionMode,
   isThreadTodoStatus,
-  threadReviewTodo,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import {
   getThreadTodoFeed,
   getThreadTodoService,

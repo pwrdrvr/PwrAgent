@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import type { AppServerReadThreadResponse } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import type { EditedFileGroup } from "../thread-detail/edited-file-groups";
 
 /**

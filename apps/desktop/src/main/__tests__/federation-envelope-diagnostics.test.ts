@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { describeLargeBackendEvent, describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
 
 const request = {

@@ -1,9 +1,9 @@
 import {
   buildThreadIdentityKey,
-  classifyDirectory,
   type NavigationThreadSummary,
   type NavigationDirectoryRow,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 
 /** Presentation identity retained when a project pools multiple owners. */
 export type StarMapProjectThread = NavigationThreadSummary & {

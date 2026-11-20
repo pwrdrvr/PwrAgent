@@ -2,7 +2,12 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { transcriptFileReference, type DesktopApplicationsSnapshot, type ResolveTranscriptFilesRequest, type ResolveTranscriptFilesResponse } from "@pwragent/shared";
+import { transcriptFileReference } from "@pwragent/shared/transcript-file-reference";
+import {
+  type DesktopApplicationsSnapshot,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";

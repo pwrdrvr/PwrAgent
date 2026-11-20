@@ -7,7 +7,7 @@ import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
 import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
 import { cssWithOnlyProperties } from "../../../styles/__tests__/css-property-cascade";

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationBrowseMode } from "@pwragent/shared";
+import type { NavigationBrowseMode } from "@pwragent/shared/contracts/navigation";
 import { _resetKeybindingsStoreForTests } from "../../../lib/keybindings-store";
 import { useLensHotkeys } from "../useLensHotkeys";
 import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { FEDERATION_SHUTDOWN_METHOD, type FederationProtocolEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_SHUTDOWN_METHOD,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { FederationShutdown } from "../federation/federation-shutdown";
 import { FederationRouter } from "../federation/federation-router";
 

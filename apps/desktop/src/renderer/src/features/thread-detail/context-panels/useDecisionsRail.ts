@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import type { DecisionsRailSnapshot, NavigationThreadSummary } from "@pwragent/shared";
+import type { DecisionsRailSnapshot } from "@pwragent/shared/decisions-rail";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { decisionsRailPollDelayMs } from "./decisions-format";

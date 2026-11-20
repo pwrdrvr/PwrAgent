@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type {
   GetWorktreeOtherChangeDiffRequest,
   GetWorktreeOtherChangeDiffResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { EditsPanel } from "../EditsPanel";
 import type { EditedFileGroup } from "../../edited-file-groups";
 

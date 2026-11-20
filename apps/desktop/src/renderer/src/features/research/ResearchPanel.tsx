@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from "react";
-import { sameResearchThread, type NavigationThreadSummary, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared";
+import { sameResearchThread, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared/research";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { PopoutIcon } from "../../icons";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";

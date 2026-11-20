@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { hydrateFederatedThreadMessageOrigins } from "../federation/federated-thread-origin-hydrator";
 
 describe("federated thread origin hydration", () => {

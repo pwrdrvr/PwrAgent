@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ArchiveThreadCleanupResult } from "@pwragent/shared";
+import type { ArchiveThreadCleanupResult } from "@pwragent/shared/contracts/normalized-app-server";
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress } from "../archive-cleanup-notice";
 
 describe("archive cleanup notices", () => {

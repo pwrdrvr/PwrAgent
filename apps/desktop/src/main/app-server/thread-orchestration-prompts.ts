@@ -4,10 +4,10 @@ import {
   type AppServerReviewTarget,
   type AppServerThreadImagePart,
   type AppServerTurnInputItem,
-  type CodexEnvironmentStartupFailure,
   type HandoffThreadWorkspaceResponse,
-  type PendingThreadWorkspaceMoveSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type CodexEnvironmentStartupFailure } from "@pwragent/shared/contracts/agent";
+import { type PendingThreadWorkspaceMoveSummary } from "@pwragent/shared/contracts/thread-tools";
 import { type ThreadAssetOwner } from "./thread-assets";
 import { stageTurnInputAttachmentsForRetention } from "./turn-input-attachment-files";
 

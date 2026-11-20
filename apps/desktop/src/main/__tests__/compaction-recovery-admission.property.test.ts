@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AppServerThreadMessageOrigin, SteerTurnRequest } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
 import { buildPwrAgentThreadToolDefinitions } from "../agent-tools/pwragent-thread-agent-tools";

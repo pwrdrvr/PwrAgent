@@ -1,6 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryPage, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { useLocalStarMapThreads } from "../useLocalStarMapThreads";

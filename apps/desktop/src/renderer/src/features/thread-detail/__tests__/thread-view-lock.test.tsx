@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ThreadLock } from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadLock } from "@pwragent/shared/contracts/navigation";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import {
   ThreadView as ThreadViewWithTerminals,

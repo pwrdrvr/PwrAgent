@@ -1,9 +1,9 @@
 import type {
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
-import { resolveToolIncidentVisibility } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { resolveToolIncidentVisibility } from "@pwragent/shared/contracts/tool-output-incidents";
 import { describe, expect, it, vi } from "vitest";
 import { buildToolAccountingNotice } from "../tool-accounting-notice";
 import {

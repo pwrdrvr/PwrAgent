@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { NavigationWindowQueries } from "../navigation-window-queries";
 
 const request = (i: number): NavigationQueryRequest => ({ protocol: 2, consumer: "main-sidebar",

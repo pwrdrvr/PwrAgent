@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Editor } from "@tiptap/react";
+import type { FetchLinearPastedImagesResponse } from "@pwragent/shared/contracts/mcp-connections";
 import type {
-  FetchLinearPastedImagesResponse,
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { buildInstanceReferenceUrl } from "../../../lib/instance-references";
 import { CompactComposer } from "../CompactComposer";

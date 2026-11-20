@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { DecisionsRailBatch, NavigationThreadSummary } from "@pwragent/shared";
+import type { DecisionsRailBatch } from "@pwragent/shared/decisions-rail";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { SignalCount } from "../../components/SignalCount";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";

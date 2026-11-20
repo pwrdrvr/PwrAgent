@@ -1,8 +1,13 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  AgentEvent, NavigationDirectorySummary, ThreadTodo, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot, ThreadTodosChangedEvent,
-} from "@pwragent/shared";
+  ThreadTodo,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
+  ThreadTodosChangedEvent,
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL, THREAD_TODOS_DELTA_EVENT_CHANNEL, THREAD_TODOS_LIST_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL, THREAD_TODOS_SNAPSHOT_CHANNEL, THREAD_REVIEWS_UPDATE_CHANNEL,

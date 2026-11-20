@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  CodexNativeSubAgentSummary,
-  ThreadSubAgentSummary,
-} from "../index";
+import type { CodexNativeSubAgentSummary } from "../contracts/normalized-app-server";
+import type { ThreadSubAgentSummary } from "../contracts/navigation";
 import {
   CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,

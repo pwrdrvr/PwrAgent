@@ -8,7 +8,6 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import type { } from "@pwragent/shared";
 import { FileCodeIcon, FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";

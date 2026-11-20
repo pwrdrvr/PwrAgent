@@ -4,11 +4,11 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FEDERATION_HEALTH_CHANGED_METHOD,
-  type AgentEvent,
-  type CloudflareSetupStatus,
   type FederationHealthStatus,
   type ReadFederationHealthResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type CloudflareSetupStatus } from "@pwragent/shared/contracts/federation-cloudflare";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useFederationHealth } from "../../../lib/useFederationHealth";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../AppNoticeToast";

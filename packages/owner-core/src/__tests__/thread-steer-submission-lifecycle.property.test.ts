@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { AppServerThreadMessageOrigin, AppServerTurnInputItem, SteerTurnRequest } from "@pwragent/shared";
+import type {
+  AppServerThreadMessageOrigin,
+  AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import { ThreadSteerSubmissionLifecycle, type ThreadSteerSubmissionHost } from "../thread-steer-submission-lifecycle";
 import { ThreadSteeringLifecycle } from "../thread-steering-lifecycle";
 

@@ -1,12 +1,12 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
-  ThreadSubAgentSummary,
   ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import type { PendingLiveThreadUsageLine } from "../app-server/backend-registry-types";
 import type { RegistryContext } from "../app-server/registry-context";

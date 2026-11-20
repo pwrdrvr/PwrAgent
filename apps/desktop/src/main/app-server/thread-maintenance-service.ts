@@ -1,12 +1,9 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  buildThreadIdentityKey,
-  type AppServerBackendKind,
   defaultThreadMaintenanceRules,
-  type DesktopCheckoutHibernationPolicy,
-  normalizeCheckoutHibernationPolicy,
-  type DesktopThreadArchivePolicy,
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceArchivedCheckout,
   type ThreadMaintenanceCoverage,
@@ -29,7 +26,12 @@ import {
   type ThreadMaintenanceWorkspace,
   type ThreadMaintenanceSpace,
   THREAD_MAINTENANCE_SCAN_STEPS,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
+import {
+  type DesktopCheckoutHibernationPolicy,
+  normalizeCheckoutHibernationPolicy,
+} from "@pwragent/shared/checkout-hibernation-policy";
+import { type DesktopThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import {
   archiveCandidateKeepReason,
   archiveCandidateLastActivity,

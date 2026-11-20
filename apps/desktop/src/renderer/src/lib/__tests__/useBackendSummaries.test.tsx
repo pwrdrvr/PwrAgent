@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, ProviderCatalogRefreshState } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ProviderCatalogRefreshState } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../desktop-api";
 import {
   BACKEND_SUMMARIES_REFRESH_EVENT,

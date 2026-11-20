@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import type { ResearchRun, ResearchThread, StartResearchRequest } from "@pwragent/shared";
+import type { ResearchRun, ResearchThread, StartResearchRequest } from "@pwragent/shared/research";
 import { ResearchService, type ResearchPorts } from "@pwragent/owner-core/research-service";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";

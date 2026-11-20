@@ -1,18 +1,20 @@
 import type {
   AppServerBackendKind,
-  FederationRemoteTarget,
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type {
   ListOperatorRequestsResponse,
   OperatorAsyncQuestion,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import {
-  graphemePrefix,
-  threadTodoThreadKey,
   operatorQuestionItemKey,
   operatorServerRequestItemKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
 import {
   createMcpElicitationState,
   mcpElicitationPurposeLabel,

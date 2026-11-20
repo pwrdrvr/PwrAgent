@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AppTitleBar } from "../AppTitleBar";
 import { ThreadHeader } from "../../thread-detail/ThreadHeader";
 import { ThreadPlaceholderHeader } from "../../thread-detail/ThreadPlaceholderHeader";

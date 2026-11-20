@@ -4,10 +4,12 @@ import type {
   NavigationQueryRequest,
   NavigationRow,
   NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type {
   ReadThreadFamilyPricingRequest,
   ReadThreadFamilyPricingResponse,
   ThreadFamilyPricingMember,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-family-pricing";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";

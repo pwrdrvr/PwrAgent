@@ -1,11 +1,11 @@
 import path from "node:path";
-import type { DesktopHotCpuProfileTriggerMode } from "@pwragent/shared";
+import type { DesktopHotCpuProfileTriggerMode } from "@pwragent/shared/contracts/settings";
 import {
   DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   isDesktopHotCpuProfileTriggerMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 const DEFAULT_INTERVAL_MS = 2_000;
 const DEFAULT_THRESHOLD_PERCENT = 50;

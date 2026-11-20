@@ -4,18 +4,21 @@ import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage 
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerThreadMessageOrigin,
-  StarMapWorkspaceSnapshot,
-  TaskMonitorUsageSnapshot,
-  ThreadSubAgentSummary,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
-import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY, projectActiveThreadSubAgents } from "@pwragent/shared";
-import type { AutomationRunSourceMetadata } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { StarMapWorkspaceSnapshot } from "@pwragent/shared/contracts/star-map";
+import type { TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildTurnUsageActivityEntryFromLine } from "@pwragent/shared/thread-usage-display";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
+import { projectActiveThreadSubAgents } from "@pwragent/shared/subagent-visibility";
+import type { AutomationRunSourceMetadata } from "@pwragent/shared/contracts/automations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";

@@ -1,8 +1,17 @@
 import type {
-  FederationCapability, FederationRemoteTarget, FederationTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
-  TodoBusyThread, TodoUnavailableInstance,
-} from "@pwragent/shared";
-import { normalizeThreadReview, resolveThreadTodoMergeMethod } from "@pwragent/shared";
+  FederationCapability,
+  FederationRemoteTarget,
+  FederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import type {
+  ThreadTodo,
+  ListThreadTodosRequest,
+  ThreadTodoMergeMethodPreferences,
+  TodoBusyThread,
+  TodoUnavailableInstance,
+} from "@pwragent/shared/contracts/thread-todos";
+import { normalizeThreadReview } from "@pwragent/shared/contracts/thread-reviews";
+import { resolveThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 import type { FederationRouter } from "./federation-router";
 import type { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";

@@ -1,5 +1,6 @@
-import { buildThreadIncidentSummary } from "@pwragent/shared";
-import type { AgentEvent, AppServerNotification } from "@pwragent/shared";
+import { buildThreadIncidentSummary } from "@pwragent/shared/thread-incident-summary";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** Live display resources invalidate; they never seed a historical accounting baseline. */
 export function projectThreadDisplayEvent(event: AgentEvent): AgentEvent {

@@ -2,8 +2,8 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   ThreadExecutionMode,
-  ThreadPermissionTransition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadPermissionTransition } from "@pwragent/shared/contracts/navigation";
 import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 /**

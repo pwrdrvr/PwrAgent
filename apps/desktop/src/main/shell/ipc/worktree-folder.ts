@@ -1,5 +1,5 @@
 import { ipcMain } from "electron";
-import type { DesktopWorktreeFolder, DesktopWorktreeFolderCheck } from "@pwragent/shared";
+import type { DesktopWorktreeFolder, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
 import { SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL } from "../../../shared/ipc";
 import { checkWorktreeFolder } from "../../settings/worktree-folder-check";
 

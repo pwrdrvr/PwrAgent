@@ -14,9 +14,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
+import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
+import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import type {
-  PrMergeQueueStatus,
-  ThreadReviewItem,
   ThreadTodo,
   ThreadTodoItem,
   ThreadTodoKind,
@@ -24,12 +24,14 @@ import type {
   ThreadTodoMergeMethodPreferences,
   ThreadTodoModelSettings,
   ThreadTodoResolution,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   describeMergeQueueRemoval,
   describeMergeQueueState,
   isMergeQueueActive,
   mergeQueueNoun,
+} from "@pwragent/shared/pr-merge-queue";
+import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
   THREAD_TODO_MERGE_METHOD_LABELS,
@@ -40,7 +42,7 @@ import {
   threadTodoOpenItems,
   threadTodoPrerequisites,
   threadTodoSteps,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   ArrowUpIcon,
   CheckIcon,

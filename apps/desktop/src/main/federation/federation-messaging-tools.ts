@@ -1,8 +1,13 @@
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import type { FilePushResult } from "@pwragent/federation/federation-file-push";
 import type { OriginalAttachmentConsumer } from "../messaging/core/messaging-original-attachment-store";
-import type { PwrAgentMessagingRequest, PwrAgentMessagingResponse, PwrAgentMessagingContext,
-  MessagingDynamicToolCategory, AppServerBackendKind } from "@pwragent/shared";
+import type {
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+  PwrAgentMessagingContext,
+} from "@pwragent/shared/contracts/messaging-tools";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 
 export const FEDERATION_MESSAGING_DESTINATION_METHOD = "messaging.destination";
 

@@ -1,6 +1,8 @@
 import { type MonitorCommandAction } from "./messaging-command-helpers";
-import { buildThreadIdentityKey, federatedThreadIdentityKey } from "@pwragent/shared";
-import type { FederationTarget, NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingChannelKind, MessagingChannelRef, MessagingDeliveryResult, MessagingAdapterState, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingTopicCleanupProposalItem } from "@pwragent/messaging-interface";
 import { MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT, MESSAGING_MONITOR_INTERVAL_MS, nextMonitorIntervalMs, nextMonitorThreadLimit, normalizeMonitorIntervalMs, normalizeMonitorThreadLimit } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";

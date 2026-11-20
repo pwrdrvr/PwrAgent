@@ -6,7 +6,7 @@
 import { EventEmitter } from "node:events";
 import type { WebContents } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { StarMapCommand } from "@pwragent/shared";
+import type { StarMapCommand } from "@pwragent/shared/contracts/star-map-tools";
 import { STAR_MAP_COMMAND_CHANNEL } from "../../shared/ipc";
 import {
   resetStarMapCommandBus,

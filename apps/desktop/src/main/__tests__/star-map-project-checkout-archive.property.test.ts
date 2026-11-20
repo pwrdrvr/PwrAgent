@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { buildDirectorySummaries, type NavigationThreadSummary, type ProjectCheckoutGroup } from "@pwragent/shared";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import {
+  type NavigationThreadSummary,
+  type ProjectCheckoutGroup,
+} from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { groupThreadsByProject } from "../../renderer/src/features/star-map/star-map-projects";
 

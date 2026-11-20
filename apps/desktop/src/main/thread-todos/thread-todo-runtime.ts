@@ -1,26 +1,32 @@
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
 import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
   AppServerThreadReviewEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
+} from "@pwragent/shared/contracts/federation-tools";
+import type {
   RaiseThreadTodoPlanRequest,
-  ThreadReview,
-  ThreadReviewIdentity,
   ThreadTodo,
   ThreadTodoMergeMethod,
   ThreadTodoProject,
   ThreadTodoFeedDelta,
   ThreadTodosChangedEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadReview, ThreadReviewIdentity } from "@pwragent/shared/contracts/thread-reviews";
 import {
-  DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS, resolveThreadTodoModelSettings, threadReviewTodo,
-} from "@pwragent/shared";
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
+  resolveThreadTodoModelSettings,
+} from "@pwragent/shared/contracts/thread-todos";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";

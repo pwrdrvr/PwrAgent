@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RecreateThreadWorktreeResponse, ThreadMissingWorkspace } from "@pwragent/shared";
+import type {
+  RecreateThreadWorktreeResponse,
+  ThreadMissingWorkspace,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { MissingWorktreeCard, WorkspaceRecoveryNotice } from "../MissingWorktreeCard";
 
 afterEach(() => {

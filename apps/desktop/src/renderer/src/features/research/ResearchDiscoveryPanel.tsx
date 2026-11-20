@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from "react";
-import type { ResearchDiscoverySnapshot } from "@pwragent/shared";
+import type { ResearchDiscoverySnapshot } from "@pwragent/shared/research-harness";
 import { plural } from "./research-view-model";
 
 type DiscoveryNode = NonNullable<ResearchDiscoverySnapshot["tree"]>["nodes"][number];

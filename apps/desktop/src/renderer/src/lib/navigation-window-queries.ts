@@ -1,7 +1,28 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
-import type { AgentEvent, FederationTarget, NavigationIdentity, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import {
+  NAVIGATION_QUERY_MAX_PAGE_ROWS,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
+  buildPullRequestStatusKey,
+} from "@pwragent/shared/contracts/navigation";
+import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
+import {
+  navigationInvalidationMayChangeMembership,
+  navigationQueryEventRequiresRefresh,
+  navigationWorkingStatePath,
+  readNavigationDirectoryScope,
+} from "@pwragent/shared/navigation-query-events";
+import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationIdentity,
+  NavigationMetadataDependencies,
+  NavigationQueryAnchor,
+  NavigationQueryEntry,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {

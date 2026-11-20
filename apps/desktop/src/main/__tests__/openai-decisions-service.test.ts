@@ -1,7 +1,7 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { OpenAIDecisionStore } from "../storage/openai-decision-store";
 import {
   OpenAIDecisionsError,

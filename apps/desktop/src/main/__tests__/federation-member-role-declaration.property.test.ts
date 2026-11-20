@@ -1,5 +1,9 @@
 import fc from "fast-check";
-import { FEDERATION_CAPABILITIES, type FederationPeerRole, type FederationProtocolEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_CAPABILITIES,
+  type FederationPeerRole,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { FEDERATION_MEMBER_ROLE_DECLARE_METHOD } from "@pwragent/federation/federation-backend-methods";
 import { assertFederationEgress } from "@pwragent/federation/federation-egress";
 import { expect, it, onTestFinished, vi } from "vitest";

@@ -2,7 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import queuedMessageTitlePrompt from "./queued-message-title-prompt.md?raw";
 import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 

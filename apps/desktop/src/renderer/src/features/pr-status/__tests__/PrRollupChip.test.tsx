@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type NavigationSelectedDetailRequest, type NavigationSelectedDetailResponse, type PrSummary } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";

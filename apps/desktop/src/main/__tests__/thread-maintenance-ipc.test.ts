@@ -25,7 +25,7 @@ vi.mock("../shell/window", () => ({
 }));
 
 import { ipcMain } from "electron";
-import { THREAD_MAINTENANCE_SCAN_STEPS } from "@pwragent/shared";
+import { THREAD_MAINTENANCE_SCAN_STEPS } from "@pwragent/shared/thread-maintenance";
 import { APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL, APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL } from "../../shared/ipc";
 import { registerThreadMaintenanceIpc } from "../shell/ipc/thread-maintenance-ipc";
 

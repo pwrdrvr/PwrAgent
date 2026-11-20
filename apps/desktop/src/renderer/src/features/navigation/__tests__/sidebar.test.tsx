@@ -1,6 +1,10 @@
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
-import type { NavigationQueryRequest, NavigationSelectedDetailRequest, NavigationSelectedDetailResponse } from "@pwragent/shared";
+import type {
+  NavigationQueryRequest,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+} from "@pwragent/shared/contracts/navigation";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import type { NavigationDirectoryView, NavigationPresentedThread } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
@@ -17,16 +21,18 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
-  type BackendSummary,
-  type DesktopPwrAgentProfileSummary,
-  type FederationCapability,
-  type NavigationDirectorySummary,
-  type NavigationThreadSummary,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
+} from "@pwragent/shared/project-forge-automation";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
+import { type FederationCapability } from "@pwragent/shared/contracts/federation";
+import {
+  type NavigationDirectorySummary,
+  type NavigationThreadSummary,
   type PrSummary,
-  type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import { findPeerCounterpartDirectory } from "../../../lib/federation-project-match";
 import type {

@@ -4,7 +4,7 @@ import type {
   MarkdownFileViewerSnapshot,
   OpenMarkdownFileViewerRequest,
   ReadMarkdownFileViewerSnapshotResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { getMainLogger } from "../log";
 import {
   applyWindowSecurityHardening,

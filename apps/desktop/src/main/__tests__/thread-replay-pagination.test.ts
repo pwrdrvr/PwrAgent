@@ -3,7 +3,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadReplay,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   fitNormalizedReplayWithinByteBudget,
   pageNormalizedReplay,

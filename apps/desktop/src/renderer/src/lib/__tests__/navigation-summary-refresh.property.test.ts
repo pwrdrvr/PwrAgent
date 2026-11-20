@@ -1,7 +1,12 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationQueryRequest,
+  NavigationThreadSummary,
+  PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { NavigationWindowQueries } from "../navigation-window-queries";
 

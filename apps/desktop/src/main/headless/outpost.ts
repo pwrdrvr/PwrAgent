@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
-import type { FederationPeerRole, SubmitDurableTurnRequest } from "@pwragent/shared";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
+import type { SubmitDurableTurnRequest } from "@pwragent/shared/contracts/durable-turn-requests";
 import { ensureNamedProfileExists } from "../profile";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";

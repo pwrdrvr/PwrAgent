@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 
 /**
  * One step of an owner conformance scenario, as one host answered it. The

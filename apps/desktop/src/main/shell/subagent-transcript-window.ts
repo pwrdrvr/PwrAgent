@@ -1,8 +1,6 @@
 import { BrowserWindow } from "electron";
-import {
-  buildThreadIdentityKey,
-  type OpenSubAgentTranscriptWindowRequest,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { type OpenSubAgentTranscriptWindowRequest } from "@pwragent/shared/contracts/subagent-transcript";
 import { getMainLogger } from "../log";
 import {
   applyWindowSecurityHardening,

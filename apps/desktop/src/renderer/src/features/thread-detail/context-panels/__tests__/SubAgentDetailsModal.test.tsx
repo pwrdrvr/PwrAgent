@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { SubAgentDetailsModal } from "../SubAgentDetailsModal";
 
 afterEach(() => {

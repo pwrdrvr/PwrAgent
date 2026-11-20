@@ -1,5 +1,5 @@
 import { memo, useId } from "react";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { formatBackendLabel } from "../../../lib/backend-label";

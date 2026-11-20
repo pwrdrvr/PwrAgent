@@ -1,6 +1,6 @@
 import { BackgroundTerminalsView, type BackgroundTerminalsViewProps } from "../BackgroundTerminalsView";
 import { memo } from "react";
-import type { CodexEnvironmentActionRun } from "@pwragent/shared";
+import type { CodexEnvironmentActionRun } from "@pwragent/shared/contracts/normalized-app-server";
 import { EnvActionRunsView } from "../EnvActionRunsView";
 import type { ActionRunsDock } from "./context-tab";
 

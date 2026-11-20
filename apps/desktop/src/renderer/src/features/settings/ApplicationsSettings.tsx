@@ -1,10 +1,10 @@
+import type { GhStatus } from "@pwragent/shared/contracts/navigation";
 import type {
-  GhStatus,
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationKind,
   DesktopCodeSignature,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { AppIcon } from "../../components/AppIcon";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { GhToolSection, GitToolSection } from "./CommandToolsSettings";

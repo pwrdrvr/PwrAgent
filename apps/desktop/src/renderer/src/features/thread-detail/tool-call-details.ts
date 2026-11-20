@@ -1,4 +1,4 @@
-import type { AppServerThreadEntry } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 
 export function detailMatchesInvocationItem(
   detailId: string,

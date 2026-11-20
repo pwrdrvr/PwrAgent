@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildThreadIdentityKey, encodeLegacyThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey, encodeLegacyThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

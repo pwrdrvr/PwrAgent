@@ -30,15 +30,15 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION } from "@pwragent/shared";
+import { PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION } from "@pwragent/shared/contracts/messaging-tools";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
 

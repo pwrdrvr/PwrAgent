@@ -1,11 +1,7 @@
 import type { ComponentProps } from "react";
-import {
-  buildModelMenu,
-  formatModelOptionLabel,
-  modelMenuOtherLabel,
-  type BackendModelOption,
-  type BackendSummary,
-} from "@pwragent/shared";
+import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
+import { formatModelOptionLabel } from "@pwragent/shared/codex-model-providers";
+import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import { formatBackendLabel } from "../../lib/backend-label";
 import {
   ComposerDropdown,

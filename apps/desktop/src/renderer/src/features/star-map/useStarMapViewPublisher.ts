@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { StarMapViewSnapshot } from "@pwragent/shared";
+import type { StarMapViewSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   buildStarMapViewSnapshot,

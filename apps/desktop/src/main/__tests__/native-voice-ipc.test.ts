@@ -1,7 +1,7 @@
 import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL } from "../../shared/native-voice-camera";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCameraConversationLine, VoiceCameraObservation, VoiceCameraRepeatVerdict } from "../../shared/native-voice-camera";
-import type { DesktopDecisionModelSettings } from "@pwragent/shared";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
 import { SystemOneRejected } from "../decision/system-one";
 import {
   type NativeVoiceStart,

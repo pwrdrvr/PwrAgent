@@ -6,7 +6,7 @@ import type {
   WorktreeRecoveryFailureReason,
   WorktreeRecoveryStep,
   WorktreeRecoveryStepId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { worktreeArchiveInternals } from "./worktree-archive-service";

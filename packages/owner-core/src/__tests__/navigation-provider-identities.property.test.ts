@@ -1,12 +1,11 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { providerChipNeeded, threadProviderIdentity } from "@pwragent/shared/provider-picker";
 import {
-  providerChipNeeded,
-  threadProviderIdentity,
   type NavigationQueryRequest,
   type NavigationSnapshot,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
 /**

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { AgentEvent, ScheduledThreadAction } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { buildThreadComposerScopeKey, useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";
 import {

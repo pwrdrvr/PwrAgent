@@ -1,8 +1,20 @@
 import { threadSummaryIdentityKey, federationTargetsEqual } from "../lib/federated-thread-events";
-import { federatedThreadIdentityKey, buildPullRequestStatusKey, type NavigationThreadSummary } from "@pwragent/shared";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import {
+  buildPullRequestStatusKey,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { applyNavigationThreadEvent } from "../lib/navigation-thread-event";
-import { applyNavigationSnapshotTransportResponse, buildThreadIdentityKey,
-  type AgentEvent, type NavigationLaunchpadDraft, type NavigationSnapshot, type NavigationSnapshotTransportState } from "@pwragent/shared";
+import {
+  applyNavigationSnapshotTransportResponse,
+  type NavigationSnapshotTransportState,
+} from "@pwragent/shared/navigation-snapshot-transport";
+import {
+  buildThreadIdentityKey,
+  type NavigationLaunchpadDraft,
+  type NavigationSnapshot,
+} from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../lib/desktop-api";
 import { navigationQueryFixture } from "./navigation-query-fixture";
 

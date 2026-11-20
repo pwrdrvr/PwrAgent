@@ -2,7 +2,7 @@ import type {
   ProviderCatalogRefreshProviderState,
   ProviderCatalogRefreshState,
   ProviderCatalogRefreshStepStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 
 export type ProviderCatalogRefreshProviderUpdate = {
   status: ProviderCatalogRefreshStepStatus;

@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
-import type { BackendRateLimitSummary } from "@pwragent/shared";
+import type { BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 import { PlanLimitStore } from "../app-server/plan-limit-store";
 import {
   CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeCreditsRenewTogether, claudeRateLimits,

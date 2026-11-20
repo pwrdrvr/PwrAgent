@@ -2,21 +2,23 @@ import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
-  FederationInstanceId,
-  NavigationThreadSummary,
-  SetThreadModelSettingsRequest,
   ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SetThreadModelSettingsRequest } from "@pwragent/shared/contracts/agent";
+import type {
   PwrAgentThreadInspectionErrorCode,
   PwrAgentThreadInspectionOperationName,
   PwrAgentThreadInspectionRequest,
   PwrAgentThreadInspectionResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import { AGENT_MEMORY_NOTE_ID_PATTERN } from "@pwragent/shared/contracts/agent-memory";
 import {
-  AGENT_MEMORY_NOTE_ID_PATTERN,
   PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES,
   PWRAGENT_THREAD_TOOL_NAMESPACE,
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

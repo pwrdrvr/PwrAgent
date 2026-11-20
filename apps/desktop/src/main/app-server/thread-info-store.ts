@@ -2,7 +2,7 @@ import {
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Where a piece of thread information came from. Higher-trust sources are not

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
-import type { AppServerThreadSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 const mocks = vi.hoisted(() => ({
   available: true,

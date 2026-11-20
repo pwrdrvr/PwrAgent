@@ -1,7 +1,12 @@
 import { cleanup, render, renderHook } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryEntry,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { readNavigationPresentationOrder } from "../navigation-presentation-order";

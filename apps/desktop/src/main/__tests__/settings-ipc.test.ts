@@ -9,7 +9,7 @@ import type {
   AcpAgentSettingsEntry,
   ProviderCatalogRefreshState,
   ReadProviderCatalogRefreshResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { TokenMiserStore } from "../token-miser/token-miser-store";

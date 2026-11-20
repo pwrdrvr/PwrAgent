@@ -1,7 +1,12 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationQueryEntry,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import { navigationDemandKey, navigationResumeQueryKey, NavigationWindowQueries } from "../navigation-window-queries";
 
 it("restores multiple Load more blocks in a new controller without saving refreshes", async () => {

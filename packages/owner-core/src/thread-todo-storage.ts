@@ -1,5 +1,5 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   ThreadTodo,
   ThreadTodoAction,
   ThreadTodoItem,
@@ -8,7 +8,7 @@ import type {
   ThreadTodoModelSettings,
   ThreadTodoProject,
   ThreadTodoStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 
 export type ThreadTodoResult = Pick<ThreadTodo, "result" | "startedThread">;
 

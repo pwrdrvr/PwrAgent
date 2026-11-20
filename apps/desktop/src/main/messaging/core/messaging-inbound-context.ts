@@ -7,7 +7,14 @@ import type { MessagingPrivateReplyClaims } from "./messaging-private-reply-clai
 import type { MessagingDeliveryGuard, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import type { MessagingLaunchpadDirectory, MessagingLaunchpadContext, MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import type { QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
-import type { AppServerBackendKind, BackendSummary, FederationTarget, MessagingPermissionId, MessagingToolUpdateMode, ThreadIdentifier } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
 import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingDeliveryResult, MessagingInboundEvent, MessagingInboundTextEvent, MessagingPendingIntentRecord, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";

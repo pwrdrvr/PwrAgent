@@ -3,7 +3,7 @@ import {
   resolveDecisionModelSettings,
   type DecisionProviderId,
   type DesktopDecisionModelSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decision-models";
 import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
 import type { SystemOneTarget } from "../decision/system-one";
 

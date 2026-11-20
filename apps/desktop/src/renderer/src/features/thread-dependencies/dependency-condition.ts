@@ -1,4 +1,7 @@
-import type { AppServerBackendKind, FederationTarget, NavigationThreadSummary, ThreadDependencyCondition } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadDependencyCondition } from "@pwragent/shared/contracts/thread-dependencies";
 import type { ThreadSearchCandidate } from "../thread-search/ThreadSearchPicker";
 import { threadMachineFrom } from "../thread-search/thread-address";
 

@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { CodexAsyncQuestion, OperatorAsyncQuestion } from "@pwragent/shared";
+import type { CodexAsyncQuestion } from "@pwragent/shared/codex-async-questions";
+import type { OperatorAsyncQuestion } from "@pwragent/shared/contracts/operator-requests";
 import {
   asyncQuestionDraftAnswer,
   formatAsyncQuestionDraftReply,

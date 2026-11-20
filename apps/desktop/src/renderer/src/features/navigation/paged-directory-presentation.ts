@@ -1,7 +1,7 @@
 import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import type { NavigationQueryPage, NavigationThreadSummary } from "@pwragent/shared";
-import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared/thread-pins";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { OPENAI_DECISIONS_PROVIDER } from "@pwragent/shared/openai-decisions";
 
 /**

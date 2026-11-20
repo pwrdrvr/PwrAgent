@@ -1,4 +1,5 @@
-import { FORGE_PRODUCTS, forgeKindForRemoteHost, isWindowsFilesystemPath, type ForgeKind } from "@pwragent/shared";
+import { FORGE_PRODUCTS, forgeKindForRemoteHost, type ForgeKind } from "@pwragent/shared/forge-product";
+import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";

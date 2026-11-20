@@ -6,7 +6,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import type { NavigationDirectorySummary } from "@pwragent/shared";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ReferencePicker,

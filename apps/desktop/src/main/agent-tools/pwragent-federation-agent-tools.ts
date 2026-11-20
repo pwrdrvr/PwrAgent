@@ -1,26 +1,30 @@
+import type { AdvertiseServiceArgs } from "@pwragent/shared/contracts/federation-services";
 import type {
-  AdvertiseServiceArgs,
   AppServerBackendKind,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   CreateInstanceThreadToolArgs,
   FederationSearchScope,
   ListAttentionThreadsToolArgs,
   ListFederationInstancesToolArgs,
   ListInstanceProjectsToolArgs,
   PushInstanceFileToolArgs,
-  HandoffInstanceThreadToolArgs,
   PwrAgentFederationOperationName,
   PwrAgentFederationRequest,
   PwrAgentFederationResponse,
   SearchFederationThreadsToolArgs,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-tools";
+import type { HandoffInstanceThreadToolArgs } from "@pwragent/shared/contracts/thread-instance-handoff";
 import {
   FEDERATION_SEARCH_SCOPES,
+  PWRAGENT_FEDERATION_OPERATION_NAMES,
+} from "@pwragent/shared/contracts/federation-tools";
+import {
   isAppServerBackendKind,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
-  PWRAGENT_FEDERATION_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

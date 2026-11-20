@@ -17,7 +17,7 @@ import {
 } from "./helpers/backend-registry-fixture";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
-import { launchpadStorageKey } from "@pwragent/shared";
+import { launchpadStorageKey } from "@pwragent/shared/contracts/navigation";
 import {
   mkdir,
   mkdtemp,
@@ -36,10 +36,9 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadSummary,
@@ -47,9 +46,10 @@ import type {
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   ThreadExecutionMode,
-  ThreadOverlayState,
   WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { type CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";

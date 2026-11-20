@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import type { SubmitServerRequestRequest } from "@pwragent/shared";
+import type { SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
 import {
   CheckIcon,
   EditsIcon,

@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { GithubMcpAccountSource } from "@pwragent/shared";
+import type { GithubMcpAccountSource } from "@pwragent/shared/github-mcp";
 import {
   GithubMcpAccountStatusCache,
   GITHUB_API_USER_URL,

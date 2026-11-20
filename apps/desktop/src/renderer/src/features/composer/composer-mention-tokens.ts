@@ -1,18 +1,15 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
-import type {
-  AppServerSkillSummary,
-  ThreadJumpCandidate,
-  PrSummary,
-} from "@pwragent/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadJumpCandidate } from "@pwragent/shared/thread-jump-match";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildThreadMarkdownLink,
   buildThreadUrl,
-  findSharedSkillNames,
-  isRemoteFederationTarget,
-  isSharedSkillName,
   parseThreadUrl,
-  resolvePullRequestIdentity,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-link";
+import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { resolvePullRequestIdentity } from "@pwragent/shared/contracts/navigation";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { formatHashReferenceThreadLabel } from "../../lib/hash-references";

@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MarkdownFileViewerContext, MarkdownFileViewerSnapshot } from "@pwragent/shared";
+import type {
+  MarkdownFileViewerContext,
+  MarkdownFileViewerSnapshot,
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { MarkdownFilesWindow } from "../MarkdownFilesWindow";
 import { ThreadMarkdown } from "../ThreadMarkdown";

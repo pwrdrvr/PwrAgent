@@ -1,6 +1,10 @@
 import { externalLinks as shell } from "../owner-host";
 import { existsSync } from "node:fs";
-import type { ConnectPwrGitResponse, OpenPwrGitResponse, PwrGitConnectionStatus } from "@pwragent/shared";
+import type {
+  ConnectPwrGitResponse,
+  OpenPwrGitResponse,
+  PwrGitConnectionStatus,
+} from "@pwragent/shared/contracts/mcp-connections";
 import {
   getMcpConnectionGatewayService,
   pwrSuiteUpdateDetail,

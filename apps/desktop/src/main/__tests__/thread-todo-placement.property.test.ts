@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 

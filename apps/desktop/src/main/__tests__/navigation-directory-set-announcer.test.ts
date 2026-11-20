@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationDirectorySummary, NavigationLaunchpadDraft } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
+} from "@pwragent/shared/contracts/navigation";
 import {
   directorySetFingerprint,
   directorySetMayHaveChanged,

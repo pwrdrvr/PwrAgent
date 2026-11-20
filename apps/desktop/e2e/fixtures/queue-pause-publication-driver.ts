@@ -2,8 +2,8 @@ import { createDesktopBackendRegistry } from "../../src/main/app-server/backend-
 import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { AgentEvent } from "@pwragent/shared";
-import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { DesktopBackendRegistry } from "../../src/main/app-server/backend-registry";
 import { CodexAppServerClient } from "../../src/main/codex-app-server/desktop-client";

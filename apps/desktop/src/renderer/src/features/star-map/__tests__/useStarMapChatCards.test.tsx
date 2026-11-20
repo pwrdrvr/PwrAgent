@@ -3,7 +3,7 @@ import {
   STAR_MAP_WORKSPACE_VERSION,
   type ReadStarMapWorkspaceResponse,
   type WriteStarMapWorkspaceRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {

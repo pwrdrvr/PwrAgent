@@ -5,13 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import {
-  DEFAULT_THREAD_ARCHIVE_POLICY,
   REBUILDABLE_OUTPUT_NAMES,
   type ThreadMaintenanceRun,
   type ThreadMaintenanceScanStep,
   type ThreadMaintenanceWorkspace,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import { PEER_SUBTHREADS_UNREADABLE, peerSubthreadKey, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,

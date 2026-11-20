@@ -1,13 +1,12 @@
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
-  type NavigationThreadSummary,
   type StarMapViewCloud,
   type StarMapViewInstance,
   type StarMapViewLayout,
   type StarMapViewSnapshot,
   type StarMapViewSurface,
   type StarMapViewThread,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import {
   threadAttentionCategories,
   type StarMapSessionKeys,

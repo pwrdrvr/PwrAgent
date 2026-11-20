@@ -1,9 +1,5 @@
-import {
-  buildTierPinRanks,
-  comparePinRanks,
-  isKeptAtTopRank,
-  type NavigationRelativePinMove,
-} from "@pwragent/shared";
+import { buildTierPinRanks, comparePinRanks, isKeptAtTopRank } from "@pwragent/shared/thread-pins";
+import { type NavigationRelativePinMove } from "@pwragent/shared/contracts/navigation";
 
 type RankedPin = { key: string; rank: string };
 

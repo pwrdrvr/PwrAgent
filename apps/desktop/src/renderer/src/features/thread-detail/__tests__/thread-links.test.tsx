@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";

@@ -5,8 +5,8 @@ import {
   backendLoadsMcpConnections,
   isSandboxerAccountLimited,
   withMcpConnection,
-  type AppServerBackendKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import sandboxerMark from "../../assets/sandboxer/sandboxer-mark.svg";
 import { PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";

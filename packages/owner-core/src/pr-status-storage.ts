@@ -1,13 +1,15 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   PrSummary,
-  PrAutoDispatchBudgetConfig,
-  PrAutoDispatchBudgetStatus,
   ThreadOverlayState,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  PrAutoDispatchBudgetConfig,
+  PrAutoDispatchBudgetStatus,
+} from "@pwragent/shared/contracts/settings";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 
 export type PrAutoDispatchPendingRecord = {
   dispatchLease?: {

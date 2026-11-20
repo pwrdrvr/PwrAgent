@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CODEX_MINIMUM_RECOMMENDED_VERSION, parseCodexVersionCore } from "@pwragent/shared";
+import { CODEX_MINIMUM_RECOMMENDED_VERSION, parseCodexVersionCore } from "@pwragent/shared/codex-version";
 import { CODEX_COMMAND_ENV as DISCOVERY_COMMAND_ENV } from "@pwrdrvr/codex-discovery";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";

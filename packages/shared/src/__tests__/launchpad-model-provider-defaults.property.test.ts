@@ -7,13 +7,12 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   changedProviderExecutionModeDefaultBackends,
   changedProviderModelDefaultBackends,
-  providerPickerValue,
   navigationLaunchpadProviderKey,
-  normalizeModelProviderDefaults,
   projectNavigationLaunchpadProviderSettings,
-  type DesktopProviderModelDefaults,
   type NavigationLaunchpadDefaults,
-} from "../index";
+} from "../contracts/navigation";
+import { providerPickerValue, normalizeModelProviderDefaults } from "../provider-picker";
+import { type DesktopProviderModelDefaults } from "../contracts/settings";
 
 const provider = fc.constantFrom("mathos", "bonsai");
 const effort = fc.constantFrom("low", "medium", "high");

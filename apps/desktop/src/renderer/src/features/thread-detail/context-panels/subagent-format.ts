@@ -1,12 +1,6 @@
-import type {
-  TaskMonitorUsageSnapshot,
-  ThreadSubAgentStatus,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
-import {
-  estimateOpenAiCodexCreditUsage,
-  formatTokenUsageUsd,
-} from "@pwragent/shared";
+import type { TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
+import type { ThreadSubAgentStatus, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { estimateOpenAiCodexCreditUsage, formatTokenUsageUsd } from "@pwragent/shared/token-usage-pricing";
 import type { RailChipTone } from "./RailStatusChip";
 
 export type PricingDisplayOptions = {

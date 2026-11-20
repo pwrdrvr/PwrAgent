@@ -1,4 +1,5 @@
-import type { AppServerReviewContext, ThreadReviewItem } from "@pwragent/shared";
+import type { AppServerReviewContext } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import { reviewFindingPullRequests } from "./pull-request-review";
 import { reviewFindingTag } from "./review-output";
 

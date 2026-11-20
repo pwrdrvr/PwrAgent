@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { matchesAutomationConversation } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import type {
   AutomationInboundCondition,
   AutomationInboundConditionJoin,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type { MessagingInboundTextEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "../automations/automation-store";
 import {

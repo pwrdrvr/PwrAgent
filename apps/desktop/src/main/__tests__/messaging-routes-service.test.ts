@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AppServerThreadSummary,
-  BackendSummary,
-  ThreadAgentMetadata,
-} from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ThreadAgentMetadata } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingRecord,
   MessagingDefaultAgentAssignmentRecord,

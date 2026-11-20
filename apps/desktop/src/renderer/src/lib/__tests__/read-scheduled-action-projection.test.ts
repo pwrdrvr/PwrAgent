@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ListScheduledThreadActionsResponse, ScheduledThreadAction } from "@pwragent/shared";
+import type {
+  ListScheduledThreadActionsResponse,
+  ScheduledThreadAction,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { NavigationMetadataBudget } from "../navigation-metadata-budget";
 import { readScheduledActionProjection } from "../read-scheduled-action-projection";
 

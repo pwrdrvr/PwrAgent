@@ -2,8 +2,15 @@ import { StrictMode, memo, useMemo } from "react";
 import { act, cleanup, fireEvent, render, renderHook, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { threadTodoThreadKey, type AgentEvent, type ListOperatorRequestsResponse, type NavigationThreadSummary,
-  type ThreadTodo, type ThreadTodoFeedDelta, type ThreadDependency } from "@pwragent/shared";
+import {
+  threadTodoThreadKey,
+  type ThreadTodo,
+  type ThreadTodoFeedDelta,
+} from "@pwragent/shared/contracts/thread-todos";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type ListOperatorRequestsResponse } from "@pwragent/shared/contracts/operator-requests";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { OperatorWaitsContext, useOperatorRequests } from "../../operator-requests/useOperatorRequests";
 import { ThreadTodoCountsContext, useThreadTodos } from "../../thread-todos/useThreadTodos";
 import { ThreadTodoRevealContext } from "../../thread-todos/thread-todo-reveal";

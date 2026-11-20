@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { CreateScheduledThreadActionRequest, SteerTurnRequest } from "@pwragent/shared";
+import type { CreateScheduledThreadActionRequest } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 
 describe("native review steer admission", () => {

@@ -3,7 +3,7 @@ import type {
   NavigationQueryRequest,
   NavigationQueueProjectionRequest,
   NavigationSelectedDetailRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 
 /** The first owner operations admitted by the native window transport. */
 export type OwnerNavigationRequest =

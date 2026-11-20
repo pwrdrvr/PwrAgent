@@ -1,15 +1,17 @@
-import { parseRemoteLaunchpadStorageKey } from "@pwragent/shared";
+import { parseRemoteLaunchpadStorageKey } from "@pwragent/shared/contracts/navigation";
 import path from "node:path";
 import { createCodexEnvironmentHydrationStorage } from "../storage/desktop-runtime-storage";
 import type { OverlayStoreLike } from "../storage/desktop-overlay-store";
 import {
   type AppServerThreadReplay,
-  type CodexEnvironmentOption,
   type CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type CodexEnvironmentOption,
   type NavigationLaunchpadDraft,
   type NavigationLaunchpadDefaults,
-  type EnsureDirectoryLaunchpadRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type EnsureDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import { type CodexEnvironmentSelection } from "./codex-environment-runtime";
 import { type CodexEnvironmentHydrationStore } from "../storage/codex-environment-hydration-store";
 

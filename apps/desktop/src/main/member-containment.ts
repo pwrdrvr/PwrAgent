@@ -1,10 +1,10 @@
 import {
   effectiveFederationMemberRole,
   normalizeFederationPeerRole,
-  PWRAGENT_TOOL_NAMESPACE,
   type FederationMemberContainment,
   type FederationPeerRole,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { getOwnerHostServices } from "./owner-host";
 import type { OwnerApprovals } from "./owner-runtime-policy";
 import { isAgentToolCallAllowed, OUTPOST_AGENT_TOOL_ALLOWLIST } from "./headless/outpost-agent-tools";

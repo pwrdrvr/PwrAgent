@@ -6,7 +6,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon, MergeQueueIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import {

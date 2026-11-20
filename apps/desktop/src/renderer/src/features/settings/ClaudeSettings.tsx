@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatFilesystemPath, type BackendSummary, type SettingsCredentialTestResult } from "@pwragent/shared";
+import { formatFilesystemPath } from "@pwragent/shared/path-display";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type SettingsCredentialTestResult } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { claudeProviderStatus } from "./claude-provider-status";
 import { SettingsField, SettingsSection } from "./SettingsLayout";

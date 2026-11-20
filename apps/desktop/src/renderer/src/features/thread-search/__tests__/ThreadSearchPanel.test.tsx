@@ -2,10 +2,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  NavigationThreadSummary,
-  ThreadSearchResponse,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { basename, highlightSnippet, ThreadSearchPanel } from "../ThreadSearchPanel";
 import type { DesktopApi } from "../../../lib/desktop-api";
 

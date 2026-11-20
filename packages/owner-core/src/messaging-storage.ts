@@ -1,4 +1,4 @@
-import type { FederatedThreadRef } from "@pwragent/shared";
+import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
 
 /** Hosts bind these opaque domain records without adding transport dependencies to owner policy. */
 export interface MessagingStorageRecords {

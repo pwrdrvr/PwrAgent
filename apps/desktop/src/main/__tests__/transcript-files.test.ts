@@ -2,7 +2,8 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { transcriptFileReference, type AppServerThreadSummary } from "@pwragent/shared";
+import { transcriptFileReference } from "@pwragent/shared/transcript-file-reference";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   isThreadWorkspaceFile,
   resolveTranscriptFiles,

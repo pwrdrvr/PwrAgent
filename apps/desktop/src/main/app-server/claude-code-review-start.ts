@@ -1,4 +1,5 @@
-import type { PrSummary, StartReviewRequest } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { StartReviewRequest } from "@pwragent/shared/contracts/agent";
 import {
   normalizePullRequestUrl,
   pullRequestRepositoryKey,

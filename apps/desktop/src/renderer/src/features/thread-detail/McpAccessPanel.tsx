@@ -3,13 +3,13 @@ import {
   canIsolateMcpProviderServers,
   backendLoadsMcpConnections,
   mcpSelectionApplyTiming,
-  orderManagedMcpConnections,
-  type AppServerBackendKind,
   type DescribeThreadMcpConnectionsResponse,
   type McpConnectionStatus,
-  type FederationRemoteTarget,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { orderManagedMcpConnections } from "@pwragent/shared/mcp-connection-order";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "../settings/SettingsSwitch";

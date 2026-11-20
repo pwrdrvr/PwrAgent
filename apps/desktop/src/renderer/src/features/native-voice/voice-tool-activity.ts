@@ -1,4 +1,7 @@
-import type { AppServerThreadActivityDetail, AppServerThreadActivityEntry } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { formatToolIdentifier, formatToolInvocation } from "../../../../shared/tool-activity";
 import type { VoiceActionRow } from "./native-voice-controller";
 

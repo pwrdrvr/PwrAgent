@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { graphemePrefix, graphemeSuffix } from "@pwragent/shared";
+import { graphemePrefix, graphemeSuffix } from "@pwragent/shared/text-graphemes";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { DesktopApi } from "./desktop-api";
 

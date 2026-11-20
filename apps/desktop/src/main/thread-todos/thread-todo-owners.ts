@@ -1,5 +1,6 @@
-import { buildThreadIdentityKey } from "@pwragent/shared";
-import type { AppServerThreadSummary, ThreadTodo } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 
 type TodoOwner = Pick<AppServerThreadSummary, "id" | "source" | "title" | "archivedAt"> & { federation?: unknown };
 

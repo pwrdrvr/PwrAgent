@@ -1,7 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { messagingModules } from "./fixtures/messaging-controller-modules";
 import { messagingPendingRequestHarness } from "./fixtures/messaging-pending-request-harness";
 

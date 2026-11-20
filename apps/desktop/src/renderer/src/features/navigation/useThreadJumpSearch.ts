@@ -3,8 +3,8 @@ import {
   createThreadJumpMatcher,
   parseThreadJumpQuery,
   threadHasExactPrNumberMatch,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-jump-match";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { readRendererFederationTarget } from "../../lib/federation-window";

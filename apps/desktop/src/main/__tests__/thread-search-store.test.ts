@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { StateDb } from "../state/state-db";
 import { buildThreadSearchFtsQuery } from "@pwragent/sqlite-storage/thread-search-fts-query";
 import { ThreadSearchStore } from "../storage/thread-search-store";

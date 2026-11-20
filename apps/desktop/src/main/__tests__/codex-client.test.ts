@@ -5,21 +5,20 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
 import {
-  buildAgentMemoryContext,
   buildProviderResponseBlockEntry,
-  buildThreadPricingSnapshotEstimate,
   readProviderResponseBlockNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/provider-response-block";
+import { buildThreadPricingSnapshotEstimate } from "@pwragent/shared/thread-pricing-display";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  DesktopHelperModelSettings,
-  HelperModelId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopHelperModelSettings, HelperModelId } from "@pwragent/shared/helper-models";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";

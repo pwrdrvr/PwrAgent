@@ -1,4 +1,4 @@
-import type { PrAutoDispatchBudgetStatus } from "@pwragent/shared";
+import type { PrAutoDispatchBudgetStatus } from "@pwragent/shared/contracts/settings";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export function buildPrAutoDispatchBudgetNotice(params: {

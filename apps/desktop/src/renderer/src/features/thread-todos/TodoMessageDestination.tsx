@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import type { NavigationThreadSummary, ThreadTodo, ThreadTodoMessageTarget } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo, ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
 import { ThreadChip } from "../thread-detail/ThreadChip";

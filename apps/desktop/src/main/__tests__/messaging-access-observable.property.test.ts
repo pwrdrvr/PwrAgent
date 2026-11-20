@@ -1,7 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { type MessagingPermissionId } from "@pwragent/shared";
+import { type MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 
 import { messagingAccessHarness as fixture } from "./fixtures/messaging-access-harness";
 

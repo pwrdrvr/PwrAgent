@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ResearchFinding, ResearchThread } from "@pwragent/shared";
+import type { ResearchFinding, ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";

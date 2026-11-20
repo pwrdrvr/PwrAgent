@@ -7,16 +7,12 @@ import {
   forgeRuleRepositoryLabel,
   forgeRuleRepositoryMatchKey,
   normalizeForgeRuleRepository,
-  parseCodexProviderModelId,
   removeForgeAgentToolRule,
   resolveForgeAgentToolInheritedAccess,
   sameForgeAgentRuleAgent,
   sameForgeRuleRepository,
   upsertForgeAgentToolRule,
   validateForgeAgentRuleAgent,
-  type BackendModelOption,
-  type BackendSummary,
-  type DesktopCodexModelProvider,
   type ForgeAgentRuleAgent,
   type ForgeAgentRuleNames,
   type ForgeAgentToolAccess,
@@ -25,8 +21,13 @@ import {
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
   type ForgeAgentToolRuleGroup,
-  type NavigationDirectoryRow,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
+  parseCodexProviderModelId,
+  type DesktopCodexModelProvider,
+} from "@pwragent/shared/codex-model-providers";
+import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type NavigationDirectoryRow } from "@pwragent/shared/contracts/navigation";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";

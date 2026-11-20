@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { DecisionsRailBatch } from "@pwragent/shared";
+import type { DecisionsRailBatch } from "@pwragent/shared/decisions-rail";
 import {
   decisionBatchStatusLabel,
   decisionBatchTimingLine,

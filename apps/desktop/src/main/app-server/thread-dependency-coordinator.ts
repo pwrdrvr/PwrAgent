@@ -1,21 +1,52 @@
 import { randomUUID } from "node:crypto";
 import type {
-  AppServerBackendKind, AppServerNotification, AppServerThreadMessageOrigin, AppServerThreadTurnMetadata,
-  ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, PrSummary,
-  ThreadDependency, ThreadDependencyCiRunObservation, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadDependencyLocalFile, ThreadTodo, ThreadTodoProject,
-} from "@pwragent/shared";
+  AppServerBackendKind,
+  AppServerNotification,
+  AppServerThreadMessageOrigin,
+  AppServerThreadTurnMetadata,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  ManageThreadDependenciesRequest,
+  ManageThreadDependenciesResponse,
+  ThreadDependency,
+  ThreadDependencyCiRunObservation,
+  ThreadDependencyCondition,
+  ThreadDependencyEvidence,
+  ThreadDependencyLocalFile,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
 import {
-  isRepairableDependencyFailure, isThreadDependencyLocalThreadCondition,
-  THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
-  THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH, THREAD_DEPENDENCY_MAX_STEPS, THREAD_DEPENDENCY_STEP_MAX_LENGTH,
-  THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH, threadDependencyMarkDoneIndex,
-  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS, THREAD_DEPENDENCY_CI_RUN_OUTCOMES, summarizeThreadDependencyCiRun, threadDependencyCiRunId,
+  isRepairableDependencyFailure,
+  isThreadDependencyLocalThreadCondition,
+  THREAD_DEPENDENCY_CONDITIONS,
+  THREAD_DEPENDENCY_DELIVERY_TARGETS,
+  THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH,
+  THREAD_DEPENDENCY_MAX_STEPS,
+  THREAD_DEPENDENCY_STEP_MAX_LENGTH,
+  THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH,
+  threadDependencyMarkDoneIndex,
+  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS,
+  THREAD_DEPENDENCY_CI_RUN_OUTCOMES,
+  summarizeThreadDependencyCiRun,
+  threadDependencyCiRunId,
   threadDependencyCiRunOutcomes,
-  threadDependencyConditionName, threadDependencyConditionPhrase,
-  THREAD_DEPENDENCY_PROMPT_ANY_MET, THREAD_DEPENDENCY_PROMPT_FAILED, THREAD_DEPENDENCY_PROMPT_INTRO,
-  THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
-  THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
-} from "@pwragent/shared";
+  threadDependencyConditionName,
+  threadDependencyConditionPhrase,
+  threadDependencyDeliveryTarget,
+  threadDependencyTodoKey,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  THREAD_DEPENDENCY_PROMPT_ANY_MET,
+  THREAD_DEPENDENCY_PROMPT_FAILED,
+  THREAD_DEPENDENCY_PROMPT_INTRO,
+  THREAD_DEPENDENCY_PROMPT_PLAN_LEAD,
+  THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
+} from "@pwragent/shared/contracts/thread-system-messages";
+import {
+  THREAD_TODO_DETAIL_MAX_LENGTH,
+  THREAD_TODO_TITLE_MAX_LENGTH,
+} from "@pwragent/shared/contracts/thread-todos";
 import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
 import { CI_RUN_URL_FORMS, describeCiRunObservation, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, type CiRunUrlOptions } from "./thread-dependency-ci-runs";

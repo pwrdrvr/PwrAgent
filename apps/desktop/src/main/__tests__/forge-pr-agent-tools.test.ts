@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_FORGE_AGENT_TOOL_POLICY, FORGE_AGENT_WRITE_TOOL_GROUPS, permissionForDynamicTool, type ForgeAgentToolPolicy } from "@pwragent/shared";
+import {
+  DEFAULT_FORGE_AGENT_TOOL_POLICY,
+  FORGE_AGENT_WRITE_TOOL_GROUPS,
+  type ForgeAgentToolPolicy,
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadError, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { GithubPrToolClient, type GhRunner } from "../pr-status/github-pr-tool-client";

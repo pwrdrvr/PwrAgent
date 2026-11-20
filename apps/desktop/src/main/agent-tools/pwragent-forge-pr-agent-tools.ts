@@ -1,4 +1,6 @@
-import { PWRAGENT_TOOL_NAMESPACE, type ForgeAgentToolPolicy, type ThreadTodoMergeMethod } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { type ForgeAgentToolPolicy } from "@pwragent/shared/contracts/forge-agent-tools";
+import { type ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { ForgeReadError } from "../pr-status/forge-tool-contract";
 import {
   FORGE_ATTACHMENTS_MAX,

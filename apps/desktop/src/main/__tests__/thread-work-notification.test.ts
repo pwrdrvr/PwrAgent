@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { threadNotificationSnippet, type AppServerThreadMessageOrigin, type AppServerTurnInputItem } from "@pwragent/shared";
+import { threadNotificationSnippet } from "@pwragent/shared/contracts/thread-system-messages";
+import {
+  type AppServerThreadMessageOrigin,
+  type AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { buildIncomingWorkSummary } from "../app-server/thread-work-notification";
 import { correspondenceNotice, incomingWorkText } from "../messaging/core/messaging-thread-notifications";
 

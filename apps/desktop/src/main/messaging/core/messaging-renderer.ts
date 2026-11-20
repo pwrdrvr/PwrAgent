@@ -1,10 +1,10 @@
 import type {
   AppServerReviewTarget,
   AppServerToolRequestUserInputNotification,
-  CodexAsyncQuestion,
-  NavigationSnapshot,
-} from "@pwragent/shared";
-import { coalesceToolActivityBurst } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CodexAsyncQuestion } from "@pwragent/shared/codex-async-questions";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
+import { coalesceToolActivityBurst } from "@pwragent/shared/tool-activity-burst";
 import type {
   MessagingActivityIntent,
   MessagingConfirmationIntent,

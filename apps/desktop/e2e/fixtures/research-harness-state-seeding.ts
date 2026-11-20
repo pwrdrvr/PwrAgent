@@ -1,5 +1,6 @@
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import { RESEARCH_HARNESS_REVISION, type ResearchActor, type ResearchEvent } from "@pwragent/shared";
+import { RESEARCH_HARNESS_REVISION } from "@pwragent/shared/research-harness";
+import { type ResearchActor, type ResearchEvent } from "@pwragent/shared/research";
 import { normalizeHarnessRecords } from "@pwragent/owner-core/research-harness-records";
 import { StateDb } from "../../src/main/state/state-db";
 import { harnessRecords } from "../../src/main/__tests__/fixtures/research-harness-records";

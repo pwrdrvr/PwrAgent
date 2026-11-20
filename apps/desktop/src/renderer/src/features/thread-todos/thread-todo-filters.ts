@@ -1,4 +1,4 @@
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { OperatorWait } from "../operator-requests/operator-waits";
 
 export type ThreadTodoCategory = "questions" | "approvals" | "reviews" | "todos";

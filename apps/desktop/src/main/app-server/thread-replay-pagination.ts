@@ -3,11 +3,13 @@ import {
   type AppServerReadThreadRequest,
   type AppServerThreadEntry,
   type AppServerThreadReplay,
-  isAcpBackendId,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import {
   type ThreadReplayCursorIdSpace,
   fitThreadReplayWithinByteBudget,
   pageThreadReplay,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-replay-paging";
 
 import { getMainLogger } from "../log";
 import { isOverlayOwnedTranscriptEntry } from "./overlay-transcript-entries";
@@ -16,7 +18,7 @@ const threadReplayPaginationLog = getMainLogger(
   "pwragent:thread-replay-pagination",
 );
 
-export type { ThreadReplayCursorIdSpace } from "@pwragent/shared";
+export type { ThreadReplayCursorIdSpace } from "@pwragent/shared/thread-replay-paging";
 
 /**
  * Whose id space a backend's own page cursor lives in.

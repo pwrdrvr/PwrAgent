@@ -4,7 +4,7 @@ import {
   type DesktopColorTheme,
   type DesktopContextMoonStyle,
   type DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { xrayKeyLabel } from "../../lib/xray-mode";

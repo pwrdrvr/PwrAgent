@@ -1,4 +1,8 @@
-import { FORGE_AGENT_WRITE_TOOL_GROUPS, type ForgeAgentToolGroup, type ForgeAgentWriteToolName } from "@pwragent/shared";
+import {
+  FORGE_AGENT_WRITE_TOOL_GROUPS,
+  type ForgeAgentToolGroup,
+  type ForgeAgentWriteToolName,
+} from "@pwragent/shared/contracts/forge-agent-tools";
 import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
 
 /**

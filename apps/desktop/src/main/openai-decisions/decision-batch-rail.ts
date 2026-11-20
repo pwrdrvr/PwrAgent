@@ -5,7 +5,7 @@ import {
   type DecisionsRailBatchPage,
   type DecisionsRailItem,
   type DecisionsRailItemFilter,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
 import {
   compactBatchItem,
   isFinishedBatch,

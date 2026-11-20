@@ -2,12 +2,16 @@ import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-s
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  canonicalDurableSteerRequest, canonicalDurableTurnRequest,
+  canonicalDurableSteerRequest,
+  canonicalDurableTurnRequest,
+} from "@pwragent/shared/durable-turn-request";
+import {
   DURABLE_TURN_REQUEST_RETENTION_MS,
-  type SubmitDurableSteerRequest, type ControlActiveTurnResponse,
-  type FederationRequestEnvelope,
+  type SubmitDurableSteerRequest,
   type GetDurableTurnRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/durable-turn-requests";
+import { type ControlActiveTurnResponse } from "@pwragent/shared/contracts/agent";
+import { type FederationRequestEnvelope } from "@pwragent/shared/contracts/federation";
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";

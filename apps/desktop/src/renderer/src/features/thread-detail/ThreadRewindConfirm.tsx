@@ -1,9 +1,6 @@
 import { useId, useRef, useState } from "react";
-import type {
-  PreviewThreadRewindResponse,
-  ThreadRewindMode,
-  ThreadRewindSupport,
-} from "@pwragent/shared";
+import type { PreviewThreadRewindResponse, ThreadRewindMode } from "@pwragent/shared/contracts/agent";
+import type { ThreadRewindSupport } from "@pwragent/shared/contracts/backend";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { ThreadRewindSummary } from "./thread-rewind";
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { AppServerBackendKind, NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { NavigationMetadataBudget, NAVIGATION_METADATA_MAX_RETAINED_BYTES } from "./navigation-metadata-budget";
 import { readNavigationQueryRange } from "./read-navigation-query-range";

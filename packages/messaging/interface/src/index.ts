@@ -1,29 +1,33 @@
-import type { ReviewAfterAction, ReviewRunMode, BackendCapabilities } from "@pwragent/shared";
+import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
+import type { BackendCapabilities } from "@pwragent/shared/contracts/backend";
 import type {
   AppServerBackendKind,
   AppServerReviewTarget,
-  BackendAcpSessionRuntimeState,
   CodexEnvironmentExecutionTarget,
-  LaunchpadWorkMode,
-  ModelSettingsRecent,
-  ModelMenuEntry,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
-  PendingRequestApprovalContext,
-  FederatedThreadRef,
-  MessagingBindingTargetKind,
-  MessagingDeliveryScope,
-  MessagingToolUpdateMode,
   ThreadIdentifier,
   ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
+import type {
+  LaunchpadWorkMode,
   NavigationDirectorySummary,
   NavigationDirectoryRow,
   NavigationRow,
-  FederationTarget,
   NavigationSnapshot,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ModelSettingsRecent } from "@pwragent/shared/contracts/agent";
+import type { ModelMenuEntry } from "@pwragent/shared/model-menu";
+import type { PendingRequestApprovalContext } from "@pwragent/shared/pending-request-response";
+import type { FederatedThreadRef, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  MessagingBindingTargetKind,
+  MessagingDeliveryScope,
+  MessagingToolUpdateMode,
+} from "@pwragent/shared/contracts/messaging";
 export {
   measureMessageText,
   splitTextForDelivery,
@@ -56,16 +60,11 @@ export {
 // import path without seeing two parallel declarations.
 export {
   MESSAGING_CONTACT_LABEL_MAX_LENGTH,
-  MESSAGING_TOOL_UPDATE_MODES,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
-  validateDiscordSnowflake,
-  validateMattermostId,
-  validateTelegramChatId,
-  validateTelegramPositiveId,
-  validateTelegramSupergroupId,
-  type IdentifierValidationReason,
-  type IdentifierValidationResult,
+} from "@pwragent/shared/messaging-contact-labels";
+export {
+  MESSAGING_TOOL_UPDATE_MODES,
   type MessagingDegradationReason,
   type MessagingDeliveryScope,
   type MessagingDeliveryScopeBudget,
@@ -79,7 +78,16 @@ export {
   type MessagingReconnectingDegradationReason,
   type MessagingToolUpdateMode,
   type MessagingWarningDegradationReason,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+export {
+  validateDiscordSnowflake,
+  validateMattermostId,
+  validateTelegramChatId,
+  validateTelegramPositiveId,
+  validateTelegramSupergroupId,
+  type IdentifierValidationReason,
+  type IdentifierValidationResult,
+} from "@pwragent/shared/messaging-id-validation";
 
 export const MESSAGING_SURFACE_INTENT_KINDS = [
   "activity",

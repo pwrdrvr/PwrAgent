@@ -2,7 +2,7 @@ import "./foreground-fixture";
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapFilterChip } from "../StarMapFilterChip";
 import { StarMapScreen } from "../StarMapScreen";

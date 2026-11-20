@@ -7,7 +7,7 @@
 // chip. A snapshot that got either wrong would have an Agent confidently
 // acting on threads the operator cannot see.
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildInstanceClusters,
   computeClusterCloud,

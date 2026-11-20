@@ -1,7 +1,5 @@
-import type {
-  ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+import type { ThreadToolInvocationRecord } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { describe, expect, it } from "vitest";
 import {
   indexTokenMiserCachedReplays,

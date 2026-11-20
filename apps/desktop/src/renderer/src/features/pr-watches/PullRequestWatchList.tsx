@@ -1,9 +1,7 @@
 import { useState } from "react";
-import type {
-  PrSummary,
-  ThreadPrWatchHistoryEntry,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { EyeIcon, MergeIcon, PullRequestIcon } from "../../icons";
 import { describeCiOutcomes } from "../pr-status/PrStatusCard";
 import {

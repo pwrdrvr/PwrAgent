@@ -4,44 +4,52 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
   AppServerReadThreadResponse,
   AppServerNotification,
   AppServerThreadSummary,
+  HandoffThreadWorkspaceRequest,
+  RenameThreadRequest,
+  RestoreWorktreeRequest,
+  RestoreThreadRequest,
+  ThreadGitWorkingState,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   FederationJumpSearchProgress,
   FederationJumpSearchRequest,
   GetNavigationSnapshotRequest,
-  HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
   NavigationThreadSummary,
   NavigationQueryPage,
   NavigationRemoteOwner,
-  FederationRemoteTarget,
-  FederationCapability,
-  FederationPeerSummary,
-  PrActivitySnapshot,
   PrSummary,
-  PullRequestTerminalDetails,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
-  RenameThreadRequest,
-  RestoreWorktreeRequest,
-  RestoreThreadRequest,
   SetDirectoryPinRequest,
   ReorderDirectoryPinsRequest,
   SetThreadParentRequest,
-  ThreadGitWorkingState,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  FederationRemoteTarget,
+  FederationCapability,
+  FederationPeerSummary,
+} from "@pwragent/shared/contracts/federation";
+import type { PrActivitySnapshot } from "@pwragent/shared/contracts/pr-activity";
+import type {
+  PullRequestTerminalDetails,
   ThreadPullRequestWatchEvent,
-  ThreadPrWatchesResponse,
   PwrAgentThreadInspectionResponse,
   WatchThreadPullRequestToolArgs,
-  ThreadSearchResponse,
-} from "@pwragent/shared";
-import { buildPullRequestStatusKey, DEFAULT_PROJECT_FORGE_AUTOMATION, expandNavigationRemoteOwner } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import {
   getProjectForgeAutomationIndex,
   resetProjectForgeAutomationIndexForTests,
@@ -5249,7 +5257,7 @@ describe("app server ipc", () => {
         const page = await navigationReadHandler("backend.getNavigationQueryPage")(event, {
           protocol: 2, consumer: "main-sidebar", inventory: "owner", pageSize: 10, deadlineAt,
           query: { kind: "group-members", roots: [{ backend: "codex", threadId: `root-${run}` }] },
-        }, consumerId) as import("@pwragent/shared").NavigationQueryPage;
+        }, consumerId) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
         expect(page.coverage.state).toBe(endsAfterMs === undefined ? "checking" : "complete");
         expect(Date.now()).toBeLessThan(deadlineAt);
       } finally {
@@ -5351,7 +5359,7 @@ describe("app server ipc", () => {
     const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90202, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "children", parent: { backend: "codex", threadId: parent.id } },
-    }) as import("@pwragent/shared").NavigationQueryPage;
+    }) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
     expect(page.entries.map(({ row }) => row.id)).toEqual([child.id]);
     expect(page.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
   });
@@ -5388,7 +5396,7 @@ describe("app server ipc", () => {
     const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90204, once: vi.fn() } }, {
       protocol: 2, consumer, inventory: "viewer",
       query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
-    }) as import("@pwragent/shared").NavigationQueryPage;
+    }) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
     // A pinned draft already comes from the pins; only the others are watched.
     expect(federationMock.remoteThreadSummaries.resolveWatchedThreads).toHaveBeenLastCalledWith([peerRef, heldRef],
       { cacheOnly: consumer === "exact-link" });
@@ -5417,7 +5425,7 @@ describe("app server ipc", () => {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "peer-draft", ownerInstanceId: "peer-a" }],
         includeAncestry: true, resolveFromOwners: true },
-    }) as import("@pwragent/shared").NavigationQueryPage;
+    }) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
     expect(page.entries.map(({ row }) => row.id)).toEqual(["peer-draft"]);
     expect(page.selectionDirectory?.key).toBe("directory:/local/PwrAgent");
   });

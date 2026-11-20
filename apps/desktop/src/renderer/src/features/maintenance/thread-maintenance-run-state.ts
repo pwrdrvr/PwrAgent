@@ -1,4 +1,4 @@
-import type { ThreadMaintenanceRun } from "@pwragent/shared";
+import type { ThreadMaintenanceRun } from "@pwragent/shared/thread-maintenance";
 
 /**
  * The dialog hears about a run three ways: the apply reply, run events, and a

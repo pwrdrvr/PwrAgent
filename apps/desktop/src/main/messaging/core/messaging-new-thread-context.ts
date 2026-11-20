@@ -1,4 +1,7 @@
-import type { AppServerBackendKind, BackendSummary, FederationTarget, MessagingToolUpdateMode } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
 import type { MessagingBindingRecord, MessagingBindingTargetKind, MessagingCapabilityProfile, MessagingDeliveryResult, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import type { MessagingControllerLogger, MessagingDeliveryGuard } from "./messaging-backend-event-helpers";

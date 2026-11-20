@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { InboundPreviewMessage } from "@pwragent/shared";
+import type { InboundPreviewMessage } from "@pwragent/shared/contracts/messaging";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import {
   activeInboundPreviewConversationIds,

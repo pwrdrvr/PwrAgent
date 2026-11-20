@@ -1,11 +1,8 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import { expect } from "vitest";
-import {
-  buildModelMenu,
-  modelMenuOtherLabel,
-  type BackendModelOption,
-} from "@pwragent/shared";
+import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
+import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 
 /**
  * A Codex catalog in the order Codex lists it, with superseded models mixed

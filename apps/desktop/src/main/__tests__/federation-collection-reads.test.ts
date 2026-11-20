@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FederationProtocolEnvelope, NavigationSnapshot } from "@pwragent/shared";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,

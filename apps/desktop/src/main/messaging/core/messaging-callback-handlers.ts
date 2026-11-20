@@ -1,9 +1,14 @@
 import { messageOriginForInboundEvent, readStringValue } from "./messaging-command-helpers";
 import { federationTargetForBinding } from "./messaging-backend-event-helpers";
-import type { SteerTurnResponse } from "@pwragent/shared";
-import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
+import type { SteerTurnResponse } from "@pwragent/shared/contracts/agent";
+import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared/codex-speed";
 import { readMessagingLaunchpadContext } from "./messaging-launchpad-context";
-import { applyNavigationLaunchpadProviderSettingsPatch, buildFederatedThreadRef, isAcpBackendId, permissionForActionId } from "@pwragent/shared";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
+  isAcpBackendId,
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { permissionForActionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingCallbackHandleRecord, MessagingBrowseSessionRecord, MessagingDefaultAgentAssignmentRecord, MessagingInboundCallbackEvent, MessagingInboundEvent, MessagingInboundTextEvent, MessagingManagedConversationActionResult, MessagingPendingIntentRecord, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { defaultAgentBackendSupport } from "./messaging-default-agent.js";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
