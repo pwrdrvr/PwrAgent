@@ -238,7 +238,7 @@ describe("DesktopBackendRegistry", () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-research-"));
       const db = openInMemoryStateDb();
       const storage = new ResearchStore(db);
-      const workerFinished = createDeferred<void>();
+      const claudeQueries = new Map<string, { initialized: Promise<void>; complete: () => void }>();
       const atProviderPrompt = vi.fn((threadId: string, providerTurnId?: string) => {
         const worker = { backend, threadId };
         const [run] = storage.activeRuns(worker);
@@ -257,12 +257,24 @@ describe("DesktopBackendRegistry", () => {
           query: ({ options = {} }) => {
             const threadId = options.sessionId!;
             atProviderPrompt(threadId);
+            const initialized = createDeferred<void>();
+            const outcome = createDeferred<"completed" | "closed">();
+            claudeQueries.set(threadId, {
+              initialized: initialized.promise,
+              complete: () => outcome.resolve("completed"),
+            });
             async function* messages(): AsyncGenerator<ClaudeMessage> {
               yield { type: "system", subtype: "init", session_id: threadId } as ClaudeMessage;
-              await workerFinished.promise;
-              yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+              if (await outcome.promise === "completed") {
+                yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+              }
             }
-            return Object.assign(messages(), { close: vi.fn(() => workerFinished.resolve()), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+            return Object.assign(messages(), {
+              close: () => outcome.resolve("closed"),
+              // Claude asks for the account after saving its init metadata.
+              accountInfo: async () => { initialized.resolve(); },
+              setPermissionMode: vi.fn(),
+            }) as unknown as ClaudeQuery;
           },
         },
       }) : createAcpResearchRegistry();
@@ -296,10 +308,31 @@ describe("DesktopBackendRegistry", () => {
       });
       const unsubscribe = bindResearchRegistry(registry, research, enabled);
       const client = new McpClient({ name: "research-worker-fixture", version: "1.0.0" });
+
+      async function completeClaudeTurn(threadId: string, turnId: string) {
+        const ended = createDeferred<void>();
+        const unsubscribeTerminal = registry.onEvent((event) => {
+          const { method, params } = event.notification;
+          if (event.backend === "claude" && method === "turn/completed"
+            && params.threadId === threadId && params.turnId === turnId) {
+            ended.resolve();
+          }
+        });
+        try {
+          claudeQueries.get(threadId)!.complete();
+          await ended.promise;
+        } finally {
+          unsubscribeTerminal();
+        }
+      }
+
       try {
         const { threadId } = await registry.startThread({ backend, cwd: root, executionMode: "default" });
         const coordinator = { backend, threadId };
         const parentTurn = await registry.startTurn({ ...coordinator, input: [{ type: "text", text: "Coordinate research" }] });
+        // The handoff reads the coordinator's metadata. Let the fake init
+        // finish its write before a Windows reader can hold the file open.
+        if (backend === "claude") await claudeQueries.get(threadId)!.initialized;
         expect(registry.researchContextIsLive({ ...coordinator, turnId: parentTurn.turnId, callId: "start", transport: "mcp" })).toBe(true);
         atProviderPrompt.mockClear();
 
@@ -333,8 +366,7 @@ describe("DesktopBackendRegistry", () => {
         } });
 
         if (backend === "claude") {
-          workerFinished.resolve();
-          await vi.waitFor(() => expect(storage.header(run!.id)?.activeWorkers).toBe(0));
+          await completeClaudeTurn(worker.threadId, turnId!);
         } else {
           await registry.publishLocalEvent({ backend, notification: { method: "turn/completed", params: {
             threadId: worker.threadId, turnId: turnId!, turn: { id: turnId!, status: "completed", output: [] },
@@ -342,12 +374,17 @@ describe("DesktopBackendRegistry", () => {
         }
         expect(storage.header(run!.id)?.activeWorkers).toBe(0);
         expect(storage.approaches(run!.id, { worker })).toMatchObject([{ state: "ended", worker: { ...worker, turnId } }]);
+        // A worker's terminal releases its slot while the coordinator is still live.
+        expect(registry.getActiveTurnForThread(coordinator)?.turnId).toBe(parentTurn.turnId);
         expect(onError).not.toHaveBeenCalled();
+        if (backend === "claude") {
+          await completeClaudeTurn(threadId, parentTurn.turnId);
+          expect(registry.getActiveTurnForThread(coordinator)).toBeUndefined();
+        }
       } finally {
         await client.close();
         unsubscribe();
         research.close();
-        workerFinished.resolve();
         await registry.close();
         db.close();
         await rm(root, { recursive: true, force: true });
@@ -2743,6 +2780,8 @@ script = "printf setup"
         tool: "move_thread_workspace",
         arguments: {
           sourcePath: "/repo/app",
+          // Agents never unlock: an approval the agent invents is not forwarded.
+          approvedLockReason: "release prep, do not remove",
         },
       },
     } as AppServerPendingRequestNotification);

@@ -55,6 +55,10 @@ import {
 import {
   type AppServerThreadTurnMetadata,
   type AppServerNotification,
+  type ReadThreadWorktreeLockRequest,
+  type ReadThreadWorktreeLockResponse,
+  type RemoveLockedThreadWorktreesRequest,
+  type RemoveLockedThreadWorktreesResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   type ThreadPendingWakesList,
@@ -1833,6 +1837,35 @@ class DesktopAppServerService {
     }
     const { federationTarget: _federationTarget, ...localRequest } = request;
     return await getDesktopBackendRegistry().moveThreadToMainCheckout(localRequest);
+  }
+
+  /** On the thread's owner. An owner too old to read locks reports none, so
+   * the handoff keeps a locked worktree, as before. */
+  async readThreadWorktreeLock(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .readThreadWorktreeLock(remoteRequest);
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().readThreadWorktreeLock(localRequest);
+  }
+
+  /** On the owner of every listed worktree; the caller groups by owner. */
+  async removeLockedThreadWorktrees(
+    request: RemoveLockedThreadWorktreesRequest,
+  ): Promise<RemoveLockedThreadWorktreesResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .removeLockedThreadWorktrees(remoteRequest);
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().removeLockedThreadWorktrees(localRequest);
   }
 
   async renameThread(
@@ -8181,19 +8214,7 @@ class DesktopAppServerService {
     }
     return await detachOwnedThreadDirectory(request, {
       overlayStore: this.getOverlayStore(),
-      readThread: async (backend, threadId) => {
-        const response = await this.listThreads({ backend });
-        return response.threads.find((thread) => thread.id === threadId);
-      },
-      publishUpdate: async (backend, threadId) => {
-        await getDesktopBackendRegistry().publishLocalEvent({
-          backend,
-          notification: {
-            method: "navigation/threadDirectories/updated",
-            params: { reason: "selected-thread", threadIds: [threadId] },
-          },
-        });
-      },
+      registry: getDesktopBackendRegistry(),
     });
   }
 

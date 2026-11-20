@@ -84,6 +84,8 @@ import { getDesktopNavigationQueryPool } from "./app-server/navigation-query-poo
 import { readLocalNavigationDirectoryIndex } from "./app-server/navigation-directory-index";
 import { setNavigationDetailPendingWakesProjector } from "./app-server/navigation-detail-service";
 import { appServerService } from "./app-server/desktop-app-server-service";
+import { startOwnerQueues } from "./owner-queue-services";
+import { disposeOperatorRequestService } from "./operator-requests/operator-request-runtime";
 
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
 const RUNNING_TURNS_STOP_TIMEOUT_MS = 2_000;
@@ -651,6 +653,15 @@ wireOwnerRendererEvents();
   }
 
   if (ownerShutdownStarted) throw new Error("Owner startup was cancelled by shutdown.");
+  const queues = startOwnerQueues(federationRuntime, {
+    registry,
+    readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
+    // Clicking a card approves the mode it shows, so these handlers skip the agent access ceiling.
+    federation: createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true }),
+    federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({
+      ...federationAgentToolOptions, operatorApproved: true, resolveMessageOrigin: () => messageOrigin,
+    }),
+  });
   void startAppServerOwnerNavigation().catch((error) => {
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });
@@ -779,12 +790,7 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
-    // A to-do runs on the operator's click, which approves the mode its
-    // card shows, so these handlers skip the agent access ceiling.
-    todoFederation: {
-      federation: createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true }),
-      federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true, resolveMessageOrigin: () => messageOrigin }),
-    },
+    queues,
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
       if (previousProviderDefaults) {
@@ -850,7 +856,11 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
   registry?.setProjectForgeAutomationHandler(undefined);
-  await appServerService?.close();
+  try {
+    await appServerService?.close();
+  } finally {
+    disposeOperatorRequestService();
+  }
 }
 
 export function releaseOwnerFederationLeaseSync(): void {

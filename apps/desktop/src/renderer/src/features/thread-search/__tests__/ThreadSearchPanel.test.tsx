@@ -1,11 +1,303 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
-import { basename, highlightSnippet, ThreadSearchPanel } from "../ThreadSearchPanel";
+import type {
+  ThreadSearchResponse,
+  ThreadSearchResult,
+} from "@pwragent/shared/contracts/thread-search";
+import {
+  basename,
+  highlightSnippet,
+  ThreadSearchPanel,
+  useThreadSearchPanelState,
+} from "../ThreadSearchPanel";
+import { prMatchToSearchResult } from "../thread-match";
+import { formatFullTimestamp } from "../../navigation/thread-time";
 import type { DesktopApi } from "../../../lib/desktop-api";
+
+// Counts renders: the title bar and every result card call this hook once
+// per render.
+// It wraps the real hook, so the provider chip still renders.
+const providerChipNeeded = vi.hoisted(() => vi.fn());
+vi.mock("../../navigation/provider-chip-visibility", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../navigation/provider-chip-visibility")>();
+  providerChipNeeded.mockImplementation(actual.useProviderChipNeeded);
+  return { ...actual, useProviderChipNeeded: providerChipNeeded };
+});
+
+function searchResult(overrides: Partial<ThreadSearchResult> & { threadId: string }): ThreadSearchResult {
+  return {
+    backend: "codex",
+    source: "codex",
+    identityKey: `codex:${overrides.threadId}`,
+    title: overrides.threadId,
+    score: 25,
+    confidence: "medium",
+    linkedDirectories: [],
+    matchReasons: [{ kind: "provider_content_match" }],
+    snippets: [],
+    ...overrides,
+  };
+}
+
+function searchResponse(results: ThreadSearchResult[], query = "deploy"): ThreadSearchResponse {
+  return {
+    backend: "all", contentMode: "available", fetchedAt: 1_000, filters: {}, query, results,
+    searchedScopes: ["metadata"], semanticMode: "disabled", unavailableScopes: [],
+  };
+}
+
+async function runSearch(query = "deploy"): Promise<void> {
+  fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: query } });
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  await screen.findByRole("list");
+}
+
+function resultTitles(): string[] {
+  return Array.from(document.querySelectorAll(".thread-search-result__title"))
+    .map((title) => title.textContent ?? "");
+}
+
+describe("ThreadSearchPanel result times", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("prints each thread's last activity as the sidebar does, with the full date on hover", async () => {
+    const now = Date.UTC(2026, 10, 20, 12);
+    vi.useFakeTimers({ now, toFake: ["Date"] });
+    const fourteenMinutes = now - 14 * 60_000;
+    const created = now - 3 * 24 * 3_600_000;
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "updated", updatedAt: fourteenMinutes, createdAt: created }),
+      searchResult({ threadId: "created-only", createdAt: created }),
+      searchResult({ threadId: "undated" }),
+    ]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+
+    const times = Array.from(document.querySelectorAll(".thread-search-result__time"));
+    expect(times.map((time) => time.textContent)).toEqual(["14m", "3d"]);
+    expect(times[0]).toHaveAttribute("data-tooltip", formatFullTimestamp(fourteenMinutes));
+    // A result with no time prints none: "now" would be a false claim.
+    expect(screen.getByRole("button", { name: /undated/ })
+      .querySelector(".thread-search-result__time")).toBeNull();
+  });
+
+  it("prefers the sidebar's current time for a thread that moved since the search", async () => {
+    const now = Date.UTC(2026, 10, 20, 12);
+    vi.useFakeTimers({ now, toFake: ["Date"] });
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "thread-1", updatedAt: now - 5 * 3_600_000 }),
+    ]));
+    const threads: NavigationThreadSummary[] = [{
+      id: "thread-1", title: "thread-1", titleSource: "explicit", source: "codex", inbox: { inInbox: true },
+      linkedDirectories: [], updatedAt: now - 2 * 60_000,
+    }];
+    render(
+      <ThreadSearchPanel
+        desktopApi={{ searchThreads } as DesktopApi}
+        onOpenResult={vi.fn()}
+        threads={threads}
+      />,
+    );
+    await runSearch();
+    expect(document.querySelector(".thread-search-result__time")).toHaveTextContent("2m");
+  });
+
+  it("carries a PR-number match's times from the navigation thread", () => {
+    const result = prMatchToSearchResult({
+      id: "thread-1", title: "PR thread", titleSource: "explicit", source: "codex", inbox: { inInbox: true },
+      linkedDirectories: [], createdAt: 10, updatedAt: 20,
+    }, 779);
+    expect(result).toMatchObject({ createdAt: 10, updatedAt: 20 });
+  });
+
+  it("names the confidence band in the tooltip and in the card's name", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "one", confidence: "high" }),
+    ]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    expect(screen.getByText("Message content")).toHaveAttribute("data-tooltip", "High confidence");
+    // The tooltip needs a pointer; the name does not.
+    expect(screen.getByRole("button", { name: /Message content, high confidence/ }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps the age label true while the results stay open", async () => {
+    const now = Date.UTC(2026, 10, 20, 12);
+    vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "one", updatedAt: now - 14 * 60_000 }),
+    ]));
+    const view = render(
+      <ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />,
+    );
+    await runSearch();
+    providerChipNeeded.mockClear();
+    expect(document.querySelector(".thread-search-result__time")).toHaveTextContent("14m");
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(document.querySelector(".thread-search-result__time")).toHaveTextContent("17m");
+    // Only the label rendered, not the card or the title bar.
+    expect(providerChipNeeded).not.toHaveBeenCalled();
+    // The timer stops with the last label.
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("ThreadSearchPanel result order", () => {
+  it("sorts by latest activity on request and returns to the search's ranking", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "old", updatedAt: 100 }),
+      searchResult({ threadId: "newest", updatedAt: 300 }),
+      searchResult({ threadId: "middle", updatedAt: 200 }),
+    ]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    const sort = screen.getByRole("group", { name: "Sort results" });
+    expect(resultTitles()).toEqual(["old", "newest", "middle"]);
+    expect(screen.getByRole("button", { name: "Best match" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Latest" }));
+    expect(resultTitles()).toEqual(["newest", "middle", "old"]);
+    expect(screen.getByRole("button", { name: "Latest" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Best match" }));
+    expect(resultTitles()).toEqual(["old", "newest", "middle"]);
+    expect(sort).toBeInTheDocument();
+  });
+
+  it("offers no sort for a single result", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([searchResult({ threadId: "only" })]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    expect(screen.queryByRole("group", { name: "Sort results" })).toBeNull();
+  });
+});
+
+describe("ThreadSearchPanel remote summary", () => {
+  it("counts the instances with no match and lists every instance in the tooltip", async () => {
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      ...searchResponse([searchResult({ threadId: "one" })]),
+      remoteInstances: [
+        { instanceId: "a", instanceLabel: "Mini / default", resultCount: 0 },
+        { instanceId: "b", instanceLabel: "Outpost / docker", resultCount: 0 },
+        { instanceId: "c", instanceLabel: "Max / default", resultCount: 0 },
+      ],
+    }));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    expect(screen.getByText("Remote: no matches on 3 instances")).toHaveAttribute(
+      "data-tooltip",
+      "Remote: Mini / default (0), Outpost / docker (0), Max / default (0)",
+    );
+  });
+});
+
+describe("ThreadSearchPanel arrow keys", () => {
+  it("walks from the search field through the results and back", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "first" }),
+      searchResult({ threadId: "second" }),
+    ]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    const input = screen.getByLabelText("Search threads");
+    const first = screen.getByRole("button", { name: /first/ });
+    const second = screen.getByRole("button", { name: /second/ });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(input).toHaveFocus();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+    // The last result is the end of the list.
+    fireEvent.keyDown(second, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+    fireEvent.keyDown(second, { key: "ArrowUp" });
+    fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(input).toHaveFocus();
+  });
+
+  it("leaves the arrows to an IME while it is composing", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([searchResult({ threadId: "first" })]));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    await runSearch();
+    const input = screen.getByLabelText("Search threads");
+    input.focus();
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+    expect(input).toHaveFocus();
+  });
+});
+
+// Property: typing in the search field renders the field, not the screen
+// around it. App owns the lifted search state, so if a keystroke rendered
+// the owner it rendered App; and a keystroke that rendered the title bar and
+// every result card re-ran each card's snippet highlighting.
+describe("ThreadSearchPanel typing cost", () => {
+  it("renders neither the state's owner, the title bar nor the result cards on a keystroke", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([
+      searchResult({ threadId: "first" }),
+      searchResult({ threadId: "second" }),
+      searchResult({ threadId: "third" }),
+    ]));
+    let ownerRenders = 0;
+    function Owner() {
+      ownerRenders += 1;
+      const state = useThreadSearchPanelState();
+      // App hands the panel new handler functions on every render.
+      return (
+        <ThreadSearchPanel
+          desktopApi={{ searchThreads } as DesktopApi}
+          state={state}
+          onOpenResult={() => undefined}
+          onOpenResultInRemoteViewer={() => undefined}
+        />
+      );
+    }
+    render(<Owner />);
+    await runSearch();
+    const ownerRendersAfterSearch = ownerRenders;
+    providerChipNeeded.mockClear();
+
+    const input = screen.getByLabelText("Search threads");
+    for (const value of ["deploy ", "deploy p", "deploy pr", "deploy pre"]) {
+      fireEvent.change(input, { target: { value } });
+    }
+
+    expect(input).toHaveValue("deploy pre");
+    expect(ownerRenders).toBe(ownerRendersAfterSearch);
+    expect(providerChipNeeded).not.toHaveBeenCalled();
+  });
+
+  it("keeps the query and results for a panel that mounts again on the same state", async () => {
+    const searchThreads = vi.fn(async () => searchResponse([searchResult({ threadId: "kept" })]));
+    function Owner(props: { open: boolean }) {
+      const state = useThreadSearchPanelState();
+      return props.open ? (
+        <ThreadSearchPanel
+          desktopApi={{ searchThreads } as DesktopApi}
+          state={state}
+          onOpenResult={vi.fn()}
+        />
+      ) : null;
+    }
+    const view = render(<Owner open />);
+    await runSearch();
+    view.rerender(<Owner open={false} />);
+    view.rerender(<Owner open />);
+    expect(screen.getByLabelText("Search threads")).toHaveValue("deploy");
+    expect(screen.getByRole("button", { name: /kept/ })).toBeInTheDocument();
+  });
+});
 
 describe("ThreadSearchPanel", () => {
   it("renders remote content results while another owner is still searching", async () => {

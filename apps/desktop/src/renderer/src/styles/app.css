@@ -9222,7 +9222,9 @@ a.button {
   display: grid;
   position: sticky;
   top: 0;
-  z-index: 5;
+  /* One above the Directory threads divider, which sticks under it and
+     slides beneath it as its list scrolls out. */
+  z-index: 6;
   /* One column: the launchpad cluster no longer owns a lane outside the
      summary's hover border — it overlays the summary's right edge
      (absolute, see `.directory-row__launchpad-cluster`) and swaps with
@@ -9876,7 +9878,7 @@ a.button {
    is no preceding 2px flex gap to cancel in that position, so the shared
    negative start margin pulled the first unpinned row 2px toward the sticky
    header. That left only 2px for a focus outline that reaches 4px outside the
-   card, allowing the z-index 5 header to erase its horizontal top run. Keep
+   card, allowing the z-index 6 header to erase its horizontal top run. Keep
    the end cancellation for the real following gap, but do not invent a gap
    above a zero-height first child. */
 .directory-row__pin-drop-boundary:first-child {
@@ -9997,15 +9999,35 @@ a.button {
      optically where it was; the extra height is hit area, not padding
      around a bigger label. Do not trade this back for density. */
   min-height: 24px;
+  /* Sticks under its project's header while the project's unpinned rows
+     scroll past, so with a long list open the disclosure that closes it is
+     still one click away instead of 150 rows up. Its containing block is
+     `.directory-row__threads` (the slot around it is `display: contents`),
+     so it lets go with the last row and slides under the header (z 6).
+     Above the rows' own layers (the sub-thread toggle is z 4). The offset
+     is the header's measured height, published on the section by
+     DirectoriesList; 24px is the summary's floor, for the first frame. */
+  position: sticky;
+  top: var(--directory-row-header-height, 24px);
+  z-index: 5;
+  /* Opaque and as wide as the header: out to the section edges over the
+     lane's 8px insets (`.directory-row__threads`), so a selected row's
+     accent border and focus ring cannot show beside the stuck band. The
+     padding returns the label and rules to the base 6px inset. */
+  margin-inline: -8px;
+  padding-inline: 14px;
+  background: var(--bg-sidebar);
 }
 
 .directory-row__thread-divider:hover:not(:disabled) {
   color: var(--text-secondary);
 }
 
+/* Inside its box, as `.directory-row__summary` does: the band now reaches
+   the section edges, and a ring outside it would be clipped by the lane. */
 .directory-row__thread-divider:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .directory-row__thread-divider:disabled {
@@ -10018,10 +10040,19 @@ a.button {
   gap: 6px;
 }
 
+/* Full strength, like the label beside it: the divider's muted color is
+   already at the AA floor on the sidebar, and the old 0.82 opacity left
+   the count at 3.4:1. Shown only while the list was collapsed, axe never
+   scanned it until it showed in both states. The number is generated
+   content from `data-count` so it stays out of the button's label-in-name
+   check (see DirectoriesList). */
 .directory-row__thread-divider-count {
   color: currentColor;
   font-variant-numeric: tabular-nums;
-  opacity: 0.82;
+}
+
+.directory-row__thread-divider-count::before {
+  content: attr(data-count);
 }
 
 .directory-row__thread-divider-chevron {
@@ -11563,6 +11594,12 @@ a.button {
   font-size: 13px;
 }
 
+.thread-search__status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .thread-search__scopes {
   display: flex;
   flex-wrap: wrap;
@@ -11577,14 +11614,78 @@ a.button {
   font-size: 12px;
 }
 
+/* The count keeps its width; the remote summary takes the room between it
+   and the sort control and ends in an ellipsis. Its tooltip lists every
+   instance. */
 .thread-search-results-meta {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 12px;
-  margin: 0;
+  min-height: 24px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.thread-search-results-meta__count {
+  flex: none;
+}
+
+.thread-search-results-meta__remote {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Logs window's segmented control, at this row's height. */
+.thread-search-sort {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  height: 24px;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.thread-search-results-meta__remote + .thread-search-sort {
+  margin-left: 0;
+}
+
+.thread-search-sort__option {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.thread-search-sort__option:last-child {
+  border-right: 0;
+}
+
+.thread-search-sort__option:hover {
+  color: var(--text-primary);
+}
+
+.thread-search-sort__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.thread-search-sort__option[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .thread-search-results-meta strong {
@@ -11599,7 +11700,11 @@ a.button {
   min-height: 0;
   gap: 8px;
   overflow: auto;
-  padding-right: 4px;
+  /* Room for a card's focus ring (2px at a 2px offset), which the scroll
+     container would otherwise clip on the first card and the left edge. The
+     negative margins keep the cards where they were. */
+  margin: -4px 0 -4px -4px;
+  padding: 4px;
 }
 
 .thread-search-result {
@@ -11710,40 +11815,55 @@ a.button {
   text-align: right;
 }
 
-.thread-search-result__confidence {
+/* The sidebar row's time column, in its type: the thread's last activity. */
+.thread-search-result__time {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+/* Why the thread matched. The dot carries the confidence band, which the
+   tooltip names: filled accent for high, filled muted for medium, a hollow
+   ring for low, so the bands differ in shape and lightness, not hue alone. */
+.thread-search-result__reason {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* Read by assistive tech, not drawn. */
+.thread-search-result__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .thread-search-result__confidence-dot {
+  flex: none;
+  box-sizing: border-box;
   width: 7px;
   height: 7px;
+  border: 1.5px solid currentColor;
   border-radius: 999px;
   background: currentColor;
 }
 
-.thread-search-result__confidence--high {
+.thread-search-result__reason--high .thread-search-result__confidence-dot {
   color: var(--accent-bright);
 }
 
-.thread-search-result__confidence--medium {
-  color: var(--text-secondary);
-}
-
-.thread-search-result__confidence--low {
-  color: var(--text-muted);
-}
-
-.thread-search-result__reason {
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.3;
+.thread-search-result__reason--low .thread-search-result__confidence-dot {
+  background: transparent;
 }
 
 /* A remote result's Remote viewer button. Buttons cannot nest, so it is the
@@ -47458,6 +47578,64 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 700;
+}
+
+/* Someone else's Git lock on the worktree a handoff would archive: Git's
+   reason, the worktree, and the operator's choice to unlock it. */
+.workspace-handoff-dialog__lock {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
+  border-radius: 6px;
+  background: var(--warning-surface);
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-reason {
+  margin: 0;
+  color: var(--status-warning-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-reason.is-empty {
+  color: var(--text-muted);
+  font-family: inherit;
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-path {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-handoff-dialog__lock-check {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.workspace-handoff-dialog__lock-check > span:last-child {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.workspace-handoff-dialog__lock .workspace-handoff-dialog__note {
+  margin: 0;
 }
 
 /* Qualified by element, as the rewind dialog's warning is: the bare classes

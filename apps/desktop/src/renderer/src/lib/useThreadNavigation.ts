@@ -1,4 +1,6 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import { useLockedArchiveWorktreeNotice } from "./useLockedArchiveWorktreeNotice";
+import { lockChangedBeforeHandoffNotice } from "./locked-worktree-notice";
 import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
 import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thread";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
@@ -3323,7 +3325,8 @@ export function useThreadNavigation(
   ) => Promise<RecreateThreadWorktreeResponse>;
   moveThreadToMainCheckout: (
     thread: NavigationThreadSummary,
-    worktreePath: string
+    worktreePath: string,
+    options?: { approvedLockReason?: string },
   ) => Promise<MoveThreadToMainCheckoutResponse>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   setThreadReaction: (
@@ -3572,6 +3575,10 @@ export function useThreadNavigation(
   }), [desktopApi]);
   const [archiveThreadError, setArchiveThreadError] = useState<string | (ThreadActionErrorContext & { message: string })>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
+  const {
+    present: presentArchiveCleanup,
+    reset: resetLockedArchiveWorktrees,
+  } = useLockedArchiveWorktreeNotice({ desktopApi, setNotice: setArchiveThreadNotice });
   const archiveCleanupContexts = useRef(new Map<string, ThreadActionErrorContext>());
   const [archiveCleanupProgressNotice, setArchiveCleanupProgressNotice] = useState<AppNoticeToastNotice>();
   const [archiveCleanupSummaryNotice, setArchiveCleanupSummaryNotice] = useState<AppNoticeToastNotice>();
@@ -4872,8 +4879,10 @@ export function useThreadNavigation(
             ...(context.worktreePaths ?? []),
             ...completion.cleanup.flatMap((item) => item.worktreePath ? [item.worktreePath] : []),
           ])] });
-        const notice = background ? undefined : formatArchiveCleanupNotice(completion.cleanup, context);
-        if (notice) setArchiveThreadNotice(notice);
+        const notice = !background && presentArchiveCleanup(completion.cleanup, context, {
+          backend: event.backend, threadId: completion.threadId,
+          threadTitle: completion.threadTitle ?? context.threadLink?.title, federationTarget: event.federationTarget,
+        });
         const receivedAt = Date.now();
         void desktopApi.logRendererDiagnostic?.({
           level: "info", message: "archive cleanup completion received",
@@ -5457,6 +5466,7 @@ export function useThreadNavigation(
     noteDirectoryPatch,
     setSelectedItemKey,
     backgroundCleanupReport,
+    presentArchiveCleanup,
   ]);
 
   // Binding chips are projected in row pages but can be mutated outside
@@ -8890,6 +8900,7 @@ export function useThreadNavigation(
       }
       setArchiveThreadError(undefined);
       setArchiveThreadNotice(undefined);
+      resetLockedArchiveWorktrees();
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
       setSetThreadExecutionModeError(undefined);
@@ -8982,16 +8993,15 @@ export function useThreadNavigation(
             throw error;
           }
           if (!response.cleanupPending) archiveCleanupContexts.current.delete(cleanupContextKey);
-          const cleanupNotice = formatArchiveCleanupNotice(response.cleanup, context);
+          presentArchiveCleanup(response.cleanup, context, {
+            backend: target.source, threadId: target.id, threadTitle: target.title, federationTarget,
+          });
           archivedKeys.add(threadSummaryIdentityKey(target));
           archived.push({
             backend: target.source,
             threadId: target.id,
             remote: federationTarget?.scope === "remote" || Boolean(target.federation),
           });
-          if (cleanupNotice) {
-            setArchiveThreadNotice(cleanupNotice);
-          }
           if (target.federation?.ref && removeRemoteThreadPinRequest) {
             // Archiving succeeds on the owner, but viewer-owned remote pins
             // are deliberately local state. Remove that cached mount too or
@@ -9036,8 +9046,10 @@ export function useThreadNavigation(
       updateArchivedThreadKey,
       deferNestedArchiveRemoval,
       desktopApi,
+      presentArchiveCleanup,
       refresh,
       removeRemoteThreadPinRequest,
+      resetLockedArchiveWorktrees,
       setSelectedItemKey,
     ]
   );
@@ -9230,6 +9242,8 @@ export function useThreadNavigation(
         });
         const threadKey = threadSummaryIdentityKey(thread);
         setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
+        const changedLock = request.approvedLockReason !== undefined ? response.keptSourceWorktree : undefined;
+        if (changedLock) setArchiveThreadNotice(lockChangedBeforeHandoffNotice(changedLock));
         // The dialog can close before Git-backed reads finish.
         refreshAfterWorkspaceChange(threadKey);
       } catch (error) {
@@ -9266,7 +9280,8 @@ export function useThreadNavigation(
   const moveThreadToMainCheckout = useCallback(
     async (
       thread: NavigationThreadSummary,
-      worktreePath: string
+      worktreePath: string,
+      options: { approvedLockReason?: string } = {},
     ): Promise<MoveThreadToMainCheckoutResponse> => {
       if (!moveThreadToMainCheckoutRequest) {
         throw new Error("Desktop bridge is missing moveThreadToMainCheckout().");
@@ -9276,11 +9291,14 @@ export function useThreadNavigation(
         federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
         threadId: thread.id,
         worktreePath,
+        ...(options.approvedLockReason !== undefined ? { approvedLockReason: options.approvedLockReason } : {}),
       });
       const threadKey = threadSummaryIdentityKey(thread);
       // As after a handoff: keep workspace actions gated until the selected
       // detail shows the thread in the main checkout.
       setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
+      const changedLock = options.approvedLockReason !== undefined ? response.keptWorktree : undefined;
+      if (changedLock) setArchiveThreadNotice(lockChangedBeforeHandoffNotice(changedLock));
       refreshAfterWorkspaceChange(threadKey);
       return response;
     },
@@ -10369,8 +10387,9 @@ export function useThreadNavigation(
   );
 
   const dismissArchiveThreadNotice = useCallback((): void => {
+    resetLockedArchiveWorktrees();
     setArchiveThreadNotice(undefined);
-  }, []);
+  }, [resetLockedArchiveWorktrees]);
 
   const dismissArchiveCleanupProgressNotice = useCallback((): void => {
     if (archiveCleanupProgressNotice) dismissedArchiveCleanupBatch.current = archiveCleanupProgressNotice.id.slice("archive-cleanup:".length);

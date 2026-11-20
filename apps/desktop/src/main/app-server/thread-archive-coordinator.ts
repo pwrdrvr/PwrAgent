@@ -59,6 +59,11 @@ import {
   type ThreadHibernatedWorkspace,
   type WorktreeRecoveryFailureReason,
   type WorktreeSnapshotSummary,
+  type RemoveLockedThreadWorktreeResponse,
+  type RemoveLockedThreadWorktreesRequest,
+  type RemoveLockedThreadWorktreesResponse,
+  WORKTREE_LOCKED_SKIP_REASON,
+  type WorktreeLockedKept,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { type CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
@@ -83,6 +88,7 @@ import {
 } from "./thread-info-store";
 import { MissingArchiveGitEntryError, MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotLimitExceededError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
+import { WorktreeLockedError } from "./worktree-volume-lock";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
 import { inspectRegisterableWorktree, sameRegisteredWorktree, type CheckoutIdentity } from "./worktree-maintenance-registration";
 import { protectiveMaintenanceWatches, type MaintenancePrObservation } from "./maintenance-pr-watches";
@@ -157,6 +163,9 @@ import {
 } from "./thread-archive-helpers";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+
+/** A reviewed removal named one archived thread, but another owns the checkout now. */
+const ARCHIVED_OWNER_CHANGED_REASON = "Now belongs to a different archived thread";
 
 /** The refusals a hibernated restore answers with a detached HEAD instead. */
 const DETACHED_RESTORE_REASONS: Partial<Record<WorktreeRecoveryFailureReason,
@@ -1477,15 +1486,14 @@ export class ThreadArchiveCoordinator {
         ...identity,
         repositoryPath: snapshot.repositoryPath,
         worktreePath: snapshot.worktreePath,
-        checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit },
+        checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit, sourceHead: snapshot.sourceHead },
         ...(detachedAt
           ? { detached: true, startPoint: detachedAt }
           : { branch: snapshot.sourceBranch, detached: !snapshot.sourceBranch, expectedHead: snapshot.sourceHead }),
       }));
     let result = await recreate();
-    // The branch is checked out elsewhere, moved, or gone. Every refusal for
-    // those comes before Git writes anything, so the checkout comes back at
-    // its saved HEAD on a detached HEAD instead, and the branch is untouched.
+    // Recovery leaves no checkout behind when the branch is checked out
+    // elsewhere, moved, or gone. Retry at the saved HEAD, detached.
     const conflict = result.status === "failed" ? DETACHED_RESTORE_REASONS[result.reason] : undefined;
     let detachedFrom: WorktreeSnapshotSummary["detachedFrom"];
     if (result.status === "failed" && conflict && snapshot.sourceBranch && snapshot.sourceHead) {
@@ -2838,9 +2846,16 @@ export class ThreadArchiveCoordinator {
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean;
       /** Reviewed approvals to snapshot past the normal limit, by normalized
        * checkout path. Each applies only to that checkout's own removal. */
-      snapshotLimits?: ReadonlyMap<string, number> };
+      snapshotLimits?: ReadonlyMap<string, number>;
+      /** The operator's approvals to unlock someone else's lock, by
+       * normalized checkout path, with the lock text they saw. */
+      lockApprovals?: ReadonlyMap<string, string>;
+      /** The archived thread each checkout must still belong to, by
+       * normalized checkout path, as a thread identity key. Another owner
+       * keeps the checkout. */
+      expectedOwners?: ReadonlyMap<string, string> };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
-    onItem?: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    onItem?: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail" | "lockReason"> & { path: string }) => void;
     stopped?: () => boolean;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     // A manual sweep joins startup repair rather than queuing duplicate removals.
@@ -2916,12 +2931,16 @@ export class ThreadArchiveCoordinator {
    * ownership admission and snapshots changes, exactly like the repair pass. */
   async removeArchivedCheckouts(selection: { worktreePaths: string[]; emptyFolders: boolean;
     /** Reviewed approvals to snapshot an over-limit checkout, by path. */
-    snapshotLimits?: { worktreePath: string; bytes: number }[] }, options?: {
-    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    snapshotLimits?: { worktreePath: string; bytes: number }[];
+    /** The operator's approvals to unlock someone else's lock, by path, with the lock text they saw. */
+    unlockApprovals?: { worktreePath: string; lockReason: string }[];
+    /** The archived thread each checkout must still belong to, by path. */
+    expectedOwners?: { worktreePath: string; backend: AppServerBackendKind; threadId: string }[] }, options?: {
+    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail" | "lockReason"> & { path: string }) => void;
     stopped: () => boolean;
   }): Promise<{
     removed: { worktreePath: string }[];
-    kept: { worktreePath: string; reason: string }[];
+    kept: { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[];
     failed: { worktreePath: string; message: string }[];
     emptyFoldersRemoved: number;
     emptyFoldersFailed: { worktreePath: string; message: string }[];
@@ -2930,12 +2949,16 @@ export class ThreadArchiveCoordinator {
     const report = await this.repairArchivedThreadWorktrees({
       select: { worktreePaths: selected, emptyFolders: selection.emptyFolders,
         ...(selection.snapshotLimits?.length ? { snapshotLimits: new Map(selection.snapshotLimits.map((limit) =>
-          [normalizeWorktreePathForComparison(limit.worktreePath), limit.bytes])) } : {}) },
+          [normalizeWorktreePathForComparison(limit.worktreePath), limit.bytes])) } : {}),
+        ...(selection.unlockApprovals?.length ? { lockApprovals: new Map(selection.unlockApprovals.map((approval) =>
+          [normalizeWorktreePathForComparison(approval.worktreePath), approval.lockReason])) } : {}),
+        ...(selection.expectedOwners?.length ? { expectedOwners: new Map(selection.expectedOwners.map((owner) =>
+          [normalizeWorktreePathForComparison(owner.worktreePath), buildThreadIdentityKey(owner.backend, owner.threadId)])) } : {}) },
       ...options,
     });
     const result = {
       removed: [] as { worktreePath: string }[],
-      kept: [] as { worktreePath: string; reason: string }[],
+      kept: [] as { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[],
       failed: [] as { worktreePath: string; message: string }[],
       emptyFoldersRemoved: 0,
       emptyFoldersFailed: [] as { worktreePath: string; message: string }[],
@@ -2948,7 +2971,8 @@ export class ThreadArchiveCoordinator {
       seen.add(key);
       if (item.removedWorktree) result.removed.push({ worktreePath: item.worktreePath });
       else if (item.error) result.failed.push({ worktreePath: item.worktreePath, message: item.error });
-      else result.kept.push({ worktreePath: item.worktreePath, reason: item.skippedReason ?? "Kept" });
+      else result.kept.push({ worktreePath: item.worktreePath, reason: item.skippedReason ?? "Kept",
+        ...(item.kept ? { lock: item.kept } : {}) });
     }
     for (const detail of report.protectedWorktreeDetails) {
       const key = normalizeWorktreePathForComparison(detail.worktreePath);
@@ -2967,6 +2991,37 @@ export class ThreadArchiveCoordinator {
       }
     }
     return result;
+  }
+
+  /**
+   * The archive notice's Unlock and Remove: checkpoint and remove archived
+   * threads' worktrees that were kept because someone else locked them, in
+   * one pass over the archived checkouts. Each takes the same ownership
+   * admission as any archived-checkout removal, and is kept when another
+   * archived thread owns it by now. Each lock is cleared only while it still
+   * says what the operator saw.
+   */
+  async removeLockedThreadWorktrees(request: RemoveLockedThreadWorktreesRequest): Promise<RemoveLockedThreadWorktreesResponse> {
+    if (request.worktrees.length === 0) return { results: [] };
+    const removal = await this.removeArchivedCheckouts({
+      worktreePaths: request.worktrees.map((item) => item.worktreePath), emptyFolders: false,
+      unlockApprovals: request.worktrees.map((item) => ({ worktreePath: item.worktreePath, lockReason: item.approvedLockReason })),
+      expectedOwners: request.worktrees.map((item) => ({ worktreePath: item.worktreePath, backend: item.backend, threadId: item.threadId })),
+    });
+    const byPath = new Map<string, RemoveLockedThreadWorktreeResponse>();
+    for (const item of removal.removed) {
+      byPath.set(normalizeWorktreePathForComparison(item.worktreePath), { status: "removed", worktreePath: item.worktreePath });
+    }
+    for (const item of removal.failed) {
+      byPath.set(normalizeWorktreePathForComparison(item.worktreePath),
+        { status: "failed", worktreePath: item.worktreePath, message: item.message });
+    }
+    for (const item of removal.kept) {
+      byPath.set(normalizeWorktreePathForComparison(item.worktreePath), { status: "kept", worktreePath: item.worktreePath,
+        reason: item.reason, ...(item.lock ? { kept: item.lock } : {}) });
+    }
+    return { results: request.worktrees.map((item) => byPath.get(normalizeWorktreePathForComparison(item.worktreePath))
+      ?? { status: "kept", worktreePath: item.worktreePath, reason: "Kept" }) };
   }
 
   /** Approve one thread's next archive to snapshot up to `bytes`. Expires on
@@ -3051,10 +3106,17 @@ export class ThreadArchiveCoordinator {
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean;
       /** Reviewed approvals to snapshot past the normal limit, by normalized
        * checkout path. Each applies only to that checkout's own removal. */
-      snapshotLimits?: ReadonlyMap<string, number> };
+      snapshotLimits?: ReadonlyMap<string, number>;
+      /** The operator's approvals to unlock someone else's lock, by
+       * normalized checkout path, with the lock text they saw. */
+      lockApprovals?: ReadonlyMap<string, string>;
+      /** The archived thread each checkout must still belong to, by
+       * normalized checkout path, as a thread identity key. Another owner
+       * keeps the checkout. */
+      expectedOwners?: ReadonlyMap<string, string> };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
     onDiscoveryProgress?: (progress: MaintenanceDiscoveryProgress) => void;
-    onItem?: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    onItem?: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail" | "lockReason"> & { path: string }) => void;
     stopped?: () => boolean;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     await this.host().subAgentStartupReconciliation;
@@ -3067,6 +3129,9 @@ export class ThreadArchiveCoordinator {
     let inventory!: Awaited<ReturnType<ArchiveCleanupInventory["readPacedArchiveCleanupInventory"]>>;
     let report!: ArchivedWorktreeRepairReport;
     const ownersByPath = new Map<string, { thread: AppServerThreadSummary; worktreePath: string }>();
+    // Every archived thread that links each checkout. Several can share one
+    // (a parent and its sub-threads); any of them may name it for removal.
+    const ownerKeysByPath = new Map<string, Set<string>>();
     const canonicalKeys = new Map<string, string>();
     options.onDiscoveryProgress?.({ detail: "Waiting for checkout ownership audit" });
     await this.archiveCleanupQueue.enqueue(`archive-repair-read:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
@@ -3079,6 +3144,9 @@ export class ThreadArchiveCoordinator {
           // Canonical keys may fold Windows casing or resolve an alias. Keep
           // the supplied path for filesystem/provider calls and result data.
           ownersByPath.set(key, { thread, worktreePath: normalizeWorktreePathForComparison(value) });
+          const ownerKeys = ownerKeysByPath.get(key) ?? new Set<string>();
+          ownerKeys.add(buildThreadIdentityKey(thread.source, thread.id));
+          ownerKeysByPath.set(key, ownerKeys);
         } catch (error) {
           report.cleanup.push({ worktreePath: value, removedWorktree: false, deletedBranch: false,
             error: error instanceof Error ? error.message : String(error) });
@@ -3257,8 +3325,17 @@ export class ThreadArchiveCoordinator {
         options.onProgress?.(++completed, total, report);
         return;
       }
-      options.onItem?.({ path: candidate.worktreePath, status: "running", stage: "waiting" });
       const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
+      const expectedOwner = options.select?.expectedOwners?.get(normalizeWorktreePathForComparison(candidate.worktreePath));
+      const candidateOwners = ownerKeysByPath.get(canonicalKeys.get(normalizeWorktreePathForComparison(candidate.worktreePath)) ?? "");
+      if (expectedOwner !== undefined && !candidateOwners?.has(expectedOwner)) {
+        report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
+          worktreeState: "present", skippedReason: ARCHIVED_OWNER_CHANGED_REASON });
+        options.onItem?.({ path: candidate.worktreePath, status: "kept", reason: ARCHIVED_OWNER_CHANGED_REASON });
+        options.onProgress?.(++completed, total, report);
+        return;
+      }
+      options.onItem?.({ path: candidate.worktreePath, status: "running", stage: "waiting" });
       const completion = this.enqueueArchiveRepair(key, candidate.worktreePath, async (context) => {
         options.onItem?.({ path: candidate.worktreePath, status: "running", stage: "checking" });
         // This complete inventory is preliminary only. archiveThreadWorktrees
@@ -3274,11 +3351,13 @@ export class ThreadArchiveCoordinator {
         // with this one removal, never stored on the thread: another checkout
         // of the same thread may be removed concurrently.
         const snapshotLimit = options.select?.snapshotLimits?.get(normalizeWorktreePathForComparison(candidate.worktreePath));
+        const approvedLockReason = options.select?.lockApprovals?.get(normalizeWorktreePathForComparison(candidate.worktreePath));
         return {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
           cleanup: await this.archiveThreadWorktrees({
             ...inventory, backend: candidate.backend, thread, context,
             ...(snapshotLimit !== undefined ? { snapshotLimitBytes: snapshotLimit } : {}),
+            ...(approvedLockReason !== undefined ? { approvedLockReason } : {}),
             onStage: (stage) => options.onItem?.({ path: candidate.worktreePath, status: "running", stage }),
           }),
         };
@@ -3291,7 +3370,8 @@ export class ThreadArchiveCoordinator {
         for (const item of result.cleanup) {
           if (!item.worktreePath) continue;
           options.onItem?.({ path: item.worktreePath, status: item.removedWorktree ? "done" : item.error ? "failed" : "kept",
-            reason: item.error ? "Removal failed" : item.skippedReason, detail: item.error });
+            reason: item.error ? "Removal failed" : item.skippedReason, detail: item.error,
+            ...(item.kept ? { lockReason: item.kept.lockReason } : {}) });
         }
       } catch (error) {
         assertCurrent();
@@ -3429,6 +3509,10 @@ export class ThreadArchiveCoordinator {
     ownershipPaths?: ArchiveCleanupMetadata["ownershipPaths"];
     /** A reviewed approval for exactly this call's checkouts. */
     snapshotLimitBytes?: number;
+    /** The operator's approval to unlock someone else's lock on exactly this
+     * call's checkout, with the lock text they saw. Never from an automatic
+     * path or an agent. */
+    approvedLockReason?: string;
   }): Promise<ArchiveThreadCleanupResult[]> {
     // Ownership may live on another (even archived) thread using the same
     // checkout. A provider alias without the marker must not authorize removal.
@@ -3644,6 +3728,7 @@ export class ThreadArchiveCoordinator {
                 params.onStage?.(stage);
               } : params.onStage,
               maxSnapshotBytes: params.snapshotLimitBytes ?? this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
+              ...(params.approvedLockReason !== undefined ? { approvedLockReason: params.approvedLockReason } : {}),
               beforeRemove: usesRemovalAdmission ? () => admitRemoval(admission) : undefined,
               ...(usesRemovalAdmission ? { onCheckoutVerified: (checkout: CheckoutIdentity) => { expectedCheckout ??= checkout; } } : {}),
               ...(expectedCheckout ? { expectedCheckout } : {}),
@@ -3802,6 +3887,27 @@ export class ThreadArchiveCoordinator {
             deletedBranch: false,
             worktreeState: "present",
             skippedReason: error.message,
+          };
+        }
+        if (error instanceof WorktreeLockedError && !removedSnapshot) {
+          // Someone other than PwrAgent locked it to keep it. Retrying never
+          // unlocks it, so stop retrying; the operator decides from the
+          // archive notice or the maintenance dialog.
+          await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
+          backendRegistryLog.info("archive thread worktree cleanup kept a locked worktree", {
+            backend: params.backend,
+            threadId: params.thread.id,
+            repositoryPath: candidate.repositoryPath,
+            worktreePath: candidate.worktreePath,
+          });
+          return {
+            worktreePath: candidate.worktreePath,
+            branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+            removedWorktree: false,
+            deletedBranch: false,
+            worktreeState: "present",
+            skippedReason: WORKTREE_LOCKED_SKIP_REASON,
+            kept: { reason: "worktree-locked", worktreePath: candidate.worktreePath, lockReason: error.lockReason },
           };
         }
         if (error instanceof SnapshotLimitExceededError && !removedSnapshot) {

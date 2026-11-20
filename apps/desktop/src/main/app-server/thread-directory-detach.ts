@@ -1,6 +1,5 @@
-import path from "node:path";
+import { findPrimaryThreadLinkedDirectory, mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import type {
-  AppServerBackendKind,
   LinkedDirectorySummary,
   AppServerThreadSummary,
 } from "@pwragent/shared/contracts/normalized-app-server";
@@ -9,12 +8,21 @@ import type {
   DetachDirectoryFromThreadResponse,
 } from "@pwragent/shared/contracts/navigation";
 import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
+import type { DesktopBackendRegistry } from "./backend-registry";
+import {
+  dedupeLinkedDirectoriesByNormalizedIdentity,
+  linkedDirectoriesHaveSameWorkspaceIdentity,
+  normalizeLinkedDirectoryPathForMatch,
+} from "./linked-directory-identity";
 
-function normalizeLinkedDirectoryPathForMatch(
-  value: string | undefined,
-): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? path.resolve(trimmed).replace(/\\/g, "/") : undefined;
+/** Apply the same provider-then-overlay merge as Linked Projects before selecting the checkout. */
+export function isPrimaryDirectoryForDetach(
+  directory: LinkedDirectorySummary,
+  allDirectories: LinkedDirectorySummary[],
+  projectKey: string | undefined,
+): boolean {
+  const primary = findPrimaryThreadLinkedDirectory(mergeThreadLinkedDirectories(allDirectories), projectKey);
+  return primary !== undefined && linkedDirectoriesHaveSameWorkspaceIdentity(primary, directory);
 }
 
 function linkedDirectoriesMatchForDetach(
@@ -35,31 +43,28 @@ function linkedDirectoriesMatchForDetach(
   );
 }
 
-function countDistinctLinkedDirectories(
-  directories: LinkedDirectorySummary[],
-): number {
-  const seen = new Set<string>();
-  for (const directory of directories) {
-    const key = [
-      directory.kind,
-      normalizeLinkedDirectoryPathForMatch(directory.path),
-      normalizeLinkedDirectoryPathForMatch(directory.worktreePath),
-    ].join("\0");
-    seen.add(key);
-  }
-  return seen.size;
-}
-
 /** Run on the thread owner so membership and path comparisons use its state. */
 export async function detachOwnedThreadDirectory(
   request: DetachDirectoryFromThreadRequest,
   deps: {
     overlayStore: Pick<DesktopOwnerStorage, "getThreadOverlayState" | "removeLinkedDirectory">;
-    readThread: (backend: AppServerBackendKind, threadId: string) => Promise<Pick<AppServerThreadSummary, "linkedDirectories"> | undefined>;
-    publishUpdate: (backend: AppServerBackendKind, threadId: string) => Promise<void>;
+    registry: Pick<DesktopBackendRegistry, "listThreads" | "publishLocalEvent">;
   },
 ): Promise<DetachDirectoryFromThreadResponse> {
   const backend = request.backend ?? "codex";
+  const lookup = { backend, enrichDirectories: false, callerReason: "thread-id-lookup" } as const;
+  const matchesThread = (thread: AppServerThreadSummary) => thread.id === request.threadId && thread.source === backend;
+  const thread = (await deps.registry.listThreads(lookup)).find(matchesThread)
+    ?? (await deps.registry.listThreads({ ...lookup, archived: true, skipArchivedMetadataRefresh: true })).find(matchesThread);
+  if (!thread) {
+    return {
+      ok: false,
+      backend,
+      threadId: request.threadId,
+      reason: "not-found",
+      message: "Could not find the thread on its owning instance.",
+    };
+  }
   const overlay = await deps.overlayStore.getThreadOverlayState({
     backend,
     threadId: request.threadId,
@@ -78,13 +83,20 @@ export async function detachOwnedThreadDirectory(
         "Only secondary directories attached to this thread can be detached.",
     };
   }
-  const fullThread = await deps.readThread(backend, request.threadId)
-    .catch(() => undefined);
-  const totalLinkedDirectories = countDistinctLinkedDirectories([
-    ...(fullThread?.linkedDirectories ?? []),
+  const allDirectories = [
+    ...thread.linkedDirectories,
     ...currentDirectories,
-  ]);
-  if (totalLinkedDirectories <= 1) {
+  ];
+  if (isPrimaryDirectoryForDetach(matched, allDirectories, thread.projectKey)) {
+    return {
+      ok: false,
+      backend,
+      threadId: request.threadId,
+      reason: "primary-directory",
+      message: "This is the thread's working directory. Move the thread to another workspace first.",
+    };
+  }
+  if (dedupeLinkedDirectoriesByNormalizedIdentity(allDirectories).length <= 1) {
     return {
       ok: false,
       backend,
@@ -101,7 +113,13 @@ export async function detachOwnedThreadDirectory(
     directory: matched,
   });
 
-  await deps.publishUpdate(backend, request.threadId);
+  await deps.registry.publishLocalEvent({
+    backend,
+    notification: {
+      method: "navigation/threadDirectories/updated",
+      params: { reason: "selected-thread", threadIds: [request.threadId] },
+    },
+  });
 
   return {
     ok: true,

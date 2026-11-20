@@ -69,10 +69,11 @@ Read the task-specific references below before doing the work they cover. They c
 - Never weaken `.dependency-cruiser.cjs`: no exceptions, allowlists, or `severity: "ignore"` overrides. Do not import above a layer, add cycles, move code, or restructure it to bypass a boundary. Redesign a blocked change.
 - Internal dependency order (lowest to highest):
   - `packages/shared`: no internal imports.
-  - `packages/messaging/interface`, `packages/federation`, `packages/agent-tools`, and `packages/owner-core`: each imports only `shared`; these are independent siblings. `owner-core` holds shared navigation, Attention ordering, and title policies.
+  - `packages/messaging/interface`, `packages/federation`, `packages/agent-tools`, and `packages/owner-core`: each imports only `shared` among workspace packages. `owner-core` holds host-independent owner policy, services, and ports, including thread lifecycles, navigation, queues, durable requests, runtime leases, research, and the Codex App Server client.
+  - `packages/sqlite-storage` implements profile storage and may import `shared` contracts and `owner-core` ports. Access it through the owner host's storage adapters and state internals.
   - Each `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}` imports only `messaging/interface`, never another provider.
-  - `packages/pwragent` (Outpost) may import `shared`, `federation`, `agent-tools`, `messaging/interface`, and `owner-core` only through `src/federation-core.ts`; its JavaScript consumes that bundle.
-  - `apps/desktop` can import any package. No `packages/` code may import `apps/` code.
+  - `apps/desktop` contains the Electron shell, the headless Node host, and their shared `startOwnerServices` composition root. Its main process can import workspace packages subject to the storage and shell boundaries.
+  - Runtime libraries and CLI source under `packages/*/src` and `packages/*/bin` must not import `apps/`. For packaging, `packages/pwragent/scripts/build.mjs` calls `apps/desktop/scripts/build-headless.mjs`. Outpost CLI source consumes the emitted `dist/index.js`; direct workspace package imports and raw SQLite access are forbidden there.
 - The desktop renderer may import only `@pwragent/shared` directly; access every other package through main-process IPC. CI fails every boundary violation.
 
 ## Desktop Product Rules

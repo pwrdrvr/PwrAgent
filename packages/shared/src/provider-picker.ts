@@ -26,6 +26,7 @@ const CODEX_MODEL_PROVIDER_VALUE_PREFIX = "codex-provider:";
 export type ProviderPickerBackend = {
   kind: AppServerBackendKind;
   launchpadOptions?: { models?: readonly BackendModelOption[] };
+  codexOpenAiProviderEnabled?: false;
   codexModelProviders?: readonly CodexModelProviderCatalogState[];
 };
 
@@ -126,11 +127,13 @@ export function buildProviderPickerEntries(
       entries.push({ value: backend.kind, backend: backend.kind, models: [...models] });
       continue;
     }
-    entries.push({
-      value: "codex",
-      backend: "codex",
-      models: models.filter((model) => !modelMenuEntryProviderId(model)),
-    });
+    if (backend.codexOpenAiProviderEnabled !== false) {
+      entries.push({
+        value: "codex",
+        backend: "codex",
+        models: models.filter((model) => !modelMenuEntryProviderId(model)),
+      });
+    }
     const byProvider = new Map<string, ProviderPickerEntry>();
     const providerEntry = (id: string, label: string): ProviderPickerEntry => {
       let entry = byProvider.get(id);

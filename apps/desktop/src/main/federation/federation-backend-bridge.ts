@@ -93,6 +93,10 @@ import type {
   HandoffThreadWorkspaceResponse,
   MoveThreadToMainCheckoutRequest,
   MoveThreadToMainCheckoutResponse,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
+  RemoveLockedThreadWorktreesRequest,
+  RemoveLockedThreadWorktreesResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   ResolveThreadRequest,
@@ -572,6 +576,39 @@ function authenticateScheduledTurnOrigin<
   };
 }
 
+/** What a viewer hears when the owning instance cannot unlock and remove a worktree. */
+export const REMOVE_LOCKED_WORKTREES_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to unlock and remove this worktree.";
+
+/** One Unlock and Remove covers one archive notice, never a bulk sweep. */
+const MAX_REMOVE_LOCKED_WORKTREES = 100;
+
+/**
+ * The worktrees a viewer asked the owner to unlock and remove. Each must
+ * name its thread and the exact lock text the operator saw, so a malformed
+ * entry is refused outright rather than read as an approval.
+ */
+function parseRemoveLockedThreadWorktrees(worktrees: unknown): RemoveLockedThreadWorktreesRequest["worktrees"] {
+  if (!Array.isArray(worktrees) || worktrees.length > MAX_REMOVE_LOCKED_WORKTREES) {
+    throw new Error("Invalid locked worktree removal request.");
+  }
+  return worktrees.map((item: unknown) => {
+    const entry = item as Partial<RemoveLockedThreadWorktreesRequest["worktrees"][number]> | undefined;
+    if (
+      !entry
+      || typeof entry.backend !== "string"
+      || !isAppServerBackendKind(entry.backend)
+      || typeof entry.threadId !== "string" || !entry.threadId
+      || typeof entry.worktreePath !== "string" || !entry.worktreePath
+      || typeof entry.approvedLockReason !== "string"
+    ) {
+      throw new Error("Invalid locked worktree removal request.");
+    }
+    return { backend: entry.backend, threadId: entry.threadId, worktreePath: entry.worktreePath,
+      approvedLockReason: entry.approvedLockReason };
+  });
+}
+
 /** What a viewer hears when the owning instance cannot reorder its queue. */
 export const QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to reorder its queued messages.";
@@ -982,6 +1019,12 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   moveThreadToMainCheckout?(
     request: MoveThreadToMainCheckoutRequest,
   ): Promise<MoveThreadToMainCheckoutResponse>;
+  readThreadWorktreeLock?(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse>;
+  removeLockedThreadWorktrees?(
+    request: RemoveLockedThreadWorktreesRequest,
+  ): Promise<RemoveLockedThreadWorktreesResponse>;
   renameThread(request: RenameThreadRequest): Promise<RenameThreadResponse>;
   readApplications(): Promise<DesktopApplicationsSnapshot>;
   openApplication(
@@ -2168,6 +2211,30 @@ export function registerFederationBackendHandlers(params: {
           backend: request.backend,
           threadId: request.threadId,
           worktreePath: request.worktreePath,
+        });
+      },
+    );
+  }
+  if (params.backend.readThreadWorktreeLock) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.readThreadWorktreeLock,
+      async (envelope) => {
+        const request = envelope.params as ReadThreadWorktreeLockRequest;
+        return await params.backend.readThreadWorktreeLock!({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+        });
+      },
+    );
+  }
+  if (params.backend.removeLockedThreadWorktrees) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees,
+      async (envelope) => {
+        const request = envelope.params as RemoveLockedThreadWorktreesRequest;
+        return await params.backend.removeLockedThreadWorktrees!({
+          worktrees: parseRemoveLockedThreadWorktrees(request?.worktrees),
         });
       },
     );
@@ -3589,6 +3656,37 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       params: request,
       timeoutMs: 120_000,
     });
+  }
+
+  /** An owner too old to read locks reports none: its handoff keeps a locked worktree. */
+  async readThreadWorktreeLock(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse> {
+    try {
+      return await this.rpc.request<ReadThreadWorktreeLockResponse>({
+        method: FEDERATION_BACKEND_METHODS.readThreadWorktreeLock,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) return { worktreePath: request.worktreePath };
+      throw error;
+    }
+  }
+
+  /** Checkpoints and removes on the owner, which can take a while. */
+  async removeLockedThreadWorktrees(
+    request: RemoveLockedThreadWorktreesRequest,
+  ): Promise<RemoveLockedThreadWorktreesResponse> {
+    try {
+      return await this.rpc.request<RemoveLockedThreadWorktreesResponse>({
+        method: FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees,
+        params: request,
+        timeoutMs: 300_000,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) throw new Error(REMOVE_LOCKED_WORKTREES_UNSUPPORTED_MESSAGE);
+      throw error;
+    }
   }
 
   async renameThread(

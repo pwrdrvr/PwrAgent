@@ -5,7 +5,7 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 
 | Label | Workflow | Effect |
 |---|---|---|
-| `ci:full` | `ci.yml` | Runs the macOS unit tests, macOS Desktop E2E and Windows Desktop E2E on a PR. Without it, PRs skip those jobs unless they change a platform-specific path and the required `Desktop E2E` check accepts the skipped macOS lanes; every push to `main` and `releases/**` still runs them. The classifier reads labels live, so after adding the label use **Re-run all jobs** or push. **Re-run failed jobs** does not rerun the succeeded classifier, so it does not pick the label up. See [cross-platform jobs on PRs](#cross-platform-jobs-on-prs). |
+| `ci:full` | `ci.yml` | Runs every unit test and Desktop E2E spec on a PR, where the test plan would otherwise select the affected ones, and adds the macOS unit tests, macOS Desktop E2E and Windows Desktop E2E. Without it, PRs skip those jobs unless they change a platform-specific path and the required `Desktop E2E` check accepts the skipped macOS lanes; every push to `main` and `releases/**` still runs them. The classifier reads labels live, so after adding the label use **Re-run all jobs** or push. **Re-run failed jobs** does not rerun the succeeded classifier, so it does not pick the label up. See [cross-platform jobs on PRs](#cross-platform-jobs-on-prs). |
 | `ci:benchmark-checks` | `check-performance.yml` | Compares base and PR syntax lint, typed lint and typecheck on one GitHub-hosted `macos-26` runner. Records three paired samples, runner/hardware identity and system load. Adding this label starts the benchmark. |
 | `ci:build-preview` | `preview-build.yml` | Builds an ad-hoc signed, unnotarized macOS preview DMG and uploads it as a workflow artifact. Use for PRs that change release packaging, installer assets, or desktop distribution behavior. |
 | `ci:windows-package` | `ci.yml` | Builds the unsigned Windows NSIS installer (`release.mjs --win`) and uploads it as a workflow artifact. Off by default — the normal Windows CI job is build + test only. Adding the label alone does not start CI; add it before opening the PR, rerun CI, or push a commit after adding it. The release workflow (`release.yml`) builds the Windows installer automatically on version tags. |
@@ -19,7 +19,9 @@ change as the workflow update.
 ## Cross-platform jobs on PRs
 
 PRs run Lint, Build, the Linux unit and Desktop E2E lanes, and the Windows
-verify and unit lanes. The macOS unit tests, macOS Desktop E2E and Windows
+verify and unit lanes. On a PR the `Test plan` job selects the unit tests and
+Linux specs that the change affects, and those lanes run that selection; see
+[docs/pr-test-impact.md](../../docs/pr-test-impact.md). The macOS unit tests, macOS Desktop E2E and Windows
 Desktop E2E run on every push to `main` (each push has its own concurrency
 group, so none is dropped). A PR runs them only with `ci:full`, or when it
 changes code that only those runners exercise: `pnpm-lock.yaml`, the

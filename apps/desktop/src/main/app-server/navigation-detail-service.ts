@@ -25,6 +25,7 @@ import {
 import type { DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
+import { getOwnerHostServices } from "../owner-host";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
@@ -176,6 +177,7 @@ export type NavigationDetailRegistry = Pick<
   | "listThreads"
   | "listLiveTokenMiserSubAgents"
   | "mergeLiveTokenMiserSubAgents"
+  | "projectOutpostLaunchpadSettings"
   | "readCheckoutHibernation"
   | "readLiveSubAgentRevisionSource"
   | "readNavigationThreadLink"
@@ -197,10 +199,13 @@ export class NavigationDetailService {
       throw new NavigationQueryError("navigation_invalid_request", "Invalid launchpad configuration request.");
     }
     const store = getDesktopOverlayStore();
-    const [defaults, storedLaunchpad] = await Promise.all([
+    const [storedDefaults, rawLaunchpad] = await Promise.all([
       store.getLaunchpadDefaults(),
       request.directoryKey ? store.getDirectoryLaunchpad({ directoryKey: request.directoryKey }) : undefined,
     ]);
+    const useProxyModels = getOwnerHostServices().runtimePolicy?.codexOpenAiProviderEnabled === false;
+    const defaults = useProxyModels ? this.registry.projectOutpostLaunchpadSettings(storedDefaults) : storedDefaults;
+    const storedLaunchpad = useProxyModels && rawLaunchpad ? this.registry.projectOutpostLaunchpadSettings(rawLaunchpad) : rawLaunchpad;
     const inspectPath = storedLaunchpad?.federationTarget?.scope === "remote" ? undefined : storedLaunchpad?.directoryPath;
     const [environmentOptions, directoryGitStatus] = inspectPath ? await Promise.all([
       listCodexEnvironmentOptions(inspectPath),

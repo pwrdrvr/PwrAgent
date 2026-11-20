@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -19,7 +20,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
-import { EditorContent, Extension, useEditor, type JSONContent } from "@tiptap/react";
+import { EditorContent, Extension, useEditor, type EditorOptions, type JSONContent } from "@tiptap/react";
 import { parseThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 import { readSkillOrigin } from "@pwragent/shared/skill-origin";
 import {
@@ -475,7 +476,10 @@ export function buildCommandChipDecorations(
     Decoration.inline(from, to, {
       class: "chip skill-chip composer-tiptap-input__command tooltip-target",
       "data-command-chip": chip.text,
-      ...(chip.tooltip ? { "data-tooltip": chip.tooltip } : {}),
+      ...(chip.tooltip ? {
+        "data-tooltip": chip.tooltip,
+        "data-tooltip-describe-editor": "",
+      } : {}),
     }),
   ]);
 }
@@ -2846,13 +2850,13 @@ export const ComposerTiptapInput = forwardRef<
   );
 
   propsRef.current = props;
-  const getControlledHistoryEntry = (
+  const getControlledHistoryEntry = useCallback((
     currentEditor: TiptapEditor,
   ): ControlledHistoryEntry => ({
     ...readTiptapContent(currentEditor, readMode),
     editorDocument: currentEditor.getJSON(),
     selectionIndex: selectionIndexRef.current,
-  });
+  }), [readMode]);
   const pushControlledUndoEntry = (currentEditor: TiptapEditor): void => {
     if (applyingControlledHistoryRef.current) {
       return;
@@ -2871,7 +2875,7 @@ export const ComposerTiptapInput = forwardRef<
       stack.shift();
     }
   };
-  const restoreControlledHistoryEntry = (
+  const restoreControlledHistoryEntry = useCallback((
     currentEditor: TiptapEditor,
     entry: ControlledHistoryEntry,
   ): void => {
@@ -2899,7 +2903,7 @@ export const ComposerTiptapInput = forwardRef<
         // jsdom and detached editor states can fail selection mapping.
       }
     });
-  };
+  }, [readMode]);
   const applySelectionRequest = (
     currentEditor: TiptapEditor,
     request: ComposerTiptapInputProps["selectionRequest"] | undefined,
@@ -2914,7 +2918,7 @@ export const ComposerTiptapInput = forwardRef<
       getPositionAtDraftIndex(currentEditor, request.index, readMode),
     );
   };
-  const runUndoOrRedo = (
+  const runUndoOrRedo = useCallback((
     currentEditor: TiptapEditor,
     direction: "undo" | "redo",
   ): boolean => {
@@ -2948,7 +2952,7 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     return handled;
-  };
+  }, [getControlledHistoryEntry, readMode, restoreControlledHistoryEntry]);
   const initialContent = useMemo(
     () =>
       editorDocument ??
@@ -2957,13 +2961,10 @@ export const ComposerTiptapInput = forwardRef<
       }),
     [],
   );
-  const editor = useEditor({
-    // The mounted editor must never authorize input before the parent does.
-    // Applying disabled only in the layout effect exposes Tiptap's default
-    // editable DOM during initial attachment.
-    editable: !props.disabled && !props.readOnly,
-    content: initialContent,
-    editorProps: {
+  // Tiptap compares editorProps by reference. Keep the view options stable
+  // across draft edits and read the current input handlers through propsRef.
+  const editorProps = useMemo<EditorOptions["editorProps"]>(
+    () => ({
       // TipTap installs its editable plugin after constructing the DOM view.
       // Guard that first view too, before any layout effect or plugin runs.
       editable: () => !propsRef.current.disabled && !propsRef.current.readOnly,
@@ -3232,7 +3233,25 @@ export const ComposerTiptapInput = forwardRef<
           return handled;
         },
       },
-    },
+    }),
+    [
+      props.ariaActiveDescendant,
+      props.ariaControls,
+      props.disabled,
+      props.id,
+      props.label,
+      props.placeholder,
+      props.readOnly,
+      runUndoOrRedo,
+    ],
+  );
+  const editor = useEditor({
+    // The mounted editor must never authorize input before the parent does.
+    // Applying disabled only in the layout effect exposes Tiptap's default
+    // editable DOM during initial attachment.
+    editable: !props.disabled && !props.readOnly,
+    content: initialContent,
+    editorProps,
     enableInputRules: props.markdownConversion ? true : false,
     enablePasteRules: props.markdownConversion ? true : false,
     extensions,

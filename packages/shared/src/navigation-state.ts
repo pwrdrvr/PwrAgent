@@ -25,7 +25,7 @@ import {
 } from "./worktree-paths.js";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { isThreadCheckoutHibernated } from "./checkout-hibernation-policy";
-import { buildDirectorySummaries } from "./directory-navigation";
+import { buildDirectorySummaries, canonicalizeNavigationPath } from "./directory-navigation";
 
 type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
   codexEnvironmentOptions?: CodexEnvironmentOption[];
@@ -37,6 +37,31 @@ export function isWorkspaceHandoffDirectory(directory: LinkedDirectorySummary): 
     directory.id.startsWith("pwragent-handoff:") ||
     directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
   );
+}
+
+/** Find the linked checkout that owns the thread's working directory. */
+export function findPrimaryThreadLinkedDirectory(
+  directories: readonly LinkedDirectorySummary[],
+  projectKey: string | undefined,
+): LinkedDirectorySummary | undefined {
+  const handoff = directories.find(isWorkspaceHandoffDirectory);
+  if (handoff) return handoff;
+  if (!projectKey?.trim()) return undefined;
+
+  const cwd = canonicalizeNavigationPath(projectKey.trim());
+  let primary: LinkedDirectorySummary | undefined;
+  let primaryPathLength = -1;
+  for (const directory of directories) {
+    const checkout = (directory.worktreePath ?? directory.path).trim();
+    if (!checkout) continue;
+    const checkoutPath = canonicalizeNavigationPath(checkout);
+    if (checkoutPath.length > primaryPathLength
+      && (cwd === checkoutPath || cwd.startsWith(`${checkoutPath}/`))) {
+      primary = directory;
+      primaryPathLength = checkoutPath.length;
+    }
+  }
+  return primary;
 }
 
 /** Provider directories first, persisted overlay directories last. */

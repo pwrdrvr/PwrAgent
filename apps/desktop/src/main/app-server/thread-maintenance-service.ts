@@ -1,7 +1,12 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
-import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type AppServerBackendKind,
+  type ArchiveThreadCleanupResult,
+  WORKTREE_LOCKED_SKIP_REASON,
+  type WorktreeLockedKept,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   defaultThreadMaintenanceRules,
   type ThreadMaintenanceApplyRequest,
@@ -46,7 +51,7 @@ import {
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
-import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
+import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
 import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor, checkoutHibernationLastActivity } from "./checkout-hibernation";
 import { CheckoutPathOwners, eventLoopPacer } from "./checkout-path-owners";
 import { missingWorktreeRepository } from "./worktree-archive-service";
@@ -62,6 +67,12 @@ const FAILURE_LIMIT = 50;
 const INSPECT_CONCURRENCY = 6;
 /** Scans kept for a later apply. A newer scan replaces the oldest. */
 const RETAINED_SCANS = 4;
+/** Archived checkouts removal cannot act on, with the reason each is kept. */
+const UNREMOVABLE_CHECKOUT_REASONS: Partial<Record<ThreadMaintenanceWorkspace["kind"], string>> = {
+  notGit: HIBERNATION_WORKSPACE_KEEP_REASONS.notGit,
+  inPlace: HIBERNATION_WORKSPACE_KEEP_REASONS.primary,
+  missing: HIBERNATION_WORKSPACE_KEEP_REASONS.missing,
+};
 
 /** The snapshot cap an operator's over-limit approval grants: 10% above the
  * reviewed size, so ordinary drift does not undo the decision. */
@@ -84,13 +95,13 @@ export type ArchivedCheckoutAudit = {
 
 export type UnreferencedCheckoutRemoval = {
   removed: { worktreePath: string }[];
-  kept: { worktreePath: string; reason: string }[];
+  kept: { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[];
   failed: { worktreePath: string; message: string }[];
 };
 
 export type ArchivedCheckoutRemoval = {
   removed: { worktreePath: string }[];
-  kept: { worktreePath: string; reason: string }[];
+  kept: { worktreePath: string; reason: string; lock?: WorktreeLockedKept }[];
   failed: { worktreePath: string; message: string }[];
   emptyFoldersRemoved: number;
   emptyFoldersFailed: { worktreePath: string; message: string }[];
@@ -111,17 +122,21 @@ export type ThreadMaintenanceDeps = {
   measureAllocation?: (checkout: string, signal: AbortSignal) => Promise<ThreadMaintenanceSpace | undefined>;
   isCheckoutOnDisk?: (checkout: string) => Promise<boolean>;
   buildOutputs?: { scan: typeof scanCargoBuildOutputs; remove: typeof removeCargoBuildOutput };
-  /** Archive one reviewed family as an operator archive. Resolves false when cancelled. */
+  /** Archive one reviewed family as an operator archive. Resolves false when
+   * cancelled; when archived, may list the worktrees it kept because Git has
+   * them locked by someone else. */
   archiveFamily: (family: ThreadArchiveCandidate[], options: {
     preserveWorktrees: boolean;
     /** A one-run approval to snapshot past the normal limit. */
     snapshotLimitBytes?: number;
-  }) => Promise<boolean>;
+  }) => Promise<boolean | { lockedWorktrees: WorktreeLockedKept[] }>;
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
   removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean;
     /** One-run approvals to snapshot past the normal limit, by checkout. */
-    snapshotLimits?: { worktreePath: string; bytes: number }[] }, options?: {
-    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    snapshotLimits?: { worktreePath: string; bytes: number }[];
+    /** The operator's approvals to unlock someone else's lock, by checkout, with the lock text they saw. */
+    unlockApprovals?: { worktreePath: string; lockReason: string }[] }, options?: {
+    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail" | "lockReason"> & { path: string }) => void;
     stopped: () => boolean;
   }) => Promise<ArchivedCheckoutRemoval>;
   /** Legacy dependency retained for callers; never invoked. */
@@ -191,6 +206,11 @@ type RetainedScan = {
   outputClassification: Map<string, Promise<NonNullable<ThreadMaintenanceSpace["rebuildableOutput"]>>>;
   allocation: Map<string, Promise<ThreadMaintenanceSpace | undefined>>;
 };
+
+/** The worktrees an archive kept because Git has them locked by someone else. */
+export function lockedWorktreesKeptBy(cleanup: readonly ArchiveThreadCleanupResult[]): WorktreeLockedKept[] {
+  return cleanup.flatMap((item) => item.kept && !item.removedWorktree ? [item.kept] : []);
+}
 
 /**
  * The reviewed counterpart of the hourly sweep, used by the Thread maintenance
@@ -666,11 +686,16 @@ export class ThreadMaintenanceService {
           signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
           rebuildableOutputIsClean: rules.rebuildableOutputIsClean,
         });
-        if (inspection.keep !== undefined) {
-          kept[inspection.keep] = (kept[inspection.keep] ?? 0) + 1;
-          excludedReasons.set(candidate.worktreePath, inspection.keep);
+        const keepIt = (reason: string) => {
+          kept[reason] = (kept[reason] ?? 0) + 1;
+          excludedReasons.set(candidate.worktreePath, reason);
           return undefined;
-        }
+        };
+        if (inspection.keep !== undefined) return keepIt(inspection.keep);
+        // Removal snapshots through Git. A folder with no Git checkout left,
+        // a primary checkout, or a folder already gone is never offered.
+        const unremovable = UNREMOVABLE_CHECKOUT_REASONS[inspection.workspace.kind];
+        if (unremovable !== undefined) return keepIt(unremovable);
         // An over-limit checkout is offered for a decision, never selected
         // by default: removing it snapshots every change past the limit.
         return { ...candidate, kind: "removable" as const, workspace: inspection.workspace };
@@ -880,10 +905,23 @@ export class ThreadMaintenanceService {
       }
       try {
         const outcome = await this.archiveReviewed(entry, item.overLimit, retained.scan.rules, () => change(row.itemId, { stage: "archiving" }));
-        if (outcome === true) {
+        if (typeof outcome !== "string") {
           threadStep.done += 1;
           archivedKeys.add(keyOf(item));
           complete(row.itemId);
+          // The thread is archived; a worktree someone else locked stays on
+          // disk. Its own row offers Unlock and Remove, as a removal row does.
+          if (outcome.lockedWorktrees.length) {
+            const finishedAt = this.now();
+            rows.splice(rows.findIndex((candidate) => candidate.itemId === row.itemId) + 1, 0,
+              ...outcome.lockedWorktrees.map((kept, lockedIndex): ThreadMaintenanceRunItem => ({
+                itemId: `${row.itemId}:locked:${lockedIndex}`, step: "threads", action: "removeCheckout",
+                object: kept.worktreePath, path: kept.worktreePath, backend: item.backend, threadId: item.threadId,
+                status: "kept", reason: WORKTREE_LOCKED_SKIP_REASON, lockReason: kept.lockReason,
+                startedAt: finishedAt, finishedAt, finishedOrder: ++finishedOrder,
+              })));
+            update();
+          }
         } else {
           threadStep.kept += 1;
           addProblem({ step: "threads", kind: "kept", object, reason: outcome, backend: item.backend, threadId: item.threadId });
@@ -992,6 +1030,12 @@ export class ThreadMaintenanceService {
       for (const item of removable) keepStopped(item.worktreePath);
     } else if (removable.length || request.removeEmptyFolders) {
       if (request.removeEmptyFolders) begin("empty");
+      // Removal re-checks every archived checkout's ownership before it
+      // reports any one of them. The selected ones are in progress, not waiting.
+      for (const item of removable) {
+        const row = rows.find((row) => row.action === "removeCheckout" && row.path === item.worktreePath);
+        if (row?.status === "queued") begin(row.itemId);
+      }
       update({ current: { step: "checkouts", processed: 0, total: removable.length, object: removable[0]?.worktreePath } });
       try {
         const removal = await this.deps.removeArchivedCheckouts({
@@ -1014,6 +1058,8 @@ export class ThreadMaintenanceService {
         for (const item of removal.kept) {
           checkoutStep.kept += 1;
           addProblem({ step: "checkouts", kind: "kept", object: item.worktreePath, reason: item.reason, path: item.worktreePath });
+          const row = item.lock && rows.find((row) => row.action === "removeCheckout" && row.path === item.worktreePath);
+          if (row && item.lock) change(row.itemId, { lockReason: item.lock.lockReason });
         }
         for (const item of [...removal.failed, ...removal.emptyFoldersFailed]) {
           checkoutStep.failed += 1;
@@ -1132,13 +1178,14 @@ export class ThreadMaintenanceService {
     return this.publish(finished);
   }
 
-  /** True when archived, else the reason it was kept. Throws on failure. */
+  /** When archived, the worktrees it kept locked; else the reason the thread
+   * was kept. Throws on failure. */
   private async archiveReviewed(
     entry: { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread },
     overLimit: ThreadMaintenanceApplyRequest["archive"][number]["overLimit"],
     rules: ThreadMaintenanceRules,
     onArchive: () => void,
-  ): Promise<true | string> {
+  ): Promise<{ lockedWorktrees: WorktreeLockedKept[] } | string> {
     const refreshed = await Promise.all(entry.family.map((item) => this.deps.refreshCandidate(item)));
     if (archiveCandidateLastActivity(refreshed[0]!) > entry.row.lastActivityAt) return "New activity during the run";
     const policy = { ...this.deps.getPolicy(), mode: "age" as const, inactivityDays: 0 };
@@ -1159,7 +1206,8 @@ export class ThreadMaintenanceService {
       ...(workspace.kind === "overLimit" && overLimit === "snapshotAll"
         ? { snapshotLimitBytes: reviewedSnapshotCap(workspace.bytes) } : {}),
     });
-    return archived ? true : "Archive cancelled";
+    if (archived === false) return "Archive cancelled";
+    return { lockedWorktrees: archived === true ? [] : archived.lockedWorktrees };
   }
 
   private publish(snapshot: ThreadMaintenanceRun): ThreadMaintenanceRun {

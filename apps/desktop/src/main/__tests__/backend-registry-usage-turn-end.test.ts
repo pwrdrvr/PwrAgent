@@ -2,6 +2,7 @@ import { createDesktopBackendRegistry, registryModules } from "../app-server/bac
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
@@ -570,7 +571,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(completedAt(acpTurnId)).toBeGreaterThanOrEqual(beforeClose);
     });
 
-    it("keeps the shutdown deadline while an answered ACP terminal is still adopting its branch", async () => {
+    it.each(["before", "during"] as const)("keeps the shutdown deadline for an ACP terminal emitted %s shutdown", async (ingress) => {
       const registry = createRegistry();
       const internal = registry as unknown as {
         adoptThreadBranchChangeFromActiveTurn(params: { backend: AppServerBackendKind; threadId: string }): Promise<void>;
@@ -584,7 +585,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       let terminal: Promise<void> | undefined;
       vi.spyOn(internals(registry).acpBackend, "cancelRunningSession")
         .mockImplementation(async () => {
-          terminal = internals(registry).emit(acpCancelled(acpTurnId));
+          if (ingress === "during") terminal = internals(registry).emit(acpCancelled(acpTurnId));
           return true;
         });
       await runTurn(registry, "acp:grok", acpTurnId);
@@ -595,6 +596,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       vi.useFakeTimers();
       try {
         let stopped = false;
+        if (ingress === "before") terminal = internals(registry).emit(acpCancelled(acpTurnId));
         const stop = registry.stopRunningTurnsForShutdown().then(() => { stopped = true; });
         await entered;
         expect(registryModules(registry).turnState.registeredTurnCount).toBe(0);
@@ -678,6 +680,61 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(codex.getInitializeResult).not.toHaveBeenCalled();
       expect(cancel).not.toHaveBeenCalled();
       expect(writes.commits).toBe(0);
+    });
+
+    it("retires a Claude turn at shutdown if saving its init metadata fails", async () => {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-account-shutdown-"));
+      const init = Promise.withResolvers<void>();
+      const terminalAccountRead = Promise.withResolvers<void>();
+      const sessions = new ClaudeSessionStore(path.join(cwd, "sessions"));
+      const registry = createRegistry([], { claudeBackendOptions: {
+        store: sessions,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ options }) => {
+          async function* messages() {
+            await init.promise;
+            yield { type: "system", subtype: "init", session_id: options!.sessionId! } as SDKMessage;
+          }
+          return Object.assign(messages(), { close: init.resolve }) as unknown as Query;
+        },
+      } });
+      const ledger = registryModules(registry).threadUsageLedger;
+      const usageAccountForTurn = ledger.usageAccountForTurn.bind(ledger);
+      vi.spyOn(ledger, "usageAccountForTurn").mockImplementation((...args) => {
+        terminalAccountRead.resolve();
+        return usageAccountForTurn(...args);
+      });
+      const delivered = Promise.withResolvers<AgentEvent>();
+      registry.onEvent((event) => {
+        if (event.notification.method === "turn/failed") delivered.resolve(event);
+      });
+      try {
+        const { threadId } = await registry.startThread({ backend: "claude", cwd, executionMode: "default" });
+        const { turnId } = await registry.startTurn({
+          backend: "claude", threadId, input: [{ type: "text", text: "Start" }],
+        });
+        const failure = Object.assign(new Error("EPERM: cannot replace Claude session metadata"), { code: "EPERM" });
+        vi.spyOn(sessions, "save").mockRejectedValueOnce(failure);
+        // turn/started has captured the pending account read. The failed init
+        // cannot confirm the account, and terminal accounting must still finish.
+        init.resolve();
+        await terminalAccountRead.promise;
+        await registry.stopRunningTurnsForShutdown();
+
+        expect(logger.warn).not.toHaveBeenCalledWith(
+          "running turns still unanswered at the shutdown deadline", expect.anything(),
+        );
+        expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined();
+        expect(await delivered.promise).toMatchObject({
+          backend: "claude",
+          notification: { params: { threadId, turnId, turn: { status: "failed", error: { message: failure.message } } } },
+        });
+      } finally {
+        init.resolve();
+        await registry.close();
+        await rm(cwd, { recursive: true, force: true });
+      }
     });
 
     it("does not start a queued turn in place of one it stopped", async () => {

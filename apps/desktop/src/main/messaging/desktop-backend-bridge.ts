@@ -48,6 +48,8 @@ import type {
   AppServerThreadStatus,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   SetThreadLockRequest,
@@ -1005,6 +1007,16 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       );
     }
     return await this.registry.handoffThreadWorkspace(request);
+  }
+
+  async readThreadWorktreeLock(
+    request: ReadThreadWorktreeLockRequest,
+  ): Promise<ReadThreadWorktreeLockResponse> {
+    // Local owners only. A peer's handoff gets no approval, so its owner
+    // keeps a locked worktree, which is the safe default.
+    if (this.remoteBackend(request.federationTarget)) return { worktreePath: request.worktreePath };
+    const { federationTarget: _federationTarget, ...local } = request;
+    return await this.registry.readThreadWorktreeLock(local);
   }
 
   async ensureDirectoryLaunchpad(

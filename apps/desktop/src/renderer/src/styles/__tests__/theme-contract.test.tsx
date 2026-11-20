@@ -582,6 +582,24 @@ describe("Tangerine Terminal theme contract", () => {
     expect(extractRuleBody(css, ".directory-row__header")).toMatch(/\btop:\s*0;/);
   });
 
+  it("sticks the Directory threads divider under its project header", () => {
+    // With a long project open, the disclosure that closes it scrolled away
+    // with the first rows and was lost among 150 others. It sticks at the
+    // header's measured height, opaque and as wide as the header so rows
+    // never show beside it, and under the header so it slides beneath it
+    // when its list scrolls out.
+    const divider = extractRuleBody(css, ".directory-row__thread-divider");
+    expect(divider).toContain("position: sticky;");
+    expect(divider).toMatch(/\btop:\s*var\(--directory-row-header-height, 24px\);/);
+    expect(divider).toContain("background: var(--bg-sidebar);");
+    expect(divider).toMatch(/\bmargin-inline:\s*-8px;/);
+    expect(extractRuleBody(css, ".directory-row__threads")).toMatch(/\bpadding-left:\s*8px;/);
+    const zIndex = (rule: string): number =>
+      Number(/\bz-index:\s*(\d+);/.exec(extractRuleBody(css, rule))?.[1]);
+    expect(zIndex(".directory-row__thread-divider")).toBeLessThan(zIndex(".directory-row__header"));
+    expect(zIndex(".directory-row__thread-divider")).toBeGreaterThan(zIndex(".thread-row__subthread-toggle"));
+  });
+
   it("does not leave unresolved theme token references in app.css", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",

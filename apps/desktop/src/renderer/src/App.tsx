@@ -4133,10 +4133,13 @@ function DesktopAppShell(props: {
     // detail again so it never waits on a revision that was already current.
     await navigation.refreshSelectedThreadConfiguration().catch(() => undefined);
   });
-  const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
+  const handleMoveThreadToMainCheckout = useEventCallback(async (
+    worktreePath: string,
+    options?: { approvedLockReason?: string },
+  ) => {
     const thread = navigation.selectedThread;
     if (!thread) throw new Error("Select the thread again, then try once more.");
-    return await navigation.moveThreadToMainCheckout(thread, worktreePath);
+    return await navigation.moveThreadToMainCheckout(thread, worktreePath, options);
   });
   const handleSetExecutionMode = useEventCallback(async (
     executionMode: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[0],
@@ -4964,7 +4967,9 @@ function DesktopAppShell(props: {
                   // seeded with the search query so it highlights + scrolls the
                   // matched message into view (auto-loading older history if the
                   // match lives further up than the first page).
-                  const seed = threadSearchState.query.trim();
+                  // The query that produced the results, not text typed since.
+                  const searchSnapshot = threadSearchState.getSnapshot();
+                  const seed = (searchSnapshot.response?.query ?? searchSnapshot.query).trim();
                   setFindRequest(
                     seed
                       ? {

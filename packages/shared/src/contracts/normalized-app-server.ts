@@ -1206,6 +1206,22 @@ export type ResolveThreadResponse = {
   thread?: AppServerThreadSummary;
 };
 
+/**
+ * Git has a worktree locked by someone other than PwrAgent (an operator, a
+ * script or another tool), so PwrAgent kept it. PwrAgent's own drive lock
+ * never produces this. `lockReason` is the text of Git's lock, trimmed: ""
+ * when the lock has no reason. Pass it back as `approvedLockReason` to unlock
+ * and remove the worktree; a lock that says anything else by then keeps it.
+ */
+export type WorktreeLockedKept = {
+  reason: "worktree-locked";
+  worktreePath: string;
+  lockReason: string;
+};
+
+/** Text Git and older owners use when a lock stops a removal. */
+export const WORKTREE_LOCKED_SKIP_REASON = "Locked worktree";
+
 export type ArchiveThreadCleanupResult = {
   worktreePath?: string;
   /** Confirmed folder presence at cleanup, independent of other thread worktrees. */
@@ -1217,6 +1233,8 @@ export type ArchiveThreadCleanupResult = {
   deletedBranch: boolean;
   skippedReason?: string;
   error?: string;
+  /** Kept because Git has it locked by someone else. Older owners report an `error` instead. */
+  kept?: WorktreeLockedKept;
   /** Active users on the cleanup owner's instance. A remote viewer qualifies that owner. */
   blockingThreads?: Array<{ backend: AppServerBackendKind; threadId: ThreadIdentifier; title?: string }>;
   /**
@@ -1369,6 +1387,14 @@ export type HandoffThreadWorkspaceRequest = {
    * stays on disk until the thread is archived.
    */
   baseRef?: string;
+  /**
+   * The operator chose to unlock and archive the source worktree, which Git
+   * had locked by someone else with exactly this text (`lockReason` from
+   * `readThreadWorktreeLock`). Without it, or when the lock says anything
+   * else by then, the handoff completes and keeps the worktree on disk, still
+   * locked. Older owners ignore it.
+   */
+  approvedLockReason?: string;
 };
 
 export type HandoffThreadWorkspaceResponse = {
@@ -1383,6 +1409,8 @@ export type HandoffThreadWorkspaceResponse = {
   targetPath: string;
   linkedDirectory: LinkedDirectorySummary;
   archivedSourceWorktree?: WorktreeSnapshotSummary;
+  /** The source worktree stayed on disk because Git has it locked by someone else. */
+  keptSourceWorktree?: WorktreeLockedKept;
   sourceStash?: ThreadWorkspaceHandoffStashSummary;
   destinationStash?: ThreadWorkspaceHandoffStashSummary;
   warnings: string[];
@@ -1423,6 +1451,7 @@ export type ThreadMissingWorkspace = {
   checkpoint?: {
     snapshotRef: string;
     snapshotCommit: string;
+    sourceHead?: string;
     archivedAt?: number;
   };
 };
@@ -1526,6 +1555,14 @@ export type MoveThreadToMainCheckoutRequest = {
   threadId: ThreadIdentifier;
   /** The worktree the thread is leaving. The owner refuses any other. */
   worktreePath: string;
+  /**
+   * The operator chose to unlock and archive the worktree, which Git
+   * had locked by someone else with exactly this text (`lockReason` from
+   * `readThreadWorktreeLock`). Without it, or when the lock says anything
+   * else by then, the thread still moves and the worktree stays on disk,
+   * still locked. Older owners ignore it.
+   */
+  approvedLockReason?: string;
 };
 
 export type MoveThreadToMainCheckoutResponse = {
@@ -1537,8 +1574,65 @@ export type MoveThreadToMainCheckoutResponse = {
   /** The thread's workspace now, as its selected detail will show it. */
   linkedDirectory: LinkedDirectorySummary;
   archivedWorktree?: WorktreeSnapshotSummary;
+  /** The worktree stayed on disk because Git has it locked by someone else. */
+  keptWorktree?: WorktreeLockedKept;
   warnings: string[];
   completedAt: number;
+};
+
+/**
+ * Reads Git's lock on one of a thread's worktrees, so the operator can be
+ * asked before it is removed. A single file read. `lock` is present only for
+ * someone else's lock: PwrAgent's own drive lock is cleared without asking.
+ */
+export type ReadThreadWorktreeLockRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** One of the thread's worktrees. The owner refuses any other. */
+  worktreePath: string;
+};
+
+export type ReadThreadWorktreeLockResponse = {
+  worktreePath: string;
+  lock?: WorktreeLockedKept;
+};
+
+/**
+ * One archived thread's worktree to unlock and remove: it was kept because
+ * Git has it locked by someone else. It is checkpointed first, as archive
+ * would have. Only from the operator's explicit choice.
+ */
+export type RemoveLockedThreadWorktreeRequest = {
+  backend: AppServerBackendKind;
+  /** The archived thread the operator saw it under. A checkout another
+   * thread owns by now is kept. */
+  threadId: ThreadIdentifier;
+  worktreePath: string;
+  /** The lock text the operator saw. A lock that says anything else keeps the worktree. */
+  approvedLockReason: string;
+};
+
+/** One worktree's outcome. */
+export type RemoveLockedThreadWorktreeResponse =
+  | { status: "removed"; worktreePath: string }
+  /** Still on disk: `kept` when the lock changed, or another keep reason. */
+  | { status: "kept"; worktreePath: string; reason: string; kept?: WorktreeLockedKept }
+  | { status: "failed"; worktreePath: string; message: string };
+
+/**
+ * Unlock and Remove for several worktrees on one owner, in one pass over its
+ * archived checkouts. Each worktree is still admitted, checkpointed and
+ * unlocked on its own.
+ */
+export type RemoveLockedThreadWorktreesRequest = {
+  federationTarget?: FederationTarget;
+  worktrees: RemoveLockedThreadWorktreeRequest[];
+};
+
+/** One result per requested worktree, in request order. */
+export type RemoveLockedThreadWorktreesResponse = {
+  results: RemoveLockedThreadWorktreeResponse[];
 };
 
 export type RenameThreadRequest = {

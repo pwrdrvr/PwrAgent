@@ -8,6 +8,8 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
   ThreadWorkspaceHandoffStashSummary,
+  WorktreeLockedKept,
+  WorktreeSnapshotSummary,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DesktopWorktreeFolder,
@@ -23,6 +25,7 @@ import {
   releaseWorktreePathReservation,
 } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
+import { lockApprovalMatches, readWorktreeLockAt, WorktreeLockedError } from "./worktree-volume-lock";
 import { runGitCommand } from "./git-executable";
 
 const DETACHED_HEAD_LEAVE_LOCAL_BRANCH = "HEAD";
@@ -107,6 +110,11 @@ type HandoffParams = {
    * archiving it, because this thread does not own it.
    */
   keepSourceWorktree?: boolean;
+  /**
+   * The operator approved unlocking someone else's lock on the source
+   * worktree while it said exactly this. Otherwise such a lock keeps it.
+   */
+  approvedLockReason?: string;
   now?: number;
 };
 
@@ -805,6 +813,7 @@ export class GitWorkspaceHandoffService {
       throw new Error("Worktree-to-worktree handoff must start from a worktree.");
     }
     const strategy = params.strategy ?? "detached-changes";
+    const keptByLock = params.keepSourceWorktree ? undefined : await this.lockKeepingSource(context, params.approvedLockReason);
     const moved = strategy === "new-branch"
       ? await this.handoffLocalChangesToNewBranchWorktree(params, context)
       : strategy === "detached-changes"
@@ -816,6 +825,7 @@ export class GitWorkspaceHandoffService {
         warnings: [...moved.warnings, "The previous worktree was created outside PwrAgent, so it was left on disk."],
       };
     }
+    if (keptByLock) return withKeptSource(moved, keptByLock);
     // The thread already moved. A failed archive leaves the old worktree in
     // place; it must not undo the move.
     try {
@@ -825,9 +835,11 @@ export class GitWorkspaceHandoffService {
         repositoryPath: context.repositoryPath,
         worktreePath: context.sourcePath,
         now: context.now,
+        ...approvalFor(params.approvedLockReason),
       });
       return { ...moved, archivedSourceWorktree };
     } catch (error) {
+      if (error instanceof WorktreeLockedError) return withKeptSource(moved, keptSource(context, error.lockReason));
       const detail = error instanceof Error ? error.message : String(error);
       return {
         ...moved,
@@ -996,8 +1008,13 @@ export class GitWorkspaceHandoffService {
       throw new Error("Worktree-to-local handoff must start from a worktree.");
     }
 
+    // Before any Git state moves: someone else's lock decides now whether the
+    // source is archived afterwards, so the handoff never fails after the
+    // branch has already switched.
+    const approvedLockReason = params.approvedLockReason;
+    const keptByLock = await this.lockKeepingSource(context, approvedLockReason);
     if (context.branch === "HEAD") {
-      return await this.handoffDetachedWorktreeToLocal(context);
+      return await this.handoffDetachedWorktreeToLocal(context, keptByLock, approvedLockReason);
     }
 
     ensureBranchNotCheckedOutElsewhere({
@@ -1021,13 +1038,7 @@ export class GitWorkspaceHandoffService {
       sourceStash,
       this.gitEnv,
     );
-    const archivedSourceWorktree = await this.worktreeArchiveService.archive({
-      backend: context.backend,
-      threadId: context.threadId,
-      repositoryPath: context.repositoryPath,
-      worktreePath: context.sourcePath,
-      now: context.now,
-    });
+    const { archivedSourceWorktree, keptSourceWorktree, warning } = await this.archiveMovedSource(context, keptByLock, approvedLockReason);
 
     const linkedDirectory = this.buildLinkedDirectory({
       context,
@@ -1045,15 +1056,18 @@ export class GitWorkspaceHandoffService {
       repositoryPath: context.repositoryPath,
       targetPath: context.repositoryPath,
       linkedDirectory,
-      archivedSourceWorktree,
+      ...(archivedSourceWorktree ? { archivedSourceWorktree } : {}),
+      ...(keptSourceWorktree ? { keptSourceWorktree } : {}),
       sourceStash: appliedSourceStash,
-      warnings,
+      warnings: warning ? [...warnings, warning] : warnings,
       completedAt: context.now,
     };
   }
 
   private async handoffDetachedWorktreeToLocal(
     context: HandoffContext,
+    keptByLock: WorktreeLockedKept | undefined,
+    approvedLockReason: string | undefined,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const warnings = [
       "Ignored files are not preserved by workspace handoff.",
@@ -1076,13 +1090,7 @@ export class GitWorkspaceHandoffService {
       sourceStash,
       this.gitEnv,
     );
-    const archivedSourceWorktree = await this.worktreeArchiveService.archive({
-      backend: context.backend,
-      threadId: context.threadId,
-      repositoryPath: context.repositoryPath,
-      worktreePath: context.sourcePath,
-      now: context.now,
-    });
+    const { archivedSourceWorktree, keptSourceWorktree, warning } = await this.archiveMovedSource(context, keptByLock, approvedLockReason);
 
     const linkedDirectory = this.buildLinkedDirectory({
       context,
@@ -1100,11 +1108,57 @@ export class GitWorkspaceHandoffService {
       repositoryPath: context.repositoryPath,
       targetPath: context.repositoryPath,
       linkedDirectory,
-      archivedSourceWorktree,
+      ...(archivedSourceWorktree ? { archivedSourceWorktree } : {}),
+      ...(keptSourceWorktree ? { keptSourceWorktree } : {}),
       sourceStash: appliedSourceStash,
-      warnings,
+      warnings: warning ? [...warnings, warning] : warnings,
       completedAt: context.now,
     };
+  }
+
+  /**
+   * Someone else's lock on the source worktree, unless the operator approved
+   * it as it reads now. Read before any Git state moves.
+   */
+  private async lockKeepingSource(
+    context: HandoffContext,
+    approvedLockReason: string | undefined,
+  ): Promise<WorktreeLockedKept | undefined> {
+    // An unreadable pointer is left to the archive, whose admission reads
+    // the lock again and keeps the checkout on someone else's.
+    const lock = await readWorktreeLockAt(context.sourcePath).catch(() => ({ holder: "none" as const }));
+    if (lock.holder !== "other" || lockApprovalMatches(lock, approvedLockReason)) return undefined;
+    return keptSource(context, lock.reason ?? "");
+  }
+
+  /**
+   * After the move: archive the source, or keep it when someone else's lock
+   * holds it. The handoff has already moved Git state, so nothing here may
+   * fail it: a lock that changed since the check keeps the worktree (typed),
+   * and any other archive failure leaves it on disk with a warning, as a
+   * handoff to a new worktree does.
+   */
+  private async archiveMovedSource(
+    context: HandoffContext,
+    keptByLock: WorktreeLockedKept | undefined,
+    approvedLockReason: string | undefined,
+  ): Promise<{ archivedSourceWorktree?: WorktreeSnapshotSummary; keptSourceWorktree?: WorktreeLockedKept; warning?: string }> {
+    if (keptByLock) return { keptSourceWorktree: keptByLock };
+    try {
+      return {
+        archivedSourceWorktree: await this.worktreeArchiveService.archive({
+          backend: context.backend,
+          threadId: context.threadId,
+          repositoryPath: context.repositoryPath,
+          worktreePath: context.sourcePath,
+          now: context.now,
+          ...approvalFor(approvedLockReason),
+        }),
+      };
+    } catch (error) {
+      if (error instanceof WorktreeLockedError) return { keptSourceWorktree: keptSource(context, error.lockReason) };
+      return { warning: `The previous worktree was left on disk: ${error instanceof Error ? error.message : String(error)}` };
+    }
   }
 
   private buildStashMessage(
@@ -1133,4 +1187,22 @@ export class GitWorkspaceHandoffService {
       worktreePath: params.kind === "worktree" ? params.targetPath : undefined,
     };
   }
+}
+
+function approvalFor(approvedLockReason: string | undefined): { approvedLockReason?: string } {
+  return approvedLockReason !== undefined ? { approvedLockReason } : {};
+}
+
+function keptSource(context: HandoffContext, lockReason: string): WorktreeLockedKept {
+  return { reason: "worktree-locked", worktreePath: context.sourcePath, lockReason };
+}
+
+function withKeptSource(
+  moved: HandoffThreadWorkspaceResponse,
+  kept: WorktreeLockedKept,
+): HandoffThreadWorkspaceResponse {
+  return {
+    ...moved,
+    keptSourceWorktree: kept,
+  };
 }

@@ -17,8 +17,21 @@ Read this before changing desktop configuration, profiles, runtime storage, deve
   - Dual write.
 - Do not use `PWRAGNT_STATE_ROOT` or `PWRAGNT_CONFIG_PATH`.
 - The application does not read those removed variables.
-- Multiple instances can safely share one profile database through SQLite WAL mode.
+- Instances running the same PwrAgent version can share one profile database.
 - Do not add a lock file for this database.
+
+### Sharing a profile across versions
+
+Quit every instance using a profile before opening it with a different
+PwrAgent version. Use separate profiles to run versions side by side. An older
+version's ability to open a profile after a downgrade covers sequential use.
+
+SQLite WAL coordinates database access. It does not make different versions
+follow the same dispatch protocol. For example, v1.4.12 can submit a queued
+automation run before persisting that it started. A newer instance can recover
+that row while the acknowledgement is still missing. The provider lease
+serializes submissions, but a later lease transfer cannot tell whether the
+old provider call already performed work. See [Automation Scheduling](automation-scheduling.md#run-history).
 
 ### Provider context configuration
 

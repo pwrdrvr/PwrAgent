@@ -14,9 +14,8 @@ type Anchor = {
   /** What opened it, which decides what closes it: a pointer leaving does not
    *  close a keyboard-focus tooltip, and a blur does not close a hovered one. */
   via: "pointer" | "focus";
-  /** Whether this layer wrote the anchor's `aria-describedby`, so it only ever
-   *  removes a reference it added. */
-  describedBy: boolean;
+  /** The element whose `aria-describedby` this layer owns while open. */
+  descriptionTarget: HTMLElement | null;
 };
 
 function tooltipTargetAt(node: EventTarget | null): HTMLElement | null {
@@ -64,11 +63,8 @@ export function DataTooltipLayer() {
     contentObserverRef.current = null;
     const anchor = anchorRef.current;
     anchorRef.current = null;
-    if (
-      anchor?.describedBy
-      && anchor.element.getAttribute(DESCRIBED_BY) === tooltipId
-    ) {
-      anchor.element.removeAttribute(DESCRIBED_BY);
+    if (anchor?.descriptionTarget?.getAttribute(DESCRIBED_BY) === tooltipId) {
+      anchor.descriptionTarget.removeAttribute(DESCRIBED_BY);
     }
   }, [tooltipId]);
 
@@ -88,28 +84,36 @@ export function DataTooltipLayer() {
 
   useEffect(() => {
     const open = (element: HTMLElement, via: Anchor["via"]): void => {
-      const content = element.getAttribute("data-tooltip");
+      let content = element.getAttribute("data-tooltip");
       if (!content) {
         return;
       }
       release();
+      // A command chip is editable text wrapped in a ProseMirror decoration.
+      // Writing an attribute on that wrapper dirties the document view and
+      // replaces the hover target. The editor root owns the accessible
+      // description and ProseMirror ignores attribute changes on that root.
+      const descriptionTarget = element.hasAttribute("data-tooltip-describe-editor")
+        ? element.closest<HTMLElement>('[contenteditable][role="textbox"]')
+        : element;
       // A control that already names its own description keeps it; this layer
       // only fills the gap.
-      const describedBy = !element.hasAttribute(DESCRIBED_BY);
-      if (describedBy) {
-        element.setAttribute(DESCRIBED_BY, tooltipId);
+      const ownsDescription = descriptionTarget && !descriptionTarget.hasAttribute(DESCRIBED_BY);
+      if (ownsDescription) {
+        descriptionTarget.setAttribute(DESCRIBED_BY, tooltipId);
       }
-      anchorRef.current = { element, via, describedBy };
+      anchorRef.current = { element, via, descriptionTarget: ownsDescription ? descriptionTarget : null };
       // Controls rewrite their tooltip while it shows ("Talk to this thread"
       // becomes "End voice"), which the `::after` picked up for free.
       const observer = new MutationObserver(() => {
         const next = element.matches(DATA_TOOLTIP_SELECTOR)
           ? element.getAttribute("data-tooltip")
           : null;
-        if (next) {
-          update(next);
-        } else {
+        if (!next) {
           close();
+        } else if (next !== content) {
+          content = next;
+          update(next);
         }
       });
       observer.observe(element, {

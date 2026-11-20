@@ -1,14 +1,10 @@
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
 import { FederatedThreadTodoService, type ThreadTodoOperation } from "../../federation/federation-thread-todos";
-import {
-  listLocalTodoOwnerThreads, localThreadTodoOperations, readManagedTodoThreadKeys,
-} from "../../thread-todos/thread-todo-operations";
+import { localThreadTodoOperations } from "../../thread-todos/thread-todo-operations";
 import { ThreadTodoViewHub } from "../../thread-todos/thread-todo-views";
 import { getDesktopOverlayStore } from "../../storage/desktop-overlay-store";
-import { readLocalNavigationDirectoryIndex } from "../../app-server/navigation-directory-index";
 import { getMainLogger } from "../../log";
 import { ipcMain } from "electron";
-import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
   ThreadTodoFeedDelta,
@@ -32,15 +28,10 @@ import {
   THREAD_REVIEWS_DISARM_AUTO_FIX_CHANNEL,
 } from "../../../shared/ipc";
 import { expectedNavigationReadFailure } from "../../../shared/navigation-ipc-result";
-import type { PwrAgentFederationHandler } from "../../agent-tools/pwragent-federation-agent-tools";
-import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
-import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
-import type { ThreadTodoProjectCandidate } from "../../thread-todos/thread-todo-projects";
-import {
-  installThreadTodoRuntime,
-} from "../../thread-todos/thread-todo-runtime";
+import type { OwnerQueueEvents } from "../../owner-queue-services";
 import { federationTargetForChannelSubscriber, subscribersForChannel } from "../window-channels";
 
+let unsubscribeLocalTodos: (() => void) | undefined;
 let unsubscribeRemoteTodos: (() => void) | undefined;
 let unsubscribePeerStatus: (() => void) | undefined;
 const todoLog = getMainLogger("pwragent:thread-todos");
@@ -75,28 +66,7 @@ function hasThreadTodoViewers(target: FederationRemoteTarget | undefined): boole
     federationTargetForChannelSubscriber(webContents)?.instanceId === target?.instanceId);
 }
 
-/**
- * The local Directories lens rows, the projects a card can name. Every
- * page of them: a navigation page holds at most 100 rows.
- */
-async function listLocalProjects(): Promise<ThreadTodoProjectCandidate[]> {
-  return (await readLocalNavigationDirectoryIndex()).map((directory) => ({
-    key: directory.key,
-    label: directory.label,
-    kind: directory.kind,
-    ...(directory.path ? { path: directory.path } : {}),
-    ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
-    ...(directory.repositoryKeys?.length ? { repositoryKeys: directory.repositoryKeys } : {}),
-    ...(directory.localAvailability ? { localAvailability: directory.localAvailability } : {}),
-  }));
-}
-
-export function registerThreadTodoIpcHandlers(options: {
-  /** Starts handoff threads on federation peers. */
-  federation?: PwrAgentFederationHandler;
-  /** The same tools sending one message origin, for a card's peer start. */
-  federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
-} = {}): void {
+export function registerThreadTodoIpcHandlers(events: OwnerQueueEvents): void {
   const runtime = getDesktopFederationRuntime();
   const mountedThreads = async () => (await getDesktopOverlayStore().listRemoteThreadPins())
     .filter((pin) => pin.ref.target.scope === "remote")
@@ -115,34 +85,18 @@ export function registerThreadTodoIpcHandlers(options: {
     send: sendThreadTodoDelta,
     onUnavailable,
   });
-  installThreadTodoRuntime({
-    registry: getDesktopBackendRegistry(),
-    broadcast: (event) => {
-      broadcastThreadTodosChanged(event);
-      runtime.publishThreadTodosChanged(event);
-      hub.localChanged();
-    },
-    feed: {
-      loadOwners: listLocalTodoOwnerThreads,
-      managedThreadKeys: readManagedTodoThreadKeys,
-      onDelta: (delta) => {
-        hub.localDelta(delta);
-        runtime.publishThreadTodoDelta(delta);
-      },
-    },
-    listProjects: listLocalProjects,
-    readDefaultMergeMethod: () =>
-      getDesktopSettingsService().resolveDefaultMergeMethod(),
-    ...(options.federation ? { federation: options.federation } : {}),
-    ...(options.federationWithOrigin ? { federationWithOrigin: options.federationWithOrigin } : {}),
-    peerPlans: {
-      // The instance picker can name this machine, which raises its own.
-      supports: (instanceId) => isLocalTodoInstance(runtime, instanceId)
-        || runtime.remotePeerSupportsTodoPlan({ scope: "remote", instanceId }),
-      raise: (instanceId, request) =>
-        runtime.requestThreadTodoOperation({ scope: "remote", instanceId }, "raisePlan", request),
-    },
-  });
+  unsubscribeLocalTodos?.();
+  const onLocalChange = (event: ThreadTodosChangedEvent): void => {
+    broadcastThreadTodosChanged(event);
+    hub.localChanged();
+  };
+  const onLocalDelta = (delta: ThreadTodoFeedDelta): void => hub.localDelta(delta);
+  events.on("threadTodosChanged", onLocalChange);
+  events.on("threadTodoDelta", onLocalDelta);
+  unsubscribeLocalTodos = () => {
+    events.off("threadTodosChanged", onLocalChange);
+    events.off("threadTodoDelta", onLocalDelta);
+  };
 
   const service = new FederatedThreadTodoService({
     local: localThreadTodoOperations,
@@ -194,17 +148,5 @@ export function registerThreadTodoIpcHandlers(options: {
         throw error;
       }
     });
-  }
-}
-
-function isLocalTodoInstance(
-  runtime: ReturnType<typeof getDesktopFederationRuntime>,
-  instanceId: string,
-): boolean {
-  try {
-    return instanceId === runtime.localFederationInstanceId();
-  } catch {
-    // State is not open yet, so the id cannot be read or minted.
-    return false;
   }
 }

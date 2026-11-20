@@ -3,6 +3,7 @@ import type {
   ThreadMaintenanceRunItem,
   ThreadMaintenanceRunStage,
 } from "@pwragent/shared/thread-maintenance";
+import type { RemoveLockedThreadWorktreeResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { formatBytes } from "./thread-maintenance-selection";
 
 /** A run's items by where they are. Every item appears in exactly one
@@ -154,4 +155,45 @@ export function problemsWithoutItems(
 ): ThreadMaintenanceProblem[] {
   if (!hasRunItems(items)) return [...problems];
   return problems.filter((problem) => !items.some((item) => problemMatchesItem(problem, item)));
+}
+
+/**
+ * Whether a run row offers Unlock and Remove: an archived checkout, kept only
+ * because someone else's Git lock holds it. That is a checkout the operator
+ * chose to remove, or one the archive step kept when it archived its thread.
+ * Never a hibernation row: hibernation keeps a locked checkout and never
+ * unlocks it, and a sleeping thread is still in use.
+ */
+export function offersUnlockAndRemove(item: ThreadMaintenanceRunItem): item is ThreadMaintenanceRunItem & {
+  lockReason: string; backend: string; threadId: string; path: string;
+} {
+  return (item.step === "checkouts" || item.step === "threads")
+    && item.action === "removeCheckout"
+    && item.status === "kept"
+    && item.lockReason !== undefined
+    && Boolean(item.backend && item.threadId && item.path);
+}
+
+/**
+ * The row after Unlock and Remove answered. `finishedOrder` puts a changed
+ * result after every earlier one, as main orders results. A lock that changed
+ * since the operator saw it comes back kept with its new text, so the row
+ * offers the action again for that text.
+ */
+export function itemAfterUnlockAndRemove(
+  item: ThreadMaintenanceRunItem,
+  outcome: RemoveLockedThreadWorktreeResponse | { status: "error"; message: string },
+  finishedOrder: number,
+  now: number,
+): ThreadMaintenanceRunItem {
+  // The earlier attempt's time and detail no longer describe this result.
+  const { lockReason: _lockReason, detail: _detail, allocatedBytesRemoved: _allocatedBytesRemoved,
+    startedAt: _startedAt, ...rest } = item;
+  const finished = { ...rest, finishedOrder, finishedAt: now };
+  if (outcome.status === "removed") return { ...finished, status: "done", reason: undefined };
+  if (outcome.status === "kept") {
+    return { ...finished, status: "kept", reason: outcome.reason,
+      ...(outcome.kept ? { lockReason: outcome.kept.lockReason } : {}) };
+  }
+  return { ...finished, status: "failed", reason: "Removal failed", detail: outcome.message };
 }

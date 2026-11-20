@@ -182,6 +182,7 @@ export function MissingWorktreeCard(props: MissingWorktreeCardProps) {
           return <>{button("Try Again", retry, "primary")}{button("Continue in Main Checkout", move, "secondary", canMove)}{props.onArchive ? button("Archive", archive, "ghost") : null}</>;
         case "branch-checked-out":
         case "branch-missing":
+        case "branch-moved":
           return <>{button("Recreate Detached", recreate({ ...options, detached: true }), "primary")}{button("Try Again", retry, "secondary")}{button("Continue in Main Checkout", move, "ghost", canMove)}</>;
         case "checkpoint-missing":
           return <>{button("Recreate Without Checkpoint", recreate({ ...options, skipCheckpoint: true }), "primary")}{button("Continue in Main Checkout", move, "secondary", canMove)}{props.onArchive ? button("Archive", archive, "ghost") : null}</>;
