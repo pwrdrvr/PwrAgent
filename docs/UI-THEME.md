@@ -623,6 +623,8 @@ The secondary "just clicked" or focus highlight must never clip on the left edge
 - The dock wears the selected row's border, fill and accent edge, and the ring a clicked row draws. The ring is on at rest: it tells the docked card from the rows passing under it. Keyboard focus adds a second ring inside the card.
 - It floats over the lane, laid out from `.sidebar__scroll-region`, so no row moves when it appears and it outlasts its own project scrolling away. A `--bg-sidebar` plate under the ring keeps the rows off it.
 - It appears when less than 40px of the row shows, so what is left of the row is under the dock. Either a row of the open thread shows that much or the dock stands in for it, never both. `selected-thread-dock.ts` holds the rule.
+- A thread with no row in the list docks too: one inside a collapsed parent or a closed project, or one the lens does not list. The dock then stands in for what would hold the row, the nearest parent's row or the project's section, and a click opens that and scrolls to the row. While the holder is in view, or the lens lists none, the dock rests at the bottom without an arrow. From a flat lens that does not list the thread, the click opens Directories.
+- It stays 6px inside the lane inset on both sides, so the ring and plate end at the inset and never cover the scrollbar. macOS draws an overlay thumb there and reserves no gutter.
 - It is not a second `ThreadRow`. The row's chips are controls, and a copy of them would be a second place to act.
 
 ### Lens Switches

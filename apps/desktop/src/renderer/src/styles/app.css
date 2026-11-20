@@ -5565,16 +5565,20 @@ textarea,
    The first two shadows after the edge are a `--bg-sidebar` plate under the
    ring: without it the rows show through the 2px between card and ring, and
    run straight into the ring's outer side. 6px is the ring's 4px reach plus
-   2px of air, and the 6px offsets below keep the plate inside the lane's
-   8px inset and clear of a stuck project header. */
+   2px of air, and the 6px offsets below keep the plate off the lane's
+   inset and clear of a stuck project header. */
 .selected-thread-dock {
   appearance: none;
   position: absolute;
   /* Above the stuck project header (6) it sits under. */
   z-index: 7;
-  left: var(--sidebar-lane-inset);
-  /* Rows stop short of the lane's reserved scrollbar gutter. */
-  right: calc(var(--sidebar-lane-inset) + var(--selected-thread-dock-gutter, 0px));
+  /* 6px inside the lane inset on both sides. The ring and its plate reach
+     6px out, so they end at the inset: clear of the wall on the left and of
+     the scrollbar on the right. macOS draws an overlay thumb in that inset
+     and reserves no gutter for it; where a gutter is reserved, the dock
+     stops short of it as the rows do. */
+  left: calc(var(--sidebar-lane-inset) + 6px);
+  right: calc(var(--sidebar-lane-inset) + max(6px, var(--selected-thread-dock-gutter, 0px)));
   display: flex;
   flex-direction: column;
   gap: 2px;

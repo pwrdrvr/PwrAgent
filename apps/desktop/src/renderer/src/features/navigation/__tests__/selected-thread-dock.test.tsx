@@ -44,7 +44,10 @@ const THREAD = {
  * scrolls. It holds two projects: PwrGit, whose header is stuck to the top
  * (30px), and PwrAgent, which holds the open thread's row.
  */
-function mountList(rowTop: number, options?: { duplicateTop?: number }): HTMLDivElement {
+function mountList(
+  rowTop: number,
+  options?: { duplicateTop?: number; hidden?: boolean },
+): HTMLDivElement {
   const region = document.createElement("div");
   region.className = "sidebar__scroll-region";
   region.style.overflow = "hidden";
@@ -75,13 +78,26 @@ function mountList(rowTop: number, options?: { duplicateTop?: number }): HTMLDiv
   place(region.querySelector("[data-header='pwragent']")!, rowTop - 200, 30);
   place(region.querySelector("[data-row='batch']")!, 300, 60);
   place(region.querySelector("[data-row='open']")!, rowTop, 60);
+  // The PwrAgent section: its header, then rows down to the open thread's.
+  place(region.querySelector("[data-directory-key='pwragent']")!, rowTop - 200, 260);
+  if (options?.hidden) {
+    // The row is not in the list: its parent is collapsed, say.
+    region.querySelector("[data-row='open']")!.parentElement!.remove();
+  }
   if (options?.duplicateTop !== undefined) {
     place(region.querySelector("[data-row='duplicate']")!, options.duplicateTop, 60);
   }
   return region;
 }
 
-function renderDock(region: HTMLDivElement, threadKey: string | undefined = "open") {
+let revealHidden: ReturnType<typeof vi.fn<() => void>>;
+
+function renderDock(
+  region: HTMLDivElement,
+  threadKey: string | undefined = "open",
+  holders: { ancestorThreadKeys?: string[]; directoryKeys?: string[] } = {},
+) {
+  revealHidden = vi.fn<() => void>();
   const regionRef = createRef<HTMLDivElement>();
   regionRef.current = region;
   const host = document.createElement("div");
@@ -94,6 +110,9 @@ function renderDock(region: HTMLDivElement, threadKey: string | undefined = "ope
       status="unread"
       remoteWork={false}
       projectLabel={(directoryKey) => (directoryKey ? `Project ${directoryKey}` : undefined)}
+      ancestorThreadKeys={holders.ancestorThreadKeys ?? []}
+      directoryKeys={holders.directoryKeys ?? []}
+      onRevealHiddenThread={revealHidden}
     />,
     { container: host },
   );
@@ -171,6 +190,59 @@ describe("SelectedThreadDock", () => {
     expect(scrollIntoView.mock.instances[0]).toBe(row);
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
     expect(document.activeElement).toBe(row.querySelector(".thread-row__open"));
+  });
+
+  it("does not ask for a reveal when it has a row to scroll to", () => {
+    renderDock(mountList(900));
+    act(() => dock()!.click());
+    expect(revealHidden).not.toHaveBeenCalled();
+  });
+
+  describe("for a thread with no row in the list", () => {
+    it("stands in for its nearest parent's row, at the edge that row is past", () => {
+      // The parent's row ("other") sits at y=300 by default; move it out above.
+      const region = mountList(900, { hidden: true });
+      place(region.querySelector("[data-row='batch']")!, -400, 60);
+      renderDock(region, "open", { ancestorThreadKeys: ["missing", "other"], directoryKeys: ["pwragent"] });
+      expect(dock()?.dataset.edge).toBe("top");
+      expect(dock()?.querySelector(".selected-thread-dock__direction")).not.toBeNull();
+      expect(dock()?.querySelector(".selected-thread-dock__project")?.textContent).toBe("Project pwragent");
+    });
+
+    it("rests at the bottom and points nowhere while what holds it is in view", () => {
+      // The parent's row is in view at y=300, collapsed over the thread.
+      renderDock(mountList(900, { hidden: true }), "open", { ancestorThreadKeys: ["other"] });
+      expect(dock()?.dataset.edge).toBe("bottom");
+      expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
+    });
+
+    it("stands in for its project when no parent has a row", () => {
+      // The PwrAgent section spans y=700..960, below the list's bottom at 500.
+      renderDock(mountList(900, { hidden: true }), "open", { directoryKeys: ["pwragent"] });
+      expect(dock()?.dataset.edge).toBe("bottom");
+      expect(dock()?.querySelector(".selected-thread-dock__direction")).not.toBeNull();
+      expect(dock()?.querySelector(".selected-thread-dock__project")?.textContent).toBe("Project pwragent");
+    });
+
+    it("still docks when the lens lists nothing that holds it", () => {
+      renderDock(mountList(900, { hidden: true }));
+      expect(dock()?.dataset.edge).toBe("bottom");
+      expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
+    });
+
+    it("asks for the thread to be revealed on click", () => {
+      renderDock(mountList(900, { hidden: true }), "open", { directoryKeys: ["pwragent"] });
+      act(() => dock()!.click());
+      expect(revealHidden).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("shows nothing while the sidebar is hidden", () => {
+      const region = mountList(900, { hidden: true });
+      place(region.querySelector(".directory-groups")!, 0, 0);
+      renderDock(region);
+      expect(dock()).toBeNull();
+    });
   });
 
   it("gets out of the way of a drag", () => {

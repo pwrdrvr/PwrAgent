@@ -438,6 +438,24 @@ test("the selected thread docks at the list's edge when its row scrolls away", a
     await expect(dock).toBeVisible();
     await expect(dock).toHaveAttribute("data-edge", "bottom");
     await expect(dock).toContainText("Parent thread with child link");
+
+    // A thread with no row at all still docks: close the project that
+    // holds it, and the dock opens the project again on click.
+    await threadBrowser.getByRole("tab", { name: "Directories" }).click();
+    const directorySummary = threadBrowser
+      .locator(".directory-row__summary")
+      .filter({ hasText: "RevealFixture" });
+    await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
+    await directorySummary.click();
+    await expect(directorySummary).toHaveAttribute("aria-expanded", "false");
+    await expect(lastRow).toHaveCount(0);
+    await expect(dock).toBeVisible();
+    await expect(dock).toContainText("Parent thread with child link");
+    await expect(dock).toContainText("RevealFixture");
+    await dock.click();
+    await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
+    await expect(lastRow).toBeInViewport({ ratio: 1 });
+    await expect(dock).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();
