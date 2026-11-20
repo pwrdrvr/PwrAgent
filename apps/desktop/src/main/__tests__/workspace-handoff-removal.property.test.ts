@@ -5,6 +5,7 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import * as gitExecutable from "../app-server/git-executable";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { createOverlayStoreMock, git, MockBackendClient, pathExists } from "./helpers/backend-registry-fixture";
@@ -13,10 +14,16 @@ type OtherThreadWorkspace = "source" | "descendant" | "unrelated";
 
 async function checkHandoffRemoval(
   otherWorkspaces: OtherThreadWorkspace[],
-  direction: "worktree-to-worktree" | "worktree-to-local" = "worktree-to-worktree",
-  lateWorkspace?: OtherThreadWorkspace,
-  strategy?: "new-branch" | "move-branch",
-  inventory: "paged" | "aggregate" = "paged",
+  {
+    direction = "worktree-to-worktree", lateWorkspace, strategy, inventory = "paged", clean = false, refuseDetachment = false,
+  }: {
+    direction?: "worktree-to-worktree" | "worktree-to-local";
+    lateWorkspace?: OtherThreadWorkspace;
+    strategy?: "new-branch" | "move-branch";
+    inventory?: "paged" | "aggregate";
+    clean?: boolean;
+    refuseDetachment?: boolean;
+  } = {},
 ) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-shared-handoff-")));
   try {
@@ -34,11 +41,19 @@ async function checkHandoffRemoval(
     });
     const sourcePath = created.targetPath;
     if (strategy) await git(sourcePath, ["switch", "-c", "source-branch"]);
-    await writeFile(path.join(sourcePath, "tracked.txt"), "staged\n");
-    await git(sourcePath, ["add", "tracked.txt"]);
-    await writeFile(path.join(sourcePath, "tracked.txt"), "working tree\n");
-    await writeFile(path.join(sourcePath, "untracked.txt"), "untracked\n");
+    if (!clean) {
+      await writeFile(path.join(sourcePath, "tracked.txt"), "staged\n");
+      await git(sourcePath, ["add", "tracked.txt"]);
+      await writeFile(path.join(sourcePath, "tracked.txt"), "working tree\n");
+      await writeFile(path.join(sourcePath, "untracked.txt"), "untracked\n");
+    }
     const sourceStatus = await git(sourcePath, ["status", "--porcelain"]);
+    const expectOriginalEdits = async () => {
+      expect(await git(sourcePath, ["status", "--porcelain"])).toBe(sourceStatus);
+      expect(await git(sourcePath, ["show", ":tracked.txt"])).toBe("staged");
+      expect(await readFile(path.join(sourcePath, "tracked.txt"), "utf8")).toBe("working tree\n");
+      expect(await readFile(path.join(sourcePath, "untracked.txt"), "utf8")).toBe("untracked\n");
+    };
     const descendant = path.join(sourcePath, "nested");
     await mkdir(descendant);
     // Ignored content is deliberately excluded from a handoff's transfer.
@@ -74,6 +89,26 @@ async function checkHandoffRemoval(
     });
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore, gitWorkspaceHandoffService: handoffService });
     try {
+      if (refuseDetachment) {
+        const runGit = gitExecutable.runGitCommand;
+        const switchSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((cwd, args, options) => {
+          if (cwd === sourcePath && args[0] === "switch" && args[1] === "--detach") {
+            return runGit(cwd, args, { ...options, beforeSpawn: () => { throw new Error("Ownership changed before detachment"); } });
+          }
+          return runGit(cwd, args, options);
+        });
+        try {
+          await expect(registry.handoffThreadWorkspace({
+            backend: "codex", threadId: moving.id, direction, strategy, repositoryPath, sourcePath,
+          })).rejects.toThrow("Ownership changed before detachment");
+        } finally {
+          switchSpy.mockRestore();
+        }
+        expect(await git(sourcePath, ["branch", "--show-current"])).toBe("source-branch");
+        await expectOriginalEdits();
+        expect(await git(repositoryPath, ["stash", "list"])).toBe("");
+        return;
+      }
       if (lateWorkspace) {
         const archive = archiveService.archive.bind(archiveService);
         vi.spyOn(archiveService, "archive").mockImplementationOnce(async (params) => await archive({
@@ -93,10 +128,12 @@ async function checkHandoffRemoval(
         ...(strategy === "new-branch" ? { newBranchName: "destination-branch" } : {}),
       });
       const sharedAtStart = otherWorkspaces.some((workspace) => workspace !== "unrelated");
-      if (sharedAtStart && strategy === "move-branch") {
-        await expect(handoff).rejects.toThrow("still used by another active thread");
-        expect(await git(sourcePath, ["branch", "--show-current"])).toBe("source-branch");
-        expect(await git(sourcePath, ["status", "--porcelain"])).toBe(sourceStatus);
+      if (sharedAtStart && !clean) {
+        await expect(handoff).rejects.toThrow(strategy === "move-branch" ? "still used by another active thread" : "The handoff could not transfer uncommitted changes.");
+        if (strategy) expect(await git(sourcePath, ["branch", "--show-current"])).toBe("source-branch");
+        await expectOriginalEdits();
+        const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: moving.id });
+        expect(overlay?.extraLinkedDirectories).toEqual([created.linkedDirectory]);
         return;
       }
       const result = await handoff;
@@ -104,18 +141,17 @@ async function checkHandoffRemoval(
       const shared = sharedAtStart || (lateWorkspace !== undefined && lateWorkspace !== "unrelated");
       expect(await pathExists(sourcePath)).toBe(shared);
       expect(await pathExists(path.join(descendant, "keep.txt"))).toBe(shared);
-      if (sharedAtStart) {
-        expect(await git(sourcePath, ["status", "--porcelain"])).toBe(sourceStatus);
-        expect(await readFile(path.join(sourcePath, "tracked.txt"), "utf8")).toBe("working tree\n");
-        expect(await readFile(path.join(sourcePath, "untracked.txt"), "utf8")).toBe("untracked\n");
+      if (clean) {
         expect(await readFile(path.join(result.targetPath, "tracked.txt"), "utf8")).toMatch(/^committed\r?\n$/);
         if (strategy === "new-branch") {
           expect(await git(sourcePath, ["branch", "--show-current"])).toBe("source-branch");
           expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("destination-branch");
         }
       } else {
+        if (shared) await expectOriginalEdits();
         expect(await readFile(path.join(result.targetPath, "tracked.txt"), "utf8")).toMatch(/^working tree\r?\n$/);
         expect(await readFile(path.join(result.targetPath, "untracked.txt"), "utf8")).toMatch(/^untracked\r?\n$/);
+        expect(await git(result.targetPath, ["show", ":tracked.txt"])).toBe("staged");
         if (strategy === "move-branch") {
           expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("source-branch");
         }
@@ -136,23 +172,35 @@ async function checkHandoffRemoval(
 
 describe("workspace handoff source removal", () => {
   it("keeps the checkout when two other active threads still use it", async () => {
-    await checkHandoffRemoval(["source", "source"]);
+    await checkHandoffRemoval(["source", "source"], { clean: true });
+  });
+
+  it("refuses a dirty shared handoff that would otherwise move only the commit", async () => {
+    await checkHandoffRemoval(["source"]);
   });
 
   it("returns a sole owner's named worktree to Local when its provider listing still shows the old checkout", async () => {
-    await checkHandoffRemoval([], "worktree-to-local", undefined, "move-branch", "aggregate");
+    await checkHandoffRemoval([], { direction: "worktree-to-local", strategy: "move-branch", inventory: "aggregate" });
   });
 
-  it.each(["source", "unrelated"] as const)("checks a late thread in the %s workspace at removal", async (workspace) => {
-    await checkHandoffRemoval([], "worktree-to-worktree", workspace);
+  it.each([
+    { lateWorkspace: "source", direction: "worktree-to-worktree" },
+    { lateWorkspace: "source", direction: "worktree-to-local" },
+    { lateWorkspace: "unrelated", direction: "worktree-to-worktree" },
+  ] as const)("checks a late thread in the $lateWorkspace workspace during $direction", async (options) => {
+    await checkHandoffRemoval([], options);
   });
 
   it("creates a new branch from a shared checkout without changing its branch", async () => {
-    await checkHandoffRemoval(["source"], "worktree-to-worktree", undefined, "new-branch");
+    await checkHandoffRemoval(["source"], { strategy: "new-branch", clean: true });
   });
 
   it.each(["worktree-to-worktree", "worktree-to-local"] as const)("refuses to move a shared branch during %s", async (direction) => {
-    await checkHandoffRemoval(["source"], direction, undefined, "move-branch");
+    await checkHandoffRemoval(["source"], { direction, strategy: "move-branch" });
+  });
+
+  it.each(["worktree-to-worktree", "worktree-to-local"] as const)("keeps the exact Git state when detachment is refused during %s", async (direction) => {
+    await checkHandoffRemoval([], { direction, strategy: "move-branch", refuseDetachment: true });
   });
 
   it("removes a worktree only when no other active thread uses it", async () => {
@@ -160,7 +208,7 @@ describe("workspace handoff source removal", () => {
       fc.array(fc.constantFrom<OtherThreadWorkspace>("source", "descendant", "unrelated"), { maxLength: 4 }),
       fc.constantFrom("worktree-to-worktree" as const, "worktree-to-local" as const),
       fc.constantFrom("paged" as const, "aggregate" as const),
-      async (workspaces, direction, inventory) => await checkHandoffRemoval(workspaces, direction, undefined, undefined, inventory),
+      async (workspaces, direction, inventory) => await checkHandoffRemoval(workspaces, { direction, inventory }),
     ), { numRuns: 12 });
   }, 30_000);
 });

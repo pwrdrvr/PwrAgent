@@ -1,4 +1,5 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type {
   AppServerBackendKind,
@@ -16,7 +17,7 @@ import type {
   DesktopWorktreeStorageLocation,
 } from "@pwragent/shared/contracts/settings";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared/contracts/settings";
-import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
+import { nestedWorktreeExcludePathspecs, nestedWorktreePathspecArgs, readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { addManagedWorktree } from "./managed-worktree";
 import {
@@ -144,7 +145,6 @@ type StashOptions = {
   message: string;
   path: string;
   gitEnv?: NodeJS.ProcessEnv;
-  beforeSpawn?: () => void;
 };
 
 type WorkspaceHandoffServiceOptions = {
@@ -267,7 +267,6 @@ async function createNamedStashIfDirty(
     options.path,
     ["stash", "push", "--include-untracked", "-m", options.message],
     options.gitEnv,
-    options.beforeSpawn,
   );
   const ref = trim(
     (await runGit(options.path, ["rev-parse", "--verify", "stash@{0}"], options.gitEnv))
@@ -283,15 +282,83 @@ async function createNamedStashIfDirty(
   };
 }
 
+/** Build a stash-shaped object using a private index. Git's own stash create
+ * captures tracked files and staging. Its optional third parent holds the
+ * untracked files. Neither operation cleans the source or updates refs/stash. */
+async function snapshotWorktreeEdits(
+  context: HandoffContext,
+  message: string,
+  gitEnv: NodeJS.ProcessEnv | undefined,
+): Promise<ThreadWorkspaceHandoffStashSummary> {
+  const source = context.sourcePath;
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-index-"));
+  try {
+    const index = path.join(tempDir, "index");
+    const env = buildPwrAgentChildProcessEnv(gitEnv ?? process.env, {
+      GIT_INDEX_FILE: index,
+      GIT_AUTHOR_NAME: "PwrAgent",
+      GIT_AUTHOR_EMAIL: "pwragent@example.invalid",
+      GIT_COMMITTER_NAME: "PwrAgent",
+      GIT_COMMITTER_EMAIL: "pwragent@example.invalid",
+    });
+    const git = async (args: string[], input?: string) => (await runGitCommand(
+      source, ["-c", "core.splitIndex=false", ...args], { env, input },
+    )).stdout;
+    const liveIndex = trim((await runGit(source, ["rev-parse", "--path-format=absolute", "--git-path", "index"], gitEnv)).stdout);
+    try {
+      await copyFile(liveIndex, index);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await git(["read-tree", "--empty"]);
+    }
+    const tracked = trim(await git(["stash", "create", message]));
+    const excludes = nestedWorktreeExcludePathspecs({ toplevel: source, worktreePaths: context.worktrees.map((worktree) => worktree.path) });
+    // Keep Git's quoting so pathspec-from-file can decode every byte of the
+    // filename, including line breaks and paths that contain non-UTF-8 bytes.
+    const untracked = await git(["-c", "core.quotePath=true", "ls-files", "--others", "--exclude-standard", ...nestedWorktreePathspecArgs(excludes)]);
+    let ref = tracked;
+    if (untracked) {
+      if (untracked.split(/\r?\n/).some((file) => /\/"?$/.test(file))) {
+        throw new Error("The worktree contains an untracked Git repository. Move it out before handing off.");
+      }
+      const head = context.headSha;
+      const commit = async (tree: string, parents: string[], subject: string) =>
+        trim(await git(["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent]), "-m", subject]));
+      const tree = trim(await git(["rev-parse", `${tracked || head}^{tree}`]));
+      const indexCommit = tracked ? trim(await git(["rev-parse", `${tracked}^2`])) : await commit(tree, [head], "Handoff index");
+      await git(["read-tree", "--empty"]);
+      await git(["--literal-pathspecs", "add", "--force", "--pathspec-from-file=-"], untracked);
+      const untrackedTree = trim(await git(["write-tree"]));
+      const untrackedCommit = await commit(untrackedTree, [], "Handoff untracked files");
+      ref = await commit(tree, [head, indexCommit, untrackedCommit], message);
+    }
+    if (!ref) throw new Error("Git could not capture the uncommitted changes in this worktree.");
+    return { ref, message, path: source, applied: false, dropped: false };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function applyWorktreeEdits(
+  target: string,
+  stash: ThreadWorkspaceHandoffStashSummary | undefined,
+  gitEnv: NodeJS.ProcessEnv | undefined,
+): Promise<ThreadWorkspaceHandoffStashSummary | undefined> {
+  if (!stash?.ref) return stash;
+  await runGit(target, ["stash", "apply", "--index", stash.ref], gitEnv);
+  return { ...stash, path: target, applied: true };
+}
+
 async function getDirtyStatus(
   workspacePath: string,
   gitEnv?: NodeJS.ProcessEnv,
 ): Promise<string> {
   // A linked worktree nested in this checkout is another checkout, not a
   // change: it must not block a handoff or produce an empty stash.
+  const statusEnv = buildPwrAgentChildProcessEnv(gitEnv ?? process.env, { GIT_OPTIONAL_LOCKS: "0" });
   return trim(await readStatusWithoutNestedWorktrees({
     cwd: workspacePath,
-    git: async (args) => (await runGit(workspacePath, args, gitEnv)).stdout,
+    git: async (args) => (await runGit(workspacePath, args, statusEnv)).stdout,
     statusArgs: ["status", "--porcelain", "--untracked-files=normal"],
     realpath: (value) => realpath(value),
   }));
@@ -691,7 +758,7 @@ export class GitWorkspaceHandoffService {
   private async handoffLocalChangesToNewBranchWorktree(
     params: HandoffParams,
     context: HandoffContext,
-    source: HandoffSourceWorktreeAccess = {},
+    source?: HandoffSourceWorktreeAccess,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const baseSha = context.headSha;
     const newBranchName = (params.newBranchName ?? "").trim();
@@ -717,16 +784,12 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = [
-      ...(source.keepReason ? [] : ["Ignored files are not preserved by workspace handoff."]),
+      ...(source?.keepReason ? [] : ["Ignored files are not preserved by workspace handoff."]),
       `The new worktree starts from ${context.branch} at the current commit.`,
     ];
-    const sourceStash = source.keepReason ? undefined : await createNamedStashIfDirty({
-      gitEnv: this.gitEnv,
-      path: context.sourcePath,
-      message: this.buildStashMessage(context, "source"),
-      beforeSpawn: source.assertExclusive,
-    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
-    if (!sourceStash && !source.keepReason) {
+    const sourceStash = await this.captureSourceChanges(context, source)
+      .catch((error) => releaseReservationAndRethrow(targetPath, error));
+    if (!sourceStash && !source?.keepReason) {
       warnings.push("No dirty non-ignored changes were available to move.");
     }
 
@@ -737,11 +800,8 @@ export class GitWorkspaceHandoffService {
       await releaseWorktreePathReservation(targetPath);
       throw error;
     }
-    const appliedSourceStash = await applyVerifyAndDropStash(
-      targetPath,
-      sourceStash,
-      this.gitEnv,
-    );
+    const apply = source ? applyWorktreeEdits : applyVerifyAndDropStash;
+    const appliedSourceStash = await apply(targetPath, sourceStash, this.gitEnv);
 
     const linkedDirectory = this.buildLinkedDirectory({
       context,
@@ -769,7 +829,7 @@ export class GitWorkspaceHandoffService {
   private async handoffLocalChangesToDetachedWorktree(
     params: HandoffParams,
     context: HandoffContext,
-    source: HandoffSourceWorktreeAccess = {},
+    source?: HandoffSourceWorktreeAccess,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const baseSha = context.headSha;
     const storage = await this.resolveStorage();
@@ -783,16 +843,12 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = [
-      ...(source.keepReason ? [] : ["Ignored files are not preserved by workspace handoff."]),
+      ...(source?.keepReason ? [] : ["Ignored files are not preserved by workspace handoff."]),
       "The new worktree starts detached at the current branch tip.",
     ];
-    const sourceStash = source.keepReason ? undefined : await createNamedStashIfDirty({
-      gitEnv: this.gitEnv,
-      path: context.sourcePath,
-      message: this.buildStashMessage(context, "source"),
-      beforeSpawn: source.assertExclusive,
-    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
-    if (!sourceStash && !source.keepReason) {
+    const sourceStash = await this.captureSourceChanges(context, source)
+      .catch((error) => releaseReservationAndRethrow(targetPath, error));
+    if (!sourceStash && !source?.keepReason) {
       warnings.push("No dirty non-ignored changes were available to move.");
     }
 
@@ -803,11 +859,8 @@ export class GitWorkspaceHandoffService {
       await releaseWorktreePathReservation(targetPath);
       throw error;
     }
-    const appliedSourceStash = await applyVerifyAndDropStash(
-      targetPath,
-      sourceStash,
-      this.gitEnv,
-    );
+    const apply = source ? applyWorktreeEdits : applyVerifyAndDropStash;
+    const appliedSourceStash = await apply(targetPath, sourceStash, this.gitEnv);
 
     const linkedDirectory = this.buildLinkedDirectory({
       context,
@@ -838,7 +891,7 @@ export class GitWorkspaceHandoffService {
   ): Promise<HandoffThreadWorkspaceResponse> {
     const strategy = params.strategy ?? "detached-changes";
     if (strategy === "move-branch" && source.keepReason) {
-      throw new Error(`${source.keepReason} Choose a detached or new-branch handoff to leave its branch and changes in place.`);
+      throw new Error(`${source.keepReason} Choose Start Fresh from a Branch to leave its branch and changes in place.`);
     }
     const keptByLock = params.keepSourceWorktree || source.keepReason
       ? undefined
@@ -847,7 +900,7 @@ export class GitWorkspaceHandoffService {
       ? await this.handoffLocalChangesToNewBranchWorktree(params, context, source)
       : strategy === "detached-changes"
         ? await this.handoffLocalChangesToDetachedWorktree(params, context, source)
-        : await this.moveWorktreeBranchToNewWorktree(context, source.assertExclusive);
+        : await this.moveWorktreeBranchToNewWorktree(context, source);
     if (source.keepReason) {
       return { ...moved, warnings: [...moved.warnings, keptWorktreeWarning(source.keepReason)] };
     }
@@ -961,7 +1014,7 @@ export class GitWorkspaceHandoffService {
   /** Checks the worktree's branch out in a new worktree and detaches the old one. */
   private async moveWorktreeBranchToNewWorktree(
     context: HandoffContext,
-    assertExclusive: (() => void) | undefined,
+    source: HandoffSourceWorktreeAccess,
   ): Promise<HandoffThreadWorkspaceResponse> {
     if (context.branch === "HEAD") {
       throw new Error("Moving the branch requires a named branch. Choose a detached or new-branch handoff instead.");
@@ -979,14 +1032,10 @@ export class GitWorkspaceHandoffService {
       homeDir: this.homeDir,
       timestamp: context.now,
     });
-    const sourceStash = await createNamedStashIfDirty({
-      gitEnv: this.gitEnv,
-      path: context.sourcePath,
-      message: this.buildStashMessage(context, "source"),
-      beforeSpawn: assertExclusive,
-    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
+    const sourceStash = await this.captureSourceChanges(context, source)
+      .catch((error) => releaseReservationAndRethrow(targetPath, error));
     // Free the branch so the new worktree can check it out.
-    await runGit(context.sourcePath, ["switch", "--detach"], this.gitEnv, assertExclusive)
+    await runGit(context.sourcePath, ["switch", "--detach"], this.gitEnv, source.assertExclusive)
       .catch((error) => releaseReservationAndRethrow(targetPath, error));
     await mkdir(path.dirname(targetPath), { recursive: true });
     try {
@@ -995,7 +1044,7 @@ export class GitWorkspaceHandoffService {
       await releaseWorktreePathReservation(targetPath);
       throw error;
     }
-    const appliedSourceStash = await applyVerifyAndDropStash(
+    const appliedSourceStash = await applyWorktreeEdits(
       targetPath,
       sourceStash,
       this.gitEnv,
@@ -1034,7 +1083,7 @@ export class GitWorkspaceHandoffService {
     }
 
     if (source.keepReason) {
-      throw new Error(`${source.keepReason} Choose Handoff to New Worktree to leave its branch and changes in place.`);
+      throw new Error(`${source.keepReason} Use Handoff to New Worktree and choose Start Fresh from a Branch to leave its branch and changes in place.`);
     }
     ensureBranchNotCheckedOutElsewhere({
       allowedPath: context.sourcePath,
@@ -1044,16 +1093,11 @@ export class GitWorkspaceHandoffService {
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
     await assertLocalCleanForDestinationHandoff(context.repositoryPath, this.gitEnv);
-    const sourceStash = await createNamedStashIfDirty({
-      gitEnv: this.gitEnv,
-      path: context.sourcePath,
-      message: this.buildStashMessage(context, "source"),
-      beforeSpawn: source.assertExclusive,
-    });
+    const sourceStash = await this.captureSourceChanges(context, source);
 
     await runGit(context.sourcePath, ["switch", "--detach"], this.gitEnv, source.assertExclusive);
     await runGit(context.repositoryPath, ["switch", context.branch], this.gitEnv);
-    const appliedSourceStash = await applyVerifyAndDropStash(
+    const appliedSourceStash = await applyWorktreeEdits(
       context.repositoryPath,
       sourceStash,
       this.gitEnv,
@@ -1095,19 +1139,14 @@ export class GitWorkspaceHandoffService {
       "Local will be left on a detached HEAD at the moved worktree commit.",
     ];
     await assertLocalCleanForDestinationHandoff(context.repositoryPath, this.gitEnv);
-    const sourceStash = source.keepReason ? undefined : await createNamedStashIfDirty({
-      gitEnv: this.gitEnv,
-      path: context.sourcePath,
-      message: this.buildStashMessage(context, "source"),
-      beforeSpawn: source.assertExclusive,
-    });
+    const sourceStash = await this.captureSourceChanges(context, source);
 
     await runGit(
       context.repositoryPath,
       ["switch", "--detach", context.headSha],
       this.gitEnv,
     );
-    const appliedSourceStash = await applyVerifyAndDropStash(
+    const appliedSourceStash = await applyWorktreeEdits(
       context.repositoryPath,
       sourceStash,
       this.gitEnv,
@@ -1183,6 +1222,19 @@ export class GitWorkspaceHandoffService {
       if (error instanceof WorktreeLockedError) return { keptSourceWorktree: keptSource(context, error.lockReason) };
       return { warning: `The previous worktree was left on disk: ${error instanceof Error ? error.message : String(error)}` };
     }
+  }
+
+  private async captureSourceChanges(
+    context: HandoffContext,
+    source?: HandoffSourceWorktreeAccess,
+  ): Promise<ThreadWorkspaceHandoffStashSummary | undefined> {
+    const message = this.buildStashMessage(context, "source");
+    if (!source) return await createNamedStashIfDirty({ path: context.sourcePath, gitEnv: this.gitEnv, message });
+    if (!await getDirtyStatus(context.sourcePath, this.gitEnv)) return undefined;
+    if (source.keepReason) {
+      throw new Error(`The handoff could not transfer uncommitted changes. ${source.keepReason} In Handoff to New Worktree, choose Start Fresh from a Branch to move only the thread.`);
+    }
+    return await snapshotWorktreeEdits(context, message, this.gitEnv);
   }
 
   private buildStashMessage(
