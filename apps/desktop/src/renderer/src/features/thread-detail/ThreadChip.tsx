@@ -103,8 +103,8 @@ export function ThreadChip(props: ThreadChipProps) {
           hoverSource.hideFromFocus();
         }}
         onFocus={(event) => hoverSource.showFromFocus(event.target as Element)}
-        onMouseEnter={hoverSource.showFromPointer}
-        onMouseLeave={hoverSource.hideFromPointer}
+        onPointerEnter={hoverSource.showFromPointer}
+        onPointerLeave={hoverSource.hideFromPointer}
       >
         <span
           aria-label={`Open thread ${label}`}
