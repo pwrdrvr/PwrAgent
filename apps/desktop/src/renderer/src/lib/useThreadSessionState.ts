@@ -11,6 +11,11 @@ import {
 } from "./thread-session-transitions";
 import { useCodexBackgroundTerminals, type BackgroundTerminalView } from "./useCodexBackgroundTerminals";
 import { activityDetailsMatch } from "./activity-detail-match";
+import {
+  safetyReviewStatusText,
+  transitionSafetyBuffering,
+  type SafetyBufferingState,
+} from "./safety-buffering-session";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
 import { useSessionIndicatorKeys } from "./session-indicator-keys";
 import {
@@ -212,6 +217,8 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   transientMessage?: AppServerTransientThreadMessageEntry;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
+  /** The running turn's output is held for a provider safety review. */
+  safetyBuffering?: SafetyBufferingState;
   // Compaction resets pages, but a matching row must keep its observed order.
   compactionOrderSources?: AppServerThreadEntry[];
   // Lightweight reading state belongs beside the bounded transcript cache.
@@ -6629,6 +6636,7 @@ export function useThreadSessionState(params: {
                 ),
                 pendingAssistantMessage: undefined,
                 pendingStatusText: undefined,
+                safetyBuffering: undefined,
                 staleThinkingRecheckAt: undefined,
               };
             });
@@ -6768,6 +6776,13 @@ export function useThreadSessionState(params: {
         !isRetainedRemoteThread &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
+        // The transcript text waits for focus, but streamed text still ends
+        // a safety hold, or the thread would show the hold once focused.
+        if (event.notification.method === "item/agentMessage/delta") {
+          const notification = event.notification;
+          updateSession(targetThreadKey, (session) =>
+            transitionSafetyBuffering(session, notification));
+        }
         return;
       }
 
@@ -6837,10 +6852,13 @@ export function useThreadSessionState(params: {
       }
 
       updateSession(targetThreadKey, (session) => {
-        const current = transitionTransientMessagesAtBoundary(
-          session,
-          event.notification
+        const current = transitionSafetyBuffering(
+          transitionTransientMessagesAtBoundary(session, event.notification),
+          event.notification,
         );
+        if (event.notification.method === "turn/safetyBuffering/updated") {
+          return current;
+        }
         const nextLastTouchedAt = Date.now();
 
         if (isApprovalRequestNotification(event.notification)) {
@@ -8983,10 +9001,16 @@ export function useThreadSessionState(params: {
   );
   const approvalRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingApprovalRequest);
   const inputRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingUserInput);
+  // A waiting request outranks the hold; the hold outranks plain Thinking.
+  const safetyReviewStatus = selectedSession
+    ? safetyReviewStatusText(selectedSession)
+    : undefined;
   const pendingStatusText =
     selectedSession?.pendingStatusText &&
     selectedSession.pendingStatusText !== "Thinking"
       ? selectedSession.pendingStatusText
+      : safetyReviewStatus
+        ? safetyReviewStatus
       : selectedSession?.transientMessage
         ? undefined
         : selectedSession?.pendingStatusText ??

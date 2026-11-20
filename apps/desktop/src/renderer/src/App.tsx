@@ -251,6 +251,7 @@ import {
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
+import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
   buildNoStartupBackendNotice,
   NO_STARTUP_BACKEND_NOTICE_ID,
@@ -586,6 +587,7 @@ function DesktopAppShell(props: {
     showAppNotice,
     dismissAppNotice,
     openCodexLogin,
+    openCodexReauthentication,
     handleThreadActionError,
   } = useAppNoticeProducers(props, dispatchAppNotice);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
@@ -1522,6 +1524,26 @@ function DesktopAppShell(props: {
           }
           return;
         }
+        if (event.notification.method === "turn/verificationRequested") {
+          const params = event.notification.params as {
+            threadId: string;
+            turnId: string;
+            verifications: string[];
+          };
+          const notice = buildModelVerificationNotice({
+            backend: event.backend,
+            threadId: params.threadId,
+            turnId: params.turnId,
+            verifications: params.verifications,
+            ...(instanceId ? { instanceId } : {}),
+            threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
+              event.errorNoticeContext?.backend ?? event.backend,
+              event.errorNoticeContext?.threadId ?? params.threadId,
+            ),
+          });
+          if (notice) dispatchAppNotice({ type: "show", notice });
+          return;
+        }
         // Params are cast explicitly: the AppServerNotification union is too
         // wide for the discriminant to narrow `params` reliably here.
         if (event.notification.method === "turn/failed") {
@@ -1559,9 +1581,12 @@ function DesktopAppShell(props: {
               errorNoticeContext: event.errorNoticeContext,
               originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
               onCodexLogin: openCodexLogin,
+              onCodexReauthenticate: openCodexReauthentication,
               onClaudeLogin,
               onOpenCodexSettings: openCodexSettings,
-              ...(recovery === "claudeSignIn" ? { recovery } : {}),
+              ...(recovery === "claudeSignIn" || recovery === "codexHardwareKeySignIn"
+                ? { recovery }
+                : {}),
               ...(recovery === "claudeSessionGone" && params.threadId ? {
                 recovery,
                 onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
@@ -1653,6 +1678,7 @@ function DesktopAppShell(props: {
       continueClaudeThreadInNewSession,
       onClaudeLogin,
       openCodexLogin,
+      openCodexReauthentication,
       openCodexSettings,
       props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
     ]);
@@ -4551,6 +4577,7 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             profile={codexLoginProfile.name}
             displayName={codexLoginProfile.displayName}
+            {...(codexLoginProfile.reauthenticate ? { reauthenticate: true } : {})}
             onCancel={() => setCodexLoginProfile(undefined)}
             onAuthenticated={settings.refresh}
           />
@@ -5717,7 +5744,12 @@ function useAppNoticeProducers(props: {
   settings: DesktopSettingsState;
   bootstrapConfig: DesktopConfigBootstrapState;
 }, dispatchAppNotice: Dispatch<Parameters<typeof appNoticeReducer>[1]>) {
-  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
+  const [codexLoginProfile, setCodexLoginProfile] = useState<{
+    name: string;
+    displayName: string;
+    /** The profile is signed in; Codex asked it to sign in again. */
+    reauthenticate?: boolean;
+  }>();
   const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
     dispatchAppNotice({ type: "show", notice });
   }, [dispatchAppNotice]);
@@ -5731,6 +5763,17 @@ function useAppNoticeProducers(props: {
     const discovery = activeCodexProfileRef.current;
     const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
     if (profile) setCodexLoginProfile(profile);
+  }, []);
+  const openCodexReauthentication = useCallback(() => {
+    const discovery = activeCodexProfileRef.current;
+    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
+    if (profile) {
+      setCodexLoginProfile({
+        name: profile.name,
+        displayName: profile.displayName,
+        reauthenticate: true,
+      });
+    }
   }, []);
   const rejectedCodexHomes = useRef(new Set<string>());
   useEffect(() => {
@@ -5815,6 +5858,7 @@ function useAppNoticeProducers(props: {
     showAppNotice,
     dismissAppNotice,
     openCodexLogin,
+    openCodexReauthentication,
     handleThreadActionError,
   };
 }
