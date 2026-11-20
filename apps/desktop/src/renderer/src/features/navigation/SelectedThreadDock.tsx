@@ -75,13 +75,9 @@ function extentOf(element: Element): DockExtent {
   return { top, bottom };
 }
 
-function quoted(value: string): string {
-  return value.replace(/["\\]/g, "\\$&");
-}
-
 function threadRows(region: HTMLElement, threadKey: string): HTMLElement[] {
   return [...region.querySelectorAll<HTMLElement>(
-    `.thread-row-shell[data-thread-key="${quoted(threadKey)}"] > .thread-row`,
+    `.thread-row-shell[data-thread-key="${CSS.escape(threadKey)}"] > .thread-row`,
   )];
 }
 
@@ -95,25 +91,32 @@ function laneOf(region: HTMLElement): HTMLElement | undefined {
 type Holders = Pick<SelectedThreadDockProps, "ancestorThreadKeys" | "directoryKeys">;
 
 /**
- * What stands where the thread's row would be when it has none: the nearest
- * parent thread with a row, else the project section that lists it.
+ * What stands where the thread's row would be when it has none: the rows of
+ * the nearest parent thread that has any, else every project section that
+ * lists it. A thread in two projects has a holder in each.
  */
-function holderOf(region: HTMLElement, holders: Holders): HTMLElement | undefined {
+function holdersOf(region: HTMLElement, holders: Holders): HTMLElement[] {
   for (const key of holders.ancestorThreadKeys) {
-    const row = threadRows(region, key)[0];
-    if (row) {
-      return row;
+    const rows = threadRows(region, key);
+    if (rows.length > 0) {
+      return rows;
     }
   }
-  for (const key of holders.directoryKeys) {
-    const section = region.querySelector<HTMLElement>(
-      `.directory-row[data-directory-key="${quoted(key)}"]`,
-    );
-    if (section) {
-      return section;
-    }
-  }
-  return undefined;
+  return holders.directoryKeys.flatMap((key) => [...region.querySelectorAll<HTMLElement>(
+    `.directory-row[data-directory-key="${CSS.escape(key)}"]`,
+  )]);
+}
+
+function isProjectSection(element: Element): boolean {
+  return element.classList.contains("directory-row");
+}
+
+// A closed project that holds the open thread draws its header selected. An
+// open one shows nothing for a thread it has not drawn a row for: one past
+// the loaded page, or under a collapsed Directory threads divider.
+function speaksForThread(holder: Element): boolean {
+  return !isProjectSection(holder)
+    || holder.querySelector(".directory-row__summary[aria-expanded='false']") !== null;
 }
 
 function measure(
@@ -125,7 +128,9 @@ function measure(
   if (region.querySelector(".is-pointer-dragging, .is-folding-directories")) {
     return undefined;
   }
-  const rows = threadRows(region, threadKey);
+  // A row kept mounted at no height is not a row the operator can find.
+  const rows = threadRows(region, threadKey)
+    .filter((row) => row.getBoundingClientRect().height > 0);
   const lane = rows[0] ? sidebarLaneOf(rows[0]) : laneOf(region);
   if (!lane) {
     return undefined;
@@ -135,8 +140,9 @@ function measure(
   if (view.height <= 0) {
     return undefined;
   }
-  const holder = rows.length === 0 ? holderOf(region, holders) : undefined;
-  const extents = holder ? [extentOf(holder)] : rows.map(extentOf);
+  const held = rows.length === 0 ? holdersOf(region, holders) : [];
+  const targets = held.length > 0 ? held : rows;
+  const extents = targets.map(extentOf);
   const nearTop = extents.some((extent) => extent.top < view.top + STICKY_REACH_PX);
   // Where a top dock sits: under whatever is stuck to the top of the list.
   const stuckTop = nearTop
@@ -148,16 +154,19 @@ function measure(
     : view.top;
   // What counts as in view. A row under the stuck header is not. A project's
   // section is: the header stuck there is its own, or it has scrolled past.
-  const bandTop = holder?.classList.contains("directory-row") ? view.top : stuckTop;
-  const placement = selectedThreadDockPlacement(extents, { top: bandTop, bottom: view.bottom });
+  const bandTop = held[0] && isProjectSection(held[0]) ? view.top : stuckTop;
+  const band = { top: bandTop, bottom: view.bottom };
+  const placement = selectedThreadDockPlacement(extents, band);
+  const holder = placement ? held[placement.index] : held[0];
   // A row in view speaks for itself, and so does what holds a hidden row: a
   // closed project that holds the open thread draws its header selected.
   // Only a thread the lens lists nowhere docks with nothing out of view.
-  if (!placement && (rows.length > 0 || holder)) {
+  if (!placement && (rows.length > 0 || held.some((element, index) =>
+    speaksForThread(element) && !selectedThreadDockPlacement([extents[index]!], band)))) {
     return undefined;
   }
   const edge = placement?.edge ?? "bottom";
-  const row = placement && !holder ? rows[placement.index] : undefined;
+  const row = placement && held.length === 0 ? rows[placement.index] : undefined;
   const regionBox = region.getBoundingClientRect();
   return {
     row,
@@ -209,6 +218,9 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const [dock, setDock] = useState<DockState>();
   const dockRef = useRef<DockState | undefined>(undefined);
   const rowRef = useRef<HTMLElement | undefined>(undefined);
+  // The thread whose hidden row the dock was asked to reveal. Focus follows
+  // to that row when it arrives, as it does for a row the dock scrolls to.
+  const focusOnArrivalRef = useRef<string | undefined>(undefined);
 
   const sync = useCallback((): void => {
     const region = regionRef.current;
@@ -219,6 +231,18 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       })
       : undefined;
     rowRef.current = measured?.row;
+    if (focusOnArrivalRef.current !== undefined) {
+      const arrived = region && focusOnArrivalRef.current === threadKey && !measured
+        ? threadRows(region, threadKey)[0]
+        : undefined;
+      if (arrived || focusOnArrivalRef.current !== threadKey) {
+        focusOnArrivalRef.current = undefined;
+      }
+      // Only from <body>, where the unmounted dock left it.
+      if (arrived && document.activeElement === document.body) {
+        arrived.querySelector<HTMLElement>(".thread-row__open")?.focus({ preventScroll: true });
+      }
+    }
     // Compared here, not in a state updater: an updater that returns the
     // same state still schedules a render, and this runs on every scroll
     // frame and every list mutation.
@@ -286,6 +310,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       onClick={() => {
         const row = rowRef.current;
         if (!row?.isConnected) {
+          focusOnArrivalRef.current = threadKey;
           props.onRevealHiddenThread();
           return;
         }

@@ -92,17 +92,30 @@ function mountList(
 
 let revealHidden: ReturnType<typeof vi.fn<() => void>>;
 
+type Holders = { ancestorThreadKeys?: string[]; directoryKeys?: string[] };
+
+function closeProject(region: HTMLElement, key: string): void {
+  region.querySelector(`[data-header='${key}']`)!.insertAdjacentHTML(
+    "beforeend",
+    `<button class="directory-row__summary" aria-expanded="false"></button>`,
+  );
+}
+
 function renderDock(
   region: HTMLDivElement,
   threadKey: string | undefined = "open",
-  holders: { ancestorThreadKeys?: string[]; directoryKeys?: string[] } = {},
+  holders: Holders = {},
 ) {
   revealHidden = vi.fn<() => void>();
-  const regionRef = createRef<HTMLDivElement>();
-  regionRef.current = region;
   const host = document.createElement("div");
   region.append(host);
-  return render(
+  return render(dockElement(region, threadKey, holders), { container: host });
+}
+
+function dockElement(region: HTMLDivElement, threadKey: string | undefined, holders: Holders) {
+  const regionRef = createRef<HTMLDivElement>();
+  regionRef.current = region;
+  return (
     <SelectedThreadDock
       regionRef={regionRef}
       thread={threadKey ? THREAD : undefined}
@@ -113,8 +126,7 @@ function renderDock(
       ancestorThreadKeys={holders.ancestorThreadKeys ?? []}
       directoryKeys={holders.directoryKeys ?? []}
       onRevealHiddenThread={revealHidden}
-    />,
-    { container: host },
+    />
   );
 }
 
@@ -223,8 +235,51 @@ describe("SelectedThreadDock", () => {
       place(region.querySelector("[data-header='pwrgit']")!, -200, 30);
       place(region.querySelector("[data-header='pwragent']")!, 100, 30);
       place(region.querySelector("[data-directory-key='pwragent']")!, 100, 30);
+      closeProject(region, "pwragent");
       renderDock(region, "open", { directoryKeys: ["pwragent"] });
       expect(dock()).toBeNull();
+    });
+
+    it("docks without an arrow while its open project is in view with no row for it", () => {
+      // The row is past the loaded page, or under a collapsed Directory
+      // threads divider. An open project's header is not drawn selected.
+      const region = mountList(900, { hidden: true });
+      place(region.querySelector("[data-directory-key='pwragent']")!, 200, 260);
+      renderDock(region, "open", { directoryKeys: ["pwragent"] });
+      expect(dock()?.dataset.edge).toBe("bottom");
+      expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
+    });
+
+    it("stays away while any closed project of a thread in two is in view", () => {
+      // PwrAgent, listed first, is far below. PwrGit is closed at the top.
+      const region = mountList(900, { hidden: true });
+      place(region.querySelector("[data-directory-key='pwrgit']")!, 100, 30);
+      closeProject(region, "pwrgit");
+      renderDock(region, "open", { directoryKeys: ["pwragent", "pwrgit"] });
+      expect(dock()).toBeNull();
+    });
+
+    it("hands focus to the row once a reveal brings it in", () => {
+      const region = mountList(900, { hidden: true });
+      const view = renderDock(region, "open", { directoryKeys: ["pwragent"] });
+      act(() => dock()!.click());
+      region.querySelector("[data-directory-key='pwragent']")!.insertAdjacentHTML(
+        "beforeend",
+        `<div class="thread-row-shell" data-thread-key="open" data-thread-directory-key="pwragent">
+          <div class="thread-row is-selected" data-row="open"><button class="thread-row__open"></button></div>
+        </div>`,
+      );
+      place(region.querySelector("[data-row='open']")!, 300, 60);
+      view.rerender(dockElement(region, "open", { directoryKeys: ["pwragent"] }));
+      expect(dock()).toBeNull();
+      expect(document.activeElement).toBe(region.querySelector("[data-row='open'] .thread-row__open"));
+    });
+
+    it("ignores a row kept mounted at no height", () => {
+      const region = mountList(900);
+      place(region.querySelector("[data-row='open']")!, 300, 0);
+      renderDock(region);
+      expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
     });
 
     it("sits under the stuck header of the project being read when its own has scrolled past", () => {
