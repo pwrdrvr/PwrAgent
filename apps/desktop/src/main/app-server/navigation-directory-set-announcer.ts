@@ -32,9 +32,10 @@ export function directorySetFingerprint(
       directory.kind,
       directory.label,
       directory.path ?? null,
-      directory.gitStatus?.originRepository ?? null,
+      directory.gitStatus?.originRepository ?? directory.repositoryKey ?? null,
       [...directory.gitStatus?.remoteRepositories ?? []].sort(),
       directory.localAvailability ?? null,
+      [...directory.checkoutPaths ?? []].sort(),
     ]));
 }
 

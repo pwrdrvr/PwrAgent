@@ -10,6 +10,7 @@ import {
 it("keeps the resume label alongside the run outcome", () => {
   expect(formatRunStatus("completed", undefined, 100)).toBe("completed · resumed");
   expect(formatRunStatus("failed", "interrupted", 100)).toBe("interrupted · resumed");
+  expect(formatRunStatus("failed", "timed_out", 100)).toBe("timed out · resumed");
   expect(formatRunStatus("failed", "interrupted")).toBe("interrupted");
 });
 

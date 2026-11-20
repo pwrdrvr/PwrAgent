@@ -55,9 +55,9 @@ export function formatRunStatus(
   failureReason?: AutomationRunFailureReason,
   resumedAt?: number,
 ): string {
-  const label = status === "failed" && failureReason === "interrupted"
-    ? "interrupted"
-    : status.replace("_", " ");
+  let label = status.replace("_", " ");
+  if (status === "failed" && failureReason === "interrupted") label = "interrupted";
+  if (status === "failed" && failureReason === "timed_out") label = "timed out";
   return resumedAt === undefined ? label : `${label} · resumed`;
 }
 

@@ -96,6 +96,8 @@ import type {
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared";
+import { NAVIGATION_SET_PROJECT_CHECKOUT_GROUP_CHANNEL } from "../shared/ipc";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
@@ -2924,6 +2926,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, request),
   removeNavigationDirectory: async (request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, request),
+  setProjectCheckoutGroup: async (request: SetProjectCheckoutGroupRequest): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_PROJECT_CHECKOUT_GROUP_CHANNEL, request),
   getNavigationLaunchpadConfig: async (
     request: NavigationLaunchpadConfigRequest,
     consumerId?: string,

@@ -550,7 +550,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   );
   const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
-    if (parent) return parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
+    if (parent) return parent.checkoutProject ? [parent.checkoutProject.key]
+      : parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
     const homeKey = startingThreadHomeKey(creation);
     return homeKey ? [homeKey] : [];
   }, [startingThreadHomeKey, threadsByKey]);
