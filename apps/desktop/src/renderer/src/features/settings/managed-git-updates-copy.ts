@@ -113,6 +113,11 @@ export function managedGitUpdatesCopy(
   options: { now: number; manualPathSelected: boolean },
 ): ManagedGitUpdatesCopy {
   const check = managed.check;
+  const currentVersion = versionInUse(managed, options.manualPathSelected);
+  const blockedOnTrack = managed.track === "latest" ? managed.tracks.latestBlocked : managed.tracks.prereleaseBlocked;
+  const blocked = blockedOnTrack && compareManagedGitVersions(blockedOnTrack.version, currentVersion) > 0
+    ? blockedOnTrack
+    : undefined;
   const selected = managed.selected && !options.manualPathSelected
     ? managed.releases.find((release) => release.generation === managed.selected)
     : undefined;
@@ -177,7 +182,7 @@ export function managedGitUpdatesCopy(
   } else {
     tone = "ok";
     tag = managed.bundledVersion;
-    message = check && !check.error
+    message = check && !check.error && !blocked
       ? `is the newest ${managed.track === "latest" ? "promoted " : ""}PwrDrvr Git. ${checkedAgo(check.checkedAt, options.now)}`
       : "is bundled with PwrAgent.";
     actions.push(checkAction("Check for updates"));
@@ -187,21 +192,30 @@ export function managedGitUpdatesCopy(
   if (check?.error) {
     tone = "notice";
     note = `Could not check for updates: ${check.error}${managed.releases.length > 0 ? " Installed builds still work." : ""}`;
-  } else if (
-    check?.needsAppUpdate
-    && compareManagedGitVersions(check.needsAppUpdate.version, versionInUse(managed, options.manualPathSelected)) > 0
-  ) {
-    note = `${check.needsAppUpdate.version} needs a newer PwrAgent. Update PwrAgent to use it.`;
   }
-  // Latest offers nothing newer: say what Prerelease would, so an operator
-  // waiting on a promotion knows a build exists.
-  const prerelease = managed.tracks.prereleaseTag;
-  const prereleaseNote = !available
-    && managed.track === "latest"
-    && prerelease !== undefined
-    && compareManagedGitVersions(prerelease, versionInUse(managed, options.manualPathSelected)) > 0
-    ? `Prerelease offers ${prerelease}, not yet promoted.`
-    : undefined;
-  if (prereleaseNote) note = note ? `${note} ${prereleaseNote}` : prereleaseNote;
+  const notes = note ? [note] : [];
+  if (blocked) {
+    tone = "notice";
+    notes.push(`${blocked.version} is unavailable. ${blocked.reason}`);
+  }
+  if (managed.track === "latest") {
+    const { prereleaseBlocked, prereleaseTag, latestTag } = managed.tracks;
+    if (
+      prereleaseBlocked
+      && prereleaseBlocked.version !== blocked?.version
+      && compareManagedGitVersions(prereleaseBlocked.version, currentVersion) > 0
+    ) {
+      tone = "notice";
+      notes.push(`Prerelease ${prereleaseBlocked.version} is unavailable. ${prereleaseBlocked.reason}`);
+    }
+    if (
+      prereleaseTag
+      && compareManagedGitVersions(prereleaseTag, currentVersion) > 0
+      && (!latestTag || compareManagedGitVersions(prereleaseTag, latestTag) > 0)
+    ) {
+      notes.push(`${prereleaseTag} is available on the Prerelease track.`);
+    }
+  }
+  note = notes.join(" ");
   return { tone, ...(tag ? { tag } : {}), message, ...(note ? { note } : {}), actions };
 }

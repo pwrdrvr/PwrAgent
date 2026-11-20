@@ -43,7 +43,11 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { lock } from "proper-lockfile";
-import { DESKTOP_UPDATE_CHANNELS, type DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
+import {
+  DESKTOP_UPDATE_CHANNELS,
+  type DesktopManagedGitBlockedRelease,
+  type DesktopUpdateChannel,
+} from "@pwragent/shared/contracts/settings";
 import bundledCatalog from "../../custom-git-runtime.json";
 import {
   fetchGitHubReleaseMetadata,
@@ -61,7 +65,6 @@ import {
   compareManagedGitVersions,
   MANAGED_GIT_GENERATION_PATTERN,
   MANAGED_GIT_REPOSITORY,
-  ManagedGitNeedsAppUpdateError,
   ManagedGitTrustError,
   managedGitArchiveName,
   managedGitGenerationId,
@@ -94,16 +97,13 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const MAX_RELEASES_PER_CHECK = 3;
 const STATE_VERSION = 1;
 /**
- * The check file's own version. Version 1 knew one list with no promotion
- * in it, so it answers for neither track: it is dropped and the next check
- * refills it.
+ * Drop old checks so the first check after an upgrade recomputes compatibility
+ * with the manifest schema and records rejected releases for both tracks.
  */
-const CHECK_STATE_VERSION = 2;
+const CHECK_STATE_VERSION = 3;
 const USER_AGENT = "PwrAgent-managed-git-runtime";
 
-/** The catalog this build shipped: its verifier contract and bundled version. */
 export const BUNDLED_GIT_VERSION: string = bundledCatalog.version;
-export const BUNDLED_GIT_CONSUMER_SHA256: string = bundledCatalog.consumer_sha256;
 
 export type ManagedGitAvailable = {
   tag: string;
@@ -119,10 +119,8 @@ export type ManagedGitAvailable = {
 export type ManagedGitTrackAnswer = {
   /** Newest release on the track this build can install, newer than the bundle. */
   available?: ManagedGitAvailable;
-  /** A newer release on the track whose catalog needs a newer PwrAgent. */
-  needsAppUpdate?: { version: string };
-  /** Why the track offers nothing, when releases were listed but none was usable. */
-  error?: string;
+  /** Newest rejected release on the track, even if there is an installable fallback. */
+  blocked?: DesktopManagedGitBlockedRelease;
 };
 
 /** Every check answers both tracks, so switching tracks needs no network. */
@@ -163,7 +161,6 @@ export type ManagedGitOptions = {
   /** Downloads of release assets (catalog, checksums, archive). */
   fetch?: typeof globalThis.fetch;
   verify?: Omit<VerifyManagedGitOptions, "signal">;
-  consumerSha256?: string;
   bundledVersion?: string;
   isProcessAlive?: (pid: number) => boolean;
   progress?: ManagedRuntimeProgressReporter;
@@ -192,7 +189,6 @@ function settings(options: ManagedGitOptions) {
     arch,
     key: managedGitPlatformKey(platform, arch),
     now: options.now ?? Date.now,
-    consumerSha256: options.consumerSha256 ?? BUNDLED_GIT_CONSUMER_SHA256,
     bundledVersion: options.bundledVersion ?? BUNDLED_GIT_VERSION,
   };
 }
@@ -246,7 +242,10 @@ async function downloadBytes(
     redirect: "follow",
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
   });
-  if (!response.ok) throw new Error(`Download failed with HTTP ${response.status}: ${url}`);
+  if (!response.ok) {
+    const name = url.slice(url.lastIndexOf("/") + 1);
+    throw new Error(`GitHub could not serve ${name} (HTTP ${response.status}).`);
+  }
   const declared = Number(response.headers.get("content-length"));
   if (declared > MAX_METADATA_BYTES) {
     await response.body?.cancel();
@@ -298,7 +297,6 @@ function verifiedFromBytes(
   const pin = parseCustomGitCatalog(catalogBytes, {
     platform: s.platform,
     arch: s.arch,
-    consumerSha256: s.consumerSha256,
     expectedVersion: release.version,
   });
   const archiveName = managedGitArchiveName(pin);
@@ -390,19 +388,20 @@ export async function checkManagedGitReleases(
       if (open.length === 0) continue;
       if (fetched >= MAX_RELEASES_PER_CHECK) break;
       fetched += 1;
+      let verified: VerifiedRelease;
       try {
-        const verified = await verifyReleaseMetadata(release, options, options.signal);
-        await saveReleaseFiles(s.rootDir, verified);
-        for (const track of open) tracks[track].available = verified.available;
+        verified = await verifyReleaseMetadata(release, options, options.signal);
       } catch (error) {
-        if (error instanceof ManagedGitNeedsAppUpdateError) {
-          for (const track of open) tracks[track].needsAppUpdate ??= { version: error.version };
-          continue;
+        options.signal?.throwIfAborted();
+        const reason = describeCheckError(error);
+        for (const track of open) {
+          tracks[track].blocked ??= { version: release.version, reason };
         }
-        if (!(error instanceof ManagedGitTrustError)) throw error;
-        for (const track of open) tracks[track].error ??= `${release.tag}: ${error.message}`;
-        log.warn("managed_git_release_rejected", { tag: release.tag, error: error.message });
+        log.warn("managed_git_release_rejected", { tag: release.tag, error: reason });
+        continue;
       }
+      await saveReleaseFiles(s.rootDir, verified);
+      for (const track of open) tracks[track].available = verified.available;
       if (tracks.latest.available) break;
     }
   } catch (error) {
@@ -706,9 +705,9 @@ async function extractSafely(archive: string, target: string, signal: AbortSigna
   }
   const unsafe = members.find(unsafeArchiveMember);
   if (unsafe !== undefined) throw new ManagedGitTrustError(`Unsafe path in the Git archive: ${unsafe}`);
-  // -x preserves the archive's own modes; nothing is rewritten afterwards,
-  // so the signed bytes stay exactly as published.
-  await runCommand("tar", ["-xzf", archive, "-C", target], { signal });
+  // The seal includes file modes. Restore them from the archive regardless of
+  // the app's umask, as the packaging stager does.
+  await runCommand("tar", ["-xpzf", archive, "-C", target], { signal });
 }
 
 // ---------------------------------------------------------------------------
@@ -801,7 +800,6 @@ export async function verifyManagedGitGeneration(
     const pin = parseCustomGitCatalog(catalogBytes, {
       platform: s.platform,
       arch: s.arch,
-      consumerSha256: s.consumerSha256,
       expectedVersion: installed.version,
     });
     if (managedGitGenerationId(pin) !== generation || pin.asset.inventory_sha256 !== installed.inventorySha256) {

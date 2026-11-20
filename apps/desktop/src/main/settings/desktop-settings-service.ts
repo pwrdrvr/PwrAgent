@@ -4052,17 +4052,17 @@ export class DesktopSettingsService {
     const previous = decodeGitRuntimeChoice(git?.managedPrevious);
     const installing = managedGitInstallInProgress();
     const answer = check?.tracks[track];
-    const latestTag = check?.tracks.latest.available?.version;
-    const prereleaseTag = check?.tracks.prerelease.available?.version;
-    // The whole check failing outranks one track having nothing usable.
-    const error = check?.error ?? (answer?.available ? undefined : answer?.error);
+    const latest = check?.tracks.latest;
+    const prerelease = check?.tracks.prerelease;
     return {
       supported,
       bundledVersion: BUNDLED_GIT_VERSION,
       track,
       tracks: {
-        ...(latestTag ? { latestTag } : {}),
-        ...(prereleaseTag ? { prereleaseTag } : {}),
+        ...(latest?.available ? { latestTag: latest.available.version } : {}),
+        ...(prerelease?.available ? { prereleaseTag: prerelease.available.version } : {}),
+        ...(latest?.blocked ? { latestBlocked: latest.blocked } : {}),
+        ...(prerelease?.blocked ? { prereleaseBlocked: prerelease.blocked } : {}),
       },
       ...(selected ? { selected } : {}),
       ...(previous ? { previous } : {}),
@@ -4094,8 +4094,7 @@ export class DesktopSettingsService {
                 },
               }
               : {}),
-            ...(answer?.needsAppUpdate ? { needsAppUpdate: answer.needsAppUpdate } : {}),
-            ...(error ? { error } : {}),
+            ...(check.error ? { error: check.error } : {}),
           },
         }
         : {}),
