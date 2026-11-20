@@ -70,8 +70,8 @@ describe("large collapsed directory rendering", () => {
     expect(
       screen.getByRole("button", {
         name: "Show directory threads for Project 1",
-      }),
-    ).toHaveTextContent("107");
+      }).querySelector(".directory-row__thread-divider-count"),
+    ).toHaveAttribute("data-count", "107");
     expect(screen.getAllByTestId("fixture-thread-row")).toHaveLength(1);
     expect(
       threadRowRender.mock.calls.every(([threadId]) => threadId === pinned.id),

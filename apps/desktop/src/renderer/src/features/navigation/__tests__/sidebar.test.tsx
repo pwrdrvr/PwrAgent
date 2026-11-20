@@ -6408,7 +6408,9 @@ describe("Sidebar", () => {
       name: "Show directory threads for PwrAgent",
     });
     expect(showDirectoryThreads).toHaveAttribute("aria-expanded", "false");
-    expect(within(showDirectoryThreads).getByText("1")).toBeInTheDocument();
+    expect(
+      showDirectoryThreads.querySelector(".directory-row__thread-divider-count"),
+    ).toHaveAttribute("data-count", "1");
     const collapsedDividerLabel = showDirectoryThreads.querySelector(
       ".directory-row__thread-divider-label",
     );
@@ -6516,7 +6518,7 @@ describe("Sidebar", () => {
     );
     const { container, rerender } = render(renderSidebar(false));
     const countOf = (name: string) => screen.getByRole("button", { name })
-      .querySelector(".directory-row__thread-divider-count")?.textContent;
+      .querySelector(".directory-row__thread-divider-count")?.getAttribute("data-count");
     expect(countOf("Hide directory threads for PwrAgent")).toBe("1");
     rerender(renderSidebar(true));
     expect(countOf("Show directory threads for PwrAgent")).toBe("1");

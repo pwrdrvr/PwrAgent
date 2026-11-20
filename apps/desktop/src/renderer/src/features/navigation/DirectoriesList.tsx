@@ -2040,10 +2040,16 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             <span>Directory threads</span>
                             {/* Open or closed: hiding it while open made
                                 the label, and the rules beside it, change
-                                width on every toggle. */}
-                            <span className="directory-row__thread-divider-count">
-                              {directoryUnpinnedThreadCount}
-                            </span>
+                                width on every toggle. Drawn by CSS from
+                                `data-count`: the aria-label names the action,
+                                and WCAG 2.5.3 wants every visible text word
+                                in it, so a text-node count would have to
+                                rename the button. It was never in the name. */}
+                            <span
+                              aria-hidden="true"
+                              className="directory-row__thread-divider-count"
+                              data-count={directoryUnpinnedThreadCount}
+                            />
                           </span>
                         </button>
                       </div>

@@ -10040,10 +10040,19 @@ a.button {
   gap: 6px;
 }
 
+/* Full strength, like the label beside it: the divider's muted color is
+   already at the AA floor on the sidebar, and the old 0.82 opacity left
+   the count at 3.4:1. Shown only while the list was collapsed, axe never
+   scanned it until it showed in both states. The number is generated
+   content from `data-count` so it stays out of the button's label-in-name
+   check (see DirectoriesList). */
 .directory-row__thread-divider-count {
   color: currentColor;
   font-variant-numeric: tabular-nums;
-  opacity: 0.82;
+}
+
+.directory-row__thread-divider-count::before {
+  content: attr(data-count);
 }
 
 .directory-row__thread-divider-chevron {
