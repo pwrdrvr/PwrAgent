@@ -108,7 +108,9 @@ export function createThreadSearchPanelState(): ThreadSearchPanelState {
     setQuery: (query) => update({ query }),
     setResponse: (response) => update({ response }),
     setSort: (sort) => update({ sort }),
-    requestSearch: (query) => update({ query, searchRequest: {} }),
+    // The last search's results go at once, so the screen never opens on
+    // them under the new query.
+    requestSearch: (query) => update({ query, response: undefined, searchRequest: {} }),
     settleSearchRequest: () => update({ searchRequest: undefined }),
   };
 }
@@ -572,7 +574,9 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   const sort = useSyncExternalStore(store.subscribe, () => store.getSnapshot().sort);
   const [helpOpen, setHelpOpen] = useState(false);
   const helpId = useId();
-  const [loading, setLoading] = useState(false);
+  // A search asked for before the panel mounted starts in its first effect;
+  // the first paint already says so.
+  const [loading, setLoading] = useState(() => Boolean(store.getSnapshot().searchRequest));
   const [error, setError] = useState<string>();
   const [cancelled, setCancelled] = useState(false);
   const searchGeneration = useRef(0);

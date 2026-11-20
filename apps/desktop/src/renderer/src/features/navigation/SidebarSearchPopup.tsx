@@ -106,6 +106,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const idPrefix = useId();
   const listId = `${idPrefix}-results`;
   const rowId = (index: number): string => `${idPrefix}-row-${index}`;
+  const searchAllId = `${idPrefix}-search-all`;
   // A layer and a trap like any dialog, so Escape and Tab have one owner
   // when ⌘K opens this over a dialog, and focus goes back on close. The
   // Tab order inside stays this component's own: see handleKeyDown.
@@ -291,7 +292,17 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
 
   // The palette matches titles, PR numbers, branches and projects. The search
   // screen also reads message content, so it is where a query goes next.
+  // Nothing matched, and nothing is still searching that could.
+  const showEmpty =
+    Boolean(trimmed)
+    && combinedRows.length === 0
+    && (Boolean(mention) || !remoteLoading)
+    && !projectSearch.loading
+    && !holdTrailingProjects;
   const canSearchAll = Boolean(props.onSearchAllThreads) && Boolean(trimmed) && !mention;
+  // Plain ↵ searches everything only once the quick search has settled on
+  // nothing. While a search may still add a row, ↵ waits for it as before.
+  const enterSearchesAll = canSearchAll && showEmpty;
   const searchAll = (): void => {
     if (!canSearchAll) return;
     props.onSearchAllThreads?.(trimmed);
@@ -366,9 +377,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     if (event.key === "Enter") {
       if (event.nativeEvent.isComposing) return;
       event.preventDefault();
-      // ⌘↵ always searches everything; plain ↵ does when there is no row to open.
-      if (event.metaKey || event.ctrlKey || !active) {
+      // ⌘↵ always searches everything; plain ↵ does when nothing matched.
+      if (event.metaKey || event.ctrlKey || enterSearchesAll) {
         searchAll();
+      } else if (!active) {
+        return;
       } else if (active.kind === "project") {
         chooseProject(active.directory);
       } else {
@@ -399,12 +412,6 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   // a section header standing over nothing.
   const showRemoteSection =
     Boolean(trimmed) && remoteSearchAvailable && remoteRows.length > 0;
-  const showEmpty =
-    Boolean(trimmed)
-    && combinedRows.length === 0
-    && (Boolean(mention) || !remoteLoading)
-    && !projectSearch.loading
-    && !holdTrailingProjects;
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
   // a harmless one.
@@ -486,6 +493,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             aria-activedescendant={
               listVisible ? rowId(activeIndex) : undefined
             }
+            // The search-all buttons stay out of the Tab order, so the field
+            // names the key that runs it: "↵ search all" or "⌘↵ search all".
+            aria-describedby={canSearchAll ? searchAllId : undefined}
+            aria-keyshortcuts={canSearchAll
+              ? enterSearchesAll ? "Enter" : "Meta+Enter Control+Enter"
+              : undefined}
             autoComplete="off"
             spellCheck={false}
             placeholder={props.placeholder ?? `${label}, PR #, branch · @project to narrow`}
@@ -537,7 +550,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           </ul>
         ) : showEmpty ? (
           <div className="jump-palette__empty">
-            <p>{mention
+            <p role="status">{mention
               ? projectSearch.state?.error ? "Projects unavailable" : "No matching projects"
               : props.onJumpToProject ? "No threads or projects match" : "No threads match"}</p>
             {canSearchAll ? (
@@ -554,18 +567,19 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         <div className="jump-palette__foot">
           <span>↑↓ navigate</span>
           {/* With no row to open, ↵ is the search-all key, and says so. */}
-          {canSearchAll && combinedRows.length === 0
+          {enterSearchesAll
             ? null
             : <span>{mention ? "↵ narrow to project" : "↵ open"}</span>}
           {canSearchAll ? (
             <button
               type="button"
               tabIndex={-1}
+              id={searchAllId}
               className="jump-palette__foot-action tooltip-target"
               data-tooltip="Search titles and message content in the search screen"
               onClick={searchAll}
             >
-              {combinedRows.length === 0 ? "↵" : searchAllChord} search all
+              {enterSearchesAll ? "↵" : searchAllChord} search all
             </button>
           ) : null}
           <span>esc close</span>

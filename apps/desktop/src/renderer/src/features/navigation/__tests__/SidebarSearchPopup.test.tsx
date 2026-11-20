@@ -1416,6 +1416,40 @@ describe("SidebarSearchPopup search all", () => {
     expect(onJumpToThread).not.toHaveBeenCalled();
   });
 
+  it("waits on Enter while the quick search may still add a row", async () => {
+    const answer = Promise.withResolvers<NavigationQueryPage>();
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockReturnValue(answer.promise);
+    const searchAll = vi.fn();
+    const { input } = open(searchAll);
+    fireEvent.change(input, { target: { value: "off page" } });
+    await settleRemoteSearch();
+    // Still searching: ↵ keeps its meaning, and the chord is the way across.
+    expect(screen.getByText("↵ open")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "⌘↵ search all" })).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(searchAll).not.toHaveBeenCalled();
+
+    await act(async () => answer.resolve(empty));
+    expect(screen.getByRole("button", { name: "↵ search all" })).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(searchAll).toHaveBeenCalledExactlyOnceWith("off page");
+  });
+
+  it("names the key on the field for assistive tech", async () => {
+    const { input } = open(vi.fn());
+    expect(input).not.toHaveAttribute("aria-keyshortcuts");
+    fireEvent.change(input, { target: { value: "deploy" } });
+    await settleRemoteSearch();
+    expect(input).toHaveAccessibleDescription("⌘↵ search all");
+    expect(input).toHaveAttribute("aria-keyshortcuts", "Meta+Enter Control+Enter");
+    fireEvent.change(input, { target: { value: "4c1e9ab" } });
+    await settleRemoteSearch();
+    expect(input).toHaveAccessibleDescription("↵ search all");
+    expect(input).toHaveAttribute("aria-keyshortcuts", "Enter");
+    expect(screen.getByRole("status")).toHaveTextContent("No threads match");
+  });
+
   it("runs from the empty state's button", async () => {
     const searchAll = vi.fn();
     const { input } = open(searchAll);

@@ -812,6 +812,26 @@ describe("ThreadSearchPanel requested search", () => {
     expect(searchThreads).toHaveBeenCalledTimes(1);
   });
 
+  it("opens on the new search, never on the last one's results", async () => {
+    const pending = Promise.withResolvers<ThreadSearchResponse>();
+    const searchThreads = vi.fn(async () => await pending.promise);
+    const state = createThreadSearchPanelState();
+    state.setQuery("alpha");
+    state.setResponse(searchResponse([searchResult({ threadId: "alpha hit" })], "alpha"));
+    state.requestSearch("beta");
+    expect(state.getSnapshot().response).toBeUndefined();
+    const { container } = render(
+      <ThreadSearchPanel
+        desktopApi={{ searchThreads } as unknown as DesktopApi}
+        state={state}
+        onOpenResult={vi.fn()}
+      />,
+    );
+    expect(container.querySelector(".thread-search-result")).toBeNull();
+    expect(screen.getByText("Searching threads…")).toBeInTheDocument();
+    await act(async () => pending.resolve(searchResponse([], "beta")));
+  });
+
   it("runs each request made while the panel is open", async () => {
     const { searchThreads, desktopApi } = setup();
     const state = createThreadSearchPanelState();
