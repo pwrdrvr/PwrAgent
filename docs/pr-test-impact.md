@@ -25,12 +25,17 @@ job either: the required lanes are that run.
 ## Diff provenance
 
 The plan verifies the GitHub file list against an immutable three-dot Git diff
-and verifies the tested merge's parents. For a GitHub stack that first merges
-the declared PR base into trunk, it compares the tested child patch against
-that synthetic parent and requires an exact match to the PR patch. A stale
-branch or ambiguous merge selects the full suite: an edit that landed on
-`main` after the fork can affect the tested merge even though the PR file list
-omits it.
+and requires the checkout to be the merge of the event's base and head. It
+then plans from that merge's first-parent diff: what the PR changes on top of
+the base tip. A branch behind its base still narrows, because a test that
+reaches none of those files runs the same code as on the base tip, where
+`main`'s own full run covers it. Of 94 failed PR runs between 2026-11-16 and
+2026-11-20, 58 tested a branch behind its base.
+
+For a GitHub stack that first merges the declared PR base into trunk, the plan
+compares the tested child patch against that synthetic parent and requires an
+exact match to the PR patch. An ambiguous merge, or a stack whose base moved,
+selects the full suite.
 
 ## Vitest selection
 

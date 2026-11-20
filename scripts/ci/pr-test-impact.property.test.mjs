@@ -22,7 +22,7 @@ function temporaryTree(callback) {
     .finally(() => rmSync(root, { recursive: true, force: true }));
 }
 
-it("retains status and path identity from Git and falls back when main advances beyond the PR fork", async () => {
+it("retains status and path identity from Git and plans from the tested merge when main advances beyond the PR fork", async () => {
   await temporaryTree(async (root, write) => {
     const git = (...args) => execFileSync("git", [
       "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args,
@@ -56,9 +56,15 @@ it("retains status and path identity from Git and falls back when main advances 
     const base = commit("advance base");
     git("merge", "--no-ff", "feature");
     const diverged = getPrDiff(root, { base, head, changedFiles: 1 }, api);
+    // The edit on main is in the tested merge and is not this PR's change.
     expect(git("show", "HEAD:base-only")).toBe("broke on main");
-    expect(diverged.branchFiles.some(({ file }) => file === "base-only")).toBe(false);
-    expect(diverged.fallback).toMatch(/base advanced/);
+    expect(diverged.fallback).toBeUndefined();
+    expect(diverged.behindBase).toBe(true);
+    expect(diverged.mergeFiles).toEqual(expect.arrayContaining([{ status: "A", file: renamed }, { status: "D", file: "old file" }]));
+    expect(diverged.mergeFiles.some(({ file }) => file === "base-only")).toBe(false);
+    git("commit", "--allow-empty", "-m", "not a merge");
+    expect(getPrDiff(root, { base, head, changedFiles: 1 }, api).fallback).toMatch(/not the merge/);
+    git("reset", "--hard", "HEAD~1");
 
     // GitHub can merge the declared parent into trunk before testing the
     // child. Only the incremental child patch should feed its selection.

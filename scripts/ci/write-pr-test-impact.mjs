@@ -50,7 +50,7 @@ async function plan() {
   try {
     await withVitestImpact(root, async (unit) => {
       const tested = diff.stacked ? diff.testedBase : diff.base;
-      live = await planImpact(diff.branchFiles ?? [], {
+      live = await planImpact(diff.mergeFiles ?? [], {
         ...configure(unit, () => listAffectedE2eFiles(root, tested)), fallback: diff.fallback,
       });
       for (const sample of calibration) {

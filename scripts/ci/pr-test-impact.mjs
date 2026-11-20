@@ -48,7 +48,13 @@ export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
     && git(root, "rev-parse", `${testedBase}^2`).trim() === base;
   const testedRange = `${stacked ? testedBase : base}..${merge}`;
   const mergeFiles = gitFiles(root, testedRange);
-  const source = { base, head, mergeBase, merge, testedBase, stacked, githubFiles, branchFiles, mergeFiles };
+  // The tested merge is the base tip plus this PR. Its first-parent diff is
+  // what the PR changes there, including on a branch behind its base: a test
+  // that reaches none of those files runs the same code as on the base tip.
+  const source = {
+    base, head, mergeBase, merge, testedBase, stacked, behindBase: mergeBase !== base,
+    githubFiles, branchFiles, mergeFiles,
+  };
   if (!Array.isArray(githubFiles) || !githubFiles.length || githubFiles.length !== changedFiles) {
     return { ...source, fallback: "incomplete GitHub diff" };
   }
@@ -56,10 +62,10 @@ export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   if (parents.length !== 2 || (!stacked && testedBase !== base) || parents[1] !== head) {
     return { ...source, fallback: "checkout is not the merge of the event base and head" };
   }
-  if (mergeBase !== base || !sameFiles(branchFiles, mergeFiles)) {
-    return { ...source, fallback: "base advanced or the merge diff differs from the PR diff" };
-  }
   if (stacked) {
+    if (mergeBase !== base || !sameFiles(branchFiles, mergeFiles)) {
+      return { ...source, fallback: "stack base advanced or the merge diff differs from the PR diff" };
+    }
     const patch = (range) => git(root, "diff", "--no-ext-diff", "--no-renames", "--binary", range, "--");
     if (patch(`${base}..${head}`) !== patch(testedRange)) {
       return { ...source, fallback: "tested stack merge changed the child patch" };
