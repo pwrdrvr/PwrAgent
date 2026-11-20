@@ -109,18 +109,18 @@ async function cleanupScenario(options: {
   }
 }
 
-it("distinguishes a missing primary checkout from a retained additional checkout with a missing repository", async () => {
-  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false });
-});
-
 it("never reports an absent checkout as kept, regardless of ownership or another checkout's presence", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (additionalExists, activeOwner, external) => {
-    await cleanupScenario({ additionalExists, activeOwner, external });
-  }), { numRuns: 8 });
-});
-
-it.each(["active", "external"])("does not report an absent folder as kept because of stale %s ownership", async (ownership) => {
-  await cleanupScenario({ additionalExists: false, activeOwner: ownership === "active", external: ownership === "external" });
+  // Cover all eight inputs, including the missing primary with a retained
+  // additional checkout and the absent checkouts with stale ownership.
+  const inputs = [false, true].flatMap((additionalExists) => [false, true].flatMap((activeOwner) =>
+    [false, true].map((external) => ({ additionalExists, activeOwner, external }))));
+  for (const input of inputs) {
+    try {
+      await cleanupScenario(input);
+    } catch (cause) {
+      throw new Error(`Archive presence scenario ${JSON.stringify(input)} failed`, { cause });
+    }
+  }
 });
 
 it("rechecks the folder before claiming a missing-repository checkout was kept", async () => {

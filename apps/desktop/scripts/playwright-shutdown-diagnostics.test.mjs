@@ -198,7 +198,9 @@ async function stopProbe(probe) {
   if (!exited()) probe.child.kill("SIGKILL");
 }
 
-async function probe(mode, { captureAfterMs = 100 } = {}) {
+const oversizedEndpoint = String.fromCharCode(1).repeat(1_000);
+
+async function probe(mode, { captureAfterMs = 100, addLargeReport = false } = {}) {
   const root = createProbeRoot();
   const output = path.join(root, "results");
   const descendantPidFile = path.join(root, "descendant.pid");
@@ -230,15 +232,20 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
         attemptToGracefullyClose: () => ${mode === "pipe" ? "Promise.resolve()" : "new Promise(() => {})"},
       });
       expect(launched.launchedProcess.pid).toBeGreaterThan(0);
-      ${mode === "large-snapshot" ? `
+      ${addLargeReport ? `
       const getReport = process.report.getReport.bind(process.report);
-      process.report.getReport = () => ({
-        ...getReport(),
-        libuv: Array.from({ length: 128 }, () => ({
+      process.report.getReport = () => {
+        const report = getReport();
+        const syntheticHandles = Array.from({ length: 128 }, () => ({
           type: 'pipe', is_active: true, is_referenced: true,
-          remoteEndpoint: String.fromCharCode(1).repeat(1_000),
-        })),
-      });
+          remoteEndpoint: ${JSON.stringify(oversizedEndpoint)},
+        }));
+        // Keep a native referenced handle in the logged sample and retain
+        // the rest of the native report alongside the oversized handles.
+        const firstReferenced = report.libuv.findIndex((handle) => handle.is_referenced);
+        report.libuv.splice(firstReferenced + 1, 0, ...syntheticHandles);
+        return report;
+      };
       ` : ""}
       ${milestone(root, "test-process-launched")}
       ${mode === "pipe" ? "await new Promise(resolve => launched.launchedProcess.once('exit', resolve));" : ""}
@@ -426,8 +433,8 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(started.snapshot().events.map(({ kind }) => kind)).toContain("close");
   });
 
-  it("names the process, originating test and unresolved close before Playwright times out", async () => {
-    const result = await probe("process");
+  it("captures the pending process and a bounded log alongside the full shutdown snapshot", async () => {
+    const result = await probe("process", { addLargeReport: true });
     expect(result.code, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("1 passed");
     expect(result.stdout).toContain("Worker teardown timeout");
@@ -440,17 +447,23 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(pending.stage).toBe("attempt-to-gracefully-close");
     expect(pending.launchStack).toContain("launchProcess");
     expect(snapshot.resources.some(({ type }) => type === "PROCESSWRAP")).toBe(true);
-    expect(snapshot.report.libuv.length).toBeGreaterThan(0);
+    const syntheticHandles = snapshot.report.libuv.filter(({ remoteEndpoint }) => remoteEndpoint === oversizedEndpoint);
+    expect(syntheticHandles).toHaveLength(128);
+    expect(snapshot.report.libuv.length).toBeGreaterThan(syntheticHandles.length);
     const artifact = result.artifacts.find(({ file }) => file.endsWith("process-tree.json"));
     expect(artifact, result.stdout + result.stderr).toBeDefined();
     const tree = JSON.parse(artifact.text);
     const loggedSnapshot = result.loggedEvidence.find(({ kind }) => kind === "snapshot");
-    expect(loggedSnapshot).toMatchObject({ workerPid: snapshot.workerPid, phase: snapshot.phase });
+    expect(loggedSnapshot).toMatchObject({
+      workerPid: snapshot.workerPid, phase: snapshot.phase, byteLimitReached: true,
+      referencedHandleCount: snapshot.report.libuv.filter(({ is_referenced }) => is_referenced).length,
+    });
     expect(loggedSnapshot.processes).toContainEqual(expect.objectContaining({
       pid: pending.pid, owner: pending.owner, stage: pending.stage,
       exitObserved: pending.exitObserved, closeObserved: pending.closeObserved, stdio: pending.stdio,
     }));
     expect(loggedSnapshot.handles.length).toBeGreaterThan(0);
+    expect(loggedSnapshot.handles.length).toBeLessThan(32);
     expect(JSON.stringify(loggedSnapshot)).not.toContain("launchStack");
     expect(result.loggedEvidence).toContainEqual(expect.objectContaining({ kind: "process-tree", workerPid: snapshot.workerPid }));
     // Keep failure classification visible if the temporary probe is removed.
@@ -525,18 +538,6 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(pending.exitCode).toBe(0);
     expect(pending.stage).toBe("wait-for-process-close-and-cleanup");
     expect(pending.stdio.some(({ fd, destroyed }) => fd === 1 && !destroyed)).toBe(true);
-  }, PROBE_TEST_TIMEOUT_MS);
-
-  it("bounds failure logs while retaining the full snapshot artifact", async () => {
-    const result = await probe("large-snapshot");
-    expect(result.code, result.stdout + result.stderr).toBe(1);
-    const logged = result.loggedEvidence.find(({ kind }) => kind === "snapshot");
-    expect(logged).toMatchObject({ referencedHandleCount: 128, byteLimitReached: true });
-    expect(logged.handles.length).toBeGreaterThan(0);
-    expect(logged.handles.length).toBeLessThan(32);
-    expect(logged.processes[0].owner.title).toBe("identifiable shutdown probe");
-    expect(result.snapshots[0].report.libuv).toHaveLength(128);
-    expect(result.snapshots[0].report.libuv[0].remoteEndpoint).toHaveLength(1_000);
   }, PROBE_TEST_TIMEOUT_MS);
 
   it("leaves healthy cleanup green without expensive snapshots", async () => {
