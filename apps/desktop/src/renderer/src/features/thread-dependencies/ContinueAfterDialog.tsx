@@ -64,8 +64,9 @@ const DEPENDENT_PHRASES: Record<When, string> = {
   pr_merged: "until it is merged",
   marked_done: "until it is marked done",
   compaction_completed: "after its compaction finishes",
-  // A CI run names no thread, so no thread lists it as a dependent.
+  // A CI run and a file marker name no prerequisite thread.
   ci_run: "until its run reaches its milestone",
+  local_file: "until its watcher writes a result",
 };
 const MAX_CONDITIONS = 16;
 const MAX_TITLE_LENGTH = 200;
@@ -912,8 +913,8 @@ function DependencyCard(props: {
                   >
                     {threadDependencyConditionName(condition)}
                   </button>
-                ) : condition.subject !== undefined ? (
-                  <span className="thread-dependencies__thread">{condition.subject}</span>
+                ) : condition.localFile || condition.subject !== undefined ? (
+                  <span className="thread-dependencies__thread">{conditionName(condition)}</span>
                 ) : (
                   <DependencyThreadLink
                     backend={condition.backend}

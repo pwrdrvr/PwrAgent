@@ -47,6 +47,7 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
+  RestoreThreadResponse,
   NavigationBrowseMode,
   NavigationResumeState,
   NavigationDirectoryGitStatus,
@@ -80,6 +81,7 @@ import {
   buildThreadIdentityKey,
   canonicalizeNavigationPath,
   classifyDirectory,
+  directoryIncludesCheckout,
   isDefaultProjectForgeAutomation,
   parseOwnedComposerScopeKey,
   compareThreadsByCreatedAtDesc,
@@ -653,9 +655,11 @@ function resolveCreateThreadTargetDirectory(args: {
   }
 
   if (!forceWorkspace && selectedThread) {
-    const threadDirectories = directories.filter(
+    const groupedDirectory = directories.find((directory) => directory.key === selectedThread.checkoutProject?.key);
+    const checkoutKeys = directoryKeysForThread(selectedThread);
+    const threadDirectories = groupedDirectory ? [groupedDirectory] : directories.filter(
       (directory) =>
-        directory.kind === "directory" && directoryKeysForThread(selectedThread).includes(directory.key)
+        directory.kind === "directory" && checkoutKeys.some((key) => directoryIncludesCheckout(directory, key))
     );
     if (threadDirectories.length === 1) {
       const [threadDirectory] = threadDirectories;
@@ -963,6 +967,9 @@ function threadSummariesEqual(
     left.titleSource === right.titleSource &&
     left.summary === right.summary &&
     left.projectKey === right.projectKey &&
+    left.checkoutProject?.key === right.checkoutProject?.key &&
+    left.checkoutProject?.label === right.checkoutProject?.label &&
+    left.checkoutProject?.repositoryKey === right.checkoutProject?.repositoryKey &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
@@ -2643,7 +2650,7 @@ function projectOptimisticThreadIntoDirectories(
   const nextDirectories = [...directories];
   for (const linkedDirectory of optimisticThread.linkedDirectories) {
     const descriptor = classifyDirectory(linkedDirectory);
-    if (nextDirectories.some((directory) => directory.key === descriptor.key)) continue;
+    if (nextDirectories.some((directory) => directoryIncludesCheckout(directory, descriptor.key))) continue;
     // A newly accepted thread can reveal a project before its descriptor arrives.
     // Its population remains unknown until the owner query returns.
     nextDirectories.push({
@@ -3216,6 +3223,8 @@ export function useThreadNavigation(
   selectedThreadConfigurationReady: boolean;
   selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
+  /** The owner reports the selected thread archived: history only, no composer. */
+  selectedThreadArchived: boolean;
   refreshSelectedThreadConfiguration: () => Promise<void>;
   selectedThreadKey?: string;
   setThreadExecutionMode: (
@@ -3282,7 +3291,9 @@ export function useThreadNavigation(
   restoreArchivedThreads: (
     threads: readonly ArchivedThreadRef[],
     reopenKey?: string,
-  ) => Promise<void>;
+    /** rethrow: hand the failure back instead of the shared archive error. */
+    options?: { rethrow?: boolean },
+  ) => Promise<RestoreThreadResponse[]>;
   archiveWorktree: (
     thread: NavigationThreadSummary,
     directory: LinkedDirectorySummary
@@ -5482,13 +5493,16 @@ export function useThreadNavigation(
 
   const directories = useMemo(
     () => {
-      const launchpads = Object.values(localLaunchpads);
+      const ownerDirectories = loadedDirectoryRows(state.rows);
+      const launchpads = Object.values(localLaunchpads).filter((launchpad) =>
+        !ownerDirectories.some((directory) => directory.key !== launchpad.directoryKey
+          && directoryIncludesCheckout(directory, launchpad.directoryKey)));
       const currentDirectories = launchpads.reduce(
         (nextDirectories, launchpad) =>
           upsertLaunchpadDirectory(nextDirectories, launchpad, {
             preserveExistingDirectoryAuthority: Boolean(rendererFederationTarget),
           }),
-        loadedDirectoryRows(state.rows).map((directory) => {
+        ownerDirectories.map((directory) => {
           const expanded = directoryDisclosure.unpinnedExpandedByKey[directory.key];
           return expanded === undefined ? directory : { ...directory, directoryThreadsCollapsed: !expanded };
         }),
@@ -5787,7 +5801,8 @@ export function useThreadNavigation(
     // Match the primary workspace, as project grouping does. Directory-list
     // ordering must not let a secondary link become the selected project.
     const primaryDirectoryKey = directoryKeysForThread(selectedDetail.state?.detail?.thread)[0];
-    const directory = directories.find((directory) => directory.key === primaryDirectoryKey);
+    const directory = directories.find((directory) => primaryDirectoryKey !== undefined
+      && directoryIncludesCheckout(directory, primaryDirectoryKey));
     // Workspace detail retains native paths; navigation rows canonicalize
     // separators. Compare them in the same form before applying branch data.
     const workspace = selectedDetail.state?.detail?.workspaceDirectories?.find((candidate) =>
@@ -8071,7 +8086,7 @@ export function useThreadNavigation(
         });
         const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
         if (notice) setArchiveThreadNotice(notice);
-        if (!directoryKey.startsWith("directory:")) continue;
+        if (!directoryKey.startsWith("directory:") || response.registrationRetained) continue;
         updateRemovedDirectoryKey(directoryKey, true);
         setLocalLaunchpads((current) => {
           const next = { ...current };
@@ -9064,17 +9079,20 @@ export function useThreadNavigation(
     async (
       threads: readonly ArchivedThreadRef[],
       reopenKey?: string,
-    ): Promise<void> => {
+      options?: { rethrow?: boolean },
+    ): Promise<RestoreThreadResponse[]> => {
       const restoreThreadRequest = desktopApi?.restoreThread;
       if (!restoreThreadRequest) {
+        if (options?.rethrow) throw new Error("Desktop bridge is missing restoreThread().");
         setArchiveThreadError("Desktop bridge is missing restoreThread().");
-        return;
+        return [];
       }
       setArchiveThreadError(undefined);
+      const responses: RestoreThreadResponse[] = [];
       try {
         for (const thread of threads) {
           if (thread.remote) continue;
-          await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId });
+          responses.push(await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId }));
           updateArchivedThreadKey(buildThreadIdentityKey(thread.backend, thread.threadId), false);
           // The `thread/unarchived` event lifts this too; a backend that
           // does not send one would otherwise keep the row hidden.
@@ -9085,9 +9103,13 @@ export function useThreadNavigation(
         }
         await refresh(reopenKey, undefined, reopenKey !== undefined);
       } catch (error) {
-        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        // A caller that shows the failure itself (the archived card) gets it
+        // back instead of the shared archive error.
+        if (!options?.rethrow) setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh();
+        if (options?.rethrow) throw error;
       }
+      return responses;
     },
     [desktopApi, refresh, updateArchivedThreadKey],
   );
@@ -10425,9 +10447,14 @@ export function useThreadNavigation(
     selectedThread,
     selectedThreadConfigurationReady,
     selectedWorkspaceHandoffPending,
+    // An archived thread keeps its history; the archived card stands in for
+    // its composer, so archival is not reported as an error.
     selectedThreadConfigurationError: selectedDetail.state?.error
-      ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
+      ?? (selectedDetail.state?.detail
+        && selectedDetail.state.detail.identity !== "present"
+        && selectedDetail.state.detail.identity !== "archived"
         ? `This thread is ${selectedDetail.state.detail.identity}.` : undefined),
+    selectedThreadArchived: selectedDetail.state?.detail?.identity === "archived",
     refreshSelectedThreadConfiguration,
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,

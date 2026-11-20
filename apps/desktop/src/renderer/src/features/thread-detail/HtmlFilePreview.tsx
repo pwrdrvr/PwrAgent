@@ -33,8 +33,10 @@ type ResourceState =
 /**
  * An HTML file, shown in an opaque-origin frame that cannot reach the
  * network. Scripts start off unless the operator's setting says otherwise
- * (`useHtmlPreviewRunScripts`), and the Scripts switch turns them on or off
- * for this page. A link the page tries to follow is offered here, with its
+ * (`useHtmlPreviewRunScripts`) or the page is the thread's own work, and the
+ * Scripts switch turns them on or off for this page. A page whose scripts are
+ * off says so above the page, since it can render blank or broken without
+ * them. A link the page tries to follow is offered here, with its
  * URL, instead of opening on its own.
  */
 export function HtmlFilePreview(props: {
@@ -53,17 +55,21 @@ export function HtmlFilePreview(props: {
   path: string;
   /** Opens another previewable file the page links to. */
   onOpenLocalFile?: (path: string) => void;
+  /** The thread's own directories or its agent's scratchpad hold the page. */
+  threadWorkspace?: boolean;
 }) {
   const runScriptsByDefault = useHtmlPreviewRunScripts(props.desktopApi);
   // The operator's choice for this page, once made, outlasts the default
   // arriving or changing.
   const [chosenScripts, setChosenScripts] = useState<boolean>();
-  const scripts = chosenScripts ?? runScriptsByDefault;
-  const [resourceState, setResourceState] = useState<ResourceState>({ status: "loading" });
-  const [pendingLink, setPendingLink] = useState<PendingLink>();
   const remote = Boolean(
     props.federationTarget && isRemoteFederationTarget(props.federationTarget),
   );
+  // Another machine's page is never the viewer's own work.
+  const scripts = chosenScripts ?? (runScriptsByDefault || (Boolean(props.threadWorkspace) && !remote));
+  const [scriptsNoticeDismissed, setScriptsNoticeDismissed] = useState(false);
+  const [resourceState, setResourceState] = useState<ResourceState>({ status: "loading" });
+  const [pendingLink, setPendingLink] = useState<PendingLink>();
   const readHtmlPreviewAssets = props.desktopApi?.readHtmlPreviewAssets;
   const onHtmlPreviewNavigation = props.desktopApi?.onHtmlPreviewNavigation;
   const onOpenLocalFile = props.onOpenLocalFile;
@@ -186,6 +192,31 @@ export function HtmlFilePreview(props: {
             if (pendingLink.kind === "file") onOpenLocalFile?.(pendingLink.path);
           }}
         />
+      ) : !scripts && prepared?.hasScripts && !scriptsNoticeDismissed ? (
+        <div className="html-preview__notice" role="group" aria-label="Page scripts">
+          <div className="html-preview__link-text">
+            <p className="html-preview__notice-title">This page's scripts are off</p>
+            <p className="html-preview__notice-detail">
+              Images and interactive parts may be missing. Run scripts only if you trust this page.
+            </p>
+          </div>
+          <div className="html-preview__link-actions">
+            <button
+              type="button"
+              className="button button--secondary html-preview__button"
+              onClick={() => setScriptsNoticeDismissed(true)}
+            >
+              Not now
+            </button>
+            <button
+              type="button"
+              className="button button--primary html-preview__button"
+              onClick={() => setChosenScripts(true)}
+            >
+              Run scripts
+            </button>
+          </div>
+        </div>
       ) : null}
       {srcdoc !== undefined ? (
         <iframe

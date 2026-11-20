@@ -473,6 +473,8 @@ export const NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL =
  */
 export const NAVIGATION_SET_DIRECTORY_PIN_CHANNEL =
   "navigation:set-directory-pin";
+export const NAVIGATION_SET_PROJECT_CHECKOUT_GROUP_CHANNEL =
+  "navigation:set-project-checkout-group";
 export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
   "navigation:reorder-directory-pins";
 export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =

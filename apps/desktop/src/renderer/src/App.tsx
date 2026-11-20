@@ -14,7 +14,7 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
-import { classifyDirectory, detectProviderResponseBlock, operatorTodoItemKey } from "@pwragent/shared";
+import { classifyDirectory, detectProviderResponseBlock, directoryIncludesCheckout, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -44,6 +44,7 @@ import {
   isRemoteFederationTarget,
   resolveNewThreadBackend,
   type AppServerBackendKind,
+  type WorktreeSnapshotSummary,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
@@ -204,6 +205,7 @@ import {
   type SubthreadLaunchpadDraft,
 } from "./lib/useThreadNavigation";
 import { ArchiveGroupConfirmation, useArchiveGroupConfirmation } from "./features/navigation/ArchiveGroupConfirmation";
+import { detachedRestoreNotice, detachedRestoreNotices } from "./features/workspace-recovery/detached-restore-notice";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -1427,10 +1429,10 @@ function DesktopAppShell(props: {
               backendErrorDirectoriesRef.current.find(
                 (directory) =>
                   directory.kind === "directory"
-                  && matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
+                  && matchingThread?.linkedDirectories.some((linked) => directoryIncludesCheckout(directory, classifyDirectory(linked).key)),
               )
               ?? backendErrorDirectoriesRef.current.find((directory) =>
-                matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)
+                matchingThread?.linkedDirectories.some((linked) => directoryIncludesCheckout(directory, classifyDirectory(linked).key))
               );
             const projectLabel =
               matchingDirectory?.label
@@ -1471,6 +1473,25 @@ function DesktopAppShell(props: {
               threadLink,
             }),
           });
+          return;
+        }
+        // A hibernated checkout restored by Restore now or by a send can come
+        // back detached; its card is gone by then, so say so here.
+        if (event.notification.method === "thread/checkoutHibernation/updated") {
+          const params = event.notification.params as {
+            threadId: string;
+            restoredDetached?: { worktreePath: string; detachedFrom: NonNullable<WorktreeSnapshotSummary["detachedFrom"]> };
+          };
+          if (params.restoredDetached) {
+            dispatchAppNotice({ type: "show", notice: detachedRestoreNotice({
+              backend: event.backend as AppServerBackendKind,
+              threadId: params.threadId,
+              ...params.restoredDetached,
+              // Only a real title: labelForThread's fallback is a thread id.
+              threadTitle: backendErrorThreadsRef.current.find((thread) =>
+                thread.source === event.backend && thread.id === params.threadId)?.title?.trim() || undefined,
+            }) });
+          }
           return;
         }
         if (event.notification.method === "codex/missingThreads/updated") {
@@ -2490,6 +2511,10 @@ function DesktopAppShell(props: {
   const localThreadProjects = useMemo(() => {
     const projects = new Map<string, { key: string; label: string }>();
     for (const thread of navigation.threads) {
+      if (thread.checkoutProject) {
+        projects.set(threadSummaryIdentityKey(thread), thread.checkoutProject);
+        continue;
+      }
       const linked = thread.linkedDirectories[0];
       if (!linked) continue;
       const descriptor = classifyDirectory(linked);
@@ -3408,7 +3433,7 @@ function DesktopAppShell(props: {
     const linked = live.linkedDirectories[0];
     const descriptor = linked ? classifyDirectory(linked) : undefined;
     const directoryRow = descriptor
-      ? navigation.directories.find((directory) => directory.key === descriptor.key)
+      ? navigation.directories.find((directory) => directoryIncludesCheckout(directory, descriptor.key))
       : undefined;
     const repositoryKey = directoryRow?.repositoryKey ?? live.primaryGitRepository;
     // Only a Git checkout needs a receiving repository. A directory with no
@@ -3702,7 +3727,9 @@ function DesktopAppShell(props: {
         label: "Undo",
         onClick: () => {
           dismissAppNotice(id);
-          void restoreArchivedThreads(restorable, details.reopenKey);
+          void restoreArchivedThreads(restorable, details.reopenKey).then((responses) => {
+            for (const notice of detachedRestoreNotices(responses, restorable.length === 1 ? details.title : undefined)) showAppNotice(notice);
+          });
         },
       }],
     });
@@ -4056,6 +4083,20 @@ function DesktopAppShell(props: {
     if (!thread || !navigation.setThreadCheckoutHibernation) throw new Error("Select the thread again, then try once more.");
     return await navigation.setThreadCheckoutHibernation(thread, change);
   });
+  // The archived card shows a refused restore itself, so it asks for the error back.
+  const handleRestoreArchivedThread = useEventCallback(async () => {
+    const thread = navigation.selectedThread;
+    if (!thread) throw new Error("Select the thread again, then try once more.");
+    const responses = await navigation.restoreArchivedThreads(
+      [{ backend: thread.source, threadId: thread.id, remote: false }],
+      threadSummaryIdentityKey(thread),
+      { rethrow: true },
+    );
+    for (const notice of detachedRestoreNotices(responses, thread.title)) showAppNotice(notice);
+    // The card waits for the owner to report the thread unarchived; read the
+    // detail again so it never waits on a revision that was already current.
+    await navigation.refreshSelectedThreadConfiguration().catch(() => undefined);
+  });
   const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
     const thread = navigation.selectedThread;
     if (!thread) throw new Error("Select the thread again, then try once more.");
@@ -4348,6 +4389,12 @@ function DesktopAppShell(props: {
           ? handleMoveThreadToMainCheckout : undefined,
         onSetThreadCheckoutHibernation: navigation.selectedThread && navigation.setThreadCheckoutHibernation
           ? handleSetThreadCheckoutHibernation : undefined,
+        selectedThreadArchived: navigation.selectedThreadArchived,
+        // A peer's archived thread is restored on that peer, not from here.
+        onRestoreArchivedThread: navigation.selectedThread
+          && navigation.selectedThread.federation?.ref.target.scope !== "remote"
+          && !activeFederationTarget
+          ? handleRestoreArchivedThread : undefined,
         onLoadOlder: session.loadOlder,
         onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
         onCancelLaunchpad: handleCancelLaunchpad,
@@ -4750,6 +4797,11 @@ function DesktopAppShell(props: {
             onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
             onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
             onSetDirectoryPin={navigation.setDirectoryPin}
+            onSetProjectCheckoutGroup={desktopApi?.setProjectCheckoutGroup}
+            onPickProjectCheckout={desktopApi?.pickDirectoryFromDisk ? async () => {
+              const picked = await desktopApi.pickDirectoryFromDisk!();
+              return picked.canceled ? undefined : picked.path;
+            } : undefined}
             onReorderDirectoryPins={navigation.reorderDirectoryPins}
             onSetDirectoryThreadsCollapsed={
               navigation.setDirectoryThreadsCollapsed

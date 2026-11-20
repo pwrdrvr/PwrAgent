@@ -75,6 +75,44 @@ describe("inline file links", () => {
     expect(screen.queryByRole("link", { name: "research/pwr-video-pilot/PILOT.md" })).toBeNull();
   });
 
+  it("copies a file chip's full path from its own button without opening the file", async () => {
+    const reference = "scratch/Review Page.html";
+    const path = `/owner/project/${reference}`;
+    const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference, path, previewable: true }] }));
+    const readMarkdownFile = vi.fn(async () => ({ path, content: "<p>Review</p>" }));
+    const copyText = vi.fn(async () => undefined);
+    render(<ThreadMarkdown fileViewerContext={context} desktopApi={{ resolveTranscriptFiles, readMarkdownFile, copyText }}
+      text={`The page is at \`${reference}\`.`} />);
+    await screen.findByRole("link", { name: reference });
+    fireEvent.click(screen.getByRole("button", { name: `Copy path ${path}` }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(path));
+    expect(await screen.findByRole("button", { name: "Copied path" })).toBeInTheDocument();
+    expect(readMarkdownFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens a page the owner reports as the thread's own work with its scripts running", async () => {
+    const pages = [
+      { reference: "own.html", threadWorkspace: true, sandbox: "allow-scripts" },
+      { reference: "other.html", threadWorkspace: false, sandbox: "" },
+    ];
+    for (const page of pages) {
+      const path = `/owner/project/${page.reference}`;
+      const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: page.reference, path, previewable: true }] }));
+      const readMarkdownFile = vi.fn(async () => ({
+        path,
+        content: "<script>draw()</script>",
+        ...(page.threadWorkspace ? { threadWorkspace: true } : {}),
+      }));
+      const view = render(<ThreadMarkdown fileViewerContext={context} desktopApi={{ resolveTranscriptFiles, readMarkdownFile }}
+        text={`Open \`${page.reference}\`.`} />);
+      fireEvent.click(await screen.findByRole("link", { name: page.reference }));
+      const frame = await screen.findByTitle(`HTML preview: ${page.reference}`);
+      expect(frame.getAttribute("sandbox"), page.reference).toBe(page.sandbox);
+      view.unmount();
+    }
+  });
+
   it("offers an editor action for existing unsupported files and preserves location suffixes", async () => {
     const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: "src/code.ts:8:2", path: "/owner/project/src/code.ts", line: 8, column: 2, previewable: false }] }));
     const openApplication = vi.fn(async () => ({ opened: true as const }));

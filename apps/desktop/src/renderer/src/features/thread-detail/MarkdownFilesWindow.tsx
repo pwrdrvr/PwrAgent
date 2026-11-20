@@ -258,6 +258,7 @@ export function MarkdownFilesWindow() {
                   federationTarget={federationTarget}
                   label={selectedFile.label}
                   path={selectedFile.path}
+                  threadWorkspace={loadState.threadWorkspace}
                   controlsContainer={headerControls}
                   onOpenLocalFile={remoteSource ? undefined : openLinkedFile}
                 />

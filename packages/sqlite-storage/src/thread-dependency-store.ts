@@ -13,6 +13,8 @@ function key(backend: string, threadId: string): string {
 }
 
 function signature(dependency: ThreadDependency): string {
+  const file = dependency.conditions[0]?.localFile;
+  if (file) return JSON.stringify([dependency.backend, dependency.threadId, dependency.deliver ?? "agent", file.path, file.since]);
   return JSON.stringify([
     dependency.backend, dependency.threadId, dependency.mode,
     dependency.onFailure, dependency.continuation ?? "",
@@ -200,6 +202,20 @@ export class ThreadDependencyStore {
   } {
     return this.db.transaction(() => {
       if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
+      const file = candidate.conditions[0]?.localFile;
+      if (file) {
+        // A marker can remain on disk indefinitely. Re-registering the same
+        // attempt after delivery must not admit another turn.
+        const [delivered] = this.decode(this.db.prepare(`
+          SELECT payload FROM thread_dependencies
+          WHERE backend = ? AND thread_id = ? AND status IN ('delivered', 'dismissed')
+            AND json_extract(payload, '$.conditions[0].localFile.path') = ?
+            AND json_extract(payload, '$.conditions[0].localFile.since') = ?
+            AND coalesce(json_extract(payload, '$.deliver'), 'agent') = ?
+          LIMIT 1`
+        ).all(candidate.backend, candidate.threadId, file.path, file.since, candidate.deliver ?? "agent"));
+        if (delivered) return { dependency: delivered, superseded: [] };
+      }
       const current = this.active();
       const unresolved = current.find((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
         && item.status === "dispatching" && item.error);

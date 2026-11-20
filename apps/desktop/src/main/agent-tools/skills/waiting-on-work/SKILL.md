@@ -13,6 +13,7 @@ input schema for argument details and result semantics.
 | CI or merge of this thread's attached PR | `check_thread_pull_request_status`, follow `prAutomation.guidance`, then `watch_thread_pull_request` if a notification is needed. |
 | Another local thread's turn, passing CI, or PR merge | `manage_thread_dependencies` (the **Continue After** UI) with `action: "create"`. Use `mode: "all"` for several prerequisites. |
 | Work that finishes only when someone says so, before merging or before the operator acts, including a peer's thread or work outside PwrAgent | `manage_thread_dependencies` with a `marked_done` condition. |
+| An existing local watcher writes a result or exit marker in this workspace | `manage_thread_dependencies` with one `local_file` condition. Keep the watcher running and end the turn. |
 | A GitHub Actions run or GitLab pipeline with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
 | A time: "check again in two hours", "look at this tomorrow at 9" | `schedule_follow_up`. Never a polling monitor, a sleep, or a backend `/loop`. |
 | A long job or repeatable check that no workflow above covers | `create_monitor_delegation`. |
@@ -116,6 +117,23 @@ Registration uses PwrAgent's existing PR status updates. It starts no monitor
 thread and spends no model turns while waiting, whether the wait takes minutes
 or days. After registration succeeds, end the turn. This schedules the follow-up;
 it does not merge any prerequisite PR or enforce their merge order.
+
+## An existing local watcher
+
+When an external command already watches a release and writes a marker after
+publishing its result, wait on that marker. Use `manage_thread_dependencies`
+with one `local_file` condition, `threadId: ""` inside the condition, and
+`localFile: { path, since, exitPath? }`. Use the absolute marker path and
+the watcher start time in epoch milliseconds. The marker's parent directory
+must already exist inside the thread's workspace. If the command writes a
+separate exit marker, pass its path as `exitPath`.
+
+The continuation should name the expected release or command and the files
+to check before reporting its outcome. File presence wakes the thread
+to verify the result. It does not establish success. Keep the same paths
+and start time if registration is retried, then end the turn quietly.
+PwrAgent observes the marker across restarts, including when a signing gate
+waits indefinitely. This uses no additional provider polling or Job Monitor.
 
 ## A CI run with no PR
 

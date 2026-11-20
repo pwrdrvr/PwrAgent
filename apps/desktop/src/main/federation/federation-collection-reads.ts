@@ -84,6 +84,8 @@ export function projectFederationProjectPage(
     const candidate = {
       key: directory.key, kind: directory.kind, label: directory.label,
       path: directory.path, localAvailability: directory.localAvailability,
+      ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
+      ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
       needsAttentionCount: directory.needsAttentionCount, latestUpdatedAt: directory.latestUpdatedAt,
       pinnedRank: directory.pinnedRank, threadKeys: [],
     };

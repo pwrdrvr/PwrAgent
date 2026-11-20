@@ -1356,6 +1356,7 @@ export class MessagingController {
     entry: MessagingQueuedTurnEntry,
     body: string,
     event?: MessagingInboundCallbackEvent,
+    title = "Message queued",
   ): Promise<void> {
     const targetSurface = entry.surface ?? event?.sourceSurface ?? event?.interaction;
     if (!targetSurface) {
@@ -1373,7 +1374,7 @@ export class MessagingController {
             replaceMarkup: true,
             fallback: "present_new",
           },
-          title: "Message queued",
+          title,
           body,
           targetSurface,
         }),

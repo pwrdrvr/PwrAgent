@@ -54,6 +54,6 @@ export const isFailureReport = (dependency: ThreadDependency): boolean =>
   dependency.status === "ready" && dependency.outcome === "failure" && !isRepairableDependencyFailure(dependency);
 
 /** A prerequisite's display name: its subject, its saved title, its CI run, or its id. */
-export function conditionName(condition: Pick<ThreadDependencyCondition, "subject" | "title" | "threadId" | "ciRun">): string {
+export function conditionName(condition: Pick<ThreadDependencyCondition, "subject" | "title" | "threadId" | "ciRun" | "localFile">): string {
   return threadDependencyConditionName(condition) || condition.threadId;
 }

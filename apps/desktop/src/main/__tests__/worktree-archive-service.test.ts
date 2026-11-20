@@ -247,6 +247,82 @@ describe("WorktreeArchiveService", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  // Oracle: a restore lands on its branch exactly when Git would allow it
+  // without moving that branch; otherwise it is detached at the saved HEAD
+  // and says why, naming the worktree that holds the branch.
+  it.each(["codex", "claude"] as const)("records why a %s restore came back detached", async (backend) => {
+    for (const branchState of ["available", "occupied", "advanced", "deleted"] as const) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-detached-restore-"));
+      const repo = path.join(root, "repo");
+      const checkout = path.join(root, "checkout");
+      const other = path.join(root, "other");
+      try {
+        await mkdir(repo);
+        await git(repo, ["init", "-b", "main"]);
+        await git(repo, ["config", "user.name", "Fixture"]);
+        await git(repo, ["config", "user.email", "fixture@example.invalid"]);
+        await git(repo, ["config", "core.autocrlf", "false"]);
+        await writeFile(path.join(repo, "file.txt"), "committed\n");
+        await git(repo, ["add", "."]);
+        await git(repo, ["commit", "-m", "fixture"]);
+        await git(repo, ["worktree", "add", "-b", "owned", checkout]);
+        const head = await git(checkout, ["rev-parse", "HEAD"]);
+        await writeFile(path.join(checkout, "file.txt"), "saved edits\n");
+        const service = new WorktreeArchiveService();
+        const snapshot = await service.archive({ backend, threadId: "fixture", repositoryPath: repo, worktreePath: checkout });
+        if (branchState === "occupied") await git(repo, ["worktree", "add", other, "owned"]);
+        if (branchState === "advanced") {
+          await git(repo, ["commit", "--allow-empty", "-m", "new commit"]);
+          await git(repo, ["branch", "-f", "owned", "main"]);
+        }
+        if (branchState === "deleted") await git(repo, ["branch", "-D", "owned"]);
+        const restored = await service.restore({ backend, threadId: "fixture", repositoryPath: repo, worktreePath: checkout,
+          snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit, snapshot,
+          allowDetachedFallback: backend === "codex", restoreSourceCheckout: true });
+
+        expect(await git(checkout, ["rev-parse", "HEAD"])).toBe(head);
+        expect(await git(checkout, ["branch", "--show-current"])).toBe(branchState === "available" ? "owned" : "");
+        expect(await readFile(path.join(checkout, "file.txt"), "utf8")).toBe("saved edits\n");
+        const expected = branchState === "available" ? undefined
+          : branchState === "occupied" ? { branch: "owned", head, reason: "in-use", checkedOutAt: await realpath(other) }
+          : { branch: "owned", head, reason: branchState === "advanced" ? "moved" : "missing" };
+        const actual = restored.detachedFrom?.checkedOutAt
+          ? { ...restored.detachedFrom, checkedOutAt: await realpath(restored.detachedFrom.checkedOutAt) }
+          : restored.detachedFrom;
+        expect(actual, branchState).toEqual(expected);
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it("falls back to a detached repository HEAD when neither the snapshot nor the saved HEAD survives", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fallback-restore-"));
+    const repo = path.join(root, "repo");
+    const checkout = path.join(root, "checkout");
+    try {
+      await mkdir(repo);
+      await git(repo, ["init", "-b", "main"]);
+      await git(repo, ["config", "user.name", "Fixture"]);
+      await git(repo, ["config", "user.email", "fixture@example.invalid"]);
+      await git(repo, ["config", "core.autocrlf", "false"]);
+      await writeFile(path.join(repo, "file.txt"), "committed\n");
+      await git(repo, ["add", "."]);
+      await git(repo, ["commit", "-m", "fixture"]);
+      const repoHead = await git(repo, ["rev-parse", "HEAD"]);
+      const gone = "1".repeat(40);
+      const service = new WorktreeArchiveService();
+      const restored = await service.restore({ backend: "codex", threadId: "fixture", repositoryPath: repo, worktreePath: checkout,
+        snapshotRef: "refs/pwragent/snapshots/gone", snapshotCommit: gone, allowDetachedFallback: true, restoreSourceCheckout: true,
+        snapshot: { id: "s", backend: "codex", threadId: "fixture", worktreePath: checkout, repositoryPath: repo,
+          snapshotRef: "refs/pwragent/snapshots/gone", snapshotCommit: gone, sourceBranch: "main", sourceHead: "2".repeat(40),
+          createdAt: 1, state: "archived", ignoredFilesExcluded: true } });
+
+      expect(await git(checkout, ["rev-parse", "HEAD"])).toBe(repoHead);
+      expect(await git(checkout, ["branch", "--show-current"])).toBe("");
+      expect(await git(checkout, ["status", "--porcelain"])).toBe("");
+      expect(restored.unavailableReason).toContain("repository HEAD");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("resolves the primary repository when the repository path points at the worktree", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
     const repoPath = path.join(root, "repo");
