@@ -89,7 +89,7 @@ import type {
 import {
   ThreadInfoStore,
 } from "./thread-info-store";
-import { GitWorkspaceHandoffService, lockedSourceKeptWarning } from "./git-workspace-handoff-service";
+import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { readWorktreeLockAt, WorktreeLockedError } from "./worktree-volume-lock";
@@ -735,7 +735,6 @@ export class ThreadWorkspaceService {
             // The archive refuses before it writes anything.
             if (!(error instanceof WorktreeLockedError)) throw error;
             keptWorktree = { reason: "worktree-locked", worktreePath, lockReason: error.lockReason };
-            warnings.push(lockedSourceKeptWarning(error.lockReason));
           }
         }
       } else {

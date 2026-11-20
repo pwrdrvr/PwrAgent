@@ -70,6 +70,20 @@ describe("locked worktree archive notice", () => {
     }), { numRuns: 40 });
   });
 
+  it("keeps collected locked worktrees when a later thread's cleanup fails for another reason", () => {
+    const [locked] = fc.sample(lockedCleanup, { numRuns: 1, seed: 1 });
+    let notice: ArchiveThreadNotice | undefined;
+    const { result } = renderHook(() => useLockedArchiveWorktreeNotice({ setNotice: (next) => { notice = next; } }));
+    act(() => { result.current.present(locked!, {}, { backend: "codex", threadId: "a" }); });
+    act(() => {
+      result.current.present([{ worktreePath: "/contrived/worktrees/other", removedWorktree: false, deletedBranch: false,
+        error: "Snapshot failed" }], {}, { backend: "codex", threadId: "b" });
+    });
+    expect(notice?.actions?.map((action) => action.label)).toEqual(["Unlock and Remove", "Keep"]);
+    for (const item of locked!) expect(notice?.facts?.some((fact) => fact.value.includes(item.worktreePath!))).toBe(true);
+    expect(notice?.facts?.some((fact) => fact.value.includes("Snapshot failed"))).toBe(true);
+  });
+
   it("asks again with the new reason when the lock changed before removal", async () => {
     const cleanup: ArchiveThreadCleanupResult[] = [{
       worktreePath: "/contrived/worktrees/orbit", removedWorktree: false, deletedBranch: false,

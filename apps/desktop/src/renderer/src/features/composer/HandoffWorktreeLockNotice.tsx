@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NavigationThreadSummary, WorktreeLockedKept } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -23,19 +23,27 @@ export function useHandoffWorktreeLock(params: {
   /** The worktree the handoff would archive; undefined when it archives none. */
   worktreePath?: string;
 }): HandoffWorktreeLock {
-  const { desktopApi, thread, worktreePath } = params;
+  const { thread, worktreePath } = params;
   const [lock, setLock] = useState<WorktreeLockedKept>();
   const [unlock, setUnlock] = useState(false);
+  // A refreshed thread summary or API object must not re-read the lock and
+  // clear the operator's choice: the read is keyed by identity values only.
+  const readRef = useRef(params.desktopApi?.readThreadWorktreeLock);
+  readRef.current = params.desktopApi?.readThreadWorktreeLock;
+  const targetRef = useRef(thread?.federation?.ref.target);
+  targetRef.current = thread?.federation?.ref.target;
   const threadId = thread?.id;
   const backend = thread?.source;
-  const federationTarget = thread?.federation?.ref.target;
+  const target = thread?.federation?.ref.target;
+  const targetKey = target?.scope === "remote" ? `remote:${target.instanceId}` : target?.scope ?? "";
   useEffect(() => {
     setLock(undefined);
     setUnlock(false);
-    if (!worktreePath || !threadId || !backend || !desktopApi?.readThreadWorktreeLock) return;
+    const read = readRef.current;
+    if (!worktreePath || !threadId || !backend || !read) return;
     let current = true;
-    void desktopApi.readThreadWorktreeLock({
-      backend, threadId, worktreePath, federationTarget: federationTarget ?? readRendererFederationTarget(),
+    void read({
+      backend, threadId, worktreePath, federationTarget: targetRef.current ?? readRendererFederationTarget(),
     }).then((response) => {
       if (current) setLock(response.lock);
     }, () => {
@@ -43,7 +51,7 @@ export function useHandoffWorktreeLock(params: {
       // handoff completes and the worktree stays on disk.
     });
     return () => { current = false; };
-  }, [backend, desktopApi, federationTarget, threadId, worktreePath]);
+  }, [backend, targetKey, threadId, worktreePath]);
   return { lock, unlock, setUnlock };
 }
 

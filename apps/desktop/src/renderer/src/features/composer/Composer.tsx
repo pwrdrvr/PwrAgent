@@ -12638,8 +12638,14 @@ function useComposerController(props: ComposerProps) {
     const toNewWorktree = handoffDialog === "local-to-worktree"
       || handoffDialog === "worktree-to-worktree";
     const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
-    // Only these archive the worktree being left; a fresh start keeps it.
+    // Only these archive the worktree being left; a fresh start keeps it, and
+    // the owner never archives a worktree created outside PwrAgent.
+    const sourceWorktreeIsExternal = Boolean(threadWorkspace && props.thread?.linkedDirectories?.some((directory) =>
+      directory.kind === "worktree"
+      && directory.worktreeOwnership === "external"
+      && (directory.worktreePath ?? directory.path) === threadWorkspace.sourcePath));
     const handoffArchivesSource = Boolean(threadWorkspace?.mode === "worktree"
+      && !sourceWorktreeIsExternal
       && (handoffDialog === "worktree-to-local"
         || (fromWorktreeToNew && localHandoffStrategy !== "fresh-from-base")));
     const handoffWorktreeLock = useHandoffWorktreeLock({

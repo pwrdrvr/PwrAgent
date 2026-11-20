@@ -1038,7 +1038,7 @@ export class GitWorkspaceHandoffService {
       sourceStash,
       this.gitEnv,
     );
-    const { archivedSourceWorktree, keptSourceWorktree } = await this.archiveMovedSource(context, keptByLock, approvedLockReason);
+    const { archivedSourceWorktree, keptSourceWorktree, warning } = await this.archiveMovedSource(context, keptByLock, approvedLockReason);
 
     const linkedDirectory = this.buildLinkedDirectory({
       context,
@@ -1059,7 +1059,7 @@ export class GitWorkspaceHandoffService {
       ...(archivedSourceWorktree ? { archivedSourceWorktree } : {}),
       ...(keptSourceWorktree ? { keptSourceWorktree } : {}),
       sourceStash: appliedSourceStash,
-      warnings: keptSourceWorktree ? [...warnings, lockedSourceKeptWarning(keptSourceWorktree.lockReason)] : warnings,
+      warnings: warning ? [...warnings, warning] : warnings,
       completedAt: context.now,
     };
   }
@@ -1090,7 +1090,7 @@ export class GitWorkspaceHandoffService {
       sourceStash,
       this.gitEnv,
     );
-    const { archivedSourceWorktree, keptSourceWorktree } = await this.archiveMovedSource(context, keptByLock, approvedLockReason);
+    const { archivedSourceWorktree, keptSourceWorktree, warning } = await this.archiveMovedSource(context, keptByLock, approvedLockReason);
 
     const linkedDirectory = this.buildLinkedDirectory({
       context,
@@ -1111,7 +1111,7 @@ export class GitWorkspaceHandoffService {
       ...(archivedSourceWorktree ? { archivedSourceWorktree } : {}),
       ...(keptSourceWorktree ? { keptSourceWorktree } : {}),
       sourceStash: appliedSourceStash,
-      warnings: keptSourceWorktree ? [...warnings, lockedSourceKeptWarning(keptSourceWorktree.lockReason)] : warnings,
+      warnings: warning ? [...warnings, warning] : warnings,
       completedAt: context.now,
     };
   }
@@ -1133,14 +1133,16 @@ export class GitWorkspaceHandoffService {
 
   /**
    * After the move: archive the source, or keep it when someone else's lock
-   * holds it. A lock that changed since the check also keeps it; the handoff
-   * has already moved Git state, so it must not fail now.
+   * holds it. The handoff has already moved Git state, so nothing here may
+   * fail it: a lock that changed since the check keeps the worktree (typed),
+   * and any other archive failure leaves it on disk with a warning, as a
+   * handoff to a new worktree does.
    */
   private async archiveMovedSource(
     context: HandoffContext,
     keptByLock: WorktreeLockedKept | undefined,
     approvedLockReason: string | undefined,
-  ): Promise<{ archivedSourceWorktree?: WorktreeSnapshotSummary; keptSourceWorktree?: WorktreeLockedKept }> {
+  ): Promise<{ archivedSourceWorktree?: WorktreeSnapshotSummary; keptSourceWorktree?: WorktreeLockedKept; warning?: string }> {
     if (keptByLock) return { keptSourceWorktree: keptByLock };
     try {
       return {
@@ -1155,7 +1157,7 @@ export class GitWorkspaceHandoffService {
       };
     } catch (error) {
       if (error instanceof WorktreeLockedError) return { keptSourceWorktree: keptSource(context, error.lockReason) };
-      throw error;
+      return { warning: `The previous worktree was left on disk: ${error instanceof Error ? error.message : String(error)}` };
     }
   }
 
@@ -1195,13 +1197,6 @@ function keptSource(context: HandoffContext, lockReason: string): WorktreeLocked
   return { reason: "worktree-locked", worktreePath: context.sourcePath, lockReason };
 }
 
-/** The warning when someone else's Git lock kept the previous worktree on disk. */
-export function lockedSourceKeptWarning(lockReason: string): string {
-  return lockReason
-    ? `Git has the previous worktree locked, so it was left on disk: ${lockReason}`
-    : "Git has the previous worktree locked, so it was left on disk.";
-}
-
 function withKeptSource(
   moved: HandoffThreadWorkspaceResponse,
   kept: WorktreeLockedKept,
@@ -1209,6 +1204,5 @@ function withKeptSource(
   return {
     ...moved,
     keptSourceWorktree: kept,
-    warnings: [...moved.warnings, lockedSourceKeptWarning(kept.lockReason)],
   };
 }

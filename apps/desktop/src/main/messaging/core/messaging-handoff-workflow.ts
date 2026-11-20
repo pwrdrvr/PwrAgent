@@ -531,10 +531,7 @@ export function handoffSuccessText(result: HandoffThreadWorkspaceResponse): stri
         ? `The worktree was kept because Git has it locked: ${kept.lockReason}`
         : "The worktree was kept because Git has it locked."
       : undefined,
-    // The owner also reports the kept worktree as a warning; say it once.
-    ...result.warnings
-      .filter((warning) => !kept || !warning.startsWith("Git has the previous worktree locked"))
-      .map((warning) => `Warning: ${warning}`),
+    ...result.warnings.map((warning) => `Warning: ${warning}`),
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");

@@ -231,14 +231,14 @@ it("hands off without an approval when the actor keeps the worktree", async () =
   expect(f.requests[0]).not.toHaveProperty("approvedLockReason");
 });
 
-it("says once that a locked worktree was kept", () => {
+it("reports a locked worktree kept from the typed result, not a warning", () => {
   const text = handoffSuccessText({
     backend: "codex", threadId: "thread", direction: "worktree-to-local", workMode: "local",
     repositoryPath: "/repo", targetPath: "/repo", completedAt: 2,
     linkedDirectory: { id: "repo", label: "Repo", kind: "local", path: "/repo" },
     keptSourceWorktree: { reason: "worktree-locked", worktreePath: "/wt", lockReason: LOCK_REASON },
-    warnings: [`Git has the previous worktree locked, so it was left on disk: ${LOCK_REASON}`],
+    warnings: [],
   });
   expect(text).toContain(`The worktree was kept because Git has it locked: ${LOCK_REASON}`);
-  expect(text).not.toContain("Warning: Git has");
+  expect(text.match(/Git has it locked/g)).toHaveLength(1);
 });

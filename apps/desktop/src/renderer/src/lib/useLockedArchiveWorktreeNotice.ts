@@ -79,7 +79,9 @@ export function useLockedArchiveWorktreeNotice(params: {
     const failed = formatArchiveCleanupNotice(cleanup, context, { excludeLocked: true });
     const added = collectLockedArchiveWorktrees(cleanup, owner);
     if (added.length === 0) {
-      if (failed) setNotice(failed);
+      // Keep worktrees collected earlier in this action, and their action.
+      if (failed && lockedRef.current.length) showRef.current(failed);
+      else if (failed) setNotice(failed);
       return Boolean(failed);
     }
     lockedRef.current = mergeLockedArchiveWorktrees(lockedRef.current, added);

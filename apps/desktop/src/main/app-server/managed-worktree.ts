@@ -65,26 +65,23 @@ export async function removeManagedWorktree<T>(params: {
    */
   removeGit?: GitRunner<T>;
 }): Promise<T> {
-  if (params.approvedLockReason !== undefined) {
+  // Without a record or an approval, only PwrAgent's own lock is read and cleared.
+  if (!params.lock && params.approvedLockReason === undefined) {
+    await unlockPwrAgentWorktreeLock({ worktreePath: params.worktreePath, git: params.git });
+  } else {
     const lock: WorktreeLock = params.lock
       ? !params.lock.locked ? { holder: "none" }
         : isPwrAgentWorktreeLock(params.lock) ? { holder: "pwragent" }
         : { holder: "other", reason: (params.lock.lockReason ?? "").trim() }
       : await readWorktreeLockAt(params.worktreePath);
-    if (lock.holder === "other") {
-      if (!lockApprovalMatches(lock, params.approvedLockReason)) {
-        throw new WorktreeLockedError(params.worktreePath, lock.reason ?? "");
-      }
-      await params.git(["worktree", "unlock", params.worktreePath]);
-    } else if (lock.holder === "pwragent") {
+    if (lock.holder === "other" && params.approvedLockReason !== undefined
+      && !lockApprovalMatches(lock, params.approvedLockReason)) {
+      throw new WorktreeLockedError(params.worktreePath, lock.reason ?? "");
+    }
+    // Someone else's lock without an approval stays, so Git refuses the removal.
+    if (lock.holder === "pwragent" || (lock.holder === "other" && params.approvedLockReason !== undefined)) {
       await params.git(["worktree", "unlock", params.worktreePath]);
     }
-  } else if (params.lock) {
-    if (isPwrAgentWorktreeLock(params.lock)) {
-      await params.git(["worktree", "unlock", params.worktreePath]);
-    }
-  } else {
-    await unlockPwrAgentWorktreeLock({ worktreePath: params.worktreePath, git: params.git });
   }
   const removeGit = params.removeGit ?? params.git;
   return await removeGit(["worktree", "remove", ...(params.force ? ["--force"] : []), params.worktreePath]);

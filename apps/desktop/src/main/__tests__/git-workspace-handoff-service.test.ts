@@ -525,6 +525,30 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  it("completes a handoff to Local when archiving the worktree fails after Git moved", async () => {
+    const repoPath = await createRepo();
+    await git(repoPath, ["switch", "main"]);
+    const worktreePath = path.join(path.dirname(repoPath), "worktree-feature");
+    await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
+    await writeFile(path.join(worktreePath, "README.md"), "dirty worktree\n", "utf8");
+    const archive = vi.fn(async () => { throw new Error("The checkout's changes exceed the snapshot limit."); });
+    const service = new GitWorkspaceHandoffService({
+      worktreeArchiveService: { archive } as unknown as WorktreeArchiveService,
+    });
+
+    const result = await service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "worktree-to-local",
+      repositoryPath: repoPath, sourcePath: worktreePath, sourceBranch: "feature/handoff", now: 2100,
+    });
+
+    expect(archive).toHaveBeenCalledTimes(1);
+    expect(result.archivedSourceWorktree).toBeUndefined();
+    expect(result.warnings).toContain("The previous worktree was left on disk: The checkout's changes exceed the snapshot limit.");
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+    await expect(readFile(path.join(repoPath, "README.md"), "utf8")).resolves.toBe("dirty worktree\n");
+    expect(await pathExists(worktreePath)).toBe(true);
+  });
+
   describe("worktree to new worktree", () => {
     async function dirtyWorktree(): Promise<{ repoPath: string; worktreePath: string }> {
       const repoPath = await createRepo();
