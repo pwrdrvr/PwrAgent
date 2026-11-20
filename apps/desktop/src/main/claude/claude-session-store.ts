@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { lock } from "proper-lockfile";
 import type {
   AppServerThreadEntry,
@@ -21,6 +22,21 @@ const sessionWrites = new Map<string, {
   ready: Promise<() => Promise<void>>;
   closing?: Promise<void>;
 }>();
+const metadataWrites = new Map<string, Promise<void>>();
+
+async function replaceSessionSidecar(temporary: string, destination: string): Promise<void> {
+  // On Windows, even a Node read handle that shares delete access can block
+  // replacement of the destination. Give short-lived readers time to close.
+  for (let wait = 5; ; wait *= 2) {
+    try {
+      await rename(temporary, destination);
+      return;
+    } catch (error) {
+      if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM" || wait > 80) throw error;
+      await delay(wait);
+    }
+  }
+}
 
 export type ClaudeSession = {
   thread: AppServerThreadSummary;
@@ -276,6 +292,24 @@ export class ClaudeSessionStore {
     }
   }
 
+  /** Read and replace a sidecar in order across local stores. Keep the shared
+   * file lock through the whole update, including any Windows rename backoff. */
+  async withMetadataMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const current = this.mutationContext.getStore();
+    if (current?.id === id && current.active) return await work();
+    const file = path.resolve(this.file(id, "json"));
+    const previous = metadataWrites.get(file);
+    const run = async () => {
+      await previous;
+      return await work();
+    };
+    const result = this.memory.has(id) ? run() : this.withWrite(id, run);
+    const settled = result.then(() => {}, () => {});
+    metadataWrites.set(file, settled);
+    try { return await result; }
+    finally { if (metadataWrites.get(file) === settled) metadataWrites.delete(file); }
+  }
+
   async read(id: string): Promise<ClaudeSession> {
     const held = this.memory.get(id);
     if (held) return JSON.parse(held.session) as ClaudeSession;
@@ -288,12 +322,12 @@ export class ClaudeSessionStore {
       if (held) held.session = JSON.stringify(session);
       return;
     }
-    await this.withWrite(session.thread.id, async () => {
+    await this.withMetadataMutation(session.thread.id, async () => {
       const destination = this.file(session.thread.id, "json");
       const temporary = `${destination}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, JSON.stringify(session), { mode: 0o600 });
-        await rename(temporary, destination);
+        await replaceSessionSidecar(temporary, destination);
       } finally {
         await rm(temporary, { force: true });
       }
