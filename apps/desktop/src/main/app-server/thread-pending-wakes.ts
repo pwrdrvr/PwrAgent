@@ -67,6 +67,7 @@ export type ThreadPendingWakeReaders = {
     endedLimit: number,
   ) => PendingWakeScheduledActions | Promise<PendingWakeScheduledActions>;
   monitors: (thread: PendingWakeThread) => PendingTaskMonitorWake[];
+  monitorWakesTripped: (thread: PendingWakeThread) => boolean;
   /** Ended monitor summaries, newest completion first. */
   recentSubAgents: (thread: PendingWakeThread, limit: number) => Promise<ThreadSubAgentSummary[]>;
   /** Tasks the backend runs for the thread; only background ones wake it. */
@@ -114,7 +115,7 @@ export async function buildThreadPendingWakes(
     }
   };
   const [
-    prWatches, prHistory, autoFix, dependencies, scheduled, monitors, subAgents, tasks, backendWakes, hold, heldEntries,
+    prWatches, prHistory, autoFix, dependencies, scheduled, monitors, monitorWakesTripped, subAgents, tasks, backendWakes, hold, heldEntries,
   ] = await Promise.all([
     options.activePrWatches ?? read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
     endedLimit === 0 ? [] : read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
@@ -122,6 +123,7 @@ export async function buildThreadPendingWakes(
     read("dependencies", [] as ThreadDependency[], () => readers.dependencies(thread, endedLimit)),
     read("scheduledActions", { actions: [] } as PendingWakeScheduledActions, () => readers.scheduledActions(thread, endedLimit)),
     read("monitors", [] as PendingTaskMonitorWake[], () => readers.monitors(thread)),
+    read("monitorWakeGuard", false, () => readers.monitorWakesTripped(thread)),
     endedLimit === 0 ? [] : read("recentSubAgents", [] as ThreadSubAgentSummary[], () => readers.recentSubAgents(thread, endedLimit)),
     read("backendTasks", [] as AppServerBackgroundTask[], () => readers.backendTasks(thread)),
     read("backendWakes", [] as AppServerBackendWake[], () => readers.backendWakes(thread)),
@@ -155,6 +157,7 @@ export async function buildThreadPendingWakes(
     wakes,
     ended,
     ...(scheduled.followUpsSuspended ? { followUpsSuspended: true as const } : {}),
+    ...(monitorWakesTripped ? { monitorWakesSuspended: true as const } : {}),
     ...(incomplete || scheduled.incomplete ? { incomplete: true as const } : {}),
   });
 }

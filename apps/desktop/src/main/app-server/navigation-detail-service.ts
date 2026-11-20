@@ -399,6 +399,7 @@ export class NavigationDetailService {
       configuration.pendingWakes = pendingWakes.wakes;
       if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
       if (pendingWakes.followUpsSuspended) configuration.pendingWakesFollowUpsSuspended = true;
+      if (pendingWakes.monitorWakesSuspended) configuration.pendingWakesMonitorWakesSuspended = true;
     }
     if (configuration.pendingWakes) {
       const baseBytes = responseBytes({ ref: request.ref, thread: { ...configuration, pendingWakes: [] }, collections, workspaceDirectories }) + 512;
@@ -584,10 +585,12 @@ export class NavigationDetailService {
   }
 }
 
+type PendingWakesDetail = Omit<ThreadPendingWakesList, "ended">;
+
 type PendingWakesProjector = (thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}, activePrWatches: readonly ThreadPullRequestWatchSummary[]) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete" | "followUpsSuspended">>;
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]) => Promise<PendingWakesDetail>;
 
 let pendingWakesProjector: PendingWakesProjector | undefined;
 
@@ -600,7 +603,7 @@ export function setNavigationDetailPendingWakesProjector(projector: PendingWakes
 async function readPendingWakesForDetail(thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}, activePrWatches: readonly ThreadPullRequestWatchSummary[]): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete" | "followUpsSuspended"> | undefined> {
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]): Promise<PendingWakesDetail | undefined> {
   if (!pendingWakesProjector) return undefined;
   try {
     return await pendingWakesProjector(thread, activePrWatches);

@@ -18,7 +18,7 @@ import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
 import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchivePolicy } from "@pwragent/shared";
-import type { ArchiveCleanupCheckpointStorage } from "../storage/desktop-runtime-storage";
+import type { ArchiveCleanupCheckpointStorage, TaskMonitorWakeStorage } from "../storage/desktop-runtime-storage";
 import type { RestartDispatchPlanOptions } from "./restart-continuation-gate";
 import type { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import type { CodexProviderCatalogRetry, CodexProviderCatalogRetryTimer } from "./codex-provider-catalog-retry";
@@ -199,6 +199,7 @@ export type DesktopBackendRegistryOptions = {
   archiveCleanupCheckpointStore?: ArchiveCleanupCheckpointStorage | null;
   /** `null` keeps held wake-ups in memory only. */
   projectHeldWakeupStore?: ProjectHeldWakeupStoreLike | null;
+  taskMonitorWakeStore?: TaskMonitorWakeStorage;
   /** `null` keeps no restart continuations. */
   restartContinuationStore?: RestartContinuationStoreLike | null;
   /** Batch size, delays, and jitter for continuations. Tests only. */

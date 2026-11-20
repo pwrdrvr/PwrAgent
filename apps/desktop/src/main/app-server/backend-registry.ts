@@ -10,7 +10,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
-import type { SubAgentMonitorService } from "./subagent-monitor-service";
+import { taskMonitorWakeIds, type SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import type { RegistryReadThreadRequest } from "./registry-host-ports";
@@ -11986,6 +11986,20 @@ export class DesktopBackendRegistry {
     pollIntervalSeconds: number;
   }> {
     return this.subAgentMonitorService.listPendingTaskMonitorWakes(params);
+  }
+
+  taskMonitorWakesTripped(thread: { backend: AppServerBackendKind; threadId: string }): boolean {
+    return this.subAgentMonitorService.taskMonitorWakesTripped(thread);
+  }
+
+  rearmTaskMonitorWakes(thread: { backend: AppServerBackendKind; threadId: string }): boolean {
+    if (!this.subAgentMonitorService.rearmTaskMonitorWakes(thread)) return false;
+    for (const entry of this.threadTurnQueue.getQueuedEntries(thread)) {
+      if (taskMonitorWakeIds(entry).size > 0) {
+        this.cancelQueuedTurn(entry.id, "Job Monitor wakes were rearmed for future monitors.");
+      }
+    }
+    return true;
   }
 
   stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {

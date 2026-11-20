@@ -8,6 +8,7 @@ import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage
 import { ThreadTodoStore } from "./thread-todo-store";
 import { OpenAIDecisionStore, type OpenAIDecisionRegistryStorage } from "./openai-decision-store";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import { RetainedOwnerThreadStore } from "./retained-owner-thread-store";
@@ -38,6 +39,7 @@ export type ArchiveCleanupCheckpointStorage = Pick<ArchiveCleanupCheckpointStore
 export type ProjectHeldWakeupStorage = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
 export type RestartContinuationStorage = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
 export type ThreadDependencyStorage = Pick<ThreadDependencyStore, keyof ThreadDependencyStore>;
+export type TaskMonitorWakeStorage = Pick<TaskMonitorWakeStore, keyof TaskMonitorWakeStore>;
 
 // Bind each store at its existing construction boundary, without caching a
 // database in this module or giving callers access to its handle.
@@ -56,6 +58,9 @@ export function createRestartContinuationStorage(): RestartContinuationStorage {
 }
 export function createThreadDependencyStorage(): ThreadDependencyStorage {
   return new ThreadDependencyStore(getAppStateDb().raw);
+}
+export function createTaskMonitorWakeStorage(): TaskMonitorWakeStorage {
+  return new TaskMonitorWakeStore(getAppStateDb().raw);
 }
 export function createThreadSandboxStorage(): ThreadSandboxStorage {
   return new ThreadSandboxStore(getAppStateDb().raw);

@@ -664,6 +664,35 @@ prompt under its own immutable held identity. The existing attachment admission
 reservation deduplicates matching prompts only while they still wait; a new wake
 never changes another acceptance. Unlock preserves FIFO and independent review
 holds, and shutdown never restores these transient prompts.
+
+**Job Monitor wake circuit breaker.** Each owning profile has a durable budget
+per parent backend, thread and automatic wake kind. Job Monitors get three
+admissions in a rolling thirty minutes. This matches the short-window
+compaction recovery cap and allows a few independent completions while bounding
+a rapid feedback loop. Explicit results and synthesized fallbacks spend the
+same allowance, regardless of outcome, task text or monitor identity. A fourth
+admission in the window trips the guard until an operator rearms it in
+**Waiting for**. The result and reported outcome stay on the monitor's Sub-agents
+card. Monitors can keep observing, and human messages can still start turns.
+
+Like scheduled agent follow-ups, the owner checks and reserves the allowance in
+an immediate SQLite transaction before starting or queueing a wake. Compaction
+recovery also rechecks its reservation before steering. Job Monitor wakes
+recheck at FIFO dispatch, before combining messages or calling a provider. An
+unlock, project release or restart can only deliver an eligible reservation.
+Dispatch renews its slot so an old hold cannot burst alongside fresh wakes.
+The immutable monitor ID deduplicates results across replay and restart. Rearm
+opens a new generation for monitors created afterwards and retires earlier
+automatic deliveries, including durable holds. PR Auto-fix continues to use its
+repair claim and refill budget. The ordinary lock, archive, workspace, handoff
+and active-turn admission checks still apply to their respective turn paths.
+
+The guard's checked-in SQLite budget excludes existing monitor result and turn
+bookkeeping. Pending checks use zero commits. A reservation and dispatch claim
+use two commits and measured about 16.5 KB of WAL. Tripping uses one commit and
+about 4 KB, with zero further commits from suppressed reports. At three wakes
+per thirty minutes continuously, one parent adds about 2.4 MB of WAL per day.
+
 Each accepted Outpost job retains its own input and delivery fingerprint until
 dispatch, where the combined-delivery rule above applies. At the FIFO head a
 delivery joins the current native turn, or starts a new turn when idle. The existing steering lifecycle

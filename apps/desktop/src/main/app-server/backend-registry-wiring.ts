@@ -43,6 +43,7 @@ import {
   createProviderThreadSnapshotStorage,
   createRetainedOwnerThreadStorage,
   createRestartContinuationStorage,
+  createTaskMonitorWakeStorage,
   createTokenMiserStorage,
 } from "../storage/desktop-runtime-storage";
 import { getAppStateMode, isAppStateInitialized } from "../storage/desktop-runtime-storage";
@@ -1284,6 +1285,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const threadTurnQueue = new ThreadTurnQueue({
     isAdmissionHeld: () => ports.restartGate.phase === "quieting",
     startTurn: async (entry) => await ports.startTurnNow(entry),
+    dispatchRefusal: (entry) => subAgentMonitorService.taskMonitorWakeDispatchRefusal(entry),
     canSteerThread: (entry) => !ports.stoppingRunningTurnsForShutdown
       && !ports.threadHasBlockingWorkspaceMove(entry)
       && ports.getActiveTurnForThread(entry) !== undefined
@@ -1528,6 +1530,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     forgeToolBridge,
     managedReviewService,
     threadMcpConnections,
+    taskMonitorWakeStore: options?.taskMonitorWakeStore ?? (isAppStateInitialized() ? createTaskMonitorWakeStorage() : undefined),
   }, () => ports);
   const threadUsageLedger = new ThreadUsageLedger(context, {
     managedReviewService,

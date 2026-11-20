@@ -223,9 +223,13 @@ export type ThreadTurnQueueOptions = {
    * starts on a later drain; `drainAll` follows the gate opening.
    */
   isDispatchHeld?: (entry: ThreadTurnQueueDispatchCandidate) => boolean;
+  /** Permanently refuse an individual delivery before start/steer or batching. */
+  dispatchRefusal?: (entry: ThreadTurnQueueEntry) => string | undefined;
   onLifecycle?: (event: ThreadTurnQueueLifecycleEvent) => void | Promise<void>;
   now?: () => number;
 };
+
+export class ThreadTurnQueueDispatchRefused extends Error {}
 
 /** An entry about to start, or a thread a new entry would start on. */
 export type ThreadTurnQueueDispatchCandidate = {
@@ -1394,11 +1398,14 @@ export class ThreadTurnQueue {
     // its delivery. The head starts its own group: everything before it is
     // paused, and a paused row ends a run.
     const size = planQueuedDeliveries(queue.slice(index), { maxGroups: 1 })[0]?.entryIds.length ?? 1;
-    const members = queue.splice(index, size);
-    if (members.length === 0) return "none";
-    const next = combineQueuedDelivery(members);
+    const members = queue.splice(index, size).filter((entry) => !this.discardRefusedDispatch(entry));
     if (queue.length === 0) this.queuedEntries.delete(key);
     this.dropSpentHold(key);
+    if (members.length === 0) {
+      if (queue.length > 0) this.scheduleDrain(key);
+      return "none";
+    }
+    const next = combineQueuedDelivery(members);
     const holdRevision = this.heldQueues.get(key)?.revision;
     let accepted = false;
     try {
@@ -1466,6 +1473,15 @@ export class ThreadTurnQueue {
     return this.options.isDispatchHeld?.(entry) ?? false;
   }
 
+  private discardRefusedDispatch(entry: ThreadTurnQueueEntry): string | undefined {
+    const reason = this.options.dispatchRefusal?.(entry);
+    if (reason === undefined) return undefined;
+    this.heldAdmissionReasons.delete(entry.id);
+    // The refusal is final even if a lifecycle observer fails.
+    void this.emit({ type: "cancelled", entry, reason }).catch(() => undefined);
+    return reason;
+  }
+
   private scheduleDrain(key: string): void {
     if (this.closed || this.drainTimers.has(key)) return;
     // One event-loop admission window also groups simultaneous local/remote
@@ -1502,6 +1518,10 @@ export class ThreadTurnQueue {
       members?: readonly ThreadTurnQueueEntry[];
     },
   ): Promise<ThreadTurnQueueStartResult> {
+    if (!options?.members) {
+      const refusal = this.discardRefusedDispatch(entry);
+      if (refusal !== undefined) throw new ThreadTurnQueueDispatchRefused(refusal);
+    }
     const key = this.keyFor(entry);
     const members = options?.members ?? [entry];
     const attempt = Symbol("queue admission");

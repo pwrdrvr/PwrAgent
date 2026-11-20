@@ -102,8 +102,9 @@ function controller(
   stop: (key: string) => Promise<ThreadPendingWakesResponse> = async () => ({ ok: true, stopped: true }),
   ended: (key: string) => void = () => {},
   rearmFollowUps: () => Promise<ThreadPendingWakesResponse> = async () => ({ ok: true, rearmed: true }),
+  rearmMonitorWakes: () => Promise<ThreadPendingWakesResponse> = async () => ({ ok: true, rearmed: true }),
 ): ThreadPendingWakesController {
-  return { state, stop, ended, rearmFollowUps };
+  return { state, stop, ended, rearmFollowUps, rearmMonitorWakes };
 }
 
 const ready = (wakes = WAKES, ended = ENDED, peer = false, followUpsSuspended = false): ThreadPendingWakesState =>
@@ -238,6 +239,23 @@ describe("WaitingForPanel", () => {
       expect(screen.getByText(/Rearm on Mac Mini\./)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Rearm follow-ups" })).not.toBeInTheDocument();
     });
+  });
+
+  it.each([false, true])("shows one Job Monitor protection card with rearm on the owner only (peer %s)", async (peer) => {
+    const rearm = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, rearmed: true }));
+    render(<WaitingForPanel thread={thread} ownerLabel="Mac Mini" now={NOW} controller={controller({
+      status: "ready", wakes: [], ended: [], incomplete: false, peer, monitorWakesSuspended: true,
+    }, undefined, undefined, undefined, rearm)} />);
+    const card = screen.getByRole("note");
+    expect(within(card).getByText("Job Monitor wakes suspended")).toBeInTheDocument();
+    const button = within(card).queryByRole("button", { name: "Rearm monitor wakes" });
+    if (peer) {
+      expect(button).not.toBeInTheDocument();
+      expect(within(card).getByText(/Rearm on Mac Mini\./)).toBeInTheDocument();
+    } else {
+      await act(async () => { fireEvent.click(button!); });
+      expect(rearm).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("stops a wake through its source and shows why a stop failed", async () => {

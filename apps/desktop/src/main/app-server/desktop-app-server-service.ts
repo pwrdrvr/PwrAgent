@@ -4421,6 +4421,7 @@ class DesktopAppServerService {
       },
       scheduledActions: (thread, endedLimit) => getAppScheduledThreadActionStore().listPendingWakes({ ...thread, endedLimit }),
       monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
+      monitorWakesTripped: (thread) => registry.taskMonitorWakesTripped(thread),
       recentSubAgents: async (thread, limit) => limit === 0 ? []
         : await this.getOverlayStore().listEndedThreadTaskMonitors({ ...thread, limit }),
       // Only Claude continues a thread when a background task ends.
@@ -4456,7 +4457,8 @@ class DesktopAppServerService {
   ): Promise<ThreadPendingWakesResponse> {
     if (
       !request
-      || (request.action !== "list" && request.action !== "stop" && request.action !== "rearm_follow_ups")
+      || (request.action !== "list" && request.action !== "stop"
+        && request.action !== "rearm_follow_ups" && request.action !== "rearm_monitor_wakes")
       || !isAppServerBackendKind(request.backend)
       || typeof request.threadId !== "string"
       || !request.threadId.trim()
@@ -4467,10 +4469,13 @@ class DesktopAppServerService {
     if (request.action === "list") {
       return { ok: true, ...await this.listThreadPendingWakes(thread, request.endedLimit) };
     }
-    if (request.action === "rearm_follow_ups") {
+    if (request.action === "rearm_follow_ups" || request.action === "rearm_monitor_wakes") {
       // Reached only from this instance's own window; the IPC handler refuses
       // a peer target and a federation window before calling here.
       try {
+        if (request.action === "rearm_monitor_wakes") {
+          return { ok: true, rearmed: getDesktopBackendRegistry().rearmTaskMonitorWakes(thread) };
+        }
         await getScheduledThreadActionService().rearmAgentFollowUps(thread);
         return { ok: true, rearmed: true };
       } catch (error) {
@@ -4479,7 +4484,7 @@ class DesktopAppServerService {
         this.pendingWakesCache.invalidate(thread);
       }
     }
-    if (typeof request.key !== "string") {
+    if (request.action !== "stop" || typeof request.key !== "string") {
       return { ok: false, error: { code: "invalid_arguments", message: "key is required." } };
     }
     const registry = getDesktopBackendRegistry();

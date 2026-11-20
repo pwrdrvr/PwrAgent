@@ -755,6 +755,7 @@ export type TaskMonitorDelegationRecord = {
   parentBackend: AppServerBackendKind;
   parentThreadId: string;
   parentTurnId: string;
+  wakeGeneration?: number;
   rootTurnId?: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;

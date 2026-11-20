@@ -192,10 +192,10 @@ export function registerAppServerIpcHandlers(): void {
     const target = request?.federationTarget;
     if (target && isRemoteFederationTarget(target)) {
       // Only the local operator of the owning instance rearms loop protection.
-      if (request.action === "rearm_follow_ups") {
+      if (request.action === "rearm_follow_ups" || request.action === "rearm_monitor_wakes") {
         return {
           ok: false,
-          error: { code: "federation_unsupported", message: "Rearm agent follow-ups on the instance that owns the thread." },
+          error: { code: "federation_unsupported", message: "Rearm automatic wakes on the instance that owns the thread." },
         };
       }
       // A peer's list arrives with its selected detail; only Stop comes here.

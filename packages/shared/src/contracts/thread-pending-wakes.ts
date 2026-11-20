@@ -40,6 +40,7 @@ export const THREAD_PENDING_WAKE_SOURCE_METHODS: ReadonlySet<string> = new Set([
   "thread/scheduledAction/updated", "thread/subAgents/updated", "thread/backgroundTasks/updated",
   "thread/sessionWakes/updated", "thread/lock/updated", "thread/turnQueue/updated",
   "directory/forgeAutomation/updated",
+  "thread/taskMonitorWakeGuard/updated",
 ]);
 
 /** A source mutation, or the compact invalidation an owner sends a peer. */
@@ -186,6 +187,8 @@ export type ThreadPendingWakesList = {
    * last one does not rearm the thread.
    */
   followUpsSuspended?: true;
+  /** The parent must be rearmed locally before new monitors can wake it. */
+  monitorWakesSuspended?: true;
   /** A source could not be read, or projection bounds omitted rows or text. */
   incomplete?: true;
 };
@@ -210,10 +213,10 @@ export type ThreadPendingWakesRequest =
     }
   | {
       /**
-       * Clears a tripped agent follow-up loop guard. Only the local operator
+       * Clears a tripped automatic wake guard. Only the local operator
        * of the owning instance may; a peer or an agent is refused.
        */
-      action: "rearm_follow_ups";
+      action: "rearm_follow_ups" | "rearm_monitor_wakes";
       backend: AppServerBackendKind;
       threadId: string;
       federationTarget?: FederationTarget;

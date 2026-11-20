@@ -9,6 +9,7 @@ import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-s
 import { FileScheduledThreadActionPayloadStore } from "../storage/scheduled-thread-action-payload-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 
 const THREAD = { backend: "codex" as const, threadId: "selected" };
 // Two local and two peer callers exercise contention on every tick. Keep the
@@ -24,6 +25,7 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
   const db = openInMemoryStateDb();
   const overlay = new SqliteOverlayStore(db);
   const dependencies = new ThreadDependencyStore(db.raw);
+  const monitorWakes = new TaskMonitorWakeStore(db.raw);
   const payloadDirectory = path.join(fixture.tempDir, "payloads");
   const payloads = new FileScheduledThreadActionPayloadStore(payloadDirectory);
   let scheduled = new ScheduledThreadActionStore(db, payloads);
@@ -96,6 +98,7 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
       scheduledActions: (thread, endedLimit) => scheduled.listPendingWakes({ ...thread, endedLimit }),
       recentSubAgents: (thread, limit) => overlay.listEndedThreadTaskMonitors({ ...thread, limit }),
       monitors: () => [], backendTasks: async () => [], backendWakes: () => [],
+      monitorWakesTripped: (thread) => monitorWakes.read(thread).tripped,
       // The registry's lock check reads this overlay; paused-project and queue state are in memory.
       hold: async (thread) => { await overlay.getThreadOverlayState(thread); return undefined; },
       heldEntries: () => [],
