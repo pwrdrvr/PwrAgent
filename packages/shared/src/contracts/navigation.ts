@@ -315,6 +315,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   subAgents?: ThreadSubAgentSummary[];
   /** Owner-projected composer rows, independent of lazily loaded sub-agent history. */
   activeSubAgents?: ThreadActiveSubAgent[];
+  /** Additional rows are available in the paged Sub-agents panel. */
+  activeSubAgentsIncomplete?: true;
   /**
    * Owner-projected active PR watches, on selected detail only, like
    * `activeSubAgents`. Never written to the navigation store.

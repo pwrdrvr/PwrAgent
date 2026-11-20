@@ -78,6 +78,9 @@ export function ActiveSubAgentsStrip(props: {
       isFailedSubAgent(subAgent) && !dismissedFailures.has(subAgent.monitorId),
   );
   const visible = [...running, ...blocked, ...failed];
+  const moreInPanel = props.thread?.activeSubAgentsIncomplete
+    ? <span className="live-strip__note">More in Sub-agents</span>
+    : null;
 
   // One or two rows cost almost nothing and saying what is running is the
   // point; three or more is the wall this strip exists to avoid. A later count
@@ -107,7 +110,7 @@ export function ActiveSubAgentsStrip(props: {
   const now = useNowWhileActive(running.length > 0);
 
   if (visible.length === 0) {
-    return null;
+    return moreInPanel;
   }
 
   const dismissFailure = (monitorId: string): void => {
@@ -209,17 +212,18 @@ export function ActiveSubAgentsStrip(props: {
             <span className="live-strip__note">{failedNote}</span>
           ) : null}
         </button>
+        {moreInPanel}
         {/* Clearing failures one at a time is fine for one or two and a chore
             at a dozen. Only ever clears failures — a running sub-agent is
             never swept up by it. */}
         {failed.length > 1 ? (
           <button
-            aria-label={`Dismiss all ${failed.length} failed sub-agents`}
+            aria-label={moreInPanel ? `Dismiss ${failed.length} shown failures` : `Dismiss all ${failed.length} failed sub-agents`}
             className="live-strip__item-action live-strip__dismiss-all"
             type="button"
             onClick={dismissAllFailures}
           >
-            Dismiss all
+            {moreInPanel ? "Dismiss shown" : "Dismiss all"}
           </button>
         ) : null}
       </div>

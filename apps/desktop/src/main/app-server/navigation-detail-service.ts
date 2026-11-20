@@ -9,6 +9,7 @@ import type {
   NavigationLaunchpadConfigResponse,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
+  ThreadActiveSubAgent,
   ThreadSubAgentSummary,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
@@ -33,6 +34,9 @@ import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
+const ACTIVE_SUB_AGENT_PREVIEW_ROWS = 32;
+const ACTIVE_SUB_AGENT_PREVIEW_BYTES = 32 * 1024;
+const ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS = 512;
 
 function revision(value: unknown): string {
   return createHash("sha256")
@@ -53,6 +57,35 @@ function unresolvedDetail(
 
 function responseBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function isFailedSubAgent(agent: ThreadActiveSubAgent): boolean {
+  return agent.status === "failed" || agent.status === "failure";
+}
+
+/** Keep stop controls for live work ahead of historical failures. The full
+ * task and every other card remain available from the paged Sub-agents panel. */
+function boundActiveSubAgents(cards: readonly ThreadSubAgentSummary[], maxBytes: number): {
+  rows: ThreadActiveSubAgent[];
+  addedBytes: number;
+  incomplete: boolean;
+} {
+  const projected = projectActiveThreadSubAgents(cards).sort((left, right) =>
+    Number(isFailedSubAgent(left)) - Number(isFailedSubAgent(right)));
+  const rows: ThreadActiveSubAgent[] = [];
+  let addedBytes = 0;
+  for (const row of projected) {
+    if (rows.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS) break;
+    const task = row.task.length > ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS
+      ? `${row.task.slice(0, ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`
+      : row.task;
+    const preview = { ...row, task };
+    const size = responseBytes(preview) + Number(rows.length > 0);
+    if (addedBytes + size > maxBytes) continue;
+    rows.push(preview);
+    addedBytes += size;
+  }
+  return { rows, addedBytes, incomplete: rows.length < projected.length };
 }
 
 type QueueCursor = {
@@ -387,24 +420,34 @@ export class NavigationDetailService {
     // Live gate events and selected-detail refreshes must expose the same
     // helpers before persistence at turn end; active cards come from the
     // partial index, never from the thread's whole card history.
-    configuration.activeSubAgents = projectActiveThreadSubAgents(summary.source === "codex"
+    const composerCards = summary.source === "codex"
       ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, activeCards)
-      : activeCards);
+      : activeCards;
+    configuration.activeSubAgents = [];
     // The owner's watches, so a peer viewer reads the same list. Detail only:
     // it is projected per read and never stored with the navigation row.
     if (activePrWatches.length > 0) configuration.activePrWatches = activePrWatches;
     // Only peer viewers need this projection; local windows use the pending
     // wakes IPC channel. Keep its live activity out of local detail revisions.
     if (pendingWakes) {
-      configuration.pendingWakes = pendingWakes.wakes;
+      configuration.pendingWakes = [];
       if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
       if (pendingWakes.followUpsSuspended) configuration.pendingWakesFollowUpsSuspended = true;
     }
-    if (configuration.pendingWakes) {
-      const baseBytes = responseBytes({ ref: request.ref, thread: { ...configuration, pendingWakes: [] }, collections, workspaceDirectories }) + 512;
-      const bounded = boundThreadPendingWakes({ wakes: configuration.pendingWakes }, Math.max(0, NAVIGATION_QUERY_MAX_RESULT_BYTES - baseBytes));
-      configuration.pendingWakes = bounded.wakes;
-      if (bounded.incomplete) configuration.pendingWakesIncomplete = true;
+    if (composerCards.length || pendingWakes?.wakes.length) {
+      // Leave room for the envelope and incomplete flags before allocating
+      // the remaining capacity between the independent previews.
+      const baseBytes = responseBytes({ ref: request.ref, thread: configuration, collections, workspaceDirectories }) + 512;
+      const previewBytes = Math.max(0, NAVIGATION_QUERY_MAX_RESULT_BYTES - baseBytes);
+      // The base already includes the two brackets of each empty array.
+      const active = boundActiveSubAgents(composerCards, Math.min(ACTIVE_SUB_AGENT_PREVIEW_BYTES - 2, previewBytes));
+      configuration.activeSubAgents = active.rows;
+      if (active.incomplete) configuration.activeSubAgentsIncomplete = true;
+      if (pendingWakes) {
+        const wakes = boundThreadPendingWakes(pendingWakes, previewBytes - active.addedBytes + 2);
+        configuration.pendingWakes = wakes.wakes;
+        if (wakes.incomplete) configuration.pendingWakesIncomplete = true;
+      }
     }
     const detailRevision = revision({ identity, thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {
@@ -428,10 +471,11 @@ export class NavigationDetailService {
       collections,
       ...(workspaceDirectories ? { workspaceDirectories } : {}),
     };
-    if (responseBytes(response) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+    const bytes = responseBytes(response);
+    if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
       throw new NavigationQueryError(
         "navigation_item_too_large",
-        "Selected thread detail exceeds the result budget; read its collections separately.",
+        `Selected thread detail exceeds the result budget (${bytes} bytes, limit ${NAVIGATION_QUERY_MAX_RESULT_BYTES} bytes).`,
       );
     }
     return response;

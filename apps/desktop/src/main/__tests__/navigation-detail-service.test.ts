@@ -1,9 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
+  NavigationDirectoryGitStatus,
   NavigationThreadSummary,
   PrSummary,
   ThreadQueuedTurnSummary,
@@ -150,6 +152,91 @@ describe("NavigationDetailService", () => {
   afterEach(() => {
     navigationDetail.setNavigationDetailPendingWakesProjector(undefined);
     vi.restoreAllMocks();
+  });
+
+  async function selectedWithSubAgents(gitStatus?: NavigationDirectoryGitStatus) {
+    const selected = { ...thread("selected"), executionMode: "full-access" as const };
+    if (gitStatus) selected.linkedDirectories = ["primary", "secondary", "tools"].map((name) => ({
+      id: name, kind: "local", label: name, path: `/repo/${name}`,
+    }));
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+    const service = new NavigationDetailService({
+      getThreadInfo: () => undefined,
+      getCachedThreadSummary: () => selected,
+      getQueuedExecutionModeForThread: () => undefined,
+      canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+      hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
+      listLiveTokenMiserSubAgents: () => [],
+      readLiveSubAgentRevisionSource: () => [],
+      readCheckoutHibernation: () => ({ restoring: false }),
+      readSelectedWorkspaceGitStatus: async () => gitStatus,
+      mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => mocks.newestFirst(cards),
+    } as unknown as DesktopBackendRegistry);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
+    const detail = await service.readSelectedDetail({ ...request, includeWorkspaceConfiguration: true }, { includePendingWakes: true });
+    expect(detail.thread?.executionMode).toBe(selected.executionMode);
+    expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    return { service, detail, request };
+  }
+
+  const liveMonitor: ThreadSubAgentSummary = {
+    monitorId: "monitor-live", task: "Watch the release", status: "running", createdAt: 0, updatedAt: 1,
+  };
+
+  function failedMonitors(count: number, task: string): ThreadSubAgentSummary[] {
+    return Array.from({ length: count }, (_, index) => ({
+      monitorId: `monitor-failed-${index}`, task, status: index % 2 === 0 ? "failed" : "failure",
+      createdAt: index + 1, updatedAt: index + 1, completedAt: index + 1,
+    }));
+  }
+
+  it("keeps selected configuration readable as failed monitor history grows", async () => {
+    // The composer preview fits on the wire regardless of history length and
+    // task text. Old failures cannot displace a monitor that is still running.
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 1, max: 300 }),
+      fc.integer({ min: 1, max: 2_000 }),
+      fc.constantFrom("a", "é", "💡", "\"\\\n"),
+      async (count, length, text) => {
+        mocks.cards = [liveMonitor, ...failedMonitors(count, text.repeat(length))];
+        const { detail } = await selectedWithSubAgents();
+        expect(detail.thread?.activeSubAgents).toContainEqual(expect.objectContaining(liveMonitor));
+        expect(detail.collections).toContainEqual(expect.objectContaining({ name: "subAgents", count: count + 1 }));
+      },
+    ), { numRuns: 40, examples: [[258, 500, "💡"]] });
+  });
+
+  it("opens a thread with 981 completed gates and 141 failed monitors while preserving paged tasks", async () => {
+    const failed = failedMonitors(141, "💡".repeat(300));
+    const gates: ThreadSubAgentSummary[] = Array.from({ length: 981 }, (_, index) => ({
+      monitorId: `system:token-miser:gate-${index}`, task: "Gate Code Mode output", status: "success",
+      createdAt: index + 300, updatedAt: index + 300, completedAt: index + 300,
+    }));
+    const branches = Array.from({ length: 100 }, (_, index) => `feature/release-metadata-and-workspace-${index}`);
+    const baseBranches = branches.map((branch) => `origin/${branch}`);
+    const gitStatus = {
+      currentBranch: "main", branches, handoffBranches: branches, baseBranches,
+      branchDetails: branches.map((name) => ({ name, lastCommitAt: 1_800_000_000 })),
+      baseBranchDetails: baseBranches.map((name) => ({ name, lastCommitAt: 1_800_000_000 })),
+    };
+    mocks.cards = [liveMonitor, ...failed, ...gates];
+    const { service, detail, request } = await selectedWithSubAgents(gitStatus);
+    expect(detail.workspaceDirectories?.map((directory) => directory.gitStatus)).toEqual([gitStatus, gitStatus, gitStatus]);
+    expect(detail.thread?.activeSubAgents).toContainEqual(expect.objectContaining(liveMonitor));
+    const latestFailure = detail.thread?.activeSubAgents?.find((card) => card.monitorId === failed.at(-1)?.monitorId);
+    expect(latestFailure?.task).toBe(`${"💡".repeat(255)}…`);
+    expect(detail.thread?.activeSubAgents?.some((card) => card.status === "success")).toBe(false);
+    expect(detail.thread?.activeSubAgentsIncomplete).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(detail.thread?.activeSubAgents))).toBeLessThanOrEqual(32 * 1024);
+    const cards: ThreadSubAgentSummary[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await service.readSelectedDetail({ ...request, collection: { name: "subAgents", cursor } });
+      expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+      cards.push(...response.collectionPage!.values.subAgents!);
+      cursor = response.collectionPage?.nextCursor;
+    } while (cursor);
+    expect(cards).toEqual(mocks.newestFirst(mocks.cards));
   });
 
   it("pages every attachment from the owner overlay with canonical PR status", async () => {
