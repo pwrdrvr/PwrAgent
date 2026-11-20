@@ -856,8 +856,11 @@ of the same lease excludes these desktop owners without a database lock file.
 
 The desktop main process owns a single sqlite database holding messaging
 bindings, the thread overlay (per-thread UI state), and
-`safeStorage`-encrypted secret blobs. Multiple PwrAgent instances may share
-the same profile DB safely thanks to sqlite WAL mode.
+`safeStorage`-encrypted secret blobs. Multiple instances on the same PwrAgent
+version may share a profile DB through SQLite WAL. Concurrent profile sharing
+requires the same version because the database also carries application-level
+ownership and dispatch state.
+See [Sharing a profile across versions](docs/runtime-configuration.md#sharing-a-profile-across-versions).
 
 `packages/sqlite-storage` owns the profile database opener, schema and migrations,
 including the sub-agent and usage-activity table helpers and write instrumentation.

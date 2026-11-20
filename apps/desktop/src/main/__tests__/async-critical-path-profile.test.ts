@@ -135,6 +135,7 @@ describe("async critical path profile", () => {
         listLiveTokenMiserSubAgents: (id) => registry.listLiveTokenMiserSubAgents(id),
         readLiveSubAgentRevisionSource: (id) => registry.readLiveSubAgentRevisionSource(id),
         mergeLiveTokenMiserSubAgents: (id, cards) => registry.mergeLiveTokenMiserSubAgents(id, cards),
+        projectOutpostLaunchpadSettings: (settings) => registry.projectOutpostLaunchpadSettings(settings),
         readSelectedWorkspaceGitStatus: async (cwd) => {
           if (!gitCache.has(cwd)) { await delay(20); gitCache.set(cwd, { currentBranch: "fixture" }); }
           return gitCache.get(cwd);

@@ -109,19 +109,19 @@ async function cleanupScenario(options: {
   }
 }
 
-it("never reports an absent checkout as kept, regardless of ownership or another checkout's presence", async () => {
-  // Cover all eight inputs, including the missing primary with a retained
-  // additional checkout and the absent checkouts with stale ownership.
-  const inputs = [false, true].flatMap((additionalExists) => [false, true].flatMap((activeOwner) =>
-    [false, true].map((external) => ({ additionalExists, activeOwner, external }))));
-  for (const input of inputs) {
-    try {
-      await cleanupScenario(input);
-    } catch (cause) {
-      throw new Error(`Archive presence scenario ${JSON.stringify(input)} failed`, { cause });
-    }
-  }
-});
+// Cover all eight inputs, including the missing primary with a retained
+// additional checkout and the absent checkouts with stale ownership. Each
+// input is its own test: every one runs real Git, and together they exceed
+// one test's time budget on a slow CI runner.
+const presenceInputs = [false, true].flatMap((additionalExists) => [false, true].flatMap((activeOwner) =>
+  [false, true].map((external) => ({ additionalExists, activeOwner, external }))));
+
+it.each(presenceInputs)(
+  "never reports an absent checkout as kept, regardless of ownership or another checkout's presence (additional exists $additionalExists, active owner $activeOwner, external $external)",
+  async (input) => {
+    await cleanupScenario(input);
+  },
+);
 
 it("rechecks the folder before claiming a missing-repository checkout was kept", async () => {
   await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, disappearsDuringArchive: true });

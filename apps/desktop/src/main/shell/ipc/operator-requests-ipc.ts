@@ -16,7 +16,8 @@ import {
 } from "../../../shared/ipc";
 import { getMainLogger } from "../../log";
 import type { OperatorRequestService } from "../../operator-requests/operator-request-service";
-import { createDesktopOperatorRequestService, installOperatorRequestService, localOperatorQuestionOperations } from "../../operator-requests/operator-request-runtime";
+import { localOperatorQuestionOperations } from "../../operator-requests/operator-request-runtime";
+import type { OwnerQueueEvents } from "../../owner-queue-services";
 import { FederatedOperatorRequestService } from "../../federation/federation-operator-requests";
 import { getDesktopOverlayStore } from "../../storage/desktop-overlay-store";
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
@@ -24,7 +25,7 @@ import { federationTargetForChannelSubscriber, subscribersForChannel } from "../
 
 const operatorRequestLog = getMainLogger("pwragent:operator-requests");
 
-let service: OperatorRequestService | undefined;
+let unsubscribeLocal: (() => void) | undefined;
 let unsubscribeRemote: (() => void) | undefined;
 let unsubscribePeers: (() => void) | undefined;
 
@@ -40,22 +41,17 @@ function broadcastOperatorRequestsChanged(event: OperatorRequestsChangedEvent): 
   }
 }
 
-export function registerOperatorRequestIpcHandlers(): void {
-  service?.stop();
-  service = createDesktopOperatorRequestService((event) => {
-    broadcastOperatorRequestsChanged(event);
-    getDesktopFederationRuntime().publishOperatorRequestsChanged(event);
-    if (event.reason === "questions" && event.backend && event.threadId) {
-      getDesktopFederationRuntime().publishOperatorQuestionsChanged({ backend: event.backend, threadId: event.threadId });
-    }
-  });
-  service.start();
-  const current = service;
-  installOperatorRequestService(current);
+export function registerOperatorRequestIpcHandlers({ operatorRequests, events }: {
+  operatorRequests: Pick<OperatorRequestService, "list" | "markSeen">;
+  events: OwnerQueueEvents;
+}): void {
+  unsubscribeLocal?.();
+  events.on("operatorRequestsChanged", broadcastOperatorRequestsChanged);
+  unsubscribeLocal = () => { events.off("operatorRequestsChanged", broadcastOperatorRequestsChanged); };
   const runtime = getDesktopFederationRuntime();
   const queue = new FederatedOperatorRequestService({
-    localList: () => current.list(),
-    localMarkSeen: (keys) => current.markSeen(keys),
+    localList: () => operatorRequests.list(),
+    localMarkSeen: (keys) => operatorRequests.markSeen(keys),
     remote: (target, operation, request) => runtime.requestOperatorQuestionOperation(target, operation, request),
     mountedThreads: async () => (await getDesktopOverlayStore().listRemoteThreadPins())
       .filter((pin) => pin.ref.target.scope === "remote")

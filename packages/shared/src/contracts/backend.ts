@@ -351,6 +351,8 @@ export type BackendSummary = {
   /** Owner defaults keyed by provider-picker identity, including Codex endpoints. */
   modelProviderDefaults?: Record<string, DesktopProviderModelDefaults>;
   codexFastAllowed?: boolean;
+  /** False when the owner disables the built-in OpenAI provider. Absent means enabled. */
+  codexOpenAiProviderEnabled?: false;
   /**
    * The Codex model providers this owner registered, with each one's
    * catalog state, so a picker can name a provider that offers no model and

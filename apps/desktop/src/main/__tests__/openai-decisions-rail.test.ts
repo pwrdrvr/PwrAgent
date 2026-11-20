@@ -1,12 +1,13 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OpenAIDecisionsError,
   OpenAIDecisionsService,
   type DecisionBatchUpdate,
 } from "../openai-decisions/openai-decisions-service";
+import { DecisionBatchFileWriter } from "../openai-decisions/decision-batch-files";
 import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
 import { OpenAIDecisionStore } from "../storage/openai-decision-store";
 import type { StateDb } from "../state/state-db";
@@ -24,24 +25,27 @@ let db: StateDb;
 let dir: string;
 let updates: DecisionBatchUpdate[];
 let wakes: string[];
+let services: OpenAIDecisionsService[];
 
 beforeEach(async () => {
   db = openInMemoryStateDb();
   dir = await mkdtemp(path.join(os.tmpdir(), "decision-rail-service-"));
   updates = [];
   wakes = [];
+  services = [];
 });
 afterEach(async () => {
+  await Promise.all(services.map((service) => service.close()));
   db.close();
   await rm(dir, { recursive: true, force: true });
 });
 
 function makeService(
   fetch: typeof globalThis.fetch,
-  options: { idPrefix?: string; disabled?: RegisteredDecisionProvider[] } = {},
+  options: { idPrefix?: string; disabled?: RegisteredDecisionProvider[]; onBatchUpdate?: (update: DecisionBatchUpdate) => void } = {},
 ) {
   let batch = 0;
-  return new OpenAIDecisionsService({
+  const service = new OpenAIDecisionsService({
     store: new OpenAIDecisionStore(db),
     readApiKey: async () => undefined,
     readSystemOneTarget: async (provider) => provider === "jev" ? JEV_TARGET : undefined,
@@ -49,12 +53,17 @@ function makeService(
     readAccountSettings: () => ({}),
     profileId: () => "test-profile",
     recordUsageLines: async () => undefined,
-    announceBatch: async (update) => { updates.push(update); },
+    announceBatch: async (update) => {
+      updates.push(update);
+      options.onBatchUpdate?.(update);
+    },
     wakeThread: async (_caller, wake) => { wakes.push(wake.batchId); },
     newBatchId: () => `${options.idPrefix ?? "rail"}-${(batch += 1)}`,
     batchResultsDirectory: (caller) => path.join(dir, caller.threadId),
     fetch,
   });
+  services.push(service);
+  return service;
 }
 
 function json(body: unknown, status = 200) {
@@ -169,7 +178,12 @@ describe("strip above the composer", () => {
   // thread sees only its own.
   it("lists announced batches while they run and leaves out the rest", async () => {
     const { fetch, gates } = gatedFetch();
-    const service = makeService(fetch);
+    const terminal = Promise.withResolvers<DecisionBatchUpdate>();
+    const service = makeService(fetch, {
+      onBatchUpdate: (update) => {
+        if (update.status !== "running") terminal.resolve(update);
+      },
+    });
     const background = await service.invoke(CALLER, { definition: JEV, inputs: inputs(3), concurrency: 1, background: true }) as { batchId: string };
     await expect.poll(() => gates.length).toBe(1);
     expect(service.railActiveBatches(CALLER).batches).toMatchObject([{ batchId: background.batchId, state: "running" }]);
@@ -188,12 +202,27 @@ describe("strip above the composer", () => {
     await smallCall;
     expect(updates).toHaveLength(before);
 
-    // Release each request as it arrives until the batch has left the strip.
-    await expect.poll(() => {
-      for (const gate of gates.splice(0)) gate.release();
-      return service.railActiveBatches(CALLER).batches;
-    }).toEqual([]);
-    expect(updates.at(-1)).toMatchObject({ batchId: background.batchId, status: "success", finished: 3 });
+    // In-memory completion can remove the batch from the strip while its
+    // result file is still settling and its terminal update is outstanding.
+    const finishFile = Promise.withResolvers<void>();
+    const settle = DecisionBatchFileWriter.prototype.settle;
+    const settling = vi.spyOn(DecisionBatchFileWriter.prototype, "settle")
+      .mockImplementationOnce(async function (this: DecisionBatchFileWriter) {
+        await finishFile.promise;
+        await settle.call(this);
+      });
+    try {
+      // Release each request as it arrives until the batch has left the strip.
+      await expect.poll(() => {
+        for (const gate of gates.splice(0)) gate.release();
+        return service.railActiveBatches(CALLER).batches;
+      }).toEqual([]);
+      expect(updates.at(-1)).toMatchObject({ batchId: background.batchId, status: "running" });
+    } finally {
+      finishFile.resolve();
+      settling.mockRestore();
+    }
+    expect(await terminal.promise).toMatchObject({ batchId: background.batchId, status: "success", finished: 3 });
   });
 });
 

@@ -308,6 +308,24 @@ describe("DesktopBackendRegistry", () => {
       });
       const unsubscribe = bindResearchRegistry(registry, research, enabled);
       const client = new McpClient({ name: "research-worker-fixture", version: "1.0.0" });
+
+      async function completeClaudeTurn(threadId: string, turnId: string) {
+        const ended = createDeferred<void>();
+        const unsubscribeTerminal = registry.onEvent((event) => {
+          const { method, params } = event.notification;
+          if (event.backend === "claude" && method === "turn/completed"
+            && params.threadId === threadId && params.turnId === turnId) {
+            ended.resolve();
+          }
+        });
+        try {
+          claudeQueries.get(threadId)!.complete();
+          await ended.promise;
+        } finally {
+          unsubscribeTerminal();
+        }
+      }
+
       try {
         const { threadId } = await registry.startThread({ backend, cwd: root, executionMode: "default" });
         const coordinator = { backend, threadId };
@@ -348,21 +366,7 @@ describe("DesktopBackendRegistry", () => {
         } });
 
         if (backend === "claude") {
-          const workerEnded = createDeferred<void>();
-          const unsubscribeWorker = registry.onEvent((event) => {
-            const { method, params } = event.notification;
-            if (event.backend === backend && method === "turn/completed"
-              && params.threadId === worker.threadId && params.turnId === turnId) {
-              workerEnded.resolve();
-            }
-          });
-          try {
-            claudeQueries.get(worker.threadId)!.complete();
-            await workerEnded.promise;
-          } finally {
-            unsubscribeWorker();
-          }
-          expect(registry.getActiveTurnForThread(coordinator)?.turnId).toBe(parentTurn.turnId);
+          await completeClaudeTurn(worker.threadId, turnId!);
         } else {
           await registry.publishLocalEvent({ backend, notification: { method: "turn/completed", params: {
             threadId: worker.threadId, turnId: turnId!, turn: { id: turnId!, status: "completed", output: [] },
@@ -370,7 +374,13 @@ describe("DesktopBackendRegistry", () => {
         }
         expect(storage.header(run!.id)?.activeWorkers).toBe(0);
         expect(storage.approaches(run!.id, { worker })).toMatchObject([{ state: "ended", worker: { ...worker, turnId } }]);
+        // A worker's terminal releases its slot while the coordinator is still live.
+        expect(registry.getActiveTurnForThread(coordinator)?.turnId).toBe(parentTurn.turnId);
         expect(onError).not.toHaveBeenCalled();
+        if (backend === "claude") {
+          await completeClaudeTurn(threadId, parentTurn.turnId);
+          expect(registry.getActiveTurnForThread(coordinator)).toBeUndefined();
+        }
       } finally {
         await client.close();
         unsubscribe();
@@ -2770,6 +2780,8 @@ script = "printf setup"
         tool: "move_thread_workspace",
         arguments: {
           sourcePath: "/repo/app",
+          // Agents never unlock: an approval the agent invents is not forwarded.
+          approvedLockReason: "release prep, do not remove",
         },
       },
     } as AppServerPendingRequestNotification);

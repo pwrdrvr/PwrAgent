@@ -12,6 +12,7 @@ import type {
   ThreadTokenMiserSavings,
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
+  WorktreeLockedKept,
 } from "./normalized-app-server";
 import type { ThreadPricingSummary } from "../token-usage-pricing";
 import type {
@@ -702,6 +703,12 @@ export type ThreadMutationResult = {
   instanceLabel?: string;
   dryRun: boolean;
   changes: ThreadMutationAppliedChange[];
+  /**
+   * Archive kept these worktrees because Git has them locked by someone
+   * else. Agents never unlock; the operator can from the archive notice.
+   */
+  keptWorktrees?: WorktreeLockedKept[];
+  notes?: string[];
 };
 
 export type ThreadInspectionSummary = {

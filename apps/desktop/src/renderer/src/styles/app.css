@@ -47460,6 +47460,64 @@ button.composer__subthread-source-parent:hover {
   font-weight: 700;
 }
 
+/* Someone else's Git lock on the worktree a handoff would archive: Git's
+   reason, the worktree, and the operator's choice to unlock it. */
+.workspace-handoff-dialog__lock {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
+  border-radius: 6px;
+  background: var(--warning-surface);
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-reason {
+  margin: 0;
+  color: var(--status-warning-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-reason.is-empty {
+  color: var(--text-muted);
+  font-family: inherit;
+}
+
+.workspace-handoff-dialog p.workspace-handoff-dialog__lock-path {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-handoff-dialog__lock-check {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.workspace-handoff-dialog__lock-check > span:last-child {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.workspace-handoff-dialog__lock .workspace-handoff-dialog__note {
+  margin: 0;
+}
+
 /* Qualified by element, as the rewind dialog's warning is: the bare classes
    lost to `.workspace-handoff-dialog p`, so every note and error in these
    dialogs drew in the body's secondary text color. */

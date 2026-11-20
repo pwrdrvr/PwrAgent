@@ -2,6 +2,7 @@ import {
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
 } from "@pwragent/shared/codex-model-providers";
+import { assertOutpostCodexProvider } from "../owner-runtime-policy";
 import type { CodexAppServerClient } from "./desktop-client";
 import {
   combineCodexAppServerRolloverOutcomes,
@@ -124,6 +125,10 @@ const PERSISTED_OPERATIONS = new Set<Method>([
   "readThreadToolInvocation", "readTurnRoot",
   "archiveThread", "renameThread", "restoreThread", "deleteThread", "updateThreadMetadata",
 ]);
+const PROVIDER_WORK = new Set<Method>([
+  "startThread", "forkThread", "startTurn", "steerTurn", "startReview", "compactThread",
+  "startRealtime", "appendRealtimeText", "runHelperToolTurn",
+]);
 
 /** Independent clients own their processes, caches, turn state, recovery and RPC IDs. */
 export function createProviderRuntimeClient(
@@ -131,6 +136,7 @@ export function createProviderRuntimeClient(
   options: {
     resolveProviders: () => readonly CodexModelProviderSettings[];
     create: (provider: CodexModelProviderSettings) => CodexAppServerClient;
+    openAiProviderEnabled?: boolean;
   },
 ): CodexAppServerClient {
   const runtimes = new Map<string, CodexAppServerClient>();
@@ -204,6 +210,15 @@ export function createProviderRuntimeClient(
     const startedAtGeneration = generation;
     const params = record(args[0]);
     const threadId = route === "threadId" ? args[0] : params?.threadId;
+    const selection = typeof params?.model === "string" ? parseCodexProviderModelId(params.model) : undefined;
+    const openAiDisabled = options.openAiProviderEnabled === false;
+    if (openAiDisabled && (method === "generateTitle" || method === "generateStructuredObject" || method === "resolveHelperModelSelection")
+      && !options.resolveProviders().some((provider) => provider.id === selection?.providerId)) {
+      return method === "resolveHelperModelSelection" ? { source: "backend_current", verified: false }
+        : { status: "unavailable", reason: "codex_structured_generation_unavailable" };
+    }
+    const restricted = openAiDisabled && PROVIDER_WORK.has(method);
+    if (restricted && selection) assertOutpostCodexProvider(selection.providerId);
     // A fork from a rollout path reads its history from that file. A thread
     // handoff passes another machine's thread ID, which this App Server has
     // never stored, so reading it here fails with "thread not loaded".
@@ -218,14 +233,18 @@ export function createProviderRuntimeClient(
       }
       owner = providerForThread(threadId);
     }
-    const requested = typeof params?.model === "string" ? parseCodexProviderModelId(params.model).providerId : undefined;
+    const requested = selection?.providerId;
     if (typeof threadId === "string" && requested && requested !== owner && method !== "forkThread") {
       throw new Error(`This thread runs on ${owner ?? "Codex's default provider"}. Hand it off to a new thread to change providers.`);
     }
     if (generation !== startedAtGeneration) throw new Error("Codex runtime pool closed during routing.");
     const provider = method === "forkThread" ? requested ?? owner : owner ?? requested;
     const settings = options.resolveProviders().find(entry => entry.id === provider);
-    const selectedModel = typeof params?.model === "string" ? parseCodexProviderModelId(params.model).model : undefined;
+    if (restricted) {
+      assertOutpostCodexProvider(provider);
+      if (!settings) throw new Error(`Codex model provider ${provider} is no longer configured on this Outpost.`);
+    }
+    const selectedModel = selection?.model;
     if (settings?.toolDiscovery === "portable" && selectedModel && !PERSISTED_OPERATIONS.has(method)
       && !settings.modelMetadata?.some(model => model.id === selectedModel && model.supportsPortableDiscovery === true)) {
       throw new Error(`Test portable discovery for ${selectedModel} in Settings → Models and save before using it.`);

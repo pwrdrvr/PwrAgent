@@ -1524,3 +1524,89 @@ describe("archived checkouts over the snapshot limit", () => {
     }), { numRuns: 12 });
   });
 });
+
+describe("archived checkouts removal can actually remove", () => {
+  // Rule: the scan offers an archived checkout only when removal can act on
+  // it. Removal snapshots through Git, so a folder with no Git checkout left
+  // (a stranded folder), a primary checkout, or a folder already gone is
+  // never offered. It is kept quietly with its reason, never run to fail.
+  const workspaces: ThreadMaintenanceWorkspace[] = [
+    { kind: "clean" },
+    { kind: "changes", files: 1, bytes: 10 },
+    { kind: "overLimit", files: 1, bytes: 500, limitBytes: 100, largest: [] },
+    { kind: "notGit" },
+    { kind: "inPlace" },
+    { kind: "missing" },
+  ];
+  const removable = new Set(["clean", "changes", "overLimit"]);
+  const reasons: Record<string, string> = { notGit: "Not a Git checkout", inPlace: "Main checkout", missing: "Checkout missing" };
+
+  it("offers a checkout only when its workspace is one removal can snapshot", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom(...workspaces), async (workspace) => {
+      const worktreePath = "/w/archived/app";
+      const built = harness([], {
+        auditArchivedCheckouts: vi.fn(async () => ({
+          candidates: [{ backend: "codex", threadId: "old", worktreePath }], kept: {}, emptyFolders: 0,
+        })),
+      });
+      built.workspaces.set(worktreePath, workspace);
+      const scan = await built.service.scan();
+      if (removable.has(workspace.kind)) {
+        expect(scan.checkouts.items).toEqual([expect.objectContaining({ worktreePath, kind: "removable" })]);
+      } else {
+        expect(scan.checkouts.items).toEqual([]);
+        expect(scan.checkouts.kept).toEqual({ [reasons[workspace.kind]!]: 1 });
+        expect(scan.failures).toEqual([]);
+      }
+    }), { numRuns: 30 });
+  });
+
+  it("does not offer a stranded folder left with only ignored files and no .git", async () => {
+    const root = await tempRoot();
+    const worktreePath = path.join(root, "worktrees", "mw9nml7x", "app");
+    await mkdir(path.join(worktreePath, "apps", "desktop", ".local"), { recursive: true });
+    await writeFile(path.join(worktreePath, "apps", "desktop", ".local", "metrics.jsonl"), "{}\n");
+    const built = harness([], {
+      inspectWorkspace: undefined,
+      auditArchivedCheckouts: vi.fn(async () => ({
+        candidates: [{ backend: "codex", threadId: "old", worktreePath }], kept: {}, emptyFolders: 0,
+      })),
+    });
+    const scan = await built.service.scan();
+    expect(scan.checkouts.items).toEqual([]);
+    expect(scan.checkouts.kept).toEqual({ "Not a Git checkout": 1 });
+    // The review still names the folder, so the operator can find it.
+    expect(scan.checkouts.coverage?.keptCheckouts).toEqual([expect.objectContaining({ path: worktreePath, reason: "Not a Git checkout" })]);
+  });
+
+  // Rule: once the removal step starts, every selected checkout it is
+  // working on is in progress, never waiting. Removal first re-audits every
+  // archived checkout's ownership, which can take a minute, before it
+  // reports any single checkout.
+  it("shows selected checkouts in progress while removal re-checks ownership", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), async (count) => {
+      const paths = Array.from({ length: count }, (_, index) => `/w/archived/${index}/app`);
+      let during: ThreadMaintenanceRun | undefined;
+      let service!: ThreadMaintenanceService;
+      const built = harness([], {
+        auditArchivedCheckouts: vi.fn(async () => ({
+          candidates: paths.map((worktreePath, index) => ({ backend: "codex", threadId: `t${index}`, worktreePath })),
+          kept: {}, emptyFolders: 0,
+        })),
+        removeArchivedCheckouts: vi.fn(async (selection: { worktreePaths: string[] }) => {
+          during = service.getRun();
+          return { removed: selection.worktreePaths.map((worktreePath) => ({ worktreePath })), kept: [], failed: [],
+            emptyFoldersRemoved: 0, emptyFoldersFailed: [] };
+        }),
+      });
+      service = built.service;
+      const scan = await service.scan();
+      const run = await service.apply({ scanId: scan.scanId, archive: [], trashCheckouts: [], removeEmptyFolders: false,
+        removeCheckouts: paths.map((worktreePath, index) => ({ backend: "codex", threadId: `t${index}`, worktreePath })) });
+      const removing = during?.items?.filter((item) => item.action === "removeCheckout") ?? [];
+      expect(removing).toHaveLength(count);
+      expect(removing.every((item) => item.status === "running" && item.startedAt !== undefined)).toBe(true);
+      expect(run.items?.every((item) => item.status === "done")).toBe(true);
+    }), { numRuns: 8 });
+  });
+});

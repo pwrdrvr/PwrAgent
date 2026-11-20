@@ -20984,7 +20984,7 @@ describe("Composer", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
-      expect(onMoveThreadToMainCheckout).toHaveBeenCalledWith("/repo/.worktrees/pwragent-feature");
+      expect(onMoveThreadToMainCheckout).toHaveBeenCalledWith("/repo/.worktrees/pwragent-feature", {});
     });
     expect(onHandoffThreadWorkspace).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Handoff to Local" })).toBeNull());
@@ -21003,6 +21003,61 @@ describe("Composer", () => {
         sourceBranch: "feature/handoff",
       });
     });
+  });
+
+  it("asks before a handoff unlocks a worktree someone else locked, and keeps it by default", async () => {
+    const worktreePath = "/repo/.worktrees/pwragent-feature";
+    const lockReason = "release prep, do not remove";
+    const readThreadWorktreeLock = vi.fn(async () => ({
+      worktreePath, lock: { reason: "worktree-locked" as const, worktreePath, lockReason },
+    }));
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const onMoveThreadToMainCheckout = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", repositoryPath: "/repo", branch: "main", warnings: [], completedAt: 1,
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", kind: "local" as const, label: "repo", path: "/repo" },
+    }));
+    render(<Composer
+      backends={[backendSummary("codex")]}
+      desktopApi={{ readThreadWorktreeLock }}
+      directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+        gitStatus: { currentBranch: "main", branches: ["main", "feature/handoff"] } }}
+      onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+      onMoveThreadToMainCheckout={onMoveThreadToMainCheckout}
+      skills={[]}
+      thread={{
+        id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "codex", executionMode: "default",
+        gitBranch: "feature/handoff", inbox: { inInbox: false },
+        linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath, kind: "worktree" }],
+      }}
+    />);
+    const open = () => {
+      fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+      return screen.getByRole("dialog", { name: "Handoff to Local" });
+    };
+
+    // Unchecked: the handoff sends no approval, so the owner keeps the worktree.
+    let dialog = open();
+    const notice = await within(dialog).findByRole("group", { name: "Git has this worktree locked" });
+    expect(notice).toHaveTextContent(lockReason);
+    expect(notice).toHaveTextContent(worktreePath);
+    expect(within(notice).getByRole("checkbox", { name: "Unlock it and archive the worktree" })).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+    await waitFor(() => expect(onMoveThreadToMainCheckout).toHaveBeenCalledWith(worktreePath, {}));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Handoff to Local" })).toBeNull());
+
+    // Checked, and the choice does not carry over to the next opening.
+    dialog = open();
+    let checkbox = await within(dialog).findByRole("checkbox", { name: "Unlock it and archive the worktree" });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Move feature\/handoff to Local/ }));
+    checkbox = await within(dialog).findByRole("checkbox", { name: "Unlock it and archive the worktree" });
+    fireEvent.click(checkbox);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      direction: "worktree-to-local", sourcePath: worktreePath, approvedLockReason: lockReason,
+    })));
+    expect(readThreadWorktreeLock).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "thread-1", worktreePath }));
   });
 
   it("hands a Claude worktree thread to a new worktree", async () => {

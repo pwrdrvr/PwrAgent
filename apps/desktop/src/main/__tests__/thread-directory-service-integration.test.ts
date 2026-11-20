@@ -3973,15 +3973,38 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("rejects detaching the primary runtime directory through the dynamic tool", async () => {
+  it.each([false, true])("rejects detaching the primary runtime directory through the dynamic tool (cached: %s)", async (cached) => {
+    const primary = {
+      id: expectedDir("/repo/pwragent"),
+      kind: "local" as const,
+      label: "PwrAgent",
+      path: expectedDir("/repo/pwragent"),
+    };
+    const secondary = {
+      id: expectedDir("/repo/agent-kit"),
+      kind: "local" as const,
+      label: "agent-kit",
+      path: expectedDir("/repo/agent-kit"),
+    };
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
+      threads: [{
+        id: "agent-thread",
+        title: "Cross repo work",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: primary.path,
+        linkedDirectories: [primary],
+      }],
     });
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
-          "codex:agent-thread": createAgentOverlay(),
+          "codex:agent-thread": {
+            ...createAgentOverlay(),
+            extraLinkedDirectories: cached ? [secondary, primary] : [secondary],
+          },
         },
       }),
     });

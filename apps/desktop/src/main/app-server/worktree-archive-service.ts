@@ -13,7 +13,7 @@ import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { sameRegisteredWorktree, worktreeDirectoryIdentity, type CheckoutIdentity } from "./worktree-maintenance-registration";
 import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
-import { readWorktreeLockHolder } from "./worktree-volume-lock";
+import { lockApprovalMatches, readWorktreeLock, WorktreeLockedError } from "./worktree-volume-lock";
 
 type GitResult = {
   stdout: string;
@@ -45,6 +45,13 @@ type ArchiveWorktreeParams = {
   expectedCheckout?: CheckoutIdentity;
   onCheckoutVerified?: (checkout: CheckoutIdentity) => void;
   onStage?: (stage: ThreadMaintenanceRunStage) => void;
+  /**
+   * The operator approved unlocking someone else's lock on this checkout
+   * while it said exactly this. Only from an operator's explicit choice:
+   * hibernation, the archive sweep, background retries and agents never pass
+   * it. A lock that says anything else keeps the checkout.
+   */
+  approvedLockReason?: string;
 };
 
 type HibernateWorktreeParams = {
@@ -274,6 +281,7 @@ async function checkArchiveRegistration(params: {
   gitDirectory: string;
   commonDirectory: string;
   removing?: boolean;
+  approvedLockReason?: string;
 }): Promise<void> {
   const { worktreePath, gitDirectory, commonDirectory } = params;
   const unregistered = () => new Error(`Worktree is ${params.removing ? "no longer" : "not"} registered with Git: ${worktreePath}`);
@@ -300,9 +308,11 @@ async function checkArchiveRegistration(params: {
       || (error as NodeJS.ErrnoException).code === "ENOTDIR") throw unregistered();
     throw error;
   }
-  // PwrAgent's own drive lock is cleared by the removal; any other lock is a hold.
-  if (await readWorktreeLockHolder(gitDirectory) === "other") {
-    throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+  // PwrAgent's own drive lock is cleared by the removal; any other lock is a
+  // hold unless the operator approved unlocking it as it reads now.
+  const lock = await readWorktreeLock(gitDirectory);
+  if (lock.holder === "other" && !lockApprovalMatches(lock, params.approvedLockReason)) {
+    throw new WorktreeLockedError(worktreePath, lock.reason ?? "");
   }
 }
 
@@ -438,7 +448,7 @@ export class WorktreeArchiveService {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
     const registration = { worktreePath, gitDirectory, commonDirectory };
-    await checkArchiveRegistration(registration);
+    await checkArchiveRegistration({ ...registration, approvedLockReason: params.approvedLockReason });
     const readIdentity = async (): Promise<CheckoutIdentity> => ({
       ...registration,
       checkoutIdentity: await worktreeDirectoryIdentity(worktreePath),
@@ -495,6 +505,7 @@ export class WorktreeArchiveService {
     }
     try {
       await this.removeCheckout({ worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval,
+        approvedLockReason: params.approvedLockReason,
         verifyIdentity: checkout && (async () => {
           if (!sameRegisteredWorktree(checkout, await readIdentity())
             || await realpath(path.resolve(params.worktreePath)) !== worktreePath) throw changedCheckout();
@@ -553,6 +564,7 @@ export class WorktreeArchiveService {
     repositoryPath: string;
     head: string;
     assertRemoval?: () => void;
+    approvedLockReason?: string;
     verifyIdentity?: () => Promise<void>;
     onRemovalStarted: () => void;
     onStage?: (stage: ThreadMaintenanceRunStage) => void;
@@ -562,7 +574,8 @@ export class WorktreeArchiveService {
     await this.repositoryRemovals.run(commonDirectory, async () => await withWorktreeTerminalsClosed(worktreePath, async () => {
       // Removal admission and terminal teardown can await other work. Recheck
       // Git's lock protection before modifying even ignored link entries.
-      await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true });
+      await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true,
+        approvedLockReason: params.approvedLockReason });
       if (trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout) !== head) {
         throw new Error("Worktree HEAD changed during snapshot preparation; the worktree was kept.");
       }
@@ -576,6 +589,7 @@ export class WorktreeArchiveService {
       await removeManagedWorktree({
         worktreePath,
         force: true,
+        ...(params.approvedLockReason !== undefined ? { approvedLockReason: params.approvedLockReason } : {}),
         git: async (args) => (await this.runGit(repositoryPath, args)).stdout,
         removeGit: async (args) => (await this.runGit(
           repositoryPath,
