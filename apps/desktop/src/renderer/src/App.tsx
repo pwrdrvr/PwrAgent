@@ -4667,6 +4667,7 @@ function DesktopAppShell(props: {
             composerSourceThreadKey={navigation.composerSourceThreadKey}
             revealSelectedThreadRequest={revealSelectedThreadRequest}
             onRevealSelectedThreadComplete={threadJump.completePeekRestore}
+            onRevealSelectedThread={revealSelectedThreadInList}
             projectRevealRequest={projectRevealRequest}
             projectIndexHidden={projectIndexHidden}
             onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}

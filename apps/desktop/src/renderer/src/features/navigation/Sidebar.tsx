@@ -181,7 +181,10 @@ import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapsho
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatReviewThreadCount,
+  getThreadRowStatus,
+  isThreadRemoteWorkHere,
 } from "./ThreadRowStatus";
+import { SelectedThreadDock } from "./SelectedThreadDock";
 import {
   AttentionReviewReadout,
   AttentionTurnReadouts,
@@ -336,6 +339,12 @@ type SidebarProps = {
   /** Incremented when the thread title asks the active lens to reveal its row. */
   revealSelectedThreadRequest?: number;
   onRevealSelectedThreadComplete?: (request: number) => void;
+  /**
+   * Asks for the selected thread's row to be shown: the request comes back
+   * as a new `revealSelectedThreadRequest`. The selected thread's dock asks
+   * when the thread has no row to scroll to.
+   */
+  onRevealSelectedThread?: () => void;
   /**
    * Set (to a fresh object) when the thread header's project name asks the
    * Directories lens to show that project. The caller switches the lens.
@@ -1360,6 +1369,44 @@ function SidebarContent(props: SidebarProps) {
   const visitingThread = browseMode !== "directories" && jumpedThreadKey && jumpedThreadKey === selectedItemKey
     ? navigationThreadByKey.get(jumpedThreadKey) ?? jumpedThread
     : undefined;
+
+  // The open thread, for the dock that stands in for its row once the row
+  // has scrolled out of the list or has no place in it. The row's project
+  // header scrolls away with it, so the dock names the project: the one
+  // that row sits under in Directories, the thread's first project in the
+  // flat lenses.
+  const dockedThread = selectedItemKey
+    ? presentedByKey.get(selectedItemKey) ?? navigationThreadByKey.get(selectedItemKey)
+    : undefined;
+  const dockedThreadProjectLabel = (directoryKey: string | undefined): string | undefined => {
+    const key = directoryKey ?? props.selectedThreadDirectoryKeys?.[0];
+    return (key ? props.directories.find((directory) => directory.key === key)?.label : undefined)
+      ?? dockedThread?.linkedDirectories[0]?.label;
+  };
+  // Its parents, nearest first: a collapsed one hides the row, and the dock
+  // then stands in for the parent's.
+  const dockedThreadAncestorKeys: string[] = [];
+  for (let current = dockedThread; current?.parentThreadId;) {
+    const parentKey = resolveThreadParentKey(current, navigationThreadByKey);
+    if (!parentKey || dockedThreadAncestorKeys.includes(parentKey)) {
+      break;
+    }
+    dockedThreadAncestorKeys.push(parentKey);
+    current = navigationThreadByKey.get(parentKey);
+  }
+  const revealSelectedThread = props.onRevealSelectedThread;
+  const revealDockedThread = useEventCallback((): void => {
+    // A flat lens can open only what it lists. Directories lists every
+    // thread under its project, so a thread this lens does not hold is
+    // shown there, as a project picked from the index is.
+    const listedHere = browseMode === "directories"
+      || [selectedItemKey, ...dockedThreadAncestorKeys].some((key) =>
+        renderedThreads.some((thread) => threadSummaryIdentityKey(thread) === key));
+    if (!listedHere) {
+      onBrowseModeChange("directories");
+    }
+    revealSelectedThread?.();
+  });
 
   // A direct navigation change (history, search, a thread link, etc.) starts a
   // fresh selection. Modified clicks deliberately do not navigate, so they can
@@ -3880,6 +3927,19 @@ function SidebarContent(props: SidebarProps) {
                   onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
                 />
               )
+            )}
+            {listStatus ? null : (
+              <SelectedThreadDock
+                regionRef={lensScroll.ref}
+                thread={dockedThread}
+                threadKey={dockedThread ? selectedItemKey : undefined}
+                status={dockedThread ? getThreadRowStatus(dockedThread, props.thinkingThreadKeys) : undefined}
+                remoteWork={dockedThread ? isThreadRemoteWorkHere(dockedThread) : false}
+                projectLabel={dockedThreadProjectLabel}
+                ancestorThreadKeys={dockedThreadAncestorKeys}
+                directoryKeys={props.selectedThreadDirectoryKeys ?? []}
+                onRevealHiddenThread={revealDockedThread}
+              />
             )}
           </div>
         </section>

@@ -618,6 +618,15 @@ Unread state uses an orange cookie marker. Do not use a punctuation badge such a
 
 The secondary "just clicked" or focus highlight must never clip on the left edge, resize the row, or obscure the selected state.
 
+**The open thread never leaves the list.** When its row scrolls out, a compact card docks at the edge the row left through: at the top under the stuck project header, or at the bottom (`SelectedThreadDock`, `.selected-thread-dock`). It carries the status mark, title and time, the name of the row's project, and an arrow toward the row. A click centers the row and gives it focus.
+
+- The dock wears the selected row's border, fill and accent edge, and the ring a clicked row draws. The ring is on at rest: it tells the docked card from the rows passing under it. Keyboard focus adds a second ring inside the card.
+- It floats over the lane, laid out from `.sidebar__scroll-region`, so no row moves when it appears and it outlasts its own project scrolling away. A `--bg-sidebar` plate under the ring keeps the rows off it.
+- It appears when less than 40px of the row shows, so what is left of the row is under the dock. Either a row of the open thread shows that much or the dock stands in for it, never both. `selected-thread-dock.ts` holds the rule.
+- A thread with no row in the list docks too: one inside a collapsed parent or a closed project, or one the lens does not list. The dock then stands in for what would hold the row, the nearest parent's row or the project's section, once that has scrolled out, and a click opens it and scrolls to the row. While the holder is in view there is no dock: a closed project that holds the open thread draws its header selected, and a dock there would cover the headers beside it. An open project in view that has drawn no row for the thread (the row is past the loaded page, or under a collapsed Directory threads divider) does not speak for it: the dock then rests at the bottom without an arrow. So does a thread the lens lists nowhere, and its click opens Directories. The dock has no `aria-label`; its text is its name (WCAG 2.5.3).
+- It stays 6px inside the lane inset on both sides, so the ring and plate end at the inset and never cover the scrollbar. macOS draws an overlay thumb there and reserves no gutter.
+- It is not a second `ThreadRow`. The row's chips are controls, and a copy of them would be a second place to act.
+
 ### Lens Switches
 
 Segmented controls should feel crisp and physical. The active segment uses tangerine text or outline. Inactive segments use muted text and near-black surfaces.
