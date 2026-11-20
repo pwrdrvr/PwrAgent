@@ -158,15 +158,16 @@ export function problemsWithoutItems(
 }
 
 /**
- * Whether a run row offers Unlock and Remove: an archived checkout the
- * operator chose to remove, kept only because someone else's Git lock holds
- * it. Never a hibernation row: hibernation keeps a locked checkout and never
+ * Whether a run row offers Unlock and Remove: an archived checkout, kept only
+ * because someone else's Git lock holds it. That is a checkout the operator
+ * chose to remove, or one the archive step kept when it archived its thread.
+ * Never a hibernation row: hibernation keeps a locked checkout and never
  * unlocks it, and a sleeping thread is still in use.
  */
 export function offersUnlockAndRemove(item: ThreadMaintenanceRunItem): item is ThreadMaintenanceRunItem & {
   lockReason: string; backend: string; threadId: string; path: string;
 } {
-  return item.step === "checkouts"
+  return (item.step === "checkouts" || item.step === "threads")
     && item.action === "removeCheckout"
     && item.status === "kept"
     && item.lockReason !== undefined

@@ -6,6 +6,7 @@ import type { DesktopApi } from "./desktop-api";
 import {
   collectLockedArchiveWorktrees,
   formatLockedWorktreeNotice,
+  groupLockedWorktreesByOwner,
   lockedWorktreeRemovalOutcome,
   mergeLockedArchiveWorktrees,
   type LockedArchiveWorktree,
@@ -20,7 +21,7 @@ import type { ThreadActionErrorContext } from "./thread-action-error-context";
  * exactly as the notice showed it.
  */
 export function useLockedArchiveWorktreeNotice(params: {
-  desktopApi?: Pick<DesktopApi, "removeLockedThreadWorktree">;
+  desktopApi?: Pick<DesktopApi, "removeLockedThreadWorktrees">;
   setNotice: (notice: ArchiveThreadNotice | undefined) => void;
 }) {
   const { desktopApi, setNotice } = params;
@@ -33,8 +34,8 @@ export function useLockedArchiveWorktreeNotice(params: {
   }, [setNotice]);
 
   const unlockAndRemove = useCallback(async (): Promise<void> => {
-    const chosen = lockedRef.current.filter((item) => item.unlockable);
-    lockedRef.current = lockedRef.current.filter((item) => !item.unlockable);
+    const chosen = lockedRef.current;
+    lockedRef.current = [];
     if (chosen.length === 0) return;
     setNotice({
       id: `locked-worktrees-removing\n${chosen.map((item) => item.kept.worktreePath).join("\n")}`,
@@ -43,22 +44,28 @@ export function useLockedArchiveWorktreeNotice(params: {
       autoDismiss: false,
       status: { label: "In progress", state: "progress" },
     });
-    const responses = [];
-    for (const item of chosen) {
+    // One call per owning instance; each owner checks and removes its own.
+    const groups = groupLockedWorktreesByOwner(chosen);
+    const answered = await Promise.all(groups.map(async (group) => {
       try {
-        if (!desktopApi?.removeLockedThreadWorktree) throw new Error("Update PwrAgent to remove a locked worktree.");
-        responses.push(await desktopApi.removeLockedThreadWorktree({
-          backend: item.backend,
-          threadId: item.threadId,
-          worktreePath: item.kept.worktreePath,
-          approvedLockReason: item.kept.lockReason,
-        }));
+        if (!desktopApi?.removeLockedThreadWorktrees) throw new Error("Update PwrAgent to remove a locked worktree.");
+        const { results } = await desktopApi.removeLockedThreadWorktrees({
+          ...(group.federationTarget ? { federationTarget: group.federationTarget } : {}),
+          worktrees: group.items.map((item) => ({
+            backend: item.backend,
+            threadId: item.threadId,
+            worktreePath: item.kept.worktreePath,
+            approvedLockReason: item.kept.lockReason,
+          })),
+        });
+        return group.items.map((item, index) => results[index]
+          ?? { status: "failed" as const, worktreePath: item.kept.worktreePath, message: "The owner sent no result." });
       } catch (error) {
-        responses.push({ status: "failed" as const, worktreePath: item.kept.worktreePath,
-          message: error instanceof Error ? error.message : String(error) });
+        const message = error instanceof Error ? error.message : String(error);
+        return group.items.map((item) => ({ status: "failed" as const, worktreePath: item.kept.worktreePath, message }));
       }
-    }
-    const outcome = lockedWorktreeRemovalOutcome(chosen, responses);
+    }));
+    const outcome = lockedWorktreeRemovalOutcome(groups.flatMap((group) => group.items), answered.flat());
     lockedRef.current = mergeLockedArchiveWorktrees(lockedRef.current, outcome.relocked);
     if (lockedRef.current.length) showRef.current(outcome.notice);
     else setNotice(outcome.notice);

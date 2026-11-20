@@ -755,6 +755,35 @@ describe("sub-thread parents", () => {
     expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id))
       .toEqual(["x", "y", "z", "mid", "top"]);
   });
+
+  // Rule: an archive that keeps a worktree because someone else locked it
+  // still archives the thread, and the run lists that worktree as kept with
+  // Git's lock text under its thread, so the operator can unlock it there.
+  it("lists each worktree an archive kept for its lock, under the archived thread", async () => {
+    const lockedArb = fc.array(fc.array(fc.string({ maxLength: 12 }), { maxLength: 2 }), { minLength: 1, maxLength: 3 });
+    await fc.assert(fc.asyncProperty(lockedArb, async (perThread) => {
+      const ids = perThread.map((_, index) => `t${index}`);
+      const kept = new Map(ids.map((id, index) => [id, perThread[index]!.map((lockReason, lockedIndex) => ({
+        reason: "worktree-locked" as const, worktreePath: `/w/${id}/locked-${lockedIndex}`, lockReason,
+      }))]));
+      const { service } = harness(ids.map((id) => candidate(id, { cwd: `/w/${id}`, daysIdle: 40 })), {
+        getPolicy: agePolicy,
+        archiveFamily: vi.fn(async (family: ThreadArchiveCandidate[]) => ({ lockedWorktrees: kept.get(family[0]!.thread.id)! })),
+      });
+      const scan = await service.scan();
+      const run = await service.apply({ scanId: scan.scanId, archive: ids.map((threadId) => ({ backend: "codex", threadId })),
+        removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+      const items = run.items ?? [];
+      expect(items.filter((item) => item.action === "archive").map((item) => item.status)).toEqual(ids.map(() => "done"));
+      const lockedRows = items.filter((item) => item.step === "threads" && item.action === "removeCheckout");
+      expect(lockedRows.map(({ threadId, path: worktreePath, status, lockReason }) => ({ threadId, worktreePath, status, lockReason })))
+        .toEqual(ids.flatMap((id) => kept.get(id)!.map((lock) => ({
+          threadId: id, worktreePath: lock.worktreePath, status: "kept", lockReason: lock.lockReason,
+        }))));
+      expect(new Set(items.map((item) => item.itemId)).size).toBe(items.length);
+      expect(run.steps.find((step) => step.step === "threads")).toMatchObject({ done: ids.length, kept: 0, failed: 0 });
+    }), { numRuns: 30 });
+  });
 });
 
 describe("unattributed checkout requests", () => {

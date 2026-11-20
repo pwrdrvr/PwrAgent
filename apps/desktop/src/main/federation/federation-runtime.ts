@@ -211,6 +211,10 @@ import type {
   HandoffThreadWorkspaceResponse,
   MoveThreadToMainCheckoutRequest,
   MoveThreadToMainCheckoutResponse,
+  ReadThreadWorktreeLockRequest,
+  ReadThreadWorktreeLockResponse,
+  RemoveLockedThreadWorktreesRequest,
+  RemoveLockedThreadWorktreesResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   RenameThreadResponse,
@@ -8733,6 +8737,16 @@ function localBackendOperations(): FederationBackendOperations {
       request: MoveThreadToMainCheckoutRequest,
     ): Promise<MoveThreadToMainCheckoutResponse> {
       return await getDesktopBackendRegistry().moveThreadToMainCheckout(request);
+    },
+    async readThreadWorktreeLock(
+      request: ReadThreadWorktreeLockRequest,
+    ): Promise<ReadThreadWorktreeLockResponse> {
+      return await getDesktopBackendRegistry().readThreadWorktreeLock(request);
+    },
+    async removeLockedThreadWorktrees(
+      request: RemoveLockedThreadWorktreesRequest,
+    ): Promise<RemoveLockedThreadWorktreesResponse> {
+      return await getDesktopBackendRegistry().removeLockedThreadWorktrees(request);
     },
     async renameThread(
       request: RenameThreadRequest,

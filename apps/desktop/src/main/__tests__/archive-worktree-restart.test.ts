@@ -1648,6 +1648,40 @@ describe("archive cleanup and finished helper threads", () => {
     expect([...held.values()].map((approval) => approval.bytes)).toEqual([7]);
   }, 30_000);
 
+  // Rule: Unlock and Remove acts on the checkout the operator saw under one
+  // archived thread. A checkout another archived thread owns by now is kept,
+  // still locked, even when the approval matches its lock text.
+  it("unlocks and removes a locked checkout only for the archived thread that owns it", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("archived-owner", "another-archived-thread"),
+      fc.stringMatching(/^[a-z][a-z ,]{0,16}[a-z]$/),
+      async (requested, reason) => {
+        const fixture = await createFixture();
+        ArchiveWorktreeTransport.threads = [{ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true }];
+        await fixture.git(fixture.repo, ["worktree", "lock", "--reason", reason, fixture.worktree]);
+        const instance = fixture.reopen();
+        try {
+          const { results } = await instance.registry.removeLockedThreadWorktrees({ worktrees: [{
+            backend: "codex", threadId: requested, worktreePath: fixture.worktree, approvedLockReason: reason,
+          }] });
+          const owned = requested === "archived-owner";
+          expect(results).toHaveLength(1);
+          expect(results[0]).toMatchObject({ status: owned ? "removed" : "kept", worktreePath: fixture.worktree });
+          const present = await stat(fixture.worktree).then(() => true, () => false);
+          expect(present).toBe(!owned);
+          if (!owned) {
+            const lock = await readFile(path.join(fixture.repo, ".git", "worktrees", path.basename(fixture.worktree), "locked"), "utf8");
+            expect(lock.trim()).toBe(reason);
+          }
+        } finally {
+          await instance.registry.close();
+          instance.db.close();
+          ArchiveWorktreeTransport.threads = [];
+        }
+      },
+    ), { numRuns: 4, examples: [["another-archived-thread", "release prep, do not remove"], ["archived-owner", "release prep"]] });
+  }, 120_000);
+
   // Rule: the background report names the archived thread. Its window rarely
   // has it loaded, so the owner must say what it was called.
   it("names the archived thread on its background cleanup completion", async () => {

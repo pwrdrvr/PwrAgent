@@ -82,6 +82,14 @@ as Git's documentation advises for removable media.
   `WorktreeLockedError` (`worktree-locked` in results). Hibernation, the archive sweep, background
   retries and agent tools never pass an approval. Unapproved, the operation still completes: a handoff
   keeps the source worktree (deciding before any Git state moves) and an archive keeps the checkout.
+- Unlock and Remove (`removeLockedThreadWorktrees`) takes every worktree of one owner in one call, so
+  the archived checkouts are inventoried once. Each entry names the archived thread the operator saw
+  it under; a checkout another archived thread owns by now is kept. The notice sends one call per
+  owning instance. The maintenance archive step adds a kept row under its thread for each worktree
+  the archive kept for its lock, with the same Unlock and Remove.
+- The lock read and Unlock and Remove are federated (`backend.readThreadWorktreeLock`, `thread_detail`;
+  `backend.removeLockedThreadWorktrees`, `turn_control`). An owner that predates them reads as no lock,
+  so a handoff keeps the worktree, and Unlock and Remove reports that the owner needs an update.
 - A thread handed in from another instance is created by `packages/federation`, which cannot import
   desktop code. The desktop wrapper in `src/main/federation/thread-instance-handoff-service.ts` calls
   `lockExternallyAddedWorktree` after the import and `unlockBeforeExternalRemoval` before its rollback.

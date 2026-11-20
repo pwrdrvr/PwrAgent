@@ -13,8 +13,8 @@ export type LockedArchiveWorktree = {
   threadId: string;
   threadTitle?: string;
   kept: WorktreeLockedKept;
-  /** False for a remote owner: Unlock and Remove runs only where the thread lives. */
-  unlockable: boolean;
+  /** The instance that owns the thread. Unlock and Remove runs there. */
+  federationTarget?: FederationTarget;
   /** The lock changed after the operator was last shown it. */
   changed?: boolean;
 };
@@ -28,18 +28,38 @@ export function collectLockedArchiveWorktrees(
     threadId: owner.threadId,
     ...(owner.threadTitle ? { threadTitle: owner.threadTitle } : {}),
     kept: item.kept,
-    unlockable: owner.federationTarget?.scope !== "remote",
+    ...(owner.federationTarget ? { federationTarget: owner.federationTarget } : {}),
   }] : []);
 }
 
-/** One entry per worktree; a later report of the same worktree replaces an earlier one. */
+/** The owning instance, "" for this one. */
+export function lockedWorktreeOwnerKey(item: Pick<LockedArchiveWorktree, "federationTarget">): string {
+  return item.federationTarget?.scope === "remote" ? `remote:${item.federationTarget.instanceId}` : "";
+}
+
+/** One entry per worktree on each owner; a later report of the same worktree replaces an earlier one. */
 export function mergeLockedArchiveWorktrees(
   current: readonly LockedArchiveWorktree[],
   added: readonly LockedArchiveWorktree[],
 ): LockedArchiveWorktree[] {
-  const byPath = new Map(current.map((item) => [item.kept.worktreePath, item]));
-  for (const item of added) byPath.set(item.kept.worktreePath, item);
+  const key = (item: LockedArchiveWorktree) => `${lockedWorktreeOwnerKey(item)}\n${item.kept.worktreePath}`;
+  const byPath = new Map(current.map((item) => [key(item), item]));
+  for (const item of added) byPath.set(key(item), item);
   return [...byPath.values()];
+}
+
+/** The worktrees grouped by the instance that owns them, in first-seen order. */
+export function groupLockedWorktreesByOwner(
+  items: readonly LockedArchiveWorktree[],
+): { federationTarget?: FederationTarget; items: LockedArchiveWorktree[] }[] {
+  const groups = new Map<string, { federationTarget?: FederationTarget; items: LockedArchiveWorktree[] }>();
+  for (const item of items) {
+    const key = lockedWorktreeOwnerKey(item);
+    const group = groups.get(key) ?? { ...(item.federationTarget ? { federationTarget: item.federationTarget } : {}), items: [] };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
 }
 
 function lockText(lockReason: string): string {
@@ -75,7 +95,6 @@ export function formatLockedWorktreeNotice(
     })),
     ...(failed?.facts ?? []),
   ];
-  const unlockable = items.some((item) => item.unlockable);
   return {
     ...failed,
     id: ["locked-worktrees", ...items.map((item) => `${item.kept.worktreePath}\n${item.kept.lockReason}`)].join("\n"),
@@ -84,12 +103,10 @@ export function formatLockedWorktreeNotice(
     facts,
     autoDismiss: false,
     tone: "warning",
-    actions: unlockable
-      ? [
-          { label: "Unlock and Remove", tone: "primary", onClick: handlers.onUnlockAndRemove },
-          { label: "Keep", tone: "secondary", onClick: handlers.onKeep },
-        ]
-      : undefined,
+    actions: [
+      { label: "Unlock and Remove", tone: "primary", onClick: handlers.onUnlockAndRemove },
+      { label: "Keep", tone: "secondary", onClick: handlers.onKeep },
+    ],
     copyText: [title, message, ...facts.map((fact) => fact.value), ...(failed?.copyText ? [failed.copyText] : [])].join("\n"),
   };
 }

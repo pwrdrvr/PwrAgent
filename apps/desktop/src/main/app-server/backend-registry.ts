@@ -234,8 +234,8 @@ import {
   type ThreadHibernatedWorkspace,
   type ReadThreadWorktreeLockRequest,
   type ReadThreadWorktreeLockResponse,
-  type RemoveLockedThreadWorktreeRequest,
-  type RemoveLockedThreadWorktreeResponse,
+  type RemoveLockedThreadWorktreesRequest,
+  type RemoveLockedThreadWorktreesResponse,
   type WorktreeLockedKept,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
@@ -6155,8 +6155,8 @@ export class DesktopBackendRegistry {
   }
 
   /** Only from the operator's explicit choice; never an automatic path or an agent tool. */
-  removeLockedThreadWorktree(request: RemoveLockedThreadWorktreeRequest): Promise<RemoveLockedThreadWorktreeResponse> {
-    return this.threadArchiveCoordinator.removeLockedThreadWorktree(request);
+  removeLockedThreadWorktrees(request: RemoveLockedThreadWorktreesRequest): Promise<RemoveLockedThreadWorktreesResponse> {
+    return this.threadArchiveCoordinator.removeLockedThreadWorktrees(request);
   }
 
   async renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse> {

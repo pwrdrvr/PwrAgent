@@ -394,8 +394,8 @@ import type {
   RestoreThreadResponse,
   ReadThreadWorktreeLockRequest,
   ReadThreadWorktreeLockResponse,
-  RemoveLockedThreadWorktreeRequest,
-  RemoveLockedThreadWorktreeResponse,
+  RemoveLockedThreadWorktreesRequest,
+  RemoveLockedThreadWorktreesResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   CreateScheduledThreadActionRequest,
@@ -1015,7 +1015,7 @@ import {
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
   APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL,
   APP_SERVER_READ_THREAD_WORKTREE_LOCK_CHANNEL,
-  APP_SERVER_REMOVE_LOCKED_THREAD_WORKTREE_CHANNEL,
+  APP_SERVER_REMOVE_LOCKED_THREAD_WORKTREES_CHANNEL,
   APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL,
   APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
   APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
@@ -2681,10 +2681,10 @@ const desktopApi = Object.freeze({
     request: ReadThreadWorktreeLockRequest,
   ): Promise<ReadThreadWorktreeLockResponse> =>
     await ipcRenderer.invoke(APP_SERVER_READ_THREAD_WORKTREE_LOCK_CHANNEL, request),
-  removeLockedThreadWorktree: async (
-    request: RemoveLockedThreadWorktreeRequest,
-  ): Promise<RemoveLockedThreadWorktreeResponse> =>
-    await ipcRenderer.invoke(APP_SERVER_REMOVE_LOCKED_THREAD_WORKTREE_CHANNEL, request),
+  removeLockedThreadWorktrees: async (
+    request: RemoveLockedThreadWorktreesRequest,
+  ): Promise<RemoveLockedThreadWorktreesResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_REMOVE_LOCKED_THREAD_WORKTREES_CHANNEL, request),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>

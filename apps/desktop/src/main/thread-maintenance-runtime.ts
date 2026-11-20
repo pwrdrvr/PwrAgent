@@ -4,7 +4,7 @@ import { stat } from "node:fs/promises";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { type ThreadMaintenanceRun } from "@pwragent/shared/thread-maintenance";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
-import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "./app-server/thread-maintenance-service";
+import { checkoutHibernationReviewDeps, lockedWorktreesKeptBy, ThreadMaintenanceService } from "./app-server/thread-maintenance-service";
 import { MAX_WORKTREE_SNAPSHOT_BYTES } from "./app-server/worktree-archive-service";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getMainLogger } from "./log";
@@ -48,12 +48,12 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
         registry.approveReviewedSnapshotLimit(thread.source, thread.id, options.snapshotLimitBytes);
       }
       try {
-        await registry.archiveThread({ backend: thread.source, threadId: thread.id,
+        const response = await registry.archiveThread({ backend: thread.source, threadId: thread.id,
           preserveWorktrees: options.preserveWorktrees });
+        return { lockedWorktrees: lockedWorktreesKeptBy(response.cleanup) };
       } finally {
         if (options.snapshotLimitBytes) registry.clearReviewedSnapshotLimit(thread.source, thread.id);
       }
-      return true;
     },
     removeArchivedCheckouts: async (selection, options) => await getDesktopBackendRegistry().removeArchivedCheckouts(selection, options),
     hibernation: checkoutHibernationReviewDeps(getDesktopBackendRegistry),
