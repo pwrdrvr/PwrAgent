@@ -44,11 +44,18 @@ function barrelSources(statements) {
       if (namedBindings && ts.isNamedImports(namedBindings)) {
         for (const element of namedBindings.elements) imported.set(element.name.text, specifier);
       }
-    } else if (!ts.isExportDeclaration(node) && !ts.isEmptyStatement(node)) {
+    } else if (!ts.isExportDeclaration(node) && !ts.isExportAssignment(node) && !ts.isEmptyStatement(node)) {
       return 0;
     }
   }
   for (const node of statements) {
+    if (ts.isExportAssignment(node)) {
+      if (node.isExportEquals || !ts.isIdentifier(node.expression)) return 0;
+      const specifier = imported.get(node.expression.text);
+      if (!specifier) return 0;
+      reExported.add(specifier);
+      continue;
+    }
     if (!ts.isExportDeclaration(node)) continue;
     if (node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
       reExported.add(node.moduleSpecifier.text);
@@ -96,7 +103,11 @@ export function checkImportBoundaries(root) {
   const extensions = "{ts,tsx,js,jsx,mts,cts,mjs,cjs}";
   const files = globSync([`*.${extensions}`, ...["apps", "packages", "scripts"].map((dir) => `${dir}/**/*.${extensions}`)], {
     cwd: root,
-    exclude: ["**/node_modules", "**/dist", "**/out", "**/coverage", "**/.local", "packages/pwragent/runtime"],
+    exclude: [
+      "**/node_modules", "**/dist", "**/out", "**/coverage", "**/.local",
+      "apps/desktop/release-stage", "apps/desktop/release-stage-arm64",
+      "packages/pwragent/runtime",
+    ],
   });
   return files.sort().flatMap((file) => importBoundaryViolations(
     file.split(path.sep).join("/"),

@@ -1,6 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { importBoundaryViolations } from "./lint-module-barrels.mjs";
+import { checkImportBoundaries, importBoundaryViolations } from "./lint-module-barrels.mjs";
 
 const file = "packages/example/src/index.ts";
 
@@ -16,6 +19,10 @@ it("rejects pure re-exports only when they fan out to more than ten modules", ()
         return `import { value as value${id} } from "./module-${id}"; export { value${id} };`;
       }).join("\n");
       expect(importBoundaryViolations(file, reExports)).toHaveLength(Number(modules.length > 10));
+      const withDefaultImport = `${reExports}\nimport forwarded from "./forwarded";`;
+      expect(importBoundaryViolations(file, `${withDefaultImport}\nexport default forwarded;`))
+        .toHaveLength(Number(modules.length + 1 > 10));
+      expect(importBoundaryViolations(file, `${withDefaultImport}\nexport default forwarded();`)).toEqual([]);
       expect(importBoundaryViolations(file, `${reExports}\nexport const local = 1;`)).toEqual([]);
     },
   ));
@@ -44,4 +51,25 @@ it("allows subpaths, package-name strings in config, and the renderer icon catal
     "apps/desktop/src/renderer/src/icons/index.ts",
     Array.from({ length: 11 }, (_, index) => `export * from "./icon-${index}";`).join("\n"),
   )).toEqual([]);
+});
+
+it("checks source files while skipping both generated desktop release stages", () => {
+  const root = mkdtempSync(join(tmpdir(), "pwragent-barrel-lint-"));
+  try {
+    const paths = [
+      "apps/desktop/src/generated-probe.ts",
+      "apps/desktop/release-stage/src/generated-probe.ts",
+      "apps/desktop/release-stage-arm64/src/generated-probe.ts",
+    ];
+    for (const file of paths) {
+      const absolute = join(root, file);
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, 'export * from "@pwragent/shared";');
+    }
+    const violations = checkImportBoundaries(root);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(paths[0]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
