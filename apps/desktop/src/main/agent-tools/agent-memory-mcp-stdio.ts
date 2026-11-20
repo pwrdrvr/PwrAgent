@@ -8,6 +8,8 @@ const readline = require("node:readline");
 const { PWRAGENT_MEMORY_MCP_URL: url, PWRAGENT_MEMORY_MCP_AUTH: authorization } = process.env;
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 (async () => {
+  let sessionId;
+  let protocolVersion;
   for await (const line of input) {
     let request;
     try {
@@ -15,13 +17,21 @@ const input = readline.createInterface({ input: process.stdin, crlfDelay: Infini
       const response = await fetch(url, {
         method: "POST",
         redirect: "error",
-        headers: { authorization, "content-type": "application/json", accept: "application/json, text/event-stream" },
+        headers: {
+          authorization, "content-type": "application/json", accept: "application/json, text/event-stream",
+          ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+          ...(protocolVersion ? { "mcp-protocol-version": protocolVersion } : {}),
+        },
         body: line,
         signal: AbortSignal.timeout(15000),
       });
       if (response.status === 202) continue;
       if (!response.ok) throw new Error("Memory endpoint refused request");
       const payload = await response.json();
+      if (request?.method === "initialize") {
+        sessionId = response.headers.get("mcp-session-id");
+        protocolVersion = payload.result?.protocolVersion;
+      }
       process.stdout.write(JSON.stringify(payload) + "\n");
     } catch {
       if (request && Object.hasOwn(request, "id")) {

@@ -74,21 +74,32 @@ it("the ACP stdio bridge forwards MCP frames with its bound credential", async (
     name: "pwragent", type: "http", url: "http://127.0.0.1:1234/mcp",
     headers: [{ name: "Authorization", value: "Bearer fixture-token" }],
   });
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } };
   const call = { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "agent_memory", arguments: { action: "read_index" } } };
+  const initialized = { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } };
   const response = { jsonrpc: "2.0", id: 7, result: { content: [] } };
   const written: string[] = [];
   const fetched: unknown[][] = [];
   await runInNewContext(config.args[1]!, {
     AbortSignal,
     process: { env: config.env, stdin: {}, stdout: { write: (line: string) => written.push(line) } },
-    require: () => ({ createInterface: () => [JSON.stringify(call)] }),
+    require: () => ({ createInterface: () => [JSON.stringify(initialize), JSON.stringify(call)] }),
     fetch: async (...args: unknown[]) => {
       fetched.push(args);
-      return { ok: true, status: 200, json: async () => response };
+      return fetched.length === 1
+        ? { ok: true, status: 200, headers: new Headers({ "mcp-session-id": "fixture-session" }), json: async () => initialized }
+        : { ok: true, status: 200, json: async () => response };
     },
   });
-  expect(fetched).toEqual([[config.env.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
-    body: JSON.stringify(call), headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
-  })]]);
-  expect(written).toEqual([JSON.stringify(response) + "\n"]);
+  expect(fetched).toEqual([
+    [config.env.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
+      body: JSON.stringify(initialize), headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
+    })],
+    [config.env.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
+      body: JSON.stringify(call), headers: expect.objectContaining({
+        authorization: "Bearer fixture-token", "mcp-session-id": "fixture-session", "mcp-protocol-version": "2025-06-18",
+      }),
+    })],
+  ]);
+  expect(written).toEqual([JSON.stringify(initialized) + "\n", JSON.stringify(response) + "\n"]);
 });
