@@ -18,7 +18,8 @@ vi.mock("grammy", () => {
   };
 });
 
-import { scrubBotToken, validateCredentials } from "../validate-credentials.ts";
+import { scrubBotToken } from "../telegram-error.ts";
+import { validateCredentials } from "../validate-credentials.ts";
 
 beforeEach(() => {
   getMeMock.mockReset();

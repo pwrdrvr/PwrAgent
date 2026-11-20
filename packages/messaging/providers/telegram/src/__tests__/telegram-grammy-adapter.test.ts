@@ -145,7 +145,7 @@ describe("adaptGrammyBot", () => {
         command: "resume",
         description: "Resume or start a PwrAgent thread",
       },
-    ]);
+    ], undefined, undefined);
     expect(grammyBot.api.sendMessage).toHaveBeenCalledWith(
       42,
       "Choose a thread",
@@ -1126,7 +1126,7 @@ describe("TelegramAdapter callback persistence", () => {
         command: "help",
         description: "Show available PwrAgent commands",
       },
-    ]);
+    ], undefined, expect.any(AbortSignal));
   });
 
   it("persists routed actor and binding metadata in callback handles", async () => {
