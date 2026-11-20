@@ -46,7 +46,7 @@ import {
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
-import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
+import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
 import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor, checkoutHibernationLastActivity } from "./checkout-hibernation";
 import { CheckoutPathOwners, eventLoopPacer } from "./checkout-path-owners";
 import { missingWorktreeRepository } from "./worktree-archive-service";
@@ -62,6 +62,12 @@ const FAILURE_LIMIT = 50;
 const INSPECT_CONCURRENCY = 6;
 /** Scans kept for a later apply. A newer scan replaces the oldest. */
 const RETAINED_SCANS = 4;
+/** Archived checkouts removal cannot act on, with the reason each is kept. */
+const UNREMOVABLE_CHECKOUT_REASONS: Partial<Record<ThreadMaintenanceWorkspace["kind"], string>> = {
+  notGit: HIBERNATION_WORKSPACE_KEEP_REASONS.notGit,
+  inPlace: HIBERNATION_WORKSPACE_KEEP_REASONS.primary,
+  missing: HIBERNATION_WORKSPACE_KEEP_REASONS.missing,
+};
 
 /** The snapshot cap an operator's over-limit approval grants: 10% above the
  * reviewed size, so ordinary drift does not undo the decision. */
@@ -666,11 +672,16 @@ export class ThreadMaintenanceService {
           signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
           rebuildableOutputIsClean: rules.rebuildableOutputIsClean,
         });
-        if (inspection.keep !== undefined) {
-          kept[inspection.keep] = (kept[inspection.keep] ?? 0) + 1;
-          excludedReasons.set(candidate.worktreePath, inspection.keep);
+        const keepIt = (reason: string) => {
+          kept[reason] = (kept[reason] ?? 0) + 1;
+          excludedReasons.set(candidate.worktreePath, reason);
           return undefined;
-        }
+        };
+        if (inspection.keep !== undefined) return keepIt(inspection.keep);
+        // Removal snapshots through Git. A folder with no Git checkout left,
+        // a primary checkout, or a folder already gone is never offered.
+        const unremovable = UNREMOVABLE_CHECKOUT_REASONS[inspection.workspace.kind];
+        if (unremovable !== undefined) return keepIt(unremovable);
         // An over-limit checkout is offered for a decision, never selected
         // by default: removing it snapshots every change past the limit.
         return { ...candidate, kind: "removable" as const, workspace: inspection.workspace };
@@ -992,6 +1003,12 @@ export class ThreadMaintenanceService {
       for (const item of removable) keepStopped(item.worktreePath);
     } else if (removable.length || request.removeEmptyFolders) {
       if (request.removeEmptyFolders) begin("empty");
+      // Removal re-checks every archived checkout's ownership before it
+      // reports any one of them. The selected ones are in progress, not waiting.
+      for (const item of removable) {
+        const row = rows.find((row) => row.action === "removeCheckout" && row.path === item.worktreePath);
+        if (row?.status === "queued") begin(row.itemId);
+      }
       update({ current: { step: "checkouts", processed: 0, total: removable.length, object: removable[0]?.worktreePath } });
       try {
         const removal = await this.deps.removeArchivedCheckouts({
