@@ -48,6 +48,7 @@ import {
 } from "../app-server/thread-pending-wakes";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import { authorizeLocalFile, LocalFilePoller, readLocalFile } from "./thread-dependency-local-files";
 import { CI_RUN_URL_FORMS, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
 import {
   getProjectForgeAutomationIndex,
@@ -1231,6 +1232,7 @@ class DesktopAppServerService {
   }>();
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   /** Checks CI runs that Continue After waits on; armed only while one waits. */
+  private localFilePoller: LocalFilePoller | undefined;
   private threadDependencyCiRunPoller: ThreadDependencyCiRunPoller | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
@@ -8192,6 +8194,8 @@ class DesktopAppServerService {
     this.focusedDiffService = null;
     this.prFetcher = undefined;
     this.forgeCiClient = undefined;
+    this.localFilePoller?.dispose();
+    this.localFilePoller = undefined;
     this.threadDependencyCiRunPoller?.dispose();
     this.threadDependencyCiRunPoller = undefined;
     this.prPollingScheduler?.stop();
@@ -8345,6 +8349,10 @@ class DesktopAppServerService {
           publish: (todo) => getThreadTodoService().publish(todo),
         },
         readThread: (condition) => this.readDependencyThread(condition),
+        authorizeLocalFile: async ({ backend, threadId }, file) => authorizeLocalFile(
+          await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(backend, threadId), file),
+        readLocalFile,
+        canClaimLocalFileWake: () => getDesktopBackendRegistry().tryAcquireThreadOwnership(),
         readCiRun: async (url) => await this.readDependencyCiRun(url),
         ciRunUrlOptions: () => this.ciRunUrlOptions(),
         ciRunChecked: (url) => this.getThreadDependencyCiRunPoller().checked(url),
@@ -8371,13 +8379,14 @@ class DesktopAppServerService {
         // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
           && !getDesktopBackendRegistry().isRestartGateClosed?.()
-          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done" || condition.when === "compaction_completed")
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done" || condition.when === "compaction_completed" || condition.when === "local_file")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
           // A wait that starts, fires or ends changes which runs need checks.
           // After close() the poller is gone; a late change must not rebuild it.
           if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
+          if (dependency.conditions.some((condition) => condition.localFile)) this.syncLocalFileChecks();
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
           for (const target of [dependency, ...dependency.conditions.filter(isThreadDependencyLocalThreadCondition)]) {
@@ -8393,6 +8402,17 @@ class DesktopAppServerService {
       });
     }
     return this.threadDependencyCoordinator;
+  }
+
+  private syncLocalFileChecks(delay?: number): void {
+    if (!this.ownerNavigationActive) return;
+    const coordinator = this.getThreadDependencyCoordinator();
+    this.localFilePoller ??= new LocalFilePoller({
+      hasPending: () => coordinator.hasPendingLocalFiles(),
+      check: () => coordinator.checkLocalFiles(),
+      onError: (error) => appServerLog.warn("Local watcher check failed", { error: String(error) }),
+    });
+    this.localFilePoller.sync(delay);
   }
 
   /**
@@ -8658,6 +8678,7 @@ class DesktopAppServerService {
     if (!getAppStateMode()) return;
     await this.getThreadDependencyCoordinator().reconcile();
     this.getThreadDependencyCiRunPoller().sync();
+    this.syncLocalFileChecks(0);
   }
 
   /**

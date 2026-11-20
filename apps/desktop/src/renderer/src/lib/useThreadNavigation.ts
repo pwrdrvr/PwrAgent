@@ -47,6 +47,7 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
+  RestoreThreadResponse,
   NavigationBrowseMode,
   NavigationResumeState,
   NavigationDirectoryGitStatus,
@@ -3216,6 +3217,8 @@ export function useThreadNavigation(
   selectedThreadConfigurationReady: boolean;
   selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
+  /** The owner reports the selected thread archived: history only, no composer. */
+  selectedThreadArchived: boolean;
   refreshSelectedThreadConfiguration: () => Promise<void>;
   selectedThreadKey?: string;
   setThreadExecutionMode: (
@@ -3282,7 +3285,9 @@ export function useThreadNavigation(
   restoreArchivedThreads: (
     threads: readonly ArchivedThreadRef[],
     reopenKey?: string,
-  ) => Promise<void>;
+    /** rethrow: hand the failure back instead of the shared archive error. */
+    options?: { rethrow?: boolean },
+  ) => Promise<RestoreThreadResponse[]>;
   archiveWorktree: (
     thread: NavigationThreadSummary,
     directory: LinkedDirectorySummary
@@ -9064,17 +9069,20 @@ export function useThreadNavigation(
     async (
       threads: readonly ArchivedThreadRef[],
       reopenKey?: string,
-    ): Promise<void> => {
+      options?: { rethrow?: boolean },
+    ): Promise<RestoreThreadResponse[]> => {
       const restoreThreadRequest = desktopApi?.restoreThread;
       if (!restoreThreadRequest) {
+        if (options?.rethrow) throw new Error("Desktop bridge is missing restoreThread().");
         setArchiveThreadError("Desktop bridge is missing restoreThread().");
-        return;
+        return [];
       }
       setArchiveThreadError(undefined);
+      const responses: RestoreThreadResponse[] = [];
       try {
         for (const thread of threads) {
           if (thread.remote) continue;
-          await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId });
+          responses.push(await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId }));
           updateArchivedThreadKey(buildThreadIdentityKey(thread.backend, thread.threadId), false);
           // The `thread/unarchived` event lifts this too; a backend that
           // does not send one would otherwise keep the row hidden.
@@ -9085,9 +9093,13 @@ export function useThreadNavigation(
         }
         await refresh(reopenKey, undefined, reopenKey !== undefined);
       } catch (error) {
-        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        // A caller that shows the failure itself (the archived card) gets it
+        // back instead of the shared archive error.
+        if (!options?.rethrow) setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh();
+        if (options?.rethrow) throw error;
       }
+      return responses;
     },
     [desktopApi, refresh, updateArchivedThreadKey],
   );
@@ -10425,9 +10437,14 @@ export function useThreadNavigation(
     selectedThread,
     selectedThreadConfigurationReady,
     selectedWorkspaceHandoffPending,
+    // An archived thread keeps its history; the archived card stands in for
+    // its composer, so archival is not reported as an error.
     selectedThreadConfigurationError: selectedDetail.state?.error
-      ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
+      ?? (selectedDetail.state?.detail
+        && selectedDetail.state.detail.identity !== "present"
+        && selectedDetail.state.detail.identity !== "archived"
         ? `This thread is ${selectedDetail.state.detail.identity}.` : undefined),
+    selectedThreadArchived: selectedDetail.state?.detail?.identity === "archived",
     refreshSelectedThreadConfiguration,
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,

@@ -426,6 +426,17 @@ export type WorktreeSnapshotSummary = {
   changedBytes?: number;
   removedOutput?: string[];
   restoredAt?: number;
+  /**
+   * Set when a restore could not put the checkout back on its branch and
+   * left it on a detached HEAD at the saved commit instead: the branch is
+   * checked out in another worktree (`checkedOutAt`), has moved, or is gone.
+   */
+  detachedFrom?: {
+    branch: string;
+    head: string;
+    reason: "in-use" | "moved" | "missing";
+    checkedOutAt?: string;
+  };
   /** Physical checkout successfully recreated by restore, for shared-owner reuse. */
   restoredCheckoutIdentity?: { device: string; inode: string; birthtimeNs: string; gitDirectory: string };
   state: WorktreeSnapshotState;
@@ -2705,6 +2716,12 @@ export type AppServerNotification =
         threadId: string;
         workspace?: ThreadHibernatedWorkspace | null;
         keepAwake?: boolean;
+        /** Sent once with `workspace: null` when the checkout came back on a
+         * detached HEAD instead of its branch. */
+        restoredDetached?: {
+          worktreePath: string;
+          detachedFrom: NonNullable<WorktreeSnapshotSummary["detachedFrom"]>;
+        };
       };
     }
   | {

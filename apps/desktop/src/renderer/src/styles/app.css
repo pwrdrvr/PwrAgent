@@ -29969,6 +29969,22 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 2px;
 }
 
+/* Copy for a file chip: the editor button's size and chrome, always shown. */
+.transcript-copy-button.thread-markdown__file-copy {
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  border-radius: 5px;
+  background: var(--bg-panel-hover);
+  opacity: 1;
+  vertical-align: text-bottom;
+}
+
+.transcript-copy-button.thread-markdown__file-copy::before {
+  width: 11px;
+  height: 11px;
+}
+
 .thread-markdown__table-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -30607,7 +30623,8 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .html-preview__bar,
-.html-preview__link {
+.html-preview__link,
+.html-preview__notice {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -30698,7 +30715,8 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
 }
 
-.html-preview__link-question {
+.html-preview__link-question,
+.html-preview__notice-title {
   margin: 0;
   color: var(--text-primary);
   font-size: 12px;
@@ -30713,6 +30731,12 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.html-preview__notice-detail {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .html-preview__link-actions {

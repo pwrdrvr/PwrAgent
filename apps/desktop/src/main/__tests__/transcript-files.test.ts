@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { transcriptFileReference, type AppServerThreadSummary } from "@pwragent/shared";
-import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";
+import {
+  isThreadWorkspaceFile,
+  resolveTranscriptFiles,
+  transcriptThreadDirectories,
+} from "../transcript-files";
 
 describe("transcript file resolution", () => {
   let root: string;
@@ -51,6 +55,46 @@ describe("transcript file resolution", () => {
 
   it("bounds the owner-side batch", async () => {
     await expect(resolveTranscriptFiles({ references: Array(129).fill("notes.md") }, [root])).rejects.toThrow("128");
+  });
+
+  it("counts a file as the thread's own work only in its directories or a Claude scratchpad for them", async () => {
+    const worktree = path.join(root, "work.tree");
+    const tmpRoot = path.join(root, "tmp");
+    const sessions = path.join(tmpRoot, "claude-501", worktree.replace(/[^a-zA-Z0-9]/g, "-"));
+    const files = {
+      inWorktree: path.join(worktree, "docs", "review.html"),
+      worktreeSibling: path.join(root, "work.tree-other", "review.html"),
+      ownScratchpad: path.join(sessions, "thread-1", "scratchpad", "pa", "review.html"),
+      // A rewound, restarted or forked thread runs under a new session id.
+      newSessionScratchpad: path.join(sessions, "8d1c-rewound", "scratchpad", "review.html"),
+      ownSessionOutsideScratchpad: path.join(sessions, "thread-1", "tasks", "review.html"),
+      otherProjectScratchpad: path.join(tmpRoot, "claude-501", "-elsewhere", "thread-1", "scratchpad", "review.html"),
+      otherUser: path.join(tmpRoot, "claude-502", worktree.replace(/[^a-zA-Z0-9]/g, "-"), "thread-1", "scratchpad", "review.html"),
+    };
+    for (const file of Object.values(files)) {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "<p>fixture</p>");
+    }
+    const thread = (source: string) => ({
+      id: "thread-1",
+      source,
+      projectKey: worktree,
+      linkedDirectories: [],
+    }) as unknown as AppServerThreadSummary;
+    const expected: Record<keyof typeof files, [claude: boolean, codex: boolean]> = {
+      inWorktree: [true, true],
+      worktreeSibling: [false, false],
+      ownScratchpad: [true, false],
+      newSessionScratchpad: [true, false],
+      ownSessionOutsideScratchpad: [false, false],
+      otherProjectScratchpad: [false, false],
+      otherUser: [false, false],
+    };
+    for (const [name, file] of Object.entries(files) as Array<[keyof typeof files, string]>) {
+      const [claude, codex] = expected[name];
+      expect(await isThreadWorkspaceFile(file, thread("claude"), { tmpRoot, uid: 501 }), `${name} claude`).toBe(claude);
+      expect(await isThreadWorkspaceFile(file, thread("codex"), { tmpRoot, uid: 501 }), `${name} codex`).toBe(codex);
+    }
   });
 
   it("uses the active worktree when there is no project key", () => {

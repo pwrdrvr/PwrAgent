@@ -32,6 +32,8 @@ export type PreparedHtmlPreview = {
   blockedRemote: number;
   /** Distinct local files the page asked for and did not get. */
   missingLocal: number;
+  /** The page has a script or an inline event handler: it draws less without scripts. */
+  hasScripts: boolean;
 };
 
 const STATIC_CSP = [
@@ -214,6 +216,7 @@ export function prepareHtmlPreviewDocument(
   const doc = parseHtml(html);
   const blocked = new Set<string>();
   const missing = new Set<string>();
+  let hasScripts = false;
 
   const inline = (ref: string): string | undefined => {
     const trimmed = ref.trim();
@@ -253,6 +256,10 @@ export function prepareHtmlPreviewDocument(
     }
 
     element.removeAttribute("ping");
+    if (!hasScripts) {
+      hasScripts = (name === "script" && isExecutableScript(element))
+        || element.getAttributeNames().some((attribute) => /^on/i.test(attribute));
+    }
     for (const attribute of RESOURCE_ATTRIBUTES) {
       const value = element.getAttribute(attribute);
       if (value === null || !loadsResource(element, attribute)) continue;
@@ -302,7 +309,20 @@ export function prepareHtmlPreviewDocument(
     srcdoc: (scripts) => `${before}${policyHead(scripts)}${after}`,
     blockedRemote: blocked.size,
     missingLocal: missing.size,
+    hasScripts,
   };
+}
+
+/**
+ * A script block the browser would run. `application/json`, `text/template`
+ * and the like only carry data for the page's other scripts.
+ */
+function isExecutableScript(element: Element): boolean {
+  const type = (element.getAttribute("type") ?? "").trim().toLowerCase();
+  return type === ""
+    || type === "module"
+    || /^(?:text|application)\/(?:x-)?(?:javascript|ecmascript)$/.test(type)
+    || type === "text/jscript";
 }
 
 /** The `file:` URL for a local path, as the page's base for relative links. */

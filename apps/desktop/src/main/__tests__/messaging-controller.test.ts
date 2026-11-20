@@ -18622,7 +18622,8 @@ describe("MessagingController", () => {
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      body: "Queued message was sent as a steering message.",
+      title: "Message steered",
+      body: "Sent to the current turn.",
       actions: [],
       delivery: {
         mode: "update",
