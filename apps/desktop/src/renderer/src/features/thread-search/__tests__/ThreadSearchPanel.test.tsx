@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
@@ -9,6 +10,7 @@ import type {
 } from "@pwragent/shared/contracts/thread-search";
 import {
   basename,
+  createThreadSearchPanelState,
   highlightSnippet,
   ThreadSearchPanel,
   useThreadSearchPanelState,
@@ -779,5 +781,75 @@ describe("highlightSnippet", () => {
   it("ignores query tokens shorter than two characters", () => {
     const { container } = render(<>{highlightSnippet("a apple", "a")}</>);
     expect(container.querySelectorAll("mark")).toHaveLength(0);
+  });
+});
+
+// Property: a search asked for from outside the panel (⌘K's "search all")
+// runs exactly once to a response, whether the panel is closed, open, or
+// mounted twice by StrictMode, and never again on a later mount.
+describe("ThreadSearchPanel requested search", () => {
+  function setup() {
+    const searchThreads = vi.fn(async (request: { query?: string }) =>
+      searchResponse([searchResult({ threadId: `hit for ${request.query}` })], request.query));
+    const cancelThreadSearch = vi.fn(async () => {});
+    return { searchThreads, desktopApi: { searchThreads, cancelThreadSearch } as unknown as DesktopApi };
+  }
+
+  it("runs the requested query when the panel mounts, and not again on the next mount", async () => {
+    const { searchThreads, desktopApi } = setup();
+    const state = createThreadSearchPanelState();
+    state.requestSearch("4c1e9ab");
+    const view = render(<ThreadSearchPanel desktopApi={desktopApi} state={state} onOpenResult={vi.fn()} />);
+    expect(screen.getByLabelText("Search threads")).toHaveValue("4c1e9ab");
+    expect(await screen.findByRole("button", { name: /hit for 4c1e9ab/ })).toBeInTheDocument();
+    expect(searchThreads).toHaveBeenCalledTimes(1);
+    expect(searchThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "4c1e9ab" }), expect.any(Function));
+
+    view.unmount();
+    render(<ThreadSearchPanel desktopApi={desktopApi} state={state} onOpenResult={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /hit for 4c1e9ab/ })).toBeInTheDocument();
+    expect(searchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs each request made while the panel is open", async () => {
+    const { searchThreads, desktopApi } = setup();
+    const state = createThreadSearchPanelState();
+    render(<ThreadSearchPanel desktopApi={desktopApi} state={state} onOpenResult={vi.fn()} />);
+    act(() => state.requestSearch("first"));
+    expect(await screen.findByRole("button", { name: /hit for first/ })).toBeInTheDocument();
+    act(() => state.requestSearch("second"));
+    expect(await screen.findByRole("button", { name: /hit for second/ })).toBeInTheDocument();
+    expect(searchThreads.mock.calls.map(([request]) => request.query)).toEqual(["first", "second"]);
+  });
+
+  it("still reaches a response when StrictMode mounts the panel twice", async () => {
+    const { desktopApi } = setup();
+    const state = createThreadSearchPanelState();
+    state.requestSearch("4c1e9ab");
+    render(
+      <StrictMode>
+        <ThreadSearchPanel desktopApi={desktopApi} state={state} onOpenResult={vi.fn()} />
+      </StrictMode>,
+    );
+    expect(await screen.findByRole("button", { name: /hit for 4c1e9ab/ })).toBeInTheDocument();
+    expect(state.getSnapshot().searchRequest).toBeUndefined();
+  });
+
+  it("drops a request the operator stops", async () => {
+    const pending = Promise.withResolvers<ThreadSearchResponse>();
+    const searchThreads = vi.fn(async () => await pending.promise);
+    const state = createThreadSearchPanelState();
+    state.requestSearch("slow");
+    render(
+      <ThreadSearchPanel
+        desktopApi={{ searchThreads, cancelThreadSearch: vi.fn(async () => {}) } as unknown as DesktopApi}
+        state={state}
+        onOpenResult={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    expect(state.getSnapshot().searchRequest).toBeUndefined();
+    await act(async () => pending.resolve(searchResponse([])));
   });
 });

@@ -4723,6 +4723,10 @@ function DesktopAppShell(props: {
             onOpenThreadSearch={() => {
               toggleGlobalThreadSearch();
             }}
+            onSearchAllThreads={(query) => {
+              threadSearchState.requestSearch(query);
+              setMainView("search");
+            }}
             onOpenLaunchpad={async (directory, preferredBackend) => {
               setMainView("thread");
               await navigation.openDirectoryLaunchpad(directory, preferredBackend);

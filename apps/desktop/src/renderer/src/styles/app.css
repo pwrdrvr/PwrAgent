@@ -2946,11 +2946,59 @@ textarea,
 }
 
 .jump-palette__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
   margin: 0;
   padding: 34px 20px;
   color: var(--text-muted);
   font-size: 13px;
   text-align: center;
+}
+
+.jump-palette__empty p {
+  margin: 0;
+}
+
+/* Hands the query to the search screen, which also reads message content.
+   Enter runs it while the list is empty; the query in its label ends in an
+   ellipsis before the button outgrows the panel. */
+.jump-palette__search-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.jump-palette__search-all svg {
+  flex: none;
+}
+
+.jump-palette__search-all-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jump-palette__search-all kbd {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.jump-palette__search-all:hover {
+  border-color: var(--accent);
 }
 
 /* ⌘K federated section: remote hits append below the instant local rows. */
@@ -2980,12 +3028,39 @@ textarea,
   font-weight: 500;
 }
 
+.jump-palette__foot > * {
+  flex: none;
+  white-space: nowrap;
+}
+
 .jump-palette__foot-spacer {
   flex: 1;
 }
 
-.jump-palette__foot-remote {
+/* The one status that can be long gives way first. */
+.jump-palette__foot > .jump-palette__foot-remote {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-style: italic;
+  text-overflow: ellipsis;
+}
+
+/* A legend entry that is also a button: the footer's type, the accent's
+   colour. The padding gives it a 24px target without moving the legend. */
+.jump-palette__foot-action {
+  margin: -7px -6px;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  cursor: pointer;
+}
+
+.jump-palette__foot-action:hover {
+  background: var(--accent-soft);
 }
 
 .jump-palette__foot-count {

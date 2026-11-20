@@ -56,6 +56,12 @@ type SidebarSearchPopupProps = {
   onJumpToRemoteThread?: (thread: NavigationThreadSummary) => void;
   onClose: () => void;
   /**
+   * Runs the typed query in the full search screen, which also reads message
+   * content. Given, the palette advertises it: ⌘↵ at any time, ↵ when nothing
+   * here matches, and a button in each place. The Star Map leaves it out.
+   */
+  onSearchAllThreads?: (query: string) => void;
+  /**
    * What picking a result does here, for the dialog's accessible name and
    * the field's own label. The Star Map opens the same palette to fly its
    * camera to a card rather than to scroll a list, and "Jump to thread"
@@ -283,6 +289,16 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     props.onClose();
   };
 
+  // The palette matches titles, PR numbers, branches and projects. The search
+  // screen also reads message content, so it is where a query goes next.
+  const canSearchAll = Boolean(props.onSearchAllThreads) && Boolean(trimmed) && !mention;
+  const searchAll = (): void => {
+    if (!canSearchAll) return;
+    props.onSearchAllThreads?.(trimmed);
+    props.onClose();
+  };
+  const searchAllChord = platform === "darwin" ? "⌘↵" : "Ctrl+↵";
+
   const openPullRequest = (url: string): void => {
     window.open(url, "_blank", "noopener,noreferrer");
     props.onClose();
@@ -348,10 +364,14 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       return;
     }
     if (event.key === "Enter") {
+      if (event.nativeEvent.isComposing) return;
       event.preventDefault();
-      if (active?.kind === "project") {
+      // ⌘↵ always searches everything; plain ↵ does when there is no row to open.
+      if (event.metaKey || event.ctrlKey || !active) {
+        searchAll();
+      } else if (active.kind === "project") {
         chooseProject(active.directory);
-      } else if (active) {
+      } else {
         jump(active.thread);
       }
     }
@@ -516,13 +536,38 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             )}
           </ul>
         ) : showEmpty ? (
-          <p className="jump-palette__empty">{mention
-            ? projectSearch.state?.error ? "Projects unavailable" : "No matching projects"
-            : props.onJumpToProject ? "No threads or projects match" : "No threads match"}</p>
+          <div className="jump-palette__empty">
+            <p>{mention
+              ? projectSearch.state?.error ? "Projects unavailable" : "No matching projects"
+              : props.onJumpToProject ? "No threads or projects match" : "No threads match"}</p>
+            {canSearchAll ? (
+              <button type="button" tabIndex={-1} className="jump-palette__search-all" onClick={searchAll}>
+                <SearchIcon size={14} aria-hidden />
+                <span className="jump-palette__search-all-label">
+                  Search message content for “{trimmed}”
+                </span>
+                <kbd aria-hidden>↵</kbd>
+              </button>
+            ) : null}
+          </div>
         ) : null}
         <div className="jump-palette__foot">
           <span>↑↓ navigate</span>
-          <span>{mention ? "↵ narrow to project" : "↵ open"}</span>
+          {/* With no row to open, ↵ is the search-all key, and says so. */}
+          {canSearchAll && combinedRows.length === 0
+            ? null
+            : <span>{mention ? "↵ narrow to project" : "↵ open"}</span>}
+          {canSearchAll ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              className="jump-palette__foot-action tooltip-target"
+              data-tooltip="Search titles and message content in the search screen"
+              onClick={searchAll}
+            >
+              {combinedRows.length === 0 ? "↵" : searchAllChord} search all
+            </button>
+          ) : null}
           <span>esc close</span>
           <span className="jump-palette__foot-spacer" />
           {/* Peer latency lives in the footer rather than as a list row: a

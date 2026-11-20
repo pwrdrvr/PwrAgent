@@ -47,6 +47,12 @@ type ThreadSearchPanelSnapshot = {
   query: string;
   response: ThreadSearchResponse | undefined;
   sort: ThreadSearchSort;
+  /**
+   * A search asked for from outside the panel (⌘K's "search all") that has
+   * not produced a response yet. A new object per request, so asking again
+   * runs again.
+   */
+  searchRequest: object | undefined;
 };
 
 /**
@@ -65,6 +71,9 @@ export type ThreadSearchPanelState = {
   setQuery: (query: string) => void;
   setResponse: (response: ThreadSearchResponse | undefined) => void;
   setSort: (sort: ThreadSearchSort) => void;
+  /** Puts `query` in the field and has the panel run it, now or when it mounts. */
+  requestSearch: (query: string) => void;
+  settleSearchRequest: () => void;
 };
 
 export function createThreadSearchPanelState(): ThreadSearchPanelState {
@@ -72,6 +81,7 @@ export function createThreadSearchPanelState(): ThreadSearchPanelState {
     query: "",
     response: undefined,
     sort: "relevance",
+    searchRequest: undefined,
   };
   const listeners = new Set<() => void>();
   const update = (patch: Partial<ThreadSearchPanelSnapshot>): void => {
@@ -80,6 +90,7 @@ export function createThreadSearchPanelState(): ThreadSearchPanelState {
       next.query === snapshot.query
       && next.response === snapshot.response
       && next.sort === snapshot.sort
+      && next.searchRequest === snapshot.searchRequest
     ) {
       return;
     }
@@ -97,6 +108,8 @@ export function createThreadSearchPanelState(): ThreadSearchPanelState {
     setQuery: (query) => update({ query }),
     setResponse: (response) => update({ response }),
     setSort: (sort) => update({ sort }),
+    requestSearch: (query) => update({ query, searchRequest: {} }),
+    settleSearchRequest: () => update({ searchRequest: undefined }),
   };
 }
 
@@ -651,10 +664,10 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     next.focus();
   };
 
-  const submit = async (event: FormEvent): Promise<void> => {
-    event.preventDefault();
+  const runSearch = async (): Promise<void> => {
     const trimmed = store.getSnapshot().query.trim();
     if (!trimmed || !props.desktopApi?.searchThreads) {
+      store.settleSearchRequest();
       return;
     }
     const generation = ++searchGeneration.current;
@@ -667,6 +680,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     const scopedThreads = props.threads?.filter((thread) => matchesThreadSearchProjects(thread, parsed.projects));
     const accept = (result: ThreadSearchResponse): void => {
       if (searchGeneration.current !== generation) return;
+      store.settleSearchRequest();
       setResponse(mergeAgentMatches(mergePrNumberMatches(result, parsed.query, scopedThreads), parsed.query, scopedThreads));
     };
     try {
@@ -678,6 +692,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
       }, accept));
     } catch (searchError) {
       if (searchGeneration.current === generation) {
+        store.settleSearchRequest();
         setError(searchError instanceof Error ? searchError.message : String(searchError));
       }
     } finally {
@@ -688,7 +703,22 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     }
   };
 
+  // A search asked for from outside (⌘K's "search all") runs here, when the
+  // panel mounts or while it is open. The request settles when a response or
+  // an error arrives, not when the search starts: StrictMode's mount, unmount,
+  // mount cancels the first run, and the second mount must run it again.
+  const searchRequest = useSyncExternalStore(
+    store.subscribe,
+    () => store.getSnapshot().searchRequest,
+  );
+  const runSearchRef = useRef(runSearch);
+  runSearchRef.current = runSearch;
+  useEffect(() => {
+    if (searchRequest) void runSearchRef.current();
+  }, [searchRequest]);
+
   const cancel = (): void => {
+    store.settleSearchRequest();
     searchGeneration.current += 1;
     searching.current = false;
     setLoading(false);
@@ -738,7 +768,10 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           searchUnavailable={searchUnavailable}
           helpOpen={helpOpen}
           helpId={helpId}
-          onSubmit={(event) => void submit(event)}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runSearch();
+          }}
           onCancel={cancel}
           onToggleHelp={() => setHelpOpen((open) => !open)}
         />

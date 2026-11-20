@@ -1378,3 +1378,100 @@ describe("project mentions", () => {
     expect(screen.getByText("No matching projects")).toBeInTheDocument();
   });
 });
+
+// Model: what Enter does. A row to open → plain ↵ opens it. No row → plain ↵
+// hands the query to the search screen. ⌘↵ / Ctrl+↵ hands it over either way.
+// A surface without a search screen (the Star Map) offers none of it.
+describe("SidebarSearchPopup search all", () => {
+  const threads = [localThread({ id: "deploy", title: "Deploy the docs site" })];
+
+  function open(onSearchAllThreads?: (query: string) => void) {
+    const onJumpToThread = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={threads}
+        onJumpToThread={onJumpToThread}
+        onSearchAllThreads={onSearchAllThreads}
+        onClose={onClose}
+      />,
+    );
+    return { input: screen.getByRole("textbox", { name: "Jump to thread" }), onJumpToThread, onClose };
+  }
+
+  it("hands an unmatched query to the search screen on Enter and says so", async () => {
+    const searchAll = vi.fn();
+    const { input, onJumpToThread, onClose } = open(searchAll);
+    fireEvent.change(input, { target: { value: "  4c1e9ab " } });
+    await settleRemoteSearch();
+    expect(screen.getByText("No threads match")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search message content for “4c1e9ab”" }))
+      .toBeInTheDocument();
+    // The footer's ↵ entry names what ↵ does now.
+    expect(screen.getByRole("button", { name: "↵ search all" })).toBeInTheDocument();
+    expect(screen.queryByText("↵ open")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(searchAll).toHaveBeenCalledExactlyOnceWith("4c1e9ab");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onJumpToThread).not.toHaveBeenCalled();
+  });
+
+  it("runs from the empty state's button", async () => {
+    const searchAll = vi.fn();
+    const { input } = open(searchAll);
+    fireEvent.change(input, { target: { value: "4c1e9ab" } });
+    await settleRemoteSearch();
+    fireEvent.click(screen.getByRole("button", { name: /Search message content/ }));
+    expect(searchAll).toHaveBeenCalledExactlyOnceWith("4c1e9ab");
+  });
+
+  it("opens the row on Enter and searches everything on the chord or the footer button", async () => {
+    const searchAll = vi.fn();
+    const { input, onJumpToThread } = open(searchAll);
+    fireEvent.change(input, { target: { value: "deploy" } });
+    await settleRemoteSearch();
+    expect(resultTitles()).toEqual(["Deploy the docs site"]);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(expect.objectContaining({ id: "deploy" }));
+    expect(searchAll).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "⌘↵ search all" }));
+    expect(searchAll.mock.calls).toEqual([["deploy"], ["deploy"], ["deploy"]]);
+    expect(onJumpToThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the chord for the platform", async () => {
+    desktopApi.platform = "win32";
+    const { input } = open(vi.fn());
+    fireEvent.change(input, { target: { value: "deploy" } });
+    await settleRemoteSearch();
+    expect(screen.getByRole("button", { name: "Ctrl+↵ search all" })).toBeInTheDocument();
+  });
+
+  it("offers nothing before a query, while a project mention completes, or without a search screen", async () => {
+    const searchAll = vi.fn();
+    const { input } = open(searchAll);
+    expect(screen.queryByRole("button", { name: /search all/ })).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    fireEvent.change(input, { target: { value: "@zzz" } });
+    await settleRemoteSearch();
+    expect(screen.getByText("No matching projects")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /search/i })).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(searchAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Star Map's palette as it was", async () => {
+    const { input, onClose } = open();
+    fireEvent.change(input, { target: { value: "4c1e9ab" } });
+    await settleRemoteSearch();
+    expect(screen.getByText("No threads match")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /search/i })).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
