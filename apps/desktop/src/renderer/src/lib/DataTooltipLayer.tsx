@@ -88,7 +88,7 @@ export function DataTooltipLayer() {
 
   useEffect(() => {
     const open = (element: HTMLElement, via: Anchor["via"]): void => {
-      const content = element.getAttribute("data-tooltip");
+      let content = element.getAttribute("data-tooltip");
       if (!content) {
         return;
       }
@@ -106,10 +106,11 @@ export function DataTooltipLayer() {
         const next = element.matches(DATA_TOOLTIP_SELECTOR)
           ? element.getAttribute("data-tooltip")
           : null;
-        if (next) {
-          update(next);
-        } else {
+        if (!next) {
           close();
+        } else if (next !== content) {
+          content = next;
+          update(next);
         }
       });
       observer.observe(element, {
