@@ -12,6 +12,7 @@ import {
   useCallback,
   useEffect,
   Fragment,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -302,6 +303,13 @@ export function buildLaunchpadSelectionKey(directoryKey: string): string {
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 
+/**
+ * How long a Directory threads collapse click waits for the owner to render
+ * the collapse before its scroll anchor is dropped. A failed or rejected
+ * collapse must not move the list on some unrelated later render.
+ */
+const DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS = 2000;
+
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
   selectedUnpinnedThreads: [],
@@ -465,6 +473,51 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
+  // The Directory threads disclosure sticks just under its project's sticky
+  // header, so a long project's divider stays one click away. CSS cannot read
+  // a sibling's height, so each header publishes its own on its section as
+  // `--directory-row-header-height`; it follows the title size and density
+  // settings. Stable, so React attaches it once per header.
+  const directoryHeaderObserverRef = useRef<ResizeObserver | undefined>(undefined);
+  const observeDirectoryHeaderHeight = useCallback((element: HTMLDivElement | null) => {
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    directoryHeaderObserverRef.current ??= new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const height = entry.borderBoxSize[0]?.blockSize
+          ?? entry.target.getBoundingClientRect().height;
+        (entry.target.parentElement as HTMLElement | null)?.style.setProperty(
+          "--directory-row-header-height",
+          `${height}px`,
+        );
+      }
+    });
+    const observer = directoryHeaderObserverRef.current;
+    observer.observe(element);
+    return () => observer.unobserve(element);
+  }, []);
+  // Collapsing Directory threads from its stuck position removes every row
+  // below it. Left alone, the list would land on later projects with this
+  // one scrolled out of view, so the divider is held where it was on screen,
+  // right under its header. Collapse is applied by the owner, so this waits
+  // for the render that shows it.
+  const directoryThreadsCollapseAnchorRef = useRef<
+    { directoryKey: string; top: number; at: number } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    const anchor = directoryThreadsCollapseAnchorRef.current;
+    const list = directoryListRef.current;
+    if (!anchor || !list) return;
+    if (Date.now() - anchor.at > DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS) {
+      directoryThreadsCollapseAnchorRef.current = undefined;
+      return;
+    }
+    const section = [...list.querySelectorAll<HTMLElement>(".directory-row")]
+      .find((element) => element.dataset.directoryKey === anchor.directoryKey);
+    const divider = section?.querySelector<HTMLElement>(".directory-row__thread-divider");
+    if (!divider || divider.getAttribute("aria-expanded") !== "false") return;
+    directoryThreadsCollapseAnchorRef.current = undefined;
+    list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
+  });
 
   // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
   // Updated and Created so all of them edit the one global pin order the same way.
@@ -1542,6 +1595,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
           // and `--with-launchpad` scopes the hover fade so a row that
           // renders no cluster never blanks its counts with nothing in
           // their place. A remote-only row's lone "+" is not a split pair.
+          ref={observeDirectoryHeaderHeight}
           className={`directory-row__header${
             hasLaunchCluster ? " directory-row__header--with-launchpad" : ""
           }${
@@ -1920,7 +1974,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             directoryUnconfigured
                             || !props.onSetDirectoryThreadsCollapsed
                           }
-                          onClick={() => {
+                          onClick={(event) => {
                             if (
                               directoryUnconfigured
                               || Date.now() - lastDirectoryThreadDropAtRef.current <
@@ -1928,6 +1982,13 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             ) {
                               return;
                             }
+                            directoryThreadsCollapseAnchorRef.current = directoryThreadsCollapsed
+                              ? undefined
+                              : {
+                                  directoryKey: directory.key,
+                                  top: event.currentTarget.getBoundingClientRect().top,
+                                  at: Date.now(),
+                                };
                             void props.onSetDirectoryThreadsCollapsed?.(
                               directory,
                               !directoryThreadsCollapsed,

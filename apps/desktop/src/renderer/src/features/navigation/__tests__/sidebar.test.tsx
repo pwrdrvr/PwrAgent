@@ -6421,6 +6421,71 @@ describe("Sidebar", () => {
     );
   });
 
+  it("collapses directory threads from the stuck divider in place", async () => {
+    // The divider sticks under its project header while the unpinned rows
+    // scroll past. Collapsing them from there removes every row below, and
+    // the list landed on later projects with this one scrolled away. The
+    // divider stays where it was clicked, right under the header.
+    const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+    const renderSidebar = (directoryThreadsCollapsed: boolean) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[{ ...directoryWithPinnedThread, directoryThreadsCollapsed }]}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={async () => undefined}
+      />
+    );
+    const { container, rerender } = render(renderSidebar(false));
+    const list = container.querySelector<HTMLElement>(".directory-list")!;
+    let scrollTop = 900;
+    Object.defineProperty(list, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    const divider = screen.getByRole("button", {
+      name: "Hide directory threads for PwrAgent",
+    });
+    const rectAt = (top: number) => ({
+      x: 0, y: top, top, bottom: top + 24, left: 0, right: 300, width: 300, height: 24,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    // Stuck under the header when clicked; back in its place after the
+    // collapse, 400px further up, since the rows below it are gone.
+    vi.spyOn(divider, "getBoundingClientRect")
+      .mockReturnValueOnce(rectAt(26))
+      .mockReturnValue(rectAt(-374));
+
+    await clickElement(divider);
+    // The owner has not applied the collapse yet: nothing moves.
+    expect(scrollTop).toBe(900);
+
+    rerender(renderSidebar(true));
+
+    expect(screen.getByRole("button", {
+      name: "Show directory threads for PwrAgent",
+    })).toBe(divider);
+    expect(scrollTop).toBe(500);
+    // One correction per click: later renders leave the list alone.
+    rerender(renderSidebar(true));
+    expect(scrollTop).toBe(500);
+  });
+
   it("puts a flat lens's load more right under its last row, inside the scrolling lane", () => {
     // It rendered as a sibling after the lane, and the lane is `flex: 1`, so
     // the control landed at the rail's bottom edge — below the start actions,
