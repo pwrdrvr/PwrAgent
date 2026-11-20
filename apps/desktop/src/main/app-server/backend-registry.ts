@@ -1222,8 +1222,8 @@ export class DesktopBackendRegistry {
   /** Set once a quit starts stopping turns; the queue starts nothing after. */
   private stoppingRunningTurnsForShutdown = false;
   private readonly activeTurnBranchProbeAbort = new AbortController();
-  /** Terminal events still reaching listeners while a quit waits on them. */
-  private readonly shutdownTerminalEmits = new Set<Promise<void>>();
+  /** Terminal events still in the delivery pipeline, including before quit. */
+  private readonly pendingTerminalEmits = new Set<Promise<void>>();
   /**
    * What this process knows about each thread it has seen, keyed by thread
    * identity rather than by the query that revealed it.
@@ -2278,12 +2278,12 @@ export class DesktopBackendRegistry {
    * transcript, queue, and every listener record an interrupted turn with
    * the backend's own end time.
    *
-   * The requests go out together under one deadline, and the wait covers
-   * only the turns a backend was asked to stop: one no backend can stop has
-   * no terminal coming. A turn that has not ended by the deadline, that no
-   * backend could be asked to stop, or that started afterwards, keeps the
-   * shutdown stamp close() records. Runs once; close() waits for it too, so
-   * a close outside the quit sequence still asks before it kills.
+   * The requests go out together under one deadline. Wait for requested
+   * turns to end and for pending terminal events to reach listeners, even
+   * if a terminal entered before quit or already unregistered its turn.
+   * A turn still running when the wait ends keeps the shutdown stamp close()
+   * records. Runs once; close() waits for it too, so a close outside the quit
+   * sequence still asks before it kills.
    */
   stopRunningTurnsForShutdown(
     options: { timeoutMs?: number } = {},
@@ -2296,6 +2296,10 @@ export class DesktopBackendRegistry {
     return this.runningTurnsShutdownStop;
   }
 
+  private hasTurnShutdownWork(registeredTurnCount: number): boolean {
+    return registeredTurnCount > 0 || this.pendingTerminalEmits.size > 0;
+  }
+
   private async stopRunningTurnsForShutdownOnce(timeoutMs: number): Promise<void> {
     if (this.closed) {
       return;
@@ -2303,7 +2307,7 @@ export class DesktopBackendRegistry {
     this.stoppingRunningTurnsForShutdown = true;
     this.activeTurnBranchProbeAbort.abort();
     const keys = [...this.context.turnState.registeredTurnKeys()];
-    if (keys.length === 0) {
+    if (!this.hasTurnShutdownWork(keys.length)) {
       return;
     }
     const startedAt = Date.now();
@@ -2333,7 +2337,7 @@ export class DesktopBackendRegistry {
       void sent.then(async () => {
         if (requests.requested === 0) {
           // A turn that ended on its own meanwhile still reaches listeners.
-          await Promise.all([...this.shutdownTerminalEmits]);
+          await Promise.all([...this.pendingTerminalEmits]);
           resolve("nothing-sent");
           return;
         }
@@ -2346,7 +2350,7 @@ export class DesktopBackendRegistry {
         ended.then(async () => {
           // A turn leaves the running set before its listeners run. Let
           // messaging and the renderer see each terminal before they stop.
-          await Promise.all([...this.shutdownTerminalEmits]);
+          await Promise.all([...this.pendingTerminalEmits]);
           return "ended" as const;
         }),
         nothingSent,
@@ -14788,13 +14792,12 @@ export class DesktopBackendRegistry {
 
   private async closeResources(): Promise<void> {
     this.threadArchiveCoordinator.tryCheckpointArchiveCleanupsForQuit("before-drain");
-    // Before anything unsubscribes or closes, so each turn's own terminal
-    // still reaches every consumer. A quit has normally done this already,
-    // while messaging was still running. Wait only when there is a turn to
-    // wait for: with none, `closed` below must hold from the call itself.
+    // Drain terminal delivery before closing resources. The quit phase
+    // normally does this while messaging is still running. With no pending
+    // work, `closed` below must hold from the call itself.
     const runningTurnsStopPending = this.runningTurnsShutdownStop
       ? !this.runningTurnsShutdownStopSettled
-      : this.context.turnState.registeredTurnCount > 0;
+      : this.hasTurnShutdownWork(this.context.turnState.registeredTurnCount);
     if (runningTurnsStopPending) {
       await this.stopRunningTurnsForShutdown();
     }
@@ -20615,16 +20618,21 @@ export class DesktopBackendRegistry {
 
   private async emit(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
+    const isTerminal = notification.method === "turn/completed"
+      || notification.method === "turn/failed" || notification.method === "turn/cancelled";
+    const terminalDelivery = isTerminal ? Promise.withResolvers<void>() : undefined;
+    // Register before observers can unregister the turn, and before any
+    // await so a shutdown starting mid-delivery can still drain it.
+    if (terminalDelivery) this.pendingTerminalEmits.add(terminalDelivery.promise);
     const ownedStartDelivery = !codexStartDelivery && event.backend === "codex" && notification.method === "turn/started"
       ? this.context.turnState.beginStartDelivery(notification.params.threadId, turnIdFromStartedNotification(notification as Extract<AppServerNotification, { method: "turn/started" }>))
       : undefined;
     codexStartDelivery ??= ownedStartDelivery;
-    if (event.backend === "codex" && (notification.method === "turn/completed"
-      || notification.method === "turn/failed" || notification.method === "turn/cancelled")) {
-      this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
-    }
     try {
       if (event.backend === "codex") {
+        if (isTerminal) {
+          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
+        }
         const params = readRecord(event.notification.params);
         const threadId = readOptionalString(params, ["threadId"]);
         const turnId = readOptionalString(params, ["turnId"])
@@ -20664,21 +20672,12 @@ export class DesktopBackendRegistry {
             .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
             .then(() => this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery))
         : this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery);
-      const method = event.notification.method;
-      if (
-        this.stoppingRunningTurnsForShutdown
-        && (
-          method === "turn/completed"
-          || method === "turn/failed"
-          || method === "turn/cancelled"
-        )
-      ) {
-        const delivered = emitted.catch(() => undefined);
-        this.shutdownTerminalEmits.add(delivered);
-        void delivered.finally(() => this.shutdownTerminalEmits.delete(delivered));
-      }
       return await emitted;
     } finally {
+      if (terminalDelivery) {
+        this.pendingTerminalEmits.delete(terminalDelivery.promise);
+        terminalDelivery.resolve();
+      }
       if (ownedStartDelivery) this.context.turnState.endStartDelivery(ownedStartDelivery);
     }
   }
