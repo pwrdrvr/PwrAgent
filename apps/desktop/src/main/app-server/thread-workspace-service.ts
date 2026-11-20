@@ -458,6 +458,11 @@ export class ThreadWorkspaceService {
         threadId: request.threadId,
       });
     }
+    if (request.backend === "codex") {
+      // Let a previously dispatched sync finish before reading ownership or
+      // replacing the CWD. The workspace mutation blocks new background syncs.
+      await this.pendingCodexWorkspaceCwdSyncs.get(request.threadId)?.promise;
+    }
 
     const thread = await this.host().findThreadForWorkspaceHandoff({
       backend: request.backend,
@@ -503,8 +508,14 @@ export class ThreadWorkspaceService {
     const sourcePath = request.sourcePath ?? candidate.sourcePath;
     const sourceWorktreeIsExternal = request.direction === "worktree-to-worktree"
       && await this.threadWorktreeIsExternal(request, thread, sourcePath);
-    const result = await this.threadArchiveCoordinator.withArchiveWorkspaceWrite([sourcePath, request.targetPath].filter((value): value is string => Boolean(value)), async () => await this.gitWorkspaceHandoffService.handoff({
+    const mayChangeSource = request.direction === "worktree-to-local"
+      || (request.direction === "worktree-to-worktree" && !request.baseRef?.trim());
+    const handoff = async (workspaceWriteKey?: string) => await this.gitWorkspaceHandoffService.handoff({
       ...request,
+      ...(workspaceWriteKey ? {
+        withSourceWorktreeAccess: (worktreePath, handoff) =>
+          this.threadArchiveCoordinator.withHandoffWorktreeAccess(request, worktreePath, workspaceWriteKey, handoff),
+      } : {}),
       ...(sourceWorktreeIsExternal ? { keepSourceWorktree: true } : {}),
       ...(workspacePaths ? {
         workspacePaths,
@@ -519,7 +530,11 @@ export class ThreadWorkspaceService {
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
       sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
-    }));
+    });
+    const paths = [sourcePath, request.targetPath].filter((value): value is string => Boolean(value));
+    const result = mayChangeSource
+      ? await this.threadArchiveCoordinator.withArchiveWorkspaceWriteKey(paths, handoff)
+      : await this.threadArchiveCoordinator.withArchiveWorkspaceWrite(paths, handoff);
     // A fresh start leaves the previous worktree on disk, and its changes may
     // not be this thread's. Keep a worktree this thread owns tracked, so
     // archiving the thread still checkpoints and removes it.
@@ -1292,6 +1307,11 @@ export class ThreadWorkspaceService {
     threads: AppServerThreadSummary[];
   }): void {
     for (const thread of params.threads) {
+      // A handoff's own ownership scan can still list the previous provider
+      // CWD. The handoff will publish its destination once Git has finished.
+      if (this.workspaceMutations.has(buildThreadIdentityKey("codex", thread.id))) {
+        continue;
+      }
       // Codex already told us it cannot open this thread. Retrying the
       // workspace write on every `thread/list` produced one warning per list
       // per thread forever; the missing-thread audit owns the outcome now.

@@ -614,7 +614,25 @@ describe("GitWorkspaceHandoffService", () => {
       expect(result.archivedSourceWorktree).toBeUndefined();
       expect(result.warnings).toContain("The previous worktree was created outside PwrAgent, so it was left on disk.");
       expect(await pathExists(worktreePath)).toBe(true);
-      expect(await git(worktreePath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
+      await expectCarriedChanges(worktreePath);
+    });
+
+    it("copies an untracked-only change with a Git-quoted filename", async () => {
+      const repoPath = await createRepo();
+      const worktreePath = path.join(path.dirname(repoPath), "worktree-untracked");
+      await git(repoPath, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
+      const file = "café [new].txt";
+      await writeFile(path.join(worktreePath, file), "untracked");
+
+      const result = await new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" }).handoff({
+        backend: "codex", threadId: "thread-1", direction: "worktree-to-worktree",
+        repositoryPath: repoPath, sourcePath: worktreePath, keepSourceWorktree: true,
+      });
+
+      expect(await git(worktreePath, ["status", "--porcelain"])).toMatch(/^\?\?/);
+      expect(await git(result.targetPath, ["status", "--porcelain"])).toMatch(/^\?\?/);
+      await expect(readFile(path.join(worktreePath, file), "utf8")).resolves.toBe("untracked");
+      await expect(readFile(path.join(result.targetPath, file), "utf8")).resolves.toBe("untracked");
     });
 
     it("refuses to start from the local checkout", async () => {

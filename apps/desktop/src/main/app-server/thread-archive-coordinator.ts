@@ -12,6 +12,7 @@ import { resolveOwnedMaintenanceCheckouts } from "./thread-owned-checkouts";
 import { mapMaintenanceAudit } from "./maintenance-audit-pool";
 import type { FleetChange } from "./archive-cleanup-fleet-index";
 import { ArchiveCleanupInventory, type ArchiveCleanupInventoryHost } from "./archive-cleanup-inventory";
+import type { HandoffSourceWorktreeAccess } from "./git-workspace-handoff-service";
 import { ArchiveRemovalNeedsFreshInventoryError, ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
@@ -2475,6 +2476,57 @@ export class ThreadArchiveCoordinator {
     };
   }
 
+  async withHandoffWorktreeAccess<T>(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    worktreePath: string,
+    workspaceWriteKey: string,
+    handoff: (access: HandoffSourceWorktreeAccess) => Promise<T>,
+  ): Promise<T> {
+    const scope = new ArchiveWorkspaceAdmission(buildThreadIdentityKey(identity.backend, identity.threadId), worktreePath);
+    const admission = { ...identity, worktreePath, scope };
+    // The handoff already holds a write for the source. Only that write
+    // may overlap this admission; other writers still fence it.
+    this.archiveWorktreeRemovalAdmissions.add(admission);
+    this.archiveWorkspaceOwnership.beginAdmission(scope, workspaceWriteKey);
+    const assertExclusive = () => {
+      if (this.context.lifecycle.closed) throw new ArchiveCleanupCancelledError();
+      scope.assertCurrent(this.archiveWorkspaceMutations());
+    };
+    const verifyExclusive = async () => {
+      if (this.host().isCodexBootstrapDeferredFn()) throw new Error("Could not verify which threads use it.");
+      const discovery = { ...identity, ownershipScope: worktreePath, removalAdmission: scope };
+      const inventory = this.context.providers.codex.listArchiveCleanupThreadsPage
+        ? await this.cleanupInventory.readPacedArchiveCleanupInventory(discovery)
+        : await this.cleanupInventory.findThreadForArchiveCleanup(discovery);
+      const { users, external } = await this.readCanonicalArchiveOwnership(inventory, worktreePath);
+      if (users.some((thread) => thread.id !== identity.threadId || thread.source !== identity.backend)) {
+        throw new Error("The worktree is still used by another active thread.");
+      }
+      if (external) throw new Error("The worktree is externally managed.");
+      await scope.prepare(this.archiveWorkspaceMutationsFor(scope));
+      assertExclusive();
+      scope.reserve(this.archiveWorkspaceMutations());
+    };
+    try {
+      try {
+        await verifyExclusive();
+      } catch (error) {
+        if (this.context.lifecycle.closed) throw error;
+        this.archiveWorktreeRemovalAdmissions.delete(admission);
+        return await handoff({ keepReason: error instanceof Error ? error.message : String(error) });
+      }
+      return await handoff({
+        assertExclusive,
+        beforeRemove: async () => {
+          await verifyExclusive();
+          return assertExclusive;
+        },
+      });
+    } finally {
+      this.archiveWorktreeRemovalAdmissions.delete(admission);
+    }
+  }
+
   async restoreWorktree(
     request: RestoreWorktreeRequest,
   ): Promise<RestoreWorktreeResponse> {
@@ -4549,7 +4601,11 @@ export class ThreadArchiveCoordinator {
 
   private archiveWorkspaceWriteSequence = 0;
 
-  async withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T> {
+  withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T> {
+    return this.withArchiveWorkspaceWriteKey(paths, () => work());
+  }
+
+  async withArchiveWorkspaceWriteKey<T>(paths: readonly string[], work: (key: string) => Promise<T>): Promise<T> {
     const key = `workspace-write:${++this.archiveWorkspaceWriteSequence}`;
     const finish = this.archiveWorkspaceOwnership.beginMutation(key, true);
     try {
@@ -4557,7 +4613,7 @@ export class ThreadArchiveCoordinator {
       // read, a removal near these paths cannot rely on incremental evidence.
       await this.cleanupInventory.notePathWrite(paths);
       await this.archiveWorkspaceOwnership.assertAvailable(paths);
-      return await work();
+      return await work(key);
     } finally {
       await this.archiveWorkspaceOwnership.refresh(finish(), async () => paths.length ? paths : [""]);
     }
