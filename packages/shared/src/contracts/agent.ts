@@ -571,11 +571,16 @@ export type StopSubAgentResponse = {
   stoppedAt: number;
 };
 
+export type FailedSubAgentAttempt = {
+  monitorId: string;
+  attemptId: string;
+};
+
 export type DismissFailedSubAgentsRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
-  monitorIds: string[];
+  attempts: FailedSubAgentAttempt[];
 };
 
 export type DismissFailedSubAgentsResponse = {

@@ -10071,6 +10071,7 @@ export class DesktopBackendRegistry {
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task: "Name queued messages",
+      attemptId: randomUUID(),
       status: succeeded ? "success" : "failed",
       // Each run is a new attempt, so the card's timing is the latest run's.
       createdAt: settlement.startedAt,
@@ -11993,14 +11994,16 @@ export class DesktopBackendRegistry {
   async dismissFailedSubAgents(params: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse> {
     if (!params || typeof params.backend !== "string" || !isAppServerBackendKind(params.backend)
       || typeof params.threadId !== "string" || !params.threadId.trim()
-      || !Array.isArray(params.monitorIds) || !params.monitorIds.every((id) => typeof id === "string" && id.length > 0)) {
+      || !Array.isArray(params.attempts) || !params.attempts.every((attempt) =>
+        attempt && typeof attempt.monitorId === "string" && attempt.monitorId.length > 0
+        && typeof attempt.attemptId === "string" && attempt.attemptId.length > 0)) {
       throw new Error("Invalid failed sub-agent dismissal request.");
     }
     const dismissedCount = await this.overlayStore.dismissFailedThreadSubAgents(params);
     if (dismissedCount > 0) {
       await this.emit({
         backend: params.backend,
-        notification: { method: "thread/subAgents/updated", params: { threadId: params.threadId } },
+        notification: { method: "thread/subAgentFailures/dismissed", params: { threadId: params.threadId } },
       });
     }
     return { dismissedCount };
@@ -17671,6 +17674,7 @@ export class DesktopBackendRegistry {
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task: "Name this thread",
+      attemptId: startsNewAttempt || !existing ? randomUUID() : existing.attemptId,
       status: params.status,
       createdAt: startsNewAttempt ? now : existing?.createdAt ?? now,
       updatedAt: now,

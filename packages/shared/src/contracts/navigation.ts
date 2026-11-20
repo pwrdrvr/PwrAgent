@@ -426,7 +426,7 @@ export type TokenMiserSubAgentAccounting = {
 
 export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
   | "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
-  | "agentName"
+  | "agentName" | "attemptId"
 >;
 
 export type ThreadSubAgentSummary = {
@@ -434,6 +434,8 @@ export type ThreadSubAgentSummary = {
   causalMessagingSource?: import("./normalized-app-server").MessagingCausalSourceRef;
   causalMessagingAmbiguous?: boolean;
   monitorId: string;
+  /** Set by producers that reuse a monitor ID for multiple attempts. */
+  attemptId?: string;
   task: string;
   status: ThreadSubAgentStatus;
   createdAt: number;

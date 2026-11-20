@@ -28,16 +28,11 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.tbl_name !== "research_workers"
     && row.tbl_name !== "research_items"
     && row.tbl_name !== "research_deliveries"
+    && row.tbl_name !== "thread_sub_agent_failure_dismissals"
     && row.name !== "idx_thread_usage_lines_identity"
-  ).map(row => {
-    if (row.name === "thread_usage_lines") {
-      return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
-    }
-    if (row.name === "thread_sub_agents") {
-      return { ...row, sql: row.sql?.replace(/^ {2}dismissed_from_strip INTEGER NOT NULL DEFAULT 0,\n/m, "") };
-    }
-    return row;
-  }) : rows;
+  ).map(row => row.name === "thread_usage_lines"
+    ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
+    : row) : rows;
   return {
     sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
     objects: compared.length,

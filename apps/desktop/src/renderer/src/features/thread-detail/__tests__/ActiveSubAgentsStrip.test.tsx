@@ -359,6 +359,31 @@ describe("ActiveSubAgentsStrip", () => {
   });
 
   describe("failed sub-agents", () => {
+    it.each([
+      { capabilities: [] },
+      { capabilities: ["turn_control"] },
+      { capabilities: ["sub_agent_failure_dismissal"] },
+    ] as const)(
+      "omits remote dismissal when the owner lacks permission or support ($capabilities)",
+      ({ capabilities }) => {
+        const dismissFailedSubAgents = vi.fn();
+        const thread: NavigationThreadSummary = {
+          ...buildThread([
+            buildSubAgent({ monitorId: "first", status: "failed" }),
+            buildSubAgent({ monitorId: "second", status: "failure" }),
+          ]),
+          federation: {
+            instanceLabel: "Owner",
+            ref: { backend: "codex", threadId: "parent-thread", target: { scope: "remote", instanceId: "owner" } },
+            capabilities: [...capabilities],
+          },
+        };
+        render(<ActiveSubAgentsStrip desktopApi={{ dismissFailedSubAgents }} thread={thread} />);
+        expect(screen.getByRole("button", { name: "Failed sub-agents, 2" })).toBeVisible();
+        expect(screen.queryAllByRole("button", { name: /^Dismiss/ })).toHaveLength(0);
+      },
+    );
+
     it("does not call itself Active when nothing is running", () => {
       // Regression: a thread with 13 failures and nothing running rendered
       // "ACTIVE SUB-AGENTS 13", which is just false.
@@ -488,7 +513,10 @@ describe("ActiveSubAgentsStrip", () => {
       );
       await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
       expect(dismissFailedSubAgents).toHaveBeenCalledExactlyOnceWith({
-        backend: "codex", threadId: "parent-thread", monitorIds: ["x", "y"],
+        backend: "codex", threadId: "parent-thread", attempts: [
+          { monitorId: "x", attemptId: "1800000000000" },
+          { monitorId: "y", attemptId: "1800000000000" },
+        ],
       });
       expect(screen.getByText("Still going")).toBeVisible();
       expect(screen.queryByText("Failed")).toBeNull();

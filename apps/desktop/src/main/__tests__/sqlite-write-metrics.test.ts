@@ -526,10 +526,12 @@ describe("sqlite write metrics", () => {
     await store.upsertThreadSubAgents({ ...identity, subAgents: failures });
     await store.upsertThreadSubAgents({ ...otherIdentity, subAgents: [failures[0]!] });
     // Simulate existing cards written before this schema change.
-    stateDb.raw.exec("ALTER TABLE thread_sub_agents DROP COLUMN dismissed_from_strip");
+    stateDb.raw.exec("DROP TABLE thread_sub_agent_failure_dismissals");
     const dbPath = path.join(tempDir, "state.db");
     StateDb.open(dbPath).close();
-    const request = { ...identity, monitorIds: [...failures.map((card) => card.monitorId), running.monitorId] };
+    const request = { ...identity, attempts: [...failures, running].map(({ monitorId, createdAt }) => ({
+      monitorId, attemptId: String(createdAt),
+    })) };
 
     const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
@@ -558,9 +560,9 @@ describe("sqlite write metrics", () => {
         await expect(client.dismissFailedSubAgents(request)).resolves.toEqual({ dismissedCount: 102 });
       });
       expectSqliteWriteBudget({ scenario: "failed-subagent-bulk-dismissal",
-        note: "One operator dismissal of 102 failures: 20,600 bytes per click, ~0.21 MB/day at 10 such dismissals/day, zero idle writes.", writes });
+        note: "One operator dismissal of 102 failures: 4,120 bytes per click, ~0.04 MB/day at 10 such dismissals/day, zero idle writes.", writes });
       expect(events.mock.calls.map(([event]) => event.notification)).toEqual([
-        { method: "thread/subAgents/updated", params: { threadId: "parent" } },
+        { method: "thread/subAgentFailures/dismissed", params: { threadId: "parent" } },
       ]);
       const retry = await measureSqliteWrites(() => client.dismissFailedSubAgents(request));
       expect(retry.result).toEqual({ dismissedCount: 0 });

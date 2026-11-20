@@ -162,7 +162,7 @@ const registry = {
     turnId: request.turnId,
   })),
   dismissFailedSubAgents: vi.fn(async (request: DismissFailedSubAgentsRequest) => ({
-    dismissedCount: request.monitorIds.length,
+    dismissedCount: request.attempts.length,
   })),
   stopSubAgent: vi.fn(async (request: StopSubAgentRequest) => ({
     backend: request.backend,
@@ -291,7 +291,7 @@ const federationMock = vi.hoisted(() => {
       turnId: request.turnId,
     })),
     dismissFailedSubAgents: vi.fn(async (request: DismissFailedSubAgentsRequest) => ({
-      dismissedCount: request.monitorIds.length,
+      dismissedCount: request.attempts.length,
     })),
     stopSubAgent: vi.fn(async (request: StopSubAgentRequest) => ({
       backend: request.backend,
@@ -1217,7 +1217,9 @@ describe("agent ipc", () => {
   it("sends a failed sub-agent dismissal only to the owning instance", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = createAgentIpcHarness();
     const { AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL } = await import("../../shared/ipc");
-    const request = { backend: "codex", threadId: "thread-1", monitorIds: ["failed-1", "failed-2"] };
+    const request = { backend: "codex", threadId: "thread-1", attempts: [
+      { monitorId: "failed-1", attemptId: "1" }, { monitorId: "failed-2", attemptId: "2" },
+    ] };
     const target = { scope: "remote", instanceId: "client_one" };
     registry.dismissFailedSubAgents.mockClear();
     federationMock.remoteBackend.dismissFailedSubAgents.mockClear();

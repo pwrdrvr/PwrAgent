@@ -62,6 +62,11 @@ export function ActiveSubAgentsStrip(props: {
 }): ReactNode {
   const thread = props.thread;
   const threadKey = thread && threadSummaryIdentityKey(thread);
+  const ref = thread?.federation?.ref;
+  const target = ref?.target ?? readRendererFederationTarget();
+  const capabilities = thread?.federation?.capabilities;
+  const canOfferDismiss = target?.scope !== "remote"
+    || (capabilities?.includes("turn_control") && capabilities.includes("sub_agent_failure_dismissal"));
   const dismiss = props.desktopApi?.dismissFailedSubAgents;
   const [dismissal, setDismissal] = useState<{ threadKey: string; phase: "saving" | "failed" }>();
   const dismissalPhase = dismissal?.threadKey === threadKey ? dismissal?.phase : undefined;
@@ -111,18 +116,18 @@ export function ActiveSubAgentsStrip(props: {
     return null;
   }
 
-  const dismissFailures = async (monitorIds: string[]): Promise<void> => {
-    if (!dismiss || !thread || !threadKey) return;
+  const dismissFailures = async (failures: readonly ThreadSubAgentSummary[]): Promise<void> => {
+    if (!canOfferDismiss || !dismiss || !thread || !threadKey) return;
     const pending = { threadKey, phase: "saving" } as const;
     setDismissal(pending);
     try {
-      const ref = thread.federation?.ref;
-      const target = ref?.target ?? readRendererFederationTarget();
       await dismiss({
         backend: ref?.backend ?? thread.source,
         ...(target ? { federationTarget: target } : {}),
         threadId: ref?.threadId ?? thread.id,
-        monitorIds,
+        attempts: failures.map(({ monitorId, attemptId, createdAt }) => ({
+          monitorId, attemptId: attemptId ?? String(createdAt),
+        })),
       });
     } catch {
       setDismissal((current) => current === pending ? { threadKey, phase: "failed" } : current);
@@ -222,13 +227,13 @@ export function ActiveSubAgentsStrip(props: {
         {/* Clearing failures one at a time is fine for one or two and a chore
             at a dozen. Only ever clears failures — a running sub-agent is
             never swept up by it. */}
-        {failed.length > 1 ? (
+        {canOfferDismiss && failed.length > 1 ? (
           <button
             aria-label={`Dismiss all ${failed.length} failed sub-agents`}
             className="live-strip__item-action live-strip__dismiss-all"
             disabled={!dismiss || dismissalPhase === "saving"}
             type="button"
-            onClick={() => void dismissFailures(failed.map((agent) => agent.monitorId))}
+            onClick={() => void dismissFailures(failed)}
           >
             Dismiss all
           </button>
@@ -299,13 +304,13 @@ export function ActiveSubAgentsStrip(props: {
                     state text slid right to the edge while every neighbour's
                     stopped short — the right rail stopped being a column. */}
                 <span className="live-strip__item-slot">
-                  {failedRow ? (
+                  {failedRow && canOfferDismiss ? (
                     <button
                       aria-label={`Dismiss failed sub-agent: ${label}`}
                       className="live-strip__item-action"
                       disabled={!dismiss || dismissalPhase === "saving"}
                       type="button"
-                      onClick={() => void dismissFailures([subAgent.monitorId])}
+                      onClick={() => void dismissFailures([subAgent])}
                     >
                       Dismiss
                     </button>

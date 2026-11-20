@@ -116,6 +116,12 @@ async function closeResearchOwner(): Promise<void> {
 const navigationQueryPool = getDesktopNavigationQueryPool();
 
 function invalidateNavigationEvent(event: AgentEvent): void {
+  if (event.notification.method === "thread/subAgentFailures/dismissed") {
+    navigationQueryPool.invalidateExactOwner(event.federationTarget, {
+      backend: event.backend, threadId: event.notification.params.threadId,
+    }, "detail");
+    return;
+  }
   appServerService.invalidateThreadPendingWakes(event);
   getDesktopNavigationQueryStore().observeAttentionEvent(event);
   if (event.notification.method === "federation/eventStream/changed" && event.notification.params.navigationContinuous) return;

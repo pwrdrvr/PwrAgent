@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ThreadActiveSubAgent } from "@pwragent/shared";
+import type { DismissFailedSubAgentsRequest, NavigationThreadSummary, ThreadActiveSubAgent } from "@pwragent/shared";
 import { ActiveSubAgentsStrip } from "../ActiveSubAgentsStrip";
 
 async function expectDismissalToSurviveRemount(count: number, bulk: boolean) {
@@ -13,10 +13,16 @@ async function expectDismissalToSurviveRemount(count: number, bulk: boolean) {
     status: index % 2 === 0 ? "failed" : "failure",
     createdAt: index,
     updatedAt: index,
+    ...(index % 2 === 0 ? { attemptId: `attempt-${index}` } : {}),
   }));
+  const attemptedFailure = ({ monitorId, attemptId, createdAt }: ThreadActiveSubAgent) =>
+    ({ monitorId, attemptId: attemptId ?? String(createdAt) });
   const ownerCards = new Map(failures.map((card) => [card.monitorId, card]));
-  const dismissFailedSubAgents = vi.fn(async ({ monitorIds }: { monitorIds: string[] }) => {
-    const dismissedCount = monitorIds.filter((id) => ownerCards.delete(id)).length;
+  const dismissFailedSubAgents = vi.fn(async ({ attempts }: DismissFailedSubAgentsRequest) => {
+    const dismissedCount = attempts.filter(({ monitorId, attemptId }) => {
+      const card = ownerCards.get(monitorId);
+      return card && attemptedFailure(card).attemptId === attemptId && ownerCards.delete(monitorId);
+    }).length;
     return { dismissedCount };
   });
   const desktopApi = { stopSubAgent: vi.fn(), dismissFailedSubAgents };
@@ -27,7 +33,10 @@ async function expectDismissalToSurviveRemount(count: number, bulk: boolean) {
     source: "codex",
     linkedDirectories: [],
     inbox: { inInbox: true },
-    federation: { ref: { backend: "codex", threadId: "parent", target }, instanceLabel: "Owner" },
+    federation: {
+      ref: { backend: "codex", threadId: "parent", target }, instanceLabel: "Owner",
+      capabilities: ["turn_control", "sub_agent_failure_dismissal"],
+    },
     activeSubAgents: [...ownerCards.values()],
   });
   const view = render(<ActiveSubAgentsStrip thread={readOwner()} desktopApi={desktopApi} />);
@@ -55,7 +64,7 @@ async function expectDismissalToSurviveRemount(count: number, bulk: boolean) {
       backend: "codex",
       threadId: "parent",
       federationTarget: target,
-      monitorIds: bulk ? failures.map((card) => card.monitorId) : ["failed-0"],
+      attempts: (bulk ? failures : failures.slice(0, 1)).map(attemptedFailure),
     });
   } finally {
     reopened.unmount();
