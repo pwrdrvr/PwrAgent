@@ -50,6 +50,7 @@ export async function startOutpostDaemon(options: {
   packageRoot?: string;
   hostKind?: "desktop" | "headless";
   fixturePreload?: string;
+  env?: NodeJS.ProcessEnv;
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -69,7 +70,7 @@ export async function startOutpostDaemon(options: {
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
   writeOutpostGatewayConfig(root);
-  const env: NodeJS.ProcessEnv = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...options.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
   const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
   if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;

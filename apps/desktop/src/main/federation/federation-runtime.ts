@@ -4,7 +4,7 @@ import { appendFederationRefusalAudit } from "@pwragent/federation/federation-re
 import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
 import { FEDERATION_MEMBER_ROLE_DECLARE_METHOD, FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
 import type { FederationPeerRole } from "@pwragent/shared";
-import { applicationHost as app } from "../owner-host";
+import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import { installOwnerEgressPolicy } from "./owner-egress-policy";
 import {
   clearGatewayAssignedMemberRole,
@@ -1295,6 +1295,9 @@ export class DesktopFederationRuntime {
       this.durableTurnRequests = new DurableTurnRequestService({
         storage: createDurableTurnRequestStorage(),
         ownerInstanceId: this.ensureLocalInstanceId(),
+        ...(getOwnerHostServices().runtimePolicy?.codexOpenAiProviderEnabled === false ? {
+          admitTurn: (request) => getDesktopBackendRegistry().assertThreadCodexInferenceAvailable(request),
+        } : {}),
         authorize: async (_scope, request) => {
           const resolved = await backend.resolveThread({ backend: request.backend, threadId: request.threadId });
           if (!resolved.thread) throw new DurableTurnRequestError("request_destination_unavailable");

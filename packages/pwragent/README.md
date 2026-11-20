@@ -98,6 +98,7 @@ environment. An unknown value stops startup instead of falling back.
 | `PWRAGENT_OUTPOST_AGENT_NETWORK` | `on` or `off`: network for agent commands | `off` |
 | `PWRAGENT_OUTPOST_APPROVALS` | `ask` or `never` | `ask` |
 | `PWRAGENT_OUTPOST_FEDERATION_ROLE` | `contained` or `full` | `contained` |
+| `PWRAGENT_OUTPOST_OPENAI_PROVIDER` | `on` or `off` for Codex's built-in OpenAI provider | `on` |
 
 Execution mode and federation role are independent. A contained Outpost
 supports Auto with workspace writes and operator-controlled approvals. With
@@ -110,6 +111,14 @@ The allowlist applies to all threads owned by the Outpost. To change it on an
 existing Docker Outpost, back up its named volume and recreate the container
 with the updated environment and the same volume attached. The volume holds
 the Outpost's enrollment, threads, and workspaces.
+
+For a proxy-only deployment, set `PWRAGENT_OUTPOST_OPENAI_PROVIDER=off` and
+configure a Codex model provider in the Outpost profile. New threads can use
+qualified models such as `@proxy/model`. When a launch omits the model, the
+owner selects an available configured model. Existing OpenAI threads remain
+readable and keep their model metadata. To continue their work through a proxy,
+start a new thread on that provider. Thread naming uses the first prompt as
+its fallback while the OpenAI title helper is disabled.
 
 ### Approvals
 

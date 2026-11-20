@@ -11,6 +11,8 @@ import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
+import { getOwnerHostServices } from "../owner-host";
+import { assertOwnerCodexModelSelection } from "../owner-runtime-policy";
 import {
   navigationLaunchpadProviderKey,
   providerPickerValue,
@@ -1440,6 +1442,16 @@ export class ThreadDirectoryService {
       sourceInstanceId?: FederationInstanceId;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if (policy?.codexOpenAiProviderEnabled === false) {
+      const draft = request.launchpad ?? await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      if (draft) {
+        const projected = projectNavigationLaunchpadProviderSettings(draft);
+        assertOwnerCodexModelSelection(policy, { backend: draft.backend, model: draft.model, collaborationMode: request.collaborationMode });
+        assertOwnerCodexModelSelection(policy, projected);
+        request = { ...request, launchpad: draft };
+      }
+    }
     const prepare = async (operation?: LaunchpadCreationOperation) => {
       const input = await options?.resolveInput?.();
       operation?.check();

@@ -20,7 +20,7 @@ import { refuseResolvedWorkMode } from "./required-work-mode";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
 import { logDebug } from "./registry-debug-log";
 import type { RegistryDependencies } from "./backend-registry-construction";
-import { assertOwnerExecutionPolicy, ownerSandboxForMode } from "../owner-runtime-policy";
+import { assertOutpostCodexProvider, assertOwnerCodexModelSelection, assertOwnerExecutionPolicy, ownerSandboxForMode, type OwnerExecutionRequest } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
 import { localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
@@ -105,10 +105,14 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import {
+  applyNavigationLaunchpadProviderSettingsPatch,
   attributeCodexProviderUsageLine,
+  codexModelProviderPickerValue,
+  navigationLaunchpadProviderKey,
   withCodexProviderSnapshotRates,
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
+  type NavigationLaunchpadDefaults,
 } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
@@ -830,6 +834,7 @@ import {
   describeCodexRateLimit,
   getBackendFallbackModels,
   getCodexFastModeMismatchWarning,
+  getDefaultModelOption,
   isMeaningfulAccountSummary,
   isUnauthenticatedCodexProvider,
   mergeCommandSummaries,
@@ -3465,7 +3470,10 @@ export class DesktopBackendRegistry {
     const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId) ? await this.acpBackend.describeInstalledBackends() : [];
     const summaries = [codexSummary, this.claudeBackend.summary()];
     const enabled = [...summaries, ...acpSummaries].filter(backend => !policy || policy.enabledBackends.includes(backend.kind))
-      .map(backend => !policy ? backend : { ...backend, executionModes: backend.executionModes.filter(mode => policy.executionModes.includes(mode.mode)) });
+      .map(backend => !policy ? backend : { ...backend,
+        ...(backend.kind === "codex" && !this.codexOpenAiProviderEnabled ? { codexOpenAiProviderEnabled: false as const } : {}),
+        executionModes: backend.executionModes.filter(mode => policy.executionModes.includes(mode.mode)),
+      });
 
     const providerRefresh = this.startupProviderRefreshStatus;
     return {
@@ -4212,10 +4220,11 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "modelProviderDefaults" | "codexFastAllowed"> {
     const defaults = this.resolveProviderModelDefaultsFn();
+    const showBackendDefaults = backend !== "codex" || this.codexOpenAiProviderEnabled;
     return {
-      modelDefaults: defaults[backend],
+      modelDefaults: showBackendDefaults ? defaults[backend] : undefined,
       modelProviderDefaults: Object.fromEntries(Object.entries(defaults)
-        .filter(([key]) => key === backend || (backend === "codex" && key.startsWith("codex-provider:")))),
+        .filter(([key]) => (showBackendDefaults && key === backend) || (backend === "codex" && key.startsWith("codex-provider:")))),
       ...(backend === "codex" ? {
         tokenMiser: {
           enabled: this.resolveTokenMiserEnabledFn(),
@@ -8813,6 +8822,7 @@ export class DesktopBackendRegistry {
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    await this.assertThreadCodexInferenceAvailable(params);
     await this.assertAgentMessageWithinThreadAccess(params);
     await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
@@ -8854,6 +8864,7 @@ export class DesktopBackendRegistry {
     input: AppServerTurnInputItem[];
   }): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    await this.assertThreadCodexInferenceAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     return await this.admitThreadAttachments(params, (input, onAdmission) =>
@@ -8880,6 +8891,7 @@ export class DesktopBackendRegistry {
     title?: string;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    await this.assertThreadCodexInferenceAvailable(params);
     await this.assertAgentMessageWithinThreadAccess(params);
     // No lock check: a held entry starts nothing until it is released, and
     // the release is refused while the thread is locked. Holding is how a
@@ -10601,6 +10613,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
+    await this.assertThreadCodexInferenceAvailable(params);
     await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
     const result = await this.startTurnNow(params);
     await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
@@ -10650,6 +10663,7 @@ export class DesktopBackendRegistry {
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    await this.assertThreadCodexInferenceAvailable(params);
     if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
       && this.durableRestartContinuations.has(params.id)) {
       await this.assertThreadNotLocked(params.backend, params.threadId);
@@ -10983,6 +10997,9 @@ export class DesktopBackendRegistry {
         });
         const settingsPreparation = this.resolveModelSettings(params.backend, {
           ...params,
+          ...(this.codexOpenAiProviderEnabled ? {} : {
+            codexModelProviderId: this.codexClient.modelProviderForThread?.(params.threadId),
+          }),
           model: migrationApplied
             ? overlay?.model
             : params.model ?? overlay?.model,
@@ -11593,7 +11610,9 @@ export class DesktopBackendRegistry {
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse> {
-    return this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution);
+    if (this.codexOpenAiProviderEnabled) return this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution);
+    return this.assertThreadCodexInferenceAvailable(params)
+      .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution));
   }
 
   submitReview(
@@ -12121,6 +12140,7 @@ export class DesktopBackendRegistry {
     itemId?: string;
   }> {
     if (this.closed) throw new Error("Desktop backend registry is closed");
+    await this.assertThreadCodexInferenceAvailable(params);
     // Compaction runs a backend turn, so a lock refuses it like any other.
     await this.assertThreadNotLocked(params.backend, params.threadId);
     await this.threadArchiveCoordinator.ensureCheckoutAwake(params);
@@ -12150,6 +12170,9 @@ export class DesktopBackendRegistry {
           backend: "codex", threadId: params.threadId,
         });
         const settings = await this.resolveModelSettings("codex", {
+          ...(this.codexOpenAiProviderEnabled ? {} : {
+            codexModelProviderId: this.codexClient.modelProviderForThread?.(params.threadId),
+          }),
           model: overlay?.model,
           serviceTier: overlay?.serviceTier,
           reasoningEffort: overlay?.reasoningEffort,
@@ -14887,9 +14910,13 @@ export class DesktopBackendRegistry {
       reasoningEffort: settings.reasoningEffort
         ?? (fixedRuntimeEffort ? undefined : runtimeEffort),
     };
+    assertOwnerCodexModelSelection(getOwnerHostServices().runtimePolicy, { backend, model: requested.model });
     const options = await this.getBackendLaunchpadOptions(backend, "thread-admission");
-    const resolved = resolveModelSettingsFromOptions(backend, options, requested);
+    const resolved = resolveModelSettingsFromOptions(backend, options, this.withOutpostLaunchModel(backend, options, requested));
     assertThreadModelSettingsAvailable(backend, options, requested, resolved.model);
+    if (backend === "codex" && !this.codexOpenAiProviderEnabled && !resolved.model) {
+      throw new Error("No configured Codex model is available on this Outpost.");
+    }
     return this.applyCodexFastPolicy(backend, resolved);
   }
 
@@ -14898,12 +14925,74 @@ export class DesktopBackendRegistry {
     settings: ModelSettings,
     callerReason: BackendModelCatalogCallerReason = "thread-start-defaults",
   ): Promise<ModelSettings> {
-    const resolved = resolveModelSettingsFromOptions(
-      backend,
-      await this.getBackendLaunchpadOptions(backend, callerReason),
-      settings,
-    );
+    const options = await this.getBackendLaunchpadOptions(backend, callerReason);
+    const selection = callerReason === "launchpad-defaults" ? this.withOutpostLaunchModel(backend, options, settings) : settings;
+    // Existing OpenAI threads keep their model metadata even while inference is disabled.
+    if (backend === "codex" && !this.codexOpenAiProviderEnabled && !selection.codexModelProviderId
+      && selection.model && !parseCodexProviderModelId(selection.model).providerId) return settings;
+    const resolved = resolveModelSettingsFromOptions(backend, options, selection);
     return this.applyCodexFastPolicy(backend, resolved);
+  }
+
+  private get codexOpenAiProviderEnabled(): boolean {
+    return getOwnerHostServices().runtimePolicy?.codexOpenAiProviderEnabled !== false;
+  }
+
+  private withOutpostLaunchModel(backend: AppServerBackendKind, options: BackendLaunchpadOptions | undefined, settings: ModelSettings): ModelSettings {
+    if (backend !== "codex" || this.codexOpenAiProviderEnabled || settings.codexModelProviderId
+      || (settings.model && parseCodexProviderModelId(settings.model).providerId)) return settings;
+    const unavailable = new Set(this.codexModelProviderCatalog?.catalogStates()
+      .filter((state) => state.status === "unavailable").map((state) => state.id));
+    const model = getDefaultModelOption("codex", {
+      ...options,
+      models: (options?.models ?? []).filter((model) => model.providerId && !unavailable.has(model.providerId)),
+    });
+    if (!model?.providerId) return { ...settings, model: undefined };
+    const key = codexModelProviderPickerValue(model.providerId);
+    const configured = this.resolveProviderModelDefaultsFn()[key];
+    const preferred = settings.providerSettings?.[key]?.model ?? configured?.model;
+    const preferredModel = options?.models?.find((option) => option.id === preferred && option.providerId === model.providerId);
+    return { ...settings, model: preferredModel?.id ?? model.id };
+  }
+
+  /** Project current launch choices without saving over the operator's stored presets. */
+  projectOutpostLaunchpadSettings<T extends NavigationLaunchpadDefaults>(settings: T): T {
+    if (this.codexOpenAiProviderEnabled || settings.backend !== "codex" || navigationLaunchpadProviderKey(settings) !== "codex") return settings;
+    const launchpadOptions = this.readCodexBackendSummary().launchpadOptions;
+    const choice = this.withOutpostLaunchModel("codex", launchpadOptions, { providerSettings: settings.providerSettings });
+    const providerId = choice.model ? parseCodexProviderModelId(choice.model).providerId : undefined;
+    const providerSettings = { ...settings.providerSettings };
+    delete providerSettings.codex;
+    if (!providerId) {
+      return { ...settings, providerSettings, model: undefined, reasoningEffort: undefined, serviceTier: undefined, fastMode: undefined };
+    }
+    const saved = providerSettings[codexModelProviderPickerValue(providerId)];
+    const resolved = resolveModelSettingsFromOptions("codex", launchpadOptions, choice);
+    const projected = applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDefaults>(
+      { ...settings, providerSettings, model: undefined, reasoningEffort: undefined, serviceTier: undefined, fastMode: undefined },
+      { ...resolved, codexModelProviderId: providerId, executionMode: saved?.executionMode ?? settings.executionMode },
+    );
+    return { ...settings, ...projected };
+  }
+
+  /** Check provider ownership before accepting input or reserving work on a retained thread. */
+  async assertThreadCodexInferenceAvailable(params: Pick<OwnerExecutionRequest, "backend" | "model" | "collaborationMode"> & { threadId: string }): Promise<void> {
+    if (params.backend !== "codex" || this.codexOpenAiProviderEnabled) return;
+    assertOwnerCodexModelSelection(getOwnerHostServices().runtimePolicy, params);
+    if (!this.codexClient.modelProviderForThread?.(params.threadId)
+      && !this.codexClient.reportedModelProviderForThread?.(params.threadId)) {
+      await this.codexClient.readThreadSummary?.(params.threadId);
+    }
+    const providerId = this.codexClient.modelProviderForThread?.(params.threadId)
+      ?? this.codexClient.reportedModelProviderForThread?.(params.threadId);
+    assertOutpostCodexProvider(providerId);
+    if (!this.resolveCodexModelProvidersFn().some((provider) => provider.id === providerId)) {
+      throw new Error(`Codex model provider ${providerId} is no longer configured on this Outpost.`);
+    }
+    const collaborationModel = params.collaborationMode?.settings?.model;
+    if (collaborationModel && parseCodexProviderModelId(collaborationModel).providerId !== providerId) {
+      throw new Error(`This thread runs on ${providerId}. Choose a model from that provider.`);
+    }
   }
 
   private applyCodexFastPolicy(backend: AppServerBackendKind, resolved: ModelSettings): ModelSettings {
@@ -14948,7 +15037,7 @@ export class DesktopBackendRegistry {
       !this.closed
       && backend.available
       && !requiresLogin
-      && !this.codexClient.isAuthenticationRequired?.()
+      && (!this.codexOpenAiProviderEnabled || !this.codexClient.isAuthenticationRequired?.())
       && this.codexClient.generateStructuredObject
     ) {
       return await this.codexClient.generateStructuredObject({
@@ -15003,7 +15092,8 @@ export class DesktopBackendRegistry {
     // Without the factory every tool the agent could call answers
     // "unavailable", so the turn is bought and guaranteed to produce nothing.
     // Declining here sends the caller straight to the deterministic resolver.
-    if (!this.starMapIntakeFederationHandlerFactory) {
+    if (!this.starMapIntakeFederationHandlerFactory
+      || (!this.codexOpenAiProviderEnabled && !this.isConfiguredCodexHelperModel(params.model))) {
       return undefined;
     }
     const codex = (await this.listBackends({ includeUnavailable: true })).backends
@@ -15501,7 +15591,7 @@ export class DesktopBackendRegistry {
     this.codexProviderCatalogRetry.observe(states);
     if (!this.codexBackendSummary) return { states, published: false };
     const { codexModelProviders: previousStates, ...summary } = this.codexBackendSummary;
-    const launchpadOptions = buildLaunchpadOptions("codex", result.models);
+    const launchpadOptions = this.buildCodexLaunchpadOptions(result.models);
     const changed = JSON.stringify([summary.launchpadOptions, previousStates ?? []])
       !== JSON.stringify([launchpadOptions, states]);
     this.codexBackendSummary = {
@@ -15625,7 +15715,7 @@ export class DesktopBackendRegistry {
     const known = this.codexModelProviderCatalog?.knownCatalog() ?? { models: [], states: [] };
     this.codexBackendSummary = {
       ...rest,
-      launchpadOptions: buildLaunchpadOptions("codex", [...ownModels, ...known.models]),
+      launchpadOptions: this.buildCodexLaunchpadOptions([...ownModels, ...known.models]),
       ...(known.states.length ? { codexModelProviders: known.states } : {}),
     };
     // The failed model list read never observed these states; a provider
@@ -15654,7 +15744,16 @@ export class DesktopBackendRegistry {
     }
 
     const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
-    return buildLaunchpadOptions(backend, models);
+    return this.buildCodexLaunchpadOptions(models);
+  }
+
+  private buildCodexLaunchpadOptions(models: BackendModelOption[]): BackendLaunchpadOptions | undefined {
+    return buildLaunchpadOptions("codex", models, { allowFallbackModels: this.codexOpenAiProviderEnabled });
+  }
+
+  private isConfiguredCodexHelperModel(model: string | undefined): boolean {
+    const providerId = model ? parseCodexProviderModelId(model).providerId : undefined;
+    return this.resolveCodexModelProvidersFn().some((provider) => provider.id === providerId);
   }
 
   private listActiveCodexWorkThreadIds(): string[] {
@@ -16558,15 +16657,15 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The fallback OpenAI models plus each configured provider's known models,
-   * with its catalog state. Nothing is read here.
+   * Known models and catalog states for configured providers, plus OpenAI
+   * fallback models when enabled. Nothing is fetched here.
    */
   private preDiscoveryCodexModelOptions(): Pick<BackendSummary, "launchpadOptions" | "codexModelProviders"> {
     const known = this.codexModelProviderCatalog?.knownCatalog() ?? { models: [], states: [] };
     return {
-      launchpadOptions: buildLaunchpadOptions(
-        "codex",
-        known.models.length ? [...getBackendFallbackModels("codex"), ...known.models] : [],
+      launchpadOptions: this.buildCodexLaunchpadOptions(
+        this.codexOpenAiProviderEnabled && known.models.length
+          ? [...getBackendFallbackModels("codex"), ...known.models] : known.models,
       ),
       ...(known.states.length ? { codexModelProviders: known.states } : {}),
     };
@@ -16626,7 +16725,7 @@ export class DesktopBackendRegistry {
     // Quota reads must not launch discovery or persist provider observations.
     // A failed startup thread read can leave only the selected executable's
     // projection. It still authorizes account reads on that selected runtime.
-    if (this.closed || !this.readCodexBackendSummary().available) return;
+    if (this.closed || !this.codexOpenAiProviderEnabled || !this.readCodexBackendSummary().available) return;
     if (this.codexClient.isAuthenticationRequired?.()) return;
     if (this.codexQuotaRefresh) return await this.codexQuotaRefresh;
     if (
@@ -16800,7 +16899,7 @@ export class DesktopBackendRegistry {
     const rateLimitsSince = this.planLimits.mark("codex");
     const { lastKnownGood } = this.readCodexProvider();
     const usageAccountGroup = this.resolveUsageAccountGroupsFn().codex;
-    const accountRead = readClientAccount(this.codexClient);
+    const accountRead = this.codexOpenAiProviderEnabled ? readClientAccount(this.codexClient) : Promise.resolve(undefined);
     const [
       initializeResult,
       defaultModelsResult,
@@ -16815,7 +16914,7 @@ export class DesktopBackendRegistry {
       this.readCodexDefaultModelsOnce("backend-summary"),
       accountRead,
       accountRead.catch(() => undefined).then((account) =>
-        isUnauthenticatedCodexProvider(account) ? [] : readClientRateLimits(this.codexClient)
+        !this.codexOpenAiProviderEnabled || isUnauthenticatedCodexProvider(account) ? [] : readClientRateLimits(this.codexClient)
       ),
       this.resolveCodexRuntimeCommandFn?.(),
     ]);
@@ -16892,7 +16991,7 @@ export class DesktopBackendRegistry {
       ),
       methods,
       capabilities,
-      launchpadOptions: buildLaunchpadOptions("codex", discoveredModels),
+      launchpadOptions: this.buildCodexLaunchpadOptions(discoveredModels),
       ...this.codexModelProviderCatalogStates(),
       executionModes: [
         {

@@ -572,6 +572,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.codexEnvironmentHydrationStore ??
     createDefaultCodexEnvironmentHydrationStore();
   const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
+  const openAiProviderEnabled = getOwnerHostServices().runtimePolicy?.codexOpenAiProviderEnabled !== false;
   const localFilePrivateStorageRoots = [resolveActiveProfilePath("state/agent-memory"), ...(codexHome ? [codexHome] : [])];
   const clientVersion =
     typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
@@ -696,6 +697,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     {
       resolveProviders: () => settingsService?.resolveCodexModelProviders?.() ?? [],
       create: createCodexGenerations,
+      openAiProviderEnabled,
     },
   );
   initialize.push(() => {
@@ -1179,7 +1181,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           ? createReplayThreadTitleService()
           : new ThreadTitleGenerationService({
               generators: {
-                codex: codexClient.generateTitle
+                codex: openAiProviderEnabled && codexClient.generateTitle
                   ? {
                       generateTitle: (params) =>
                         ports.codexClient.generateTitle!(params),
@@ -1248,9 +1250,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     codex: {
       // Codex's own catalog, then every configured provider's models. A
       // provider that cannot be reached must not hide Codex's models.
-      listModels: codexModelClient.listModels || resolveCodexModelProvidersFn().length
+      listModels: !openAiProviderEnabled || codexModelClient.listModels || resolveCodexModelProvidersFn().length
         ? async (diagnostics) => [
-            ...await codexModelClient.listModels?.(diagnostics) ?? [],
+            ...(openAiProviderEnabled ? await codexModelClient.listModels?.(diagnostics) ?? [] : []),
             ...await ports.codexModelProviderCatalog.listModelOptions().catch((error: unknown) => {
               backendRegistryLog.warn("Codex model provider models unavailable", {
                 error: error instanceof Error ? error.message : String(error),

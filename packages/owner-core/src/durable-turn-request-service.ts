@@ -32,6 +32,8 @@ export class DurableTurnRequestService {
     ownerInstanceId: string;
     queueEntryId?: (scope: string, requestId: string) => string;
     authorize: (scope: string, request: GetDurableTurnRequest) => Promise<void>;
+    /** Refuse work before claiming it, while preserving the outcome of completed replays. */
+    admitTurn?: (request: DurableTurnPayload) => Promise<void>;
     dispatch: (request: DurableTurnPayload & { queueEntryId: string }, scope: string) => Promise<StartTurnResponse>;
     steer?: (request: DurableSteerPayload & { requestId: string }, scope: string) => Promise<ControlActiveTurnResponse>;
     isQueued?: (receipt: DurableTurnReceipt) => Promise<boolean>;
@@ -93,6 +95,8 @@ export class DurableTurnRequestService {
       if (replay.payloadHash !== clientRequest.payloadHash) this.fail("request_conflict");
       if (replay.state !== "accepted" || replay.result) return this.reconcile(scope, replay);
     }
+
+    if (operation === "startTurn" && this.options.admitTurn) await this.options.admitTurn(request as DurableTurnPayload);
 
     const admitted = this.transaction(() => {
       const existing = this.read(scope, clientRequest.id);

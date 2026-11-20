@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } from "@pwragent/shared";
+import { codexProviderIdOfModel, type AppServerBackendKind, type AppServerCollaborationModeRequest, type FederationPeerRole, type ThreadExecutionMode } from "@pwragent/shared";
 import { resolveOutpostCodexHome, resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
 import { resolvePwragentRoot } from "./profile";
 
@@ -16,6 +16,8 @@ export interface OwnerRuntimePolicy {
   /** Runtime instances the host proved gone; their profile leases are reclaimed at once. */
   exitedRuntimeInstanceIds?: readonly string[];
   enabledBackends: readonly AppServerBackendKind[];
+  /** Allows inference on Codex's built-in OpenAI provider. Absent means enabled. */
+  codexOpenAiProviderEnabled?: boolean;
   approvals: OwnerApprovals;
   executionModes: readonly ThreadExecutionMode[];
   sandboxByMode: Readonly<Partial<Record<ThreadExecutionMode, OwnerSandboxMode>>>;
@@ -33,10 +35,27 @@ export interface OwnerExecutionRequest {
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
   sandbox?: string;
+  model?: string;
+  collaborationMode?: AppServerCollaborationModeRequest;
 }
+
+export function assertOutpostCodexProvider(providerId: string | undefined): asserts providerId is string {
+  if (!providerId || providerId === "openai") {
+    throw new Error("The built-in OpenAI provider is disabled on this Outpost. Choose a configured Codex model provider for a new thread.");
+  }
+}
+
+export function assertOwnerCodexModelSelection(policy: OwnerRuntimePolicy | undefined, request: Pick<OwnerExecutionRequest, "backend" | "model" | "collaborationMode">): void {
+  if (policy?.codexOpenAiProviderEnabled !== false || request.backend !== "codex") return;
+  for (const model of [request.model, request.collaborationMode?.settings?.model]) {
+    if (model !== undefined) assertOutpostCodexProvider(codexProviderIdOfModel(model));
+  }
+}
+
 export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefined, request: OwnerExecutionRequest): void {
   if (!policy) return;
   if (!policy.enabledBackends.includes(request.backend)) throw new Error(`Backend ${request.backend} is disabled by this host's configuration.`);
+  assertOwnerCodexModelSelection(policy, request);
   if (request.executionMode && !policy.executionModes.includes(request.executionMode)) throw new Error(executionModeUnavailableMessage(request.executionMode));
   if (policy.approvals === "never" && request.approvalPolicy !== undefined && request.approvalPolicy !== "never") {
     throw new Error("This Outpost's operator turned approvals off, so it requires approvalPolicy never.");
@@ -142,10 +161,13 @@ export function parseOutpostFederationRole(value: string | undefined): Federatio
 export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env): OwnerRuntimePolicy {
   const executionModes = parseOutpostExecutionModes(env.PWRAGENT_OUTPOST_EXECUTION_MODES);
   const sandboxByMode = Object.fromEntries(executionModes.map(mode => [mode, OUTPOST_SANDBOX_BY_MODE[mode]]));
+  const openAiProvider = env.PWRAGENT_OUTPOST_OPENAI_PROVIDER?.trim().toLowerCase() || "on";
+  if (openAiProvider !== "on" && openAiProvider !== "off") throw new Error("PWRAGENT_OUTPOST_OPENAI_PROVIDER must be on or off.");
   // The Codex home whose credentials agent commands must not read: the
   // daemon's `--codex-home`, else the one Codex itself would use.
   const codexHome = env.PWRAGENT_CODEX_HOME?.trim() || env.CODEX_HOME?.trim() || path.join(env.HOME?.trim() || os.homedir(), ".codex");
   return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"],
+    codexOpenAiProviderEnabled: openAiProvider === "on",
     approvals: parseOutpostApprovals(env.PWRAGENT_OUTPOST_APPROVALS),
     executionModes, sandboxByMode, agentNetwork: parseOutpostAgentNetwork(env.PWRAGENT_OUTPOST_AGENT_NETWORK),
     memberRole: parseOutpostFederationRole(env.PWRAGENT_OUTPOST_FEDERATION_ROLE),
