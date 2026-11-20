@@ -1,3 +1,4 @@
+import type { MessagingReplyReceiptRequest } from "./messaging-outbound-delivery";
 import type { MessagingTurns } from "./messaging-turn-state";
 import { type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { readProviderResponseBlockNotification, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
@@ -15,7 +16,7 @@ export interface MessagingBackendEventHost {
   readonly refreshStatusSurfacesForBackend: (backend: AppServerBackendKind, reason: string, federationTarget?: FederationTarget) => Promise<void>;
   readonly retireAnsweredAsyncQuestionnaires: (event: AgentEvent, threadId: ThreadIdentifier, replies: readonly CodexAsyncQuestionReply[]) => Promise<void>;
   readonly filterBindingsForChannel: (bindings: MessagingBindingRecord[]) => MessagingBindingRecord[];
-  readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard) => Promise<MessagingDeliveryResult>;
+  readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard, receipt?: MessagingReplyReceiptRequest) => Promise<MessagingDeliveryResult>;
   readonly newIntentId: (prefix: string) => string;
   readonly applySharedQueueNoticeEvent: (key: string, event: QueueNoticeEvent<MessagingQueuedTurnEntry>) => Promise<void>;
   readonly reconcileQueuedAgentMessagingOrigin: (params: { backend: AppServerBackendKind; threadId: ThreadIdentifier; update: NonNullable<ReturnType<typeof turnQueueUpdateForBackendEvent>>; }) => Promise<void>;
@@ -63,7 +64,7 @@ export interface MessagingBackendEventHost {
   readonly deliverAssistantImages: (images: MessagingImagePart[], event: AgentEvent, binding: MessagingBindingRecord, identity?: AssistantMessageDeliveryIdentity, _deliveryClaimed?: boolean) => Promise<void>;
   readonly deliverAsyncQuestionnaire: (asyncQuestions: { itemId: string; questions: CodexAsyncQuestion[]; }, event: AgentEvent, binding: MessagingBindingRecord, turnId: string | undefined) => Promise<void>;
   readonly flushAssistantStreamForEvent: (event: AgentEvent, binding: MessagingBindingRecord, finalText: string) => Promise<boolean>;
-  readonly deliverAssistantMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord, images?: MessagingImagePart[], identity?: AssistantMessageDeliveryIdentity, deliveryClaimed?: boolean) => Promise<void>;
+  readonly deliverAssistantMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord, images?: MessagingImagePart[], identity?: AssistantMessageDeliveryIdentity, deliveryClaimed?: boolean, finalReply?: boolean) => Promise<void>;
   readonly deliverAssistantProseForBackendEvent: (event: AgentEvent, binding: MessagingBindingRecord, assistantText: string, activeTurnId?: string) => Promise<void>;
   readonly flushBufferedAssistantStreamsForTerminalEvent: (event: AgentEvent, binding: MessagingBindingRecord) => Promise<void>;
   readonly deliverTurnFailureMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord) => Promise<void>;

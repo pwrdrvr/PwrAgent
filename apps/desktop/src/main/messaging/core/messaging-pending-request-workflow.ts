@@ -111,7 +111,26 @@ export class MessagingPendingRequestWorkflow {
         binding,
         request.params.turnId,
       );
-      const delivery = await this.context.host().deliver(intent, binding);
+      // An approval card keeps a delivery receipt, so one the adapter could
+      // not send is presented again while the approval is still pending.
+      const delivery = await this.context.host().deliver(
+        intent,
+        binding,
+        undefined,
+        undefined,
+        intent.kind === "approval"
+          ? {
+              identity: {
+                kind: "approval",
+                backend,
+                bindingId: binding.id,
+                pendingIntentId: pendingIntent.id,
+                threadId: request.params.threadId,
+                ...(request.params.turnId ? { turnId: request.params.turnId } : {}),
+              },
+            }
+          : undefined,
+      );
       let deliveredPendingIntent = pendingIntent;
       if (delivery.surface) {
         deliveredPendingIntent = {

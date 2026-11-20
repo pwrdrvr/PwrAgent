@@ -778,6 +778,7 @@ export class MessagingBackendEventRouter {
                 assistantImages,
                 undefined,
                 true,
+                true,
               );
             }
           }

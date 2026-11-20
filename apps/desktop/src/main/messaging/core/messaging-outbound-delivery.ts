@@ -25,6 +25,20 @@ import { isDeferrableDeliveryPriority, type MessagingDeliveryBudget, type Messag
 import type { MessagingDeliveryLane, MessagingDeliveryLaneTicket } from "./messaging-delivery-lane.js";
 import { isPermanentMessagingTargetFailure } from "./messaging-monitor-helpers";
 import type { MessagingStoreLike } from "./messaging-storage";
+import type {
+  MessagingDeliveryRecord,
+  MessagingReplyReceipt,
+  MessagingReplyReceiptReason,
+  MessagingReplyReceiptState,
+} from "./messaging-migrations";
+import {
+  claimReplyReceipt,
+  isAcceptedDeliveryOutcome,
+  openReplyReceiptId,
+  openReplyReceiptRecord,
+  releaseReplyReceipt,
+  type ReplyReceiptIdentity,
+} from "./messaging-reply-receipts";
 
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
@@ -44,6 +58,29 @@ export type MessagingControllerDeliveryBudgetEvent = {
   threadId?: ThreadIdentifier;
 };
 
+/** Asks `deliver` to keep a receipt for a final reply or an approval card. */
+export type MessagingReplyReceiptRequest = {
+  identity: ReplyReceiptIdentity;
+  /** A resend keeps the first mark time, so the receipt still expires. */
+  markedAt?: number;
+  attempts?: number;
+  /** The caller already claimed the receipt; see claimReplyReceipt. */
+  claimed?: boolean;
+};
+
+/** One send's open receipt and what the send proved about it. */
+type OpenReplyReceipt = {
+  openId: string;
+  bindingId: string;
+  channel: MessagingChannelKind;
+  intentId: string;
+  receipt: MessagingReplyReceipt;
+  providerCalled: boolean;
+  /** Set when the send provably never reached the provider. */
+  notSent?: MessagingReplyReceiptReason;
+  settled: boolean;
+};
+
 type DeliveryLaneState = {
   lane?: MessagingDeliveryLane;
   ticket?: MessagingDeliveryLaneTicket;
@@ -52,7 +89,7 @@ type DeliveryLaneState = {
 interface MessagingOutboundDeliveryOptions {
   readonly adapter: MessagingAdapter;
   readonly channel?: MessagingChannelKind;
-  readonly store: Pick<MessagingStoreLike, "recordDelivery" | "revokeBinding">;
+  readonly store: Pick<MessagingStoreLike, "recordDelivery" | "revokeBinding" | "settleDelivery">;
   readonly deliveryBudget?: MessagingDeliveryBudget;
   readonly deliveryLane?: MessagingDeliveryLane;
   readonly replacementAdapter?: {
@@ -78,6 +115,12 @@ interface MessagingOutboundDeliveryContext {
   readonly desktopActivityLog: () => MessagingActivityStorage | undefined;
   readonly recordBindingTransition: (action: "unbound", binding: MessagingBindingRecord) => Promise<void>;
   readonly notifyBindingChanged: (reason: string) => void;
+  /** Tells the operator a final reply or card may not have arrived. */
+  readonly flagDeliveryCheck: (params: {
+    bindingId: string;
+    receipt: MessagingReplyReceipt;
+    reason: MessagingReplyReceiptReason;
+  }) => Promise<void>;
 }
 
 /** Owns delivery admission, the adapter call, and post-delivery side effects. */
@@ -164,6 +207,198 @@ export class MessagingOutboundDelivery {
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
     guard?: MessagingDeliveryGuard,
+    receiptRequest?: MessagingReplyReceiptRequest,
+  ): Promise<MessagingDeliveryResult> {
+    const receipt = binding && receiptRequest
+      ? await this.openReceipt(intent, binding, receiptRequest)
+      : undefined;
+    if (receipt === "in-flight") {
+      // Another send owns this reply; a second one could only duplicate it.
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.context.now(),
+        outcome: "discarded",
+      };
+    }
+    if (!receipt) {
+      return await this.deliverWithReceipt(intent, binding, event, guard, undefined);
+    }
+    try {
+      const result = await this.deliverWithReceipt(intent, binding, event, guard, receipt);
+      if (!receipt.settled) {
+        // Every exit that skips the provider call proves non-delivery; a
+        // deliberate cancellation withdraws the reply instead of owing it.
+        const reason = receipt.notSent ?? "cancelled";
+        await this.settleReceipt(
+          receipt,
+          reason === "cancelled" ? "withdrawn" : "owed",
+          reason,
+        );
+      }
+      return result;
+    } catch (error) {
+      if (!receipt.settled) {
+        await this.settleReceipt(
+          receipt,
+          receipt.providerCalled ? "unknown" : "owed",
+          receipt.providerCalled ? "send-threw" : "cancelled",
+        );
+      }
+      throw error;
+    } finally {
+      releaseReplyReceipt(receipt.openId);
+    }
+  }
+
+  /**
+   * Writes the pending marker before the send: one commit holding identities
+   * only. A failed write sends without a receipt rather than not at all.
+   */
+  private async openReceipt(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord,
+    request: MessagingReplyReceiptRequest,
+  ): Promise<OpenReplyReceipt | "in-flight" | undefined> {
+    if (!this.options.store.settleDelivery) return undefined;
+    const openId = openReplyReceiptId(request.identity);
+    if (!request.claimed && !claimReplyReceipt(openId)) {
+      this.context.logger.debug?.("messaging reply receipt already in flight", { openId });
+      return "in-flight";
+    }
+    const { bindingId: _bindingId, ...identity } = request.identity;
+    const now = this.context.now();
+    const receipt: OpenReplyReceipt = {
+      openId,
+      bindingId: binding.id,
+      channel: binding.channel.channel,
+      intentId: intent.id,
+      receipt: {
+        ...identity,
+        state: "pending",
+        markedAt: request.markedAt ?? now,
+        attempts: (request.attempts ?? 0) + 1,
+      },
+      providerCalled: false,
+      settled: false,
+    };
+    try {
+      await this.options.store.recordDelivery(openReplyReceiptRecord({
+        ...receipt,
+        at: receipt.receipt.markedAt,
+      }));
+      this.context.logger.debug?.("messaging reply receipt opened", {
+        attempts: receipt.receipt.attempts,
+        bindingId: binding.id,
+        kind: receipt.receipt.kind,
+        threadId: receipt.receipt.threadId,
+        turnId: receipt.receipt.turnId,
+      });
+      return receipt;
+    } catch (error) {
+      if (!request.claimed) releaseReplyReceipt(openId);
+      this.context.logger.warn?.("messaging reply receipt could not be written", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** Settles an open receipt a recovery pass decided not to send. */
+  async settleOpenReceipt(
+    row: MessagingDeliveryRecord & { bindingId: string; receipt?: MessagingReplyReceipt },
+    state: "unknown" | "withdrawn",
+    reason: MessagingReplyReceiptReason,
+  ): Promise<void> {
+    if (!row.receipt || !row.intentId) return;
+    await this.settleReceipt({
+      openId: row.id,
+      bindingId: row.bindingId,
+      channel: row.channel,
+      intentId: row.intentId,
+      receipt: row.receipt,
+      providerCalled: false,
+      settled: false,
+    }, state, reason);
+  }
+
+  /**
+   * Settles a receipt. `owed` keeps the open row for the next adapter start;
+   * every other state replaces it with the delivery row in one commit.
+   */
+  private async settleReceipt(
+    receipt: OpenReplyReceipt,
+    state: MessagingReplyReceiptState,
+    reason?: MessagingReplyReceiptReason,
+    result?: MessagingDeliveryResult,
+  ): Promise<void> {
+    receipt.settled = true;
+    const settled: MessagingReplyReceipt = {
+      ...receipt.receipt,
+      state,
+      ...(reason ? { reason } : {}),
+    };
+    try {
+      if (state === "owed") {
+        await this.options.store.recordDelivery(openReplyReceiptRecord({
+          ...receipt,
+          receipt: settled,
+          at: settled.markedAt,
+        }));
+      } else {
+        await this.options.store.settleDelivery!({
+          openId: receipt.openId,
+          delivery: {
+            ...(result ?? {
+              channel: receipt.channel,
+              deliveredAt: this.context.now(),
+              outcome: "discarded" as const,
+            }),
+            id: `delivery:${receipt.intentId}:${randomUUID()}`,
+            bindingId: receipt.bindingId,
+            intentId: receipt.intentId,
+            receipt: settled,
+          },
+        });
+      }
+    } catch (error) {
+      // The open row stays; the next launch flags it as interrupted.
+      this.context.logger.warn?.("messaging reply receipt could not be settled", {
+        bindingId: receipt.bindingId,
+        error: error instanceof Error ? error.message : String(error),
+        state,
+      });
+    }
+    this.context.logger.debug?.("messaging reply receipt settled", {
+      bindingId: receipt.bindingId,
+      kind: settled.kind,
+      reason,
+      state,
+      threadId: settled.threadId,
+      turnId: settled.turnId,
+    });
+    if (state === "unknown" && reason) {
+      try {
+        await this.context.flagDeliveryCheck({
+          bindingId: receipt.bindingId,
+          receipt: settled,
+          reason,
+        });
+      } catch (error) {
+        this.context.logger.warn?.("messaging delivery check could not be raised", {
+          bindingId: receipt.bindingId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private async deliverWithReceipt(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord | undefined,
+    event: MessagingInboundEvent | undefined,
+    guard: MessagingDeliveryGuard | undefined,
+    receipt: OpenReplyReceipt | undefined,
   ): Promise<MessagingDeliveryResult> {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.context.flushToolUpdatesForBinding(binding, { clear: false });
@@ -193,6 +428,7 @@ export class MessagingOutboundDelivery {
       ? await this.adapterForSend()
       : this.options.adapter;
     if (!scopeAdapter) {
+      if (receipt) receipt.notSent = "adapter-stopped";
       return {
         channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
         deliveredAt: this.context.now(),
@@ -224,6 +460,7 @@ export class MessagingOutboundDelivery {
       return await this.deliverThroughBudget({
         binding,
         cancelledResult,
+        receipt,
         channel,
         consumeDeliveryBudget,
         guard,
@@ -247,12 +484,14 @@ export class MessagingOutboundDelivery {
     intent: MessagingSurfaceIntent;
     lane: DeliveryLaneState;
     priority: MessagingDeliveryPriority;
+    receipt: OpenReplyReceipt | undefined;
     routedIntent: MessagingSurfaceIntent;
     scope: MessagingDeliveryScope | undefined;
   }): Promise<MessagingDeliveryResult> {
     const {
       binding,
       cancelledResult,
+      receipt,
       channel,
       consumeDeliveryBudget,
       guard,
@@ -373,6 +612,7 @@ export class MessagingOutboundDelivery {
             slowMode: admission.slowMode,
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
+          if (receipt) receipt.notSent = "budget-dropped";
           return {
             channel: channel ?? "telegram",
             deliveredAt: this.context.now(),
@@ -390,14 +630,27 @@ export class MessagingOutboundDelivery {
           intentId: routedIntent.id,
           intentKind: routedIntent.kind,
         });
+        if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }
       if (guard?.isCancelled()) {
         return cancelledResult();
+      }
+      if (receipt) {
+        receipt.providerCalled = true;
+        receipt.notSent = undefined;
       }
       const result = await adapter.deliver(routedIntent);
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
+        if (receipt) {
+          await this.settleReceipt(
+            receipt,
+            isAcceptedDeliveryOutcome(result.outcome) ? "sent" : "withdrawn",
+            isAcceptedDeliveryOutcome(result.outcome) ? undefined : "cancelled",
+            result,
+          );
+        }
         return cancelledResult();
       }
       this.logDeliveryResult(routedIntent, binding, result);
@@ -429,12 +682,26 @@ export class MessagingOutboundDelivery {
           scopeId: result.rateLimit.scope.id,
         });
       }
-      await this.options.store.recordDelivery({
-        ...result,
-        id: `delivery:${routedIntent.id}:${randomUUID()}`,
-        bindingId: binding?.id ?? intent.bindingId,
-        intentId: routedIntent.id,
-      });
+      if (receipt) {
+        // The settle replaces the delivery row every send writes, so a
+        // receipt costs one commit more than an unmarked send: the marker.
+        // Only a retryable rate limit proves nothing visible was posted; a
+        // non-retryable one may follow a partly sent message.
+        if (result.rateLimit?.retryable === true && !isAcceptedDeliveryOutcome(result.outcome)) {
+          await this.settleReceipt(receipt, "owed", "rate-limited");
+        } else if (isAcceptedDeliveryOutcome(result.outcome)) {
+          await this.settleReceipt(receipt, "sent", undefined, result);
+        } else {
+          await this.settleReceipt(receipt, "unknown", "send-failed", result);
+        }
+      } else {
+        await this.options.store.recordDelivery({
+          ...result,
+          id: `delivery:${routedIntent.id}:${randomUUID()}`,
+          bindingId: binding?.id ?? intent.bindingId,
+          intentId: routedIntent.id,
+        });
+      }
       this.recordOutboundActivity(routedIntent, binding, result);
       if (
         binding &&

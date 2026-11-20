@@ -230,6 +230,18 @@ export type MessagingBackendBridge = {
     threadId: string;
     countsAsActivity?: boolean;
   }): Promise<MessagingLastAssistantReply | undefined>;
+  /**
+   * The text of one assistant item, read through the thread protocol. A
+   * final reply owed to a conversation is read back with it, never from a
+   * copy PwrAgent kept.
+   */
+  readThreadAssistantReply?(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<string | undefined>;
   resolveAssistantMessageImages?(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
