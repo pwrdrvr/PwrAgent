@@ -22,6 +22,7 @@ const execute = promisify(execFile);
 
 async function cleanupScenario(options: {
   additionalExists: boolean; activeOwner: boolean; external: boolean; disappearsDuringArchive?: boolean;
+  stalePrimaryRegistration?: boolean;
   missingGitMarker?: "removed-with-checkout" | "marker-only" | "during-probe"; residualFile?: string; nested?: boolean;
 }) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-cleanup-presence-")));
@@ -42,13 +43,18 @@ async function cleanupScenario(options: {
   try {
     const git = async (args: string[]) => await execute("git", ["-C", repositoryPath, ...args]);
     const contents = options.residualFile ?? "unsaved work\n";
-    // The provider links model the missing checkouts. Only the retained
-    // additional folder needs a Git-created marker for the orphan/residual checks.
+    // The presence matrix uses provider links for missing checkouts. The
+    // retained additional folder needs a Git-created marker for the orphan/residual checks.
     if (options.additionalExists) {
       await mkdir(repositoryPath);
       await git(["init", "-b", "main"]);
       await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture"]);
       await git(["worktree", "add", "--detach", additional]);
+      if (options.stalePrimaryRegistration) {
+        // Delete the folder directly so Git still lists the absent checkout.
+        await git(["worktree", "add", "--detach", primary]);
+        await rm(primary, { recursive: true });
+      }
       await writeFile(path.join(additional, "keep.txt"), contents);
       if (options.missingGitMarker === "removed-with-checkout") {
         await git(["worktree", "remove", "--force", additional]);
@@ -132,7 +138,7 @@ it("keeps files in a residual folder after Git removed its checkout", async () =
 });
 
 it("keeps a Git-less folder inside the repository where Git discovers the primary checkout", async () => {
-  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "marker-only", nested: true });
+  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "marker-only", nested: true, stalePrimaryRegistration: true });
 });
 
 it("reports and preserves Git-less worktree folders regardless of remaining registration", async () => {
