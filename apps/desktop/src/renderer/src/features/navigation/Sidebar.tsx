@@ -4,6 +4,7 @@ import {
   getThreadPrimaryDirectory,
   type SubthreadMachine,
   type SubthreadWorktreeBase,
+  type ThreadWorktreeAvailability,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
@@ -410,7 +411,7 @@ type SidebarProps = {
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
-  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<ThreadWorktreeAvailability>;
   /**
    * Where a sub-thread's new worktree would start on a machine other than
    * the parent's (undefined is this machine): undefined when that machine
@@ -2975,7 +2976,7 @@ function SidebarContent(props: SidebarProps) {
   const actionsMenuThreadKey = contextMenu?.pullRequest
     ? undefined
     : contextMenuThreadKey;
-  const [worktreeAvailability, setWorktreeAvailability] = useState<{ key: string; available: boolean }>();
+  const [worktreeAvailability, setWorktreeAvailability] = useState<{ key: string; available: boolean; thread?: NavigationThreadSummary }>();
   const readThreadWorktreeAvailability = props.readThreadWorktreeAvailability;
   const contextMenuThread = contextMenu?.thread;
   useEffect(() => {
@@ -2985,8 +2986,8 @@ function SidebarContent(props: SidebarProps) {
     let cancelled = false;
     setWorktreeAvailability(undefined);
     void readThreadWorktreeAvailability(contextMenuThread).then(
-      (available) => {
-        if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, available });
+      (availability) => {
+        if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, ...availability });
       },
       () => {
         if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, available: false });
@@ -3068,11 +3069,13 @@ function SidebarContent(props: SidebarProps) {
     },
     [contextMenuThreadKey],
   );
-  const contextMenuParentBranch = contextMenuThread
-    ? getThreadNamedBranch(contextMenuThread)
+  const worktreeParent = (worktreeAvailability?.key === contextMenuThreadKey ? worktreeAvailability?.thread : undefined)
+    ?? contextMenuThread;
+  const contextMenuParentBranch = worktreeParent
+    ? getThreadNamedBranch(worktreeParent)
     : undefined;
-  const subthreadProject = contextMenuThread
-    ? getSubthreadProjectIdentity(contextMenuThread, props.directories)
+  const subthreadProject = worktreeParent
+    ? getSubthreadProjectIdentity(worktreeParent, props.directories)
     : undefined;
   // Read through a ref: the provider changes identity whenever this
   // window's directories do, and a new check callback would ask every

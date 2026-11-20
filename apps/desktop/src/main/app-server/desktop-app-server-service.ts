@@ -477,6 +477,7 @@ import {
   type PullRequestReferenceIdentity,
 } from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import {
   PrStatusWatchCoordinator,
   getPrStatusWatchOutcome,
@@ -2136,7 +2137,7 @@ class DesktopAppServerService {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);
           }
-          return getDesktopNavigationDetailService().readSelectedDetail(request);
+          return getDesktopNavigationDetailService().readSelectedDetail(request, { signal: options.signal });
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
@@ -5234,9 +5235,10 @@ class DesktopAppServerService {
    */
   async canonicalizeStoredPullRequests(
     prs: PrSummary[],
+    demand?: PrMetadataDemand,
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs));
+    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs), demand);
   }
 
   private mergePrHistory(
@@ -5442,8 +5444,9 @@ class DesktopAppServerService {
    * still carry the old name, so a stored PR no remote names asks GitHub what
    * that remote is called now before it is dropped.
    */
-  private async filterStoredDiscoveredPrs(prs: PrSummary[]): Promise<PrSummary[]> {
+  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrMetadataDemand): Promise<PrSummary[]> {
     return await filterStoredDiscoveredPullRequests(prs, {
+      demand,
       resolveRepositoryNames: async (repos) => {
         if (!getDesktopSettingsService().isForgeEnabled("github")) return;
         await this.getPrGraphqlClient().resolveRepositoryNames(repos);

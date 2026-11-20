@@ -38,9 +38,9 @@ it("keeps the shrunk single shell event action out of the sidebar content", () =
 });
 
 it("does not suppress changed functions that are read during rendering", () => {
-  const view = render(<Sidebar {...props} readThreadWorktreeAvailability={async () => true} />);
+  const view = render(<Sidebar {...props} readThreadWorktreeAvailability={async (thread) => ({ available: true, thread })} />);
   const renders = vi.spyOn(drag, "useNativeDragInteractionGuard");
-  view.rerender(<Sidebar {...props} readThreadWorktreeAvailability={async () => false} />);
+  view.rerender(<Sidebar {...props} readThreadWorktreeAvailability={async (thread) => ({ available: false, thread })} />);
   expect(renders).toHaveBeenCalledTimes(1);
 });
 

@@ -46,7 +46,9 @@ describe("PR metadata launch budgets", () => {
     for (let round = 0; round < 5; round++) {
       expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([pr]);
     }
-    const expected = kind === "missing" ? [] : [["remote"]];
+    // Let the admitted child discover missing checkouts without touching the
+    // owner's filesystem pool. The negative answer still coalesces and caches.
+    const expected = [["remote"]];
     expect(runner.mock.calls.map(([, args]) => args)).toEqual(expected);
     expect(launches).toHaveBeenCalledTimes(expected.length);
   });
@@ -77,7 +79,7 @@ describe("PR metadata launch budgets", () => {
     const rejected = new Set(directories.filter((_, index) => index % 3 === 0));
     const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args) => {
       peak = Math.max(peak, ++active);
-      await Promise.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
       active--;
       if (rejected.has(cwd)) throw new Error("inconclusive repository");
       const stdout = args[0] === "symbolic-ref" ? "origin/main\n"
@@ -119,6 +121,50 @@ describe("PR metadata launch budgets", () => {
     resolveSshHostname.mockResolvedValue("gitlab.com");
     expect(await resolveGitHubRepoForDirectory(path.join(root, "first"), options)).toMatchObject({ host: "gitlab.com" });
     expect(resolveSshHostname).toHaveBeenCalledTimes(2);
+  });
+
+  it("promotes a shared selected checkout ahead of a cold scan and drops cancelled exclusive work", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const cwd = (index: number) => path.join(path.basename(root), `${index}`);
+    const starts: string[] = [];
+    const selected: string[] = [];
+    let ready!: () => void;
+    const saturated = new Promise<void>((resolve) => { ready = resolve; });
+    const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (path, args) => {
+      starts.push(path);
+      if (starts.length === 8) ready();
+      if (path === cwd(40)) selected.push(args.join(" "));
+      if (Number(path.split(/[\\/]/).at(-1)) < 8) await held;
+      return { stdout: args.length === 1 ? "origin\n" : "https://github.com/fixture/project.git\n", stderr: "" };
+    });
+    const read = (index: number) => resolveGitHubRepoForDirectory(cwd(index));
+    const scan = Array.from({ length: 41 }, (_, index) => read(index));
+    await saturated;
+    expect(starts).toEqual(Array.from({ length: 8 }, (_, index) => cwd(index)));
+    const controller = new AbortController();
+    const cancelled = resolveGitHubRepoForDirectory(cwd(41), {
+      demand: { foreground: () => true, signal: controller.signal },
+    }).catch((error: unknown) => error);
+    const cancelledShared = resolveGitHubRepoForDirectory(cwd(39), {
+      demand: { foreground: () => true, signal: controller.signal },
+    }).catch((error: unknown) => error);
+    const selectedRead = resolveGitHubRepoForDirectory(cwd(40), { demand: { foreground: () => true } });
+    await Promise.resolve();
+    // Both owners of checkout 40 should share its commands. Checkout 41 has
+    // only the consumer that aborts, so none of its queued work should start.
+    controller.abort();
+    release();
+    const resolved = await Promise.all([...scan, selectedRead]);
+    expect(resolved.every((repo) => repo?.repo === "project")).toBe(true);
+    expect(await cancelled).toBe(controller.signal.reason);
+    expect(await cancelledShared).toBe(controller.signal.reason);
+    expect(starts[8]).toBe(cwd(40));
+    expect(starts.lastIndexOf(cwd(40))).toBeLessThan(starts.indexOf(cwd(39)));
+    expect(selected).toEqual(["remote", "remote get-url --all origin"]);
+    expect(starts).not.toContain(cwd(41));
+    await expect(read(41)).resolves.toMatchObject({ repo: "project" });
+    expect(runner.mock.calls.filter(([path]) => path === cwd(41))).toHaveLength(2);
   });
 
   it("coalesces aliases while more than 128 distinct hosts are pending", async () => {

@@ -3,7 +3,7 @@ import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolveForgeReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
-import { runPrMetadataGit } from "./pr-metadata-process";
+import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
 
@@ -30,7 +30,7 @@ type StoredDiscoveryContext = { repos: GitHubRepoRef[]; defaults: DefaultBranchI
 // Navigation/federation can canonicalize many threads sharing one checkout.
 // Cache eviction and expiry apply only to completed observations.
 const storedDiscoveryContexts = new Map<string, { expiresAt: number; context: StoredDiscoveryContext }>();
-const storedDiscoveryReads = new Map<string, Promise<StoredDiscoveryContext>>();
+const storedDiscoveryReads = new Map<string, SharedPrMetadataRead<StoredDiscoveryContext>>();
 const STORED_DISCOVERY_CONTEXT_TTL_MS = 60_000;
 const MAX_STORED_DISCOVERY_CONTEXTS = 256;
 
@@ -249,12 +249,13 @@ async function readUnmergedBranchTip(params: {
  */
 export async function filterStoredDiscoveredPullRequests(
   prs: PrSummary[],
-  options: { resolveRepositoryNames?: (repos: GitHubRepoRef[]) => Promise<void> } = {},
+  options: { resolveRepositoryNames?: (repos: GitHubRepoRef[]) => Promise<void>; demand?: PrMetadataDemand } = {},
 ): Promise<PrSummary[]> {
+  options.demand?.signal?.throwIfAborted();
   const directories = uniqueNonEmpty(prs.flatMap((pr) => pr.explicitlyAttached ? [] : pr.linkedDirectoryPaths ?? []));
   if (directories.length === 0) return prs;
   const contexts = new Map(await Promise.all(directories.map(async (cwd) =>
-    [cwd, await readStoredDiscoveryContext(cwd)] as const,
+    [cwd, await readStoredDiscoveryContext(cwd, options.demand)] as const,
   )));
   // The repositories that decide each automatic PR, one list per linked
   // checkout; null where the checkout cannot say (missing, failed probe).
@@ -271,6 +272,7 @@ export async function filterStoredDiscoveredPullRequests(
     .flatMap(unnamedGitHubRepositories)
     .map((repo) => [`${repo.owner}/${repo.repo}`.toLowerCase(), repo] as const));
   const resolveRepositoryNames = options.resolveRepositoryNames;
+  options.demand?.signal?.throwIfAborted();
   if (resolveRepositoryNames && unnamed.size > 0) {
     await resolveRepositoryNames([...unnamed.values()]).catch(() => undefined);
   }
@@ -296,34 +298,35 @@ function unnamedGitHubRepositories(repos: GitHubRepoRef[]): GitHubRepoRef[] {
   return repos.filter((repo) => repo.host === "github.com" && !hasForgeRepositoryName(repo));
 }
 
-function readStoredDiscoveryContext(cwd: string): Promise<StoredDiscoveryContext> {
+function readStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand): Promise<StoredDiscoveryContext> {
   const existing = storedDiscoveryReads.get(cwd);
-  if (existing) return existing;
+  if (existing && !existing.signal.aborted) return existing.read(demand);
   const cached = storedDiscoveryContexts.get(cwd);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.context);
   storedDiscoveryContexts.delete(cwd);
-  const pending = resolveForgeReposForDirectory(cwd).then(async (repos) => {
-    // An inconclusive repository identity keeps the attachment. Reading its
-    // default branch cannot change that decision, and missing/local-only
-    // paths would otherwise repeat Git probes on every navigation read.
-    const defaults = repos.length > 0
-      ? await readDefaultBranchInfo(cwd)
-      : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
-    // Failed metadata probes are inconclusive, and must be retried rather
-    // than extend the lifetime of a known-invalid attachment.
-    const context = { repos, defaults };
-    if (repos.length > 0 && defaults.remotes.size > 0) {
-      if (storedDiscoveryContexts.size >= MAX_STORED_DISCOVERY_CONTEXTS) {
-        storedDiscoveryContexts.delete(storedDiscoveryContexts.keys().next().value!);
+  const pending = new SharedPrMetadataRead(async (sharedDemand) => {
+    try {
+      const repos = await resolveForgeReposForDirectory(cwd, undefined, { demand: sharedDemand });
+      // Inconclusive identity keeps the attachment without reading default refs.
+      const defaults = repos.length > 0
+        ? await readDefaultBranchInfo(cwd, sharedDemand)
+        : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
+      sharedDemand.signal?.throwIfAborted();
+      // Failed metadata stays inconclusive and is retried by the next read.
+      const context = { repos, defaults };
+      if (repos.length > 0 && defaults.remotes.size > 0) {
+        if (storedDiscoveryContexts.size >= MAX_STORED_DISCOVERY_CONTEXTS) {
+          storedDiscoveryContexts.delete(storedDiscoveryContexts.keys().next().value!);
+        }
+        storedDiscoveryContexts.set(cwd, { expiresAt: Date.now() + STORED_DISCOVERY_CONTEXT_TTL_MS, context });
       }
-      storedDiscoveryContexts.set(cwd, { expiresAt: Date.now() + STORED_DISCOVERY_CONTEXT_TTL_MS, context });
+      return context;
+    } finally {
+      if (storedDiscoveryReads.get(cwd) === pending) storedDiscoveryReads.delete(cwd);
     }
-    return context;
-  }).finally(() => {
-    storedDiscoveryReads.delete(cwd);
   });
   storedDiscoveryReads.set(cwd, pending);
-  return pending;
+  return pending.read(demand);
 }
 
 async function readTrackedRemoteBranch(params: {
@@ -368,13 +371,13 @@ async function readTrackedRemoteBranch(params: {
   return undefined;
 }
 
-async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
+async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand): Promise<DefaultBranchInfo> {
   try {
-    const { defaultsByRemote, remotes } = await readRemoteDefaultBranches(cwd);
+    const { defaultsByRemote, remotes } = await readRemoteDefaultBranches(cwd, demand);
     const names = new Set(defaultsByRemote.values());
 
     if (names.size === 0) {
-      const fallbackDefaultBranch = await readFallbackDefaultBranchName(cwd);
+      const fallbackDefaultBranch = await readFallbackDefaultBranchName(cwd, demand);
       if (fallbackDefaultBranch) {
         names.add(fallbackDefaultBranch);
       }
@@ -382,6 +385,7 @@ async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
 
     return { defaultsByRemote, names, remotes };
   } catch {
+    demand?.signal?.throwIfAborted();
     return {
       defaultsByRemote: new Map(),
       names: new Set(),
@@ -390,7 +394,7 @@ async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
   }
 }
 
-async function readRemoteDefaultBranches(cwd: string): Promise<{
+async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
 }> {
@@ -399,7 +403,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
     timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
-  });
+  }, demand);
   const remotes = uniqueNonEmpty(stdout.split(/\r?\n/));
   const defaults = await Promise.all(
     remotes.map(async (remote) => {
@@ -408,7 +412,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
         "--quiet",
         "--short",
         `refs/remotes/${remote}/HEAD`,
-      ]);
+      ], demand);
       const prefix = `${remote}/`;
       return remoteHead?.startsWith(prefix)
         ? ([remote, remoteHead.slice(prefix.length)] as const)
@@ -427,12 +431,13 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
 
 async function readFallbackDefaultBranchName(
   cwd: string,
+  demand?: PrMetadataDemand,
 ): Promise<string | undefined> {
   const refs = await readGitLine(cwd, [
     "for-each-ref",
     "--format=%(refname)",
     ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
-  ]);
+  ], demand);
   const names = new Set(refs?.split(/\r?\n/));
   return FALLBACK_DEFAULT_BRANCHES.find((branch) => names.has(`refs/heads/${branch}`));
 }
@@ -440,6 +445,7 @@ async function readFallbackDefaultBranchName(
 async function readGitLine(
   cwd: string,
   args: string[],
+  demand?: PrMetadataDemand,
 ): Promise<string | undefined> {
   try {
     const { stdout } = await runPrMetadataGit(cwd, args, {
@@ -447,9 +453,10 @@ async function readGitLine(
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
-    });
+    }, demand);
     return stdout.trim() || undefined;
   } catch {
+    demand?.signal?.throwIfAborted();
     return undefined;
   }
 }

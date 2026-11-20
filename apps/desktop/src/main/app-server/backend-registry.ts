@@ -53,6 +53,7 @@ import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import {
 } from "../pr-status/forge-pr-tool-contract";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
@@ -1555,8 +1556,9 @@ export class DesktopBackendRegistry {
 
   canonicalizeNavigationThreadPullRequests(
     threads: NavigationSnapshot["threads"],
+    demand?: PrMetadataDemand,
   ): Promise<NavigationSnapshot["threads"]> {
-    return this.forgeToolBridge.canonicalizeNavigationThreadPullRequests(threads);
+    return this.forgeToolBridge.canonicalizeNavigationThreadPullRequests(threads, demand);
   }
 
   // Thread inspection members the registry's importers use. ThreadInspectionTools

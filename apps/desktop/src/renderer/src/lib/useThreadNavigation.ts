@@ -135,6 +135,7 @@ import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
   getSubthreadProjectIdentity,
+  type ThreadWorktreeAvailability,
   getThreadNamedBranch,
   getThreadPrimaryDirectory,
   pickSubthreadWorktreeBase,
@@ -3062,7 +3063,7 @@ export function useThreadNavigation(
     executionMode?: ThreadExecutionMode,
     options?: { forceWorkspace?: boolean }
   ) => Promise<void>;
-  readThreadWorktreeAvailability: (thread: NavigationThreadSummary) => Promise<boolean>;
+  readThreadWorktreeAvailability: (thread: NavigationThreadSummary) => Promise<ThreadWorktreeAvailability>;
   createSubthread: (
     parent: NavigationThreadSummary,
     mode?: ThreadWorkspaceMode,
@@ -6525,7 +6526,7 @@ export function useThreadNavigation(
     [desktopApi, refresh],
   );
 
-  const readThreadWorktreeAvailability = useCallback(async (thread: NavigationThreadSummary): Promise<boolean> => {
+  const readThreadWorktreeAvailability = useCallback(async (thread: NavigationThreadSummary): Promise<ThreadWorktreeAvailability> => {
     const detail = await readNavigationActionDetail({
       api: desktopApi,
       thread,
@@ -6537,8 +6538,11 @@ export function useThreadNavigation(
     const status = detail.workspaceDirectories?.find(
       (candidate) => candidate.key === primary?.id,
     )?.gitStatus;
-    return status?.worktreeCreationAvailable !== false
-      && Boolean(status?.worktreeCreationAvailable || status?.currentBranch || status?.branches?.length);
+    return {
+      thread: detail.thread,
+      available: status?.worktreeCreationAvailable !== false
+        && Boolean(status?.worktreeCreationAvailable || status?.currentBranch || status?.branches?.length),
+    };
   }, [desktopApi]);
 
   /**
