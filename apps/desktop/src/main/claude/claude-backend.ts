@@ -1854,6 +1854,9 @@ export class ClaudeBackend {
   private async finishSession(live: LiveSession, failure: string | undefined): Promise<void> {
     const threadId = live.session.thread.id;
     live.closing = true;
+    // The stream can no longer report init. Terminal accounting awaits the
+    // account read captured at turn start, so release it before emitting.
+    live.accountChecked.resolve();
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
     if (live.wakeExpiryTimer) clearTimeout(live.wakeExpiryTimer);
     // A turn still opening in a live session is failed by its own start.
