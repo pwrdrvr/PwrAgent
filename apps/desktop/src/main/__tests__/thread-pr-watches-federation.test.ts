@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FederationCapability, FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationCapability, FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
   manageRemoteThreadPrWatches,
   readFederationThreadPrWatchesRequest,

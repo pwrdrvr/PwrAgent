@@ -7,7 +7,7 @@ import type {
   ThreadMaintenanceRun,
   ThreadMaintenanceScan,
   ThreadMaintenanceScanStep,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";
 import { buildApplyRequest, type ThreadMaintenanceSelection } from "../thread-maintenance-selection";

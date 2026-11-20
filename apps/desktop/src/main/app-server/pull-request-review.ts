@@ -1,8 +1,8 @@
 import type {
   AppServerReviewPullRequestSnapshot,
   AppServerReviewTarget,
-  PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { parseGitHubRemote } from "../pr-status/git-remote";
 import {

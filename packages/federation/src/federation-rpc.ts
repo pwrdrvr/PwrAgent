@@ -7,9 +7,9 @@ import type {
   FederationRequestEnvelope,
   FederationResponseEnvelope,
   FederationServiceDataEnvelope,
-  ServiceStreamData,
-} from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import type { ServiceStreamData } from "@pwragent/shared/contracts/federation-services";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import { serviceDataEnvelope } from "./federation-service-envelope";
 
 type PendingRequest = {

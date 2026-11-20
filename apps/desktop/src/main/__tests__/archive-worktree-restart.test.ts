@@ -22,7 +22,11 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { AcpAgentClient } from "../acp/acp-client";
 import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
-import type { AppServerThreadSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  PwrAgentThreadOrchestrationRequest,
+  PwrAgentThreadOrchestrationResponse,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
 import type { MaintenanceDiscoveryProgress } from "../app-server/unreferenced-worktrees";
 import { AcpSessionStore } from "../storage/acp-session-store";

@@ -1,4 +1,4 @@
-import type { FilePreviewKind } from "@pwragent/shared";
+import type { FilePreviewKind } from "@pwragent/shared/file-preview";
 
 export type FilePreviewTokenKind =
   | "key"

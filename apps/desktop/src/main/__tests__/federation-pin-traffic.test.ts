@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
-import type { AgentEvent, FederationProtocolEnvelope, NavigationThreadSummary, NavigationSnapshot } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary, NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederationRouter } from "../federation/federation-router";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";

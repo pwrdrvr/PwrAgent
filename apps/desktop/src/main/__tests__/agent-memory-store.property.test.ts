@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import { buildAgentMemoryStdioServer } from "../agent-tools/agent-memory-mcp-stdio";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { AGENT_MEMORY_INDEX_BYTES, AGENT_MEMORY_NOTE_BYTES } from "@pwragent/shared";
+import { AGENT_MEMORY_INDEX_BYTES, AGENT_MEMORY_NOTE_BYTES } from "@pwragent/shared/contracts/agent-memory";
 import { buildPwrAgentThreadToolDefinitions } from "../agent-tools/pwragent-thread-agent-tools";
 import { AgentMemoryError, AgentMemoryStore } from "../app-server/agent-memory-store";
 

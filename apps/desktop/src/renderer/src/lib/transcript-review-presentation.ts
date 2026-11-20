@@ -3,7 +3,7 @@ import type {
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   AppServerThreadReviewEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   isCodexReviewPromptText,
   isPwrAgentInlineReviewPrompt,

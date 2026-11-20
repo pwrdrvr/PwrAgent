@@ -1,4 +1,5 @@
-import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import type { OwnerThreadMetadata } from "./thread-storage";
 
 /** A confirmed native name fences provenance against later provider renames.

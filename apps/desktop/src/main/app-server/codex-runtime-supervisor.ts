@@ -10,22 +10,25 @@ import type {
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
   CodexBackgroundTerminal,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { randomUUID } from "node:crypto";
+import { type AgentEvent, type AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
 import {
-  type AgentEvent,
   type AppServerNotification,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
-  type AppServerCollaborationModeRequest,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type CodexAppServerRestartResult,
   type CodexAppServerRestartStatus,
+} from "@pwragent/shared/contracts/backend";
+import {
   type ThreadCodexInvalidIdRecovery,
-  type ThreadExecutionMode,
   buildThreadIdentityKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   type CodexServerCapabilities,
 } from "../codex-app-server/desktop-client";

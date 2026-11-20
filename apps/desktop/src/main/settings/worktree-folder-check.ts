@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import type { DesktopWorktreeFolderStatus } from "@pwragent/shared";
+import type { DesktopWorktreeFolderStatus } from "@pwragent/shared/contracts/settings";
 
 /** Long enough for a sleeping drive to spin up, short enough for Settings. */
 export const WORKTREE_FOLDER_CHECK_TIMEOUT_MS = 3_000;

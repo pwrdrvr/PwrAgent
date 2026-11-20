@@ -2,7 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { FederationBlobChunkEnvelope, FederationCapability } from "@pwragent/shared";
+import type {
+  FederationBlobChunkEnvelope,
+  FederationCapability,
+} from "@pwragent/shared/contracts/federation";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import { FederationResumableBlobReceiver } from "./federation-resumable-blob";

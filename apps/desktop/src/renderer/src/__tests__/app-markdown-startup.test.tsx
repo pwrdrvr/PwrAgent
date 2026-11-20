@@ -1,6 +1,9 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { DESKTOP_LOGS_VIEWER_DEFAULTS } from "@pwragent/shared";
-import type { DesktopMarkdownRenderingPreferences, DesktopSettingsSnapshot } from "@pwragent/shared";
+import { DESKTOP_LOGS_VIEWER_DEFAULTS } from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopMarkdownRenderingPreferences,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared/contracts/settings";
 import { afterEach, expect, it, vi } from "vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
 

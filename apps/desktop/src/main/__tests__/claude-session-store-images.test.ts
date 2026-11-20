@@ -5,7 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { crc32 } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+  AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { claudeToolResultContent } from "../claude/claude-tool-activity";
 import { materializeTranscriptImageUrlsForRenderer, toTranscriptImageProtocolUrl } from "../shell/transcript-image-protocol";

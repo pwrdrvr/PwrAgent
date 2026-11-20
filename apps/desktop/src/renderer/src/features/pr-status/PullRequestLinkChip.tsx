@@ -1,4 +1,4 @@
-import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranscriptPullRequest } from "../../lib/transcript-pr-status";
 import { useLivePullRequestNumber } from "../../lib/pull-request-links";

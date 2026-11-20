@@ -3,7 +3,11 @@ import { setFederationMessagingDestinationHandler } from "../federation/federati
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { FEDERATION_CAPABILITIES, type FederationPeerRole, type FederationRequestEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_CAPABILITIES,
+  type FederationPeerRole,
+  type FederationRequestEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederationStore } from "../storage/federation-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

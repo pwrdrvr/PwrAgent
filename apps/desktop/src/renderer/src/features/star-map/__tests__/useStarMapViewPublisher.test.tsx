@@ -6,7 +6,7 @@
 // where it was picked up.
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StarMapViewSnapshot } from "@pwragent/shared";
+import type { StarMapViewSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { StarMapViewSnapshotInput } from "../star-map-view-snapshot";
 import {

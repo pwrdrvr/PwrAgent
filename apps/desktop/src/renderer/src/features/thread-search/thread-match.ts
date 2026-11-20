@@ -1,16 +1,11 @@
-import {
-  agentMetadataMatchesQuery,
-  buildThreadIdentityKey,
-  threadPrNumbers,
-  type NavigationThreadSummary,
-  type ThreadSearchResponse,
-  type ThreadSearchResult,
-} from "@pwragent/shared";
+import { agentMetadataMatchesQuery, threadPrNumbers } from "@pwragent/shared/thread-jump-match";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type ThreadSearchResponse, type ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 
 // The quick-jump matcher (`threadMatchesQuery` and friends) lives in
 // @pwragent/shared so the main process can run the identical matching over
 // remote navigation summaries. Re-exported here for existing renderer imports.
-export { agentMetadataMatchesQuery, threadMatchesQuery } from "@pwragent/shared";
+export { agentMetadataMatchesQuery, threadMatchesQuery } from "@pwragent/shared/thread-jump-match";
 
 /**
  * Parse a "bare PR number" query — "779" or "#779" — into its number, or

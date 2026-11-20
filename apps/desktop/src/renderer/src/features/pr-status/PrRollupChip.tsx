@@ -10,7 +10,7 @@ import {
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";

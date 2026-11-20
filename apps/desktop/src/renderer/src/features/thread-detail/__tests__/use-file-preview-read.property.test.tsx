@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
-import type { ReadMarkdownFileResponse } from "@pwragent/shared";
+import type { ReadMarkdownFileResponse } from "@pwragent/shared/contracts/settings";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";

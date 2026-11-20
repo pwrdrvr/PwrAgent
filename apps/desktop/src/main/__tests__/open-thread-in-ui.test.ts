@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { WebContents } from "electron";
-import type { OperatorFocusSnapshot } from "@pwragent/shared";
+import type { OperatorFocusSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenThreadInUi } from "../shell/native-voice/open-thread-in-ui";
 import { publishOperatorFocus, resetOperatorFocusRegistry } from "../shell/native-voice/operator-focus-registry";

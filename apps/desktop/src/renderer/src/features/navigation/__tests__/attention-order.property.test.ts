@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { createAttentionOrderState, reconcileAttentionOrder } from "../attention-order";
 

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   applyCodexEnvironmentActionRunUpdate,
+  readCodexEnvironmentActionRuns,
+  withoutSupersededCodexEnvironmentActionRuns,
+} from "../codex-environment-action-runs";
+import {
   CODEX_ENVIRONMENT_ACTION_RUNS_MAX,
   type CodexEnvironmentActionRun,
   type CodexThreadEnvironmentRuntime,
-  readCodexEnvironmentActionRuns,
-  withoutSupersededCodexEnvironmentActionRuns,
-} from "../index";
+} from "../contracts/normalized-app-server";
 
 function buildRun(
   overrides: Partial<CodexEnvironmentActionRun>,

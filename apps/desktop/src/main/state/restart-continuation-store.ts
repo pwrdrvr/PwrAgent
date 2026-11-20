@@ -1,12 +1,12 @@
 import type Database from "better-sqlite3";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
+import { isPwrAgentUpdateVersion } from "@pwragent/shared/contracts/app-tools";
 import {
-  isAppServerBackendKind,
-  isThreadLockRefusal,
-  isPwrAgentUpdateVersion,
   type AppServerBackendKind,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import { scheduledActionIdFromTurnQueueEntry } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { storageProcessAlive } from "./storage-maintenance";

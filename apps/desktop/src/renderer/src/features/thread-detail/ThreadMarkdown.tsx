@@ -1,17 +1,16 @@
+import { filePreviewKind, isFilePreviewPath } from "@pwragent/shared/file-preview";
+import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
+import { isThreadUrl, PWRAGENT_URL_SCHEME } from "@pwragent/shared/contracts/thread-link";
+import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 import {
-  filePreviewKind,
-  findSharedSkillNames,
-  isFilePreviewPath,
-  isSharedSkillName,
-  isThreadUrl,
-  isWindowsFilesystemPath,
-  PWRAGENT_URL_SCHEME,
   type AppServerSkillSummary,
   type AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type DesktopApplicationsSnapshot,
   type MarkdownFileViewerContext,
   type ResolvedTranscriptFile,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   createContext,
   memo,

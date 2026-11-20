@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 

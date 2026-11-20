@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary, ThreadTodo } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 
 const fixture = vi.hoisted(() => ({
   cards: [] as ThreadTodo[],

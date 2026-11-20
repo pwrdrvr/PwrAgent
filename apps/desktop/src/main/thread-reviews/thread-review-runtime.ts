@@ -1,4 +1,4 @@
-import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { ThreadTodosChangedEvent } from "@pwragent/shared/contracts/thread-todos";
 import { createThreadReviewStorage } from "../storage/desktop-runtime-storage";
 import { ThreadReviewService } from "./thread-review-service";
 

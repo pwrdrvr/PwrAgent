@@ -1,4 +1,5 @@
-import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { normalizeFullRef, shortReviewSha } from "../../shared/review-command";
 import { runGitCommand } from "./git-executable";
 import {

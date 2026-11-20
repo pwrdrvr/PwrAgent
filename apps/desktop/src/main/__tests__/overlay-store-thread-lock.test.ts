@@ -1,4 +1,5 @@
-import type { AppServerThreadSummary, ThreadLock } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadLock } from "@pwragent/shared/contracts/navigation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

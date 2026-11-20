@@ -1,11 +1,10 @@
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
-  FederationCapability,
-  FederationRemoteTarget,
-} from "@pwragent/shared";
-import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
-import { isThreadLockRefusal } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationCapability, FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import { formatFederationPeerDisplayLabel } from "@pwragent/shared/contracts/federation";
+import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import {
   PwrAgentFederatedThreadMessageError,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";

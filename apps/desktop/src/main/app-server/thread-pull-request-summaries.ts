@@ -1,5 +1,9 @@
-import { type PrSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey, resolvePullRequestIdentity, normalizePullRequestProvider as normalizeSharedPullRequestProvider } from "@pwragent/shared";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
+import {
+  buildPullRequestStatusKey,
+  resolvePullRequestIdentity,
+  normalizePullRequestProvider as normalizeSharedPullRequestProvider,
+} from "@pwragent/shared/contracts/navigation";
 
 export function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
   return [...new Set(directoryPaths.map((path) => path.trim()).filter(Boolean))]

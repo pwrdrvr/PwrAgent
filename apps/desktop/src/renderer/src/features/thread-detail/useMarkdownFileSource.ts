@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { MarkdownFileViewerContext } from "@pwragent/shared";
+import type { MarkdownFileViewerContext } from "@pwragent/shared/contracts/settings";
 
 /** Metadata refreshes must not change the identity of the document read. */
 export function useMarkdownFileSource(context: MarkdownFileViewerContext | undefined) {

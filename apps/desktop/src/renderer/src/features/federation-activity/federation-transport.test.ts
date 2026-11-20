@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationActiveConnection } from "@pwragent/shared";
+import type { FederationActiveConnection } from "@pwragent/shared/contracts/federation";
 import { federationTransportTag } from "./federation-transport";
 
 const incoming = (remoteAddress: string): FederationActiveConnection =>

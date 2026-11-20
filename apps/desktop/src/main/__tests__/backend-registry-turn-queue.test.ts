@@ -13,7 +13,7 @@ import { createDesktopBackendRegistry } from "../app-server/backend-registry-wir
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
 import fc from "fast-check";
-import { threadLockRefusalMessage } from "@pwragent/shared";
+import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -26,15 +26,17 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerPendingRequestNotification,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { QUIET_RESTART_STEER_TEXT } from "../app-server/thread-restart-helpers";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

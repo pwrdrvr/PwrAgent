@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { ThreadMaintenanceSpace } from "@pwragent/shared";
+import type { ThreadMaintenanceSpace } from "@pwragent/shared/thread-maintenance";
 import { nativeRelayPath } from "../native-relay-path";
 
 const execute = promisify(execFile);

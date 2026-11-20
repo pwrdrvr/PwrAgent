@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   ThreadTitleGenerationService,
   type ThreadTitleGenerator,

@@ -1,4 +1,4 @@
-import { isAgentMemoryRead } from "@pwragent/shared";
+import { isAgentMemoryRead } from "@pwragent/shared/contracts/agent-memory";
 import {
   AGENT_MEMORY_INDEX_BYTES,
   AGENT_MEMORY_NOTE_BYTES,
@@ -6,8 +6,8 @@ import {
   AGENT_MEMORY_NOTE_ID_PATTERN,
   type AgentMemoryArgs,
   type AgentMemoryResult,
-  type AppServerBackendKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent-memory";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";

@@ -1,4 +1,8 @@
-import type { FederationContentSearchRequest, ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared";
+import type {
+  FederationContentSearchRequest,
+  ThreadSearchRequest,
+  ThreadSearchResponse,
+} from "@pwragent/shared/contracts/thread-search";
 import type { FederationRpcRequestOptions } from "../federation/federation-rpc";
 import { awaitThreadSearchRead } from "./thread-search-cancellation";
 

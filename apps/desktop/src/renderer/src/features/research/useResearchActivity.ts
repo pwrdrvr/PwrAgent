@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ResearchThread } from "@pwragent/shared";
+import type { ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   appendResearchActivityOlder, emptyResearchActivity, mergeResearchActivityHead, researchActivityHeadRange, type ResearchActivityWindow,

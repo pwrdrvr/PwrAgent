@@ -1,5 +1,5 @@
 import { memo } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { isFederationViewerWindow } from "../../lib/federation-window";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";

@@ -12,13 +12,9 @@ import type {
   NavigationQueryPage,
   NavigationRelativePinMove,
   PrSummary,
-} from "@pwragent/shared";
-import {
-  comparePinnedThreads,
-  isKeptAtTopThread,
-  isPinnedThread,
-  resolveThreadParentKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { comparePinnedThreads, isKeptAtTopThread, isPinnedThread } from "@pwragent/shared/thread-pins";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import { PinIcon } from "../../icons";
 import { useDropIndicatorController } from "./drag-drop";
 import type { NestThreadHandler } from "./thread-nest-drop";

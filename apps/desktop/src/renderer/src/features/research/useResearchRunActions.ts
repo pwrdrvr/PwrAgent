@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { ResearchCommand, ResearchThread } from "@pwragent/shared";
+import type { ResearchCommand, ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export function researchErrorMessage(error: unknown): string {

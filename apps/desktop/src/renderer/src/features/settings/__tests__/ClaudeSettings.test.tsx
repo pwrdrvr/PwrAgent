@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary, SettingsCredentialTestResult } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { SettingsCredentialTestResult } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ClaudeSettings } from "../ClaudeSettings";
 

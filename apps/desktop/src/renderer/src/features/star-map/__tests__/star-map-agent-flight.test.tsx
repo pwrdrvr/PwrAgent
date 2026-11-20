@@ -13,6 +13,8 @@ import {
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
   type SetStarMapViewToolArgs,
   type StarMapCommand,
   type StarMapCommandResult,
@@ -20,7 +22,7 @@ import {
   type StarMapThreadOpenMode,
   type StarMapThreadRef,
   type StarMapViewSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 import { useStarMapCommands } from "../useStarMapCommands";

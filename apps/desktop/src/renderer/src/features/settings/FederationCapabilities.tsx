@@ -1,5 +1,8 @@
 import { useRef, useState } from "react";
-import type { DesktopSettingsConfigPatch, DesktopSettingsSnapshot } from "@pwragent/shared";
+import type {
+  DesktopSettingsConfigPatch,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { IncomingFilesFolderActions } from "./IncomingFilesFolderActions";
 import { SettingsField, SettingsSection, ToggleField } from "./SettingsLayout";

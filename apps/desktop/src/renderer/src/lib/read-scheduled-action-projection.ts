@@ -1,4 +1,7 @@
-import type { ListScheduledThreadActionsRequest, ListScheduledThreadActionsResponse } from "@pwragent/shared";
+import type {
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { isNavigationCursorExpired } from "./navigation-query-state";
 
 /** Publish scheduled mirrors only after one complete, stable owner generation. */

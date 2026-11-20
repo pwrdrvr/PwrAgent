@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ArchiveThreadCleanupResult } from "@pwragent/shared";
+import type { ArchiveThreadCleanupResult } from "@pwragent/shared/contracts/normalized-app-server";
 import { BackgroundArchiveCleanupReport } from "../background-archive-cleanup-report";
 
 function recordOutcome(report: BackgroundArchiveCleanupReport, index: number, failed = false) {

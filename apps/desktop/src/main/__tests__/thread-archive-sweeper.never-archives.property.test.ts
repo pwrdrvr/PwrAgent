@@ -1,4 +1,4 @@
-import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import {

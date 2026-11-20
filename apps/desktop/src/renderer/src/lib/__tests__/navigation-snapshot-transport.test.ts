@@ -3,8 +3,8 @@ import type {
   NavigationSnapshot,
   NavigationSnapshotTransportFull,
   NavigationThreadSummary,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { applyNavigationSnapshotTransportResponse } from "../navigation-snapshot-transport";
 
 function buildThread(id: string, title = id): NavigationThreadSummary {

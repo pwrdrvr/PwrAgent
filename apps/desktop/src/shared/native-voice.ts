@@ -2,7 +2,8 @@ import type {
   VoiceCameraRequest, VoiceCameraFrame, VoiceCameraObservation, VoiceCameraCue, VoiceCameraSkipped,
   VoiceCameraRepeatCheck, VoiceCameraRepeatVerdict,
 } from "./native-voice-camera";
-import type { AgentEvent, OperatorFocusSnapshot } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { OperatorFocusSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 
 /** Window-local voice ownership. No credentials or service URLs cross IPC. */
 export const NATIVE_VOICE_CAPABILITY_CHANNEL = "native-voice:capability";

@@ -1,7 +1,5 @@
-import {
-  threadSeenWatermark,
-  type FederationCapability,
-} from "@pwragent/shared";
+import { threadSeenWatermark } from "@pwragent/shared/inbox";
+import { type FederationCapability } from "@pwragent/shared/contracts/federation";
 import {
   PwrAgentFederatedThreadInspectionError,
   type PwrAgentFederatedThreadMutationHandler,

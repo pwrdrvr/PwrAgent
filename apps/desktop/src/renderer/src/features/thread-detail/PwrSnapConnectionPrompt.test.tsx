@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import {
   PWRSNAP_MCP_CONNECTION_ID,
   type PwrSnapConnectionStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { describe, expect, it, vi } from "vitest";
 import { PwrSnapConnectionPrompt } from "./PwrSnapConnectionPrompt";
 

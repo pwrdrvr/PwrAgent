@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessagingErrorNotices } from "../MessagingErrorNotices";
 

@@ -13,7 +13,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { McpConnectionRuntimeState } from "@pwragent/shared";
+import type { McpConnectionRuntimeState } from "@pwragent/shared/contracts/mcp-connections";
 import {
   McpCredentialVault,
   type McpOAuthCredential,

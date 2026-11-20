@@ -1,12 +1,12 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
-  isWorkspaceHandoffDirectory,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
   type ThreadHibernatedWorkspace,
   type ThreadMissingWorkspace,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export type MissingThreadWorkspaceProbe = {
   pathExists: (target: string) => Promise<boolean>;

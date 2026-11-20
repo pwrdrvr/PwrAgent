@@ -1,4 +1,4 @@
-import type { FederationActivitySeries } from "@pwragent/shared";
+import type { FederationActivitySeries } from "@pwragent/shared/contracts/federation";
 import { formatTrafficBytes } from "./format-traffic-bytes";
 
 export function formatActivityReport(series: FederationActivitySeries, view: string, since: number, at: number): string {

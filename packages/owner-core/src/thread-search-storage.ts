@@ -1,9 +1,8 @@
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
-  ThreadSearchFilters,
-  ThreadSearchResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadSearchFilters, ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 
 export type ThreadSearchProjectionSearchRequest = {
   query?: string;

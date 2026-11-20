@@ -1,6 +1,9 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent, AppServerReviewFindingOutcome, AppServerThreadReviewEntry, ThreadReviewIdentity,
-} from "@pwragent/shared";
+  AppServerReviewFindingOutcome,
+  AppServerThreadReviewEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadReviewIdentity } from "@pwragent/shared/contracts/thread-reviews";
 import { normalizeReviewOutputRecord } from "../../shared/review-command";
 
 /** Only final review artifacts are persisted; deltas and started items are ignored. */

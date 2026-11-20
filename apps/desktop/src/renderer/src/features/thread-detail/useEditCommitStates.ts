@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { EditGroupCommitState } from "@pwragent/shared";
+import type { EditGroupCommitState } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   editGroupFileSetSignature,

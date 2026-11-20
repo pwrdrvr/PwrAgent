@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import type { AutomationSchedulingStatus } from "@pwragent/shared";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
 import { SearchIcon, SettingsIcon } from "../../icons";
 import { AutomationsButton } from "./AutomationsButton";
 import { readRendererFederationTarget } from "../../lib/federation-window";

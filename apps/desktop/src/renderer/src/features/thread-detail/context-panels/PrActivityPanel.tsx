@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  parseThreadIdentityKey,
-  type NavigationThreadSummary,
-  type PrActivityEvent,
-  type PrActivitySnapshot,
-} from "@pwragent/shared";
+import { parseThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type PrActivityEvent, type PrActivitySnapshot } from "@pwragent/shared/contracts/pr-activity";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useThreadLinks } from "../../../lib/thread-links";

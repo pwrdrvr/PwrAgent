@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { agentToolFailure, type AgentToolDefinition } from "./agent-tool-definition";
 import type { TokenMiserFocusedSummaries, FocusedRequest } from "../token-miser/token-miser-focused";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";

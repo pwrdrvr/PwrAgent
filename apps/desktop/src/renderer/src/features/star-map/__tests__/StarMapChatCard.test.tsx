@@ -13,18 +13,18 @@ import {
 } from "@testing-library/react";
 import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendCapabilities } from "@pwragent/shared/contracts/backend";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type {
-  AgentEvent,
-  AppServerReadThreadResponse,
-  BackendCapabilities,
-  CelestialIconId,
-  DesktopSettingsSnapshot,
   NavigationThreadSummary,
   NavigationQueryRequest,
   NavigationQueryPage,
   ThreadQueuedTurnSummary,
-} from "@pwragent/shared";
-import { buildModelMenu } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildModelMenu } from "@pwragent/shared/model-menu";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import {

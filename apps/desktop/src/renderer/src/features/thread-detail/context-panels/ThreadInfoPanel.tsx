@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useState } from "react";
-import type { AgentMemoryArgs, BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentMemoryArgs } from "@pwragent/shared/contracts/agent-memory";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";

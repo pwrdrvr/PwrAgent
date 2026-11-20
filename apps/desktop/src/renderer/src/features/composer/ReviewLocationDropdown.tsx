@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ReviewRunMode } from "@pwragent/shared";
+import type { ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { SubAgentsIcon } from "../../icons";
 import type { ReviewRunModeDecision } from "../../lib/review-run-mode";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";

@@ -1,5 +1,8 @@
 import { randomBytes, X509Certificate } from "node:crypto";
-import type { CloudflareSecurityCheck, CloudflareSetupStatus } from "@pwragent/shared";
+import type {
+  CloudflareSecurityCheck,
+  CloudflareSetupStatus,
+} from "@pwragent/shared/contracts/federation-cloudflare";
 import {
   CLOUDFLARE_OAUTH_CONFIGURATION,
   CLOUDFLARE_SIGN_IN_SESSION_DURATION,

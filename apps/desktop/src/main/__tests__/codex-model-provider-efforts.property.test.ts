@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import { buildLaunchpadOptions } from "../app-server/thread-model-options";
 

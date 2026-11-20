@@ -9,10 +9,8 @@ export interface TerminalEventTarget extends RendererEventTarget {
   once(event: "destroyed", listener: () => void): unknown;
 }
 import type { IPty, IDisposable } from "node-pty";
-import type {
-  DesktopIntegratedTerminalWindowsShell,
-  FederationRemoteTarget,
-} from "@pwragent/shared";
+import type { DesktopIntegratedTerminalWindowsShell } from "@pwragent/shared/contracts/settings";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,

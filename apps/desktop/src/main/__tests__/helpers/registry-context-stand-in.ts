@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { RegistryContext } from "../../app-server/registry-context";
 import { RegistryTurnState } from "../../app-server/registry-turn-state";
 

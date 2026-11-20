@@ -1,9 +1,8 @@
 import type {
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
-  NavigationThreadSummary,
-  PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import "@testing-library/jest-dom/vitest";
 import {
   act,

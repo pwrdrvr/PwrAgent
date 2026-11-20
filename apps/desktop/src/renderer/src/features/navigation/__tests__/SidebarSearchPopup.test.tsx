@@ -2,15 +2,15 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
-  buildFederatedThreadRef,
   type FederationJumpSearchProgress,
   type FederationJumpSearchRequest,
   type NavigationThreadSummary,
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { SidebarSearchPopup } from "../SidebarSearchPopup";
 import { useModalDialog } from "../../../lib/useModalDialog";
 import { pressEscape, pressTab, tabEscapes } from "../../../test/tab-walk";

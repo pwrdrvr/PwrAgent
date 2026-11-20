@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationCapability } from "@pwragent/shared";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import { buildStarMapEventSubscriptions } from "../star-map-event-subscriptions";
 
 const capabilities: FederationCapability[] = [

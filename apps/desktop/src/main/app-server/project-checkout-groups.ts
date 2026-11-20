@@ -1,10 +1,7 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import {
-  canonicalizeNavigationPath,
-  normalizeGitOriginUrl,
-  type SetProjectCheckoutGroupRequest,
-} from "@pwragent/shared";
+import { canonicalizeNavigationPath, normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
+import { type SetProjectCheckoutGroupRequest } from "@pwragent/shared/contracts/navigation";
 import { runGitCommand } from "./git-executable";
 
 const MAX_PROJECT_CHECKOUTS = 16;

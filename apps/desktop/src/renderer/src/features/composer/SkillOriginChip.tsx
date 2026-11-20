@@ -11,12 +11,11 @@ import {
   type SyntheticEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { describeSkillOriginKind, skillOriginMarketplace } from "@pwragent/shared/skill-origin";
 import {
-  describeSkillOriginKind,
-  skillOriginMarketplace,
   type AppServerSkillOrigin,
   type AppServerSkillSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   CheckIcon,
   CopyIcon,

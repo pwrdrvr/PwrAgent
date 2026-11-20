@@ -2,7 +2,10 @@ import { FederationCaptureTag } from "./FederationTrafficCapture";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationActivityTotals, ReadFederationActivityResponse } from "@pwragent/shared";
+import type {
+  FederationActivityTotals,
+  ReadFederationActivityResponse,
+} from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { FederationConnections } from "./FederationConnections";
 import { FederationStatusControl } from "./FederationStatusControl";

@@ -4,7 +4,7 @@ import {
   type DecisionProviderCheck,
   type DecisionProviderId,
   type DesktopDecisionModelSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decision-models";
 import { postSystemOne, systemOneErrorDetail, systemOneHeaders } from "./system-one";
 
 const LOCAL_CHECK_TIMEOUT_MS = 3000;

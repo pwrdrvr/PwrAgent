@@ -4,9 +4,6 @@ import type {
   ApproveMessagingPairingResponse,
   ClearMessagingDefaultAgentRequest,
   ClearMessagingDefaultAgentResponse,
-  DesktopAuthorizedContact,
-  DesktopSettingsConfigPatch,
-  DesktopSettingsSnapshot,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
@@ -36,13 +33,18 @@ import type {
   StopInboundPreviewRequest,
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+import type {
+  DesktopAuthorizedContact,
+  DesktopSettingsConfigPatch,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared/contracts/settings";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
-  isRemoteFederationTarget,
   validateSlackChannelId,
   validateSlackTeamId,
   validateSlackUserId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/messaging-id-validation";
 import { getDesktopMessagingRuntime } from "../../messaging/messaging-runtime";
 import {
   getDesktopFederationRuntime,

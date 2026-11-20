@@ -1,5 +1,5 @@
-import type { PrMergeQueueStatus } from "@pwragent/shared";
-import { isMergeQueueActive } from "@pwragent/shared";
+import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
+import { isMergeQueueActive } from "@pwragent/shared/pr-merge-queue";
 import { ForgeReadError } from "./forge-tool-contract";
 import { num, payloadItems, payloadObject, str, type Payload } from "./forge-pr-tool-shared";
 import { githubMergeQueueStatus } from "./pr-merge-queue";

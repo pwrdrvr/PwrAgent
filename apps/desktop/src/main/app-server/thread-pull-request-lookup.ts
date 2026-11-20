@@ -1,15 +1,18 @@
 import type { OverlayStoreLike, PrLookupCacheEntry } from "../storage/desktop-overlay-store";
 import { canonicalizeDetachedPrKeys } from "../pr-status/detached-pr-keys";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  type AppServerBackendKind,
   type RefreshThreadPullRequestsRequest,
   type RefreshThreadPullRequestsResponse,
   type PrSummary,
+  type ThreadOverlayState,
+} from "@pwragent/shared/contracts/navigation";
+import {
   type ProjectForgeAutomation,
   projectAllowsForgePolling,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
-import { DEFAULT_PULL_REQUEST_PROVIDER, buildThreadIdentityKey, isRemoteFederationTarget } from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import { DEFAULT_PULL_REQUEST_PROVIDER, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { isFederationPeerUnavailableError } from "../federation/federation-peer-unavailable-error";
 import { getMainLogger } from "../log";

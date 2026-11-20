@@ -1,19 +1,23 @@
 import { memo, useState, type ReactNode } from "react";
+import { AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
 import {
-  AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW,
-  THREAD_PR_WATCH_CONTROL_CAPABILITY,
   buildPullRequestStatusKey,
-  graphemePrefix,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
+import {
   isThreadDependencyThreadCondition,
-  isThreadPendingWakeLive,
   summarizeThreadDependencyCiRun,
   threadDependencyConditionName,
   threadDependencyConditionPhrase,
-  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  isThreadPendingWakeLive,
   type ThreadPendingWake,
   type ThreadPendingWakeHold,
   type ThreadPendingWakeKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-pending-wakes";
 import {
   ChevronRightIcon,
   ClockIcon,

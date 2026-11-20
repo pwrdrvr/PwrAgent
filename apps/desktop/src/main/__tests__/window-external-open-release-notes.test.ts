@@ -15,11 +15,7 @@
 // so the interesting question is not "does a good URL pass" alone but "can
 // the composer be made to produce one that shouldn't".
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  PWRAGENT_RELEASES_URL,
-  PWRAGENT_REPO_URL,
-  releaseNotesUrl,
-} from "@pwragent/shared";
+import { PWRAGENT_RELEASES_URL, PWRAGENT_REPO_URL, releaseNotesUrl } from "@pwragent/shared/release-notes";
 
 const openExternal = vi.fn(async (_url: string): Promise<void> => undefined);
 

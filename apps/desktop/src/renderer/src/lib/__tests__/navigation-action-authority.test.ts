@@ -1,6 +1,9 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
-import type { NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationSelectedDetailResponse,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { readNavigationActionDetail, readNavigationActionThread, resolveNavigationActionGroupRoot } from "../navigation-action-authority";
 
 const row: NavigationThreadSummary = { id: "same", source: "codex", title: "Row", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true }, model: "stale-model" };

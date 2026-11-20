@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { RESEARCH_MAX_WORKERS, type ResearchBoundsCommand } from "@pwragent/shared";
+import { RESEARCH_MAX_WORKERS, type ResearchBoundsCommand } from "@pwragent/shared/research";
 import { ResearchLimitField, researchLimitDraft, researchLimitMinutes, type ResearchLimitDraft } from "./ResearchLimitField";
 import { formatResearchDuration, formatRunMoment, plural, researchWorkerMinutesUsed, type ResearchRunView } from "./research-view-model";
 

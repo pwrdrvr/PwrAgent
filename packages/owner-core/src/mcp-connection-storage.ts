@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 
 export type ThreadSandboxStatus = "active" | "stopped";
 

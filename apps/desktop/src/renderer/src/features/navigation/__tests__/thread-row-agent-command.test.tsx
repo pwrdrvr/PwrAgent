@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadRow } from "../ThreadRow";
 
 afterEach(cleanup);

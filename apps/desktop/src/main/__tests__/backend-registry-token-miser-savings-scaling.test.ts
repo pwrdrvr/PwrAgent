@@ -1,11 +1,11 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import { estimateTokenUsageCost } from "@pwragent/shared";
+import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

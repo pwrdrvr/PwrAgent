@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { DesktopAppearanceDensity } from "@pwragent/shared";
+import type { DesktopAppearanceDensity } from "@pwragent/shared/contracts/settings";
 
 /**
  * The density thread rows render for. CSS does the hiding (see the density

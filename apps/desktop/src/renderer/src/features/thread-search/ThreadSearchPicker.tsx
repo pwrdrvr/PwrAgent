@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { SearchIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";

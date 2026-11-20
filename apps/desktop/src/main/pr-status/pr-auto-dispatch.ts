@@ -3,23 +3,28 @@ import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   PrAutoDispatchBudgetConfig,
   PrAutoDispatchBudgetStatus,
+} from "@pwragent/shared/contracts/settings";
+import type {
   PrSummary,
-  PrActivityEvent,
-  PrActivityTone,
-  SetThreadPrAutoDispatchRequest,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { PrActivityEvent, PrActivityTone } from "@pwragent/shared/contracts/pr-activity";
+import type { SetThreadPrAutoDispatchRequest } from "@pwragent/shared/contracts/agent";
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  parseThreadIdentityKey,
+} from "@pwragent/shared/contracts/navigation";
+import {
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
-  parseThreadIdentityKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { PrAutoDispatchStorage } from "@pwragent/owner-core/pr-status-storage";
 import { describePrRepairDecision } from "./pr-activity";
 import { isTerminalPullRequest } from "./pr-derivations";
@@ -792,7 +797,7 @@ export function buildPrRepositoryKey(
     .join("/");
 }
 
-export { pullRequestMatchesRepositoryKey } from "@pwragent/shared";
+export { pullRequestMatchesRepositoryKey } from "@pwragent/shared/contracts/navigation";
 
 export function buildPrAutoDispatchEvent(
   pr: PrSummary,

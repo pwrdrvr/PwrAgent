@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DesktopDarkTheme, DesktopLightTheme } from "@pwragent/shared";
+import type { DesktopDarkTheme, DesktopLightTheme } from "@pwragent/shared/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const electronMocks = vi.hoisted(() => ({

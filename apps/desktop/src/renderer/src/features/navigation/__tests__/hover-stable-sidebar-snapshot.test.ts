@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import type { NavigationPresentationEntry } from "../navigation-presentation-order";
 import {

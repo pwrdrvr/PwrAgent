@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { CodexEnvironmentDocument } from "@pwragent/shared";
+import type { CodexEnvironmentDocument } from "@pwragent/shared/contracts/codex-environment-editor";
 import {
   createCodexEnvironmentDocumentSource,
   listCodexEnvironmentFiles,

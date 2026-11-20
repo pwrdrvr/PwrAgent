@@ -1,5 +1,10 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessStatus, type ResearchThread } from "@pwragent/shared";
+import { RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS, type ResearchThread } from "@pwragent/shared/research";
+import {
+  type ResearchHarnessCheck,
+  type ResearchHarnessRequest,
+  type ResearchHarnessStatus,
+} from "@pwragent/shared/research-harness";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type Operation = "import" | "discovery" | "execute";

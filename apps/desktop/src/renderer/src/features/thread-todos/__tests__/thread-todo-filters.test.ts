@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter } from "../thread-todo-filters";
 import type { OperatorWait } from "../../operator-requests/operator-waits";
 

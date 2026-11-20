@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPricingSummary } from "@pwragent/shared/token-usage-pricing";
+import type { NavigationIdentity } from "@pwragent/shared/contracts/navigation";
 import type {
-  NavigationThreadSummary,
-  ThreadPricingSummary,
-} from "@pwragent/shared";
-import type { NavigationIdentity, ReadThreadFamilyPricingResponse, ThreadFamilyPricingMember } from "@pwragent/shared";
+  ReadThreadFamilyPricingResponse,
+  ThreadFamilyPricingMember,
+} from "@pwragent/shared/thread-family-pricing";
 import {
   THREAD_FAMILY_PRICING_PEER_BUDGET_MS,
   readFederatedThreadFamilyPricing,

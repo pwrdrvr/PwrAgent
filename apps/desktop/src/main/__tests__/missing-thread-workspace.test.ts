@@ -1,4 +1,7 @@
-import type { AppServerThreadSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it, vi } from "vitest";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace } from "../app-server/missing-thread-workspace";
 

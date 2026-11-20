@@ -6,7 +6,7 @@ import type {
   DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { DataTooltipLayer } from "./lib/DataTooltipLayer";

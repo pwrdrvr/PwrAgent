@@ -1,5 +1,8 @@
-import type { AdvertiseServiceArgs } from "@pwragent/shared";
-import type { LaunchpadCreationRequest, MaterializeDirectoryLaunchpadOptions } from "@pwragent/shared";
+import type { AdvertiseServiceArgs } from "@pwragent/shared/contracts/federation-services";
+import type {
+  LaunchpadCreationRequest,
+  MaterializeDirectoryLaunchpadOptions,
+} from "@pwragent/shared/contracts/agent";
 import { LaunchpadCreationOperations } from "../../src/main/app-server/launchpad-creation-operations";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../../src/main/federation/federation-services";
 import { createHash, randomBytes } from "node:crypto";
@@ -12,15 +15,18 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   CancelThreadPrAutoDispatchRequest,
   CancelThreadPrAutoDispatchResponse,
-  CodexEnvironmentOption,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
-  LinkedDirectorySummary,
-  ListBackendsResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  CodexEnvironmentOption,
   NavigationSnapshot,
   NavigationQueryRequest,
   NavigationSelectedDetailRequest,
@@ -33,14 +39,15 @@ import type {
   NavigationThreadSummary,
   SetThreadPinRequest,
   SetThreadPinResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildAppendPinRank } from "@pwragent/shared/thread-pins";
 import {
-  buildThreadIdentityKey,
-  buildAppendPinRank,
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
-  resolveNewThreadBackend,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { resolveNewThreadBackend } from "@pwragent/shared/backend-selection";
 import { NavigationQueryStore } from "../../src/main/app-server/navigation-query-store";
 import { StateDb } from "../../src/main/state/state-db";
 import {

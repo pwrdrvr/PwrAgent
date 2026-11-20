@@ -3,8 +3,6 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   MCP_CONNECTION_IDS,
-  isMcpIpcUrl,
-  parseMcpIpcUrl,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
@@ -13,18 +11,21 @@ import {
   type SandboxerTransport,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
-  isLinearMcpServerUrl,
   MCP_STDIO_ENV_NAME_PATTERN,
-  isGithubMcpAccountSource,
-  isGithubMcpServerLocation,
-  normalizeGithubMcpToolsets,
-  type GithubMcpSettings,
   type McpConnectionProjectToolApproval,
   type McpConnectionRecord,
   type McpConnectionToolApproval,
   type McpStdioLaunch,
   upsertMcpConnectionProjectToolApproval,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { isMcpIpcUrl, parseMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
+import { isLinearMcpServerUrl } from "@pwragent/shared/linear-paste";
+import {
+  isGithubMcpAccountSource,
+  isGithubMcpServerLocation,
+  normalizeGithubMcpToolsets,
+  type GithubMcpSettings,
+} from "@pwragent/shared/github-mcp";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
 import { validateMcpIpcPlatform } from "./mcp-ipc-http";
 import {

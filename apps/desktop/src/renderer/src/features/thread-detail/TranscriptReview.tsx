@@ -4,10 +4,12 @@ import type {
   AppServerReviewFinding,
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
-} from "@pwragent/shared";
-import { formatPathRelativeToDirectories } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { formatPathRelativeToDirectories } from "@pwragent/shared/path-display";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import {

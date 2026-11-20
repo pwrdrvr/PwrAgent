@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { AgentEvent, LinkedDirectorySummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { buildFleetRegistry, drivePacer, raw, worktree, type Counts, type Fleet } from "./fixtures/archive-fleet-harness";
 import { StateDb } from "../state/state-db";

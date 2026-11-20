@@ -4,7 +4,7 @@ import type {
   AutomationRunStatus,
   AutomationScheduleDefinition,
   AutomationStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import { formatUsd } from "../thread-detail/context-panels/subagent-format";
 
 export function formatAutomationTimestamp(timestamp: number | undefined): string {

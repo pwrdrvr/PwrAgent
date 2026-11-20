@@ -3,7 +3,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ResearchService, type ResearchPorts } from "@pwragent/owner-core/research-service";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import { RESEARCH_MAX_EVENTS, type ResearchActor, type ResearchApproach, type ResearchEvent, type ResearchEventData, type ResearchThread } from "@pwragent/shared";
+import {
+  RESEARCH_MAX_EVENTS,
+  type ResearchActor,
+  type ResearchApproach,
+  type ResearchEvent,
+  type ResearchEventData,
+  type ResearchThread,
+} from "@pwragent/shared/research";
 import { createResearchAgentHandler } from "../research/research-runtime";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";

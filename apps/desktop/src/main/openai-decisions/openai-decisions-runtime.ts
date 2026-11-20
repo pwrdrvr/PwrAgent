@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, ThreadUsageLineRecord } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { threadDecisionBatchDirectory } from "../app-server/thread-assets";
 import {
   isDecisionProviderEnabled,

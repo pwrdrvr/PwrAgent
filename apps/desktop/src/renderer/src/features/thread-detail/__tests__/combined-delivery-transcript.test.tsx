@@ -1,13 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { combinedDeliveryInput } from "@pwragent/shared/combined-delivery";
 import {
-  combinedDeliveryInput,
   type AppServerThreadMessageEntry,
   type AppServerThreadMessageOrigin,
   type AppServerThreadMessagePart,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TranscriptMessage } from "../TranscriptMessage";
 

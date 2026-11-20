@@ -1,4 +1,4 @@
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { describe, expect, it } from "vitest";
 import {
   isSystemQueuedMessageTitleHelperSubAgent,

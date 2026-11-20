@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type NavigationLaunchpadDraft,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

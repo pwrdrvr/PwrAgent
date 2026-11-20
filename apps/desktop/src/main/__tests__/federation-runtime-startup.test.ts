@@ -1,10 +1,10 @@
 import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopFederationMode } from "@pwragent/shared/contracts/settings";
 import type {
-  DesktopFederationMode,
   FederationActiveConnection,
   FederationPeerSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import type { FederationRuntimeConfig } from "../federation/federation-runtime-config";
 

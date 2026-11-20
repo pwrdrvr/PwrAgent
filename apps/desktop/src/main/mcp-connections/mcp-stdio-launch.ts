@@ -13,7 +13,7 @@ import {
   type McpStdioLaunch,
   type McpStdioLaunchInput,
   type McpStdioTestProblem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { pathIsExecutable, resolveCommandOnPath } from "../settings/command-discovery";
 import { terminateOwnedProcessTree, type OwnedChildProcess } from "../process-tree";
 import { mcpSharedStdio } from "./mcp-sdk";

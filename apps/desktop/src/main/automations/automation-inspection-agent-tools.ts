@@ -3,8 +3,8 @@ import type {
   AutomationInspectionOperationName,
   AutomationInspectionRequest,
   AutomationInspectionResponse,
-} from "@pwragent/shared";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automation-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

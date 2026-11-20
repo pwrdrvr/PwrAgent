@@ -6,11 +6,13 @@ import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
-  type AppServerMcpElicitationRequestNotification,
-  type AppServerPendingRequestNotification,
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
+  type AppServerMcpElicitationRequestNotification,
+  type AppServerPendingRequestNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { type ForgeToolRuleWriter } from "../app-server/backend-registry-types";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

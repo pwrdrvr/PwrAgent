@@ -14,17 +14,16 @@ import {
 } from "vitest";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerThreadEntry,
-  ThreadOverlayState,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
   ThreadToolInvocationRecord,
-  ThreadSpendAlert,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
+import type { ThreadSpendAlert, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 
 describe("DesktopBackendRegistry", () => {

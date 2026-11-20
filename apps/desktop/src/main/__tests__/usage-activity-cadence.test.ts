@@ -2,7 +2,7 @@ import { createDesktopBackendRegistry } from "../app-server/backend-registry-wir
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

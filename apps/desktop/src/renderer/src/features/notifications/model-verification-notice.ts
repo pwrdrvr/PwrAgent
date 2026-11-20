@@ -1,5 +1,6 @@
-import { describeModelVerification } from "@pwragent/shared";
-import type { AppServerBackendKind, FederationInstanceId } from "@pwragent/shared";
+import { describeModelVerification } from "@pwragent/shared/model-routing";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 /**

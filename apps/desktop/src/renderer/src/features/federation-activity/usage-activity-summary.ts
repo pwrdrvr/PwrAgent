@@ -1,4 +1,9 @@
-import { usageActivityCoverage, usageActivityIdentity, type FederationTarget, type UsageActivityRow } from "@pwragent/shared";
+import {
+  usageActivityCoverage,
+  usageActivityIdentity,
+  type UsageActivityRow,
+} from "@pwragent/shared/contracts/usage-activity";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 
 export type OwnedUsageRow = UsageActivityRow & { owner: string; target: FederationTarget };
 

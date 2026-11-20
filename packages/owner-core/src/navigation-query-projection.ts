@@ -1,12 +1,14 @@
-import { sortSubthreadSummaries, threadProviderIdentity } from "@pwragent/shared";
+import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
+import { threadProviderIdentity } from "@pwragent/shared/provider-picker";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import type {
   AppServerBackendKind,
   LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   NavigationCounts,
   NavigationStarMapFacetCounts,
-  NavigationStarMapSignals,
   NavigationDirectorySummary,
   NavigationDirectoryRow,
   NavigationIdentity,
@@ -21,26 +23,30 @@ import type {
   NavigationThreadSummary,
   NavigationMetadataDependencies,
   PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import {
   buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  comparePinnedThreads,
-  comparePullRequestStack,
-  classifyDirectory,
-  directoryIncludesCheckout,
-  countNavigationStarMapFacets,
-  passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
-  rankDirectoryMentionMatches,
-  rankThreadJumpMatches,
-  textMatchesJumpQuery,
   buildPullRequestStatusKey,
-  navigationWorkingStatePath,
-  readNavigationMetadataDependencies,
+} from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { comparePinnedThreads } from "@pwragent/shared/thread-pins";
+import {
+  comparePullRequestStack,
   pullRequestRollupPriority,
   resolveLifecycleState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pull-request-rollup";
+import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import {
+  countNavigationStarMapFacets,
+  passesNavigationStarMapFilters,
+} from "@pwragent/shared/navigation-star-map-filters";
+import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-match";
+import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
+import { textMatchesJumpQuery } from "@pwragent/shared/jump-search-text";
+import { navigationWorkingStatePath } from "@pwragent/shared/navigation-query-events";
+import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import {
   navigationAttentionIdentity,
   type NavigationAttentionOrder,

@@ -6,7 +6,7 @@ import {
   useState,
   type ReactElement,
 } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { CopyIcon, FolderIcon, NewThreadIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import {

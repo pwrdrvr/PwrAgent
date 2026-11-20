@@ -1,6 +1,8 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, ListBackgroundTerminalsResponse, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ListBackgroundTerminalsResponse } from "@pwragent/shared/contracts/background-terminals";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useCodexBackgroundTerminals } from "../useCodexBackgroundTerminals";
 import { threadSummaryIdentityKey } from "../federated-thread-events";

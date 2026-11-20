@@ -1,8 +1,5 @@
-import {
-  describeMergeQueueRemoval,
-  mergeQueueNoun,
-  type PrSummary,
-} from "@pwragent/shared";
+import { describeMergeQueueRemoval, mergeQueueNoun } from "@pwragent/shared/pr-merge-queue";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";

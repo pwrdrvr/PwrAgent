@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
-  SteerTurnRequest,
-  SteerTurnResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { SteerTurnRequest, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
 
 export type ThreadSteeringSubmission = {
   response: SteerTurnResponse;

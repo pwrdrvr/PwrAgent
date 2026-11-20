@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { findStarMapIntakeRevealTarget } from "../star-map-intake-reveal";
 
 function thread(

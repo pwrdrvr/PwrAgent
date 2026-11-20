@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerRestartStatus } from "@pwragent/shared";
+import type { CodexAppServerRestartStatus } from "@pwragent/shared/contracts/backend";
 import {
   CodexRestartNotice,
   buildCodexRestartNotice,

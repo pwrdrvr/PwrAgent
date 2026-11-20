@@ -1,4 +1,9 @@
-import { isAcpBackendId, type AppServerBackendKind, type SetThreadModelSettingsRequest, type StartThreadResponse } from "@pwragent/shared";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type SetThreadModelSettingsRequest,
+  type StartThreadResponse,
+} from "@pwragent/shared/contracts/agent";
 
 export type CreatedThreadIdentity = { backend: AppServerBackendKind; threadId: string };
 export type CreatedThreadParent = { parentThreadId: string; parentThreadBackend?: AppServerBackendKind };

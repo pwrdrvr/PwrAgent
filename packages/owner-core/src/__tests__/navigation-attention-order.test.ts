@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationAttentionIdentity, observeNavigationAttentionTurn, reconcileNavigationAttentionOrder } from "../navigation-attention-order";
 
 const thread = (id: string, updatedAt: number): NavigationThreadSummary => ({ id, source: "codex", title: id, titleSource: "fallback",

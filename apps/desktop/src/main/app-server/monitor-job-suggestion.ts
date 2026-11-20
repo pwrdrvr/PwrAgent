@@ -1,4 +1,5 @@
-import { PWRAGENT_TOOL_NAMESPACE, type ThreadToolInvocationRecord } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { type ThreadToolInvocationRecord } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** What the deterministic detector reads from an invocation. */
 export type MonitorJobObservation = Pick<

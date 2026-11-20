@@ -11,7 +11,7 @@ import {
   type ThreadMaintenanceScanStep,
   type ThreadMaintenanceSpace,
   type ThreadMaintenanceWorkspace,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 
 /** Which steps a tab runs. Combined runs the steps its plan has ticked. */
 export type ThreadMaintenanceMode = "combined" | ThreadMaintenanceScanStep;

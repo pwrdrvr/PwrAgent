@@ -1,9 +1,9 @@
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-  MessagingConversationKind,
-  ThreadMessagingBindingTransition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingConversationKind } from "@pwragent/shared/contracts/messaging";
+import type { ThreadMessagingBindingTransition } from "@pwragent/shared/contracts/navigation";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 

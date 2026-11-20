@@ -1,9 +1,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildFederatedThreadRef,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useThreadGitWorkingStateRefresh } from "../useThreadGitWorkingStateRefresh";
 

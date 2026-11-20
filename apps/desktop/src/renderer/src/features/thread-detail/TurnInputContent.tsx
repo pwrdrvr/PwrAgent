@@ -2,7 +2,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useThreadLinks } from "../../lib/thread-links";
 import { ThreadChip } from "./ThreadChip";

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "./provider-chip-visibility";

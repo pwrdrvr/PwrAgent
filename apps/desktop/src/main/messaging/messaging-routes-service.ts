@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
   AppServerThreadSummary,
-  BackendSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingBindingRoute,
   DesktopMessagingDefaultAgentScope,
@@ -14,13 +16,13 @@ import type {
   ClearMessagingDefaultAgentResponse,
   ResetMessagingToolUpdateBindingsRequest,
   ResetMessagingToolUpdateBindingsResponse,
-  ThreadAgentMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+import type { ThreadAgentMetadata } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   MESSAGING_TOOL_UPDATE_MODES,
   normalizeMessagingBindingTargetKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingDefaultAgentAssignmentRecord,
   MessagingDefaultAgentScope,

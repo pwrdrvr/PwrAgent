@@ -1,8 +1,14 @@
 import { createNavigationDiagnosticView } from "./navigation-listing-diagnostics";
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { classifyDirectory } from "@pwragent/shared";
-import type { AgentEvent, FederationTarget, NavigationDirectoryRow, NavigationQueryAnchor, NavigationQueryPage } from "@pwragent/shared";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryAnchor,
+  NavigationQueryPage,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "./navigation-window-demand";

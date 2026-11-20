@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import fc from "fast-check";
 import { useMemo, type ComponentProps } from "react";
 import { beforeAll, describe, it, vi } from "vitest";
-import type { BackendModelOption, BackendSummary } from "@pwragent/shared";
+import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import {

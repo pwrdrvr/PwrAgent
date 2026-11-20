@@ -1,11 +1,13 @@
 import type {
   AppServerBackendKind,
-  BackendSummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";

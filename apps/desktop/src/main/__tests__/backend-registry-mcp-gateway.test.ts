@@ -4,18 +4,23 @@ import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { DEFAULT_FORGE_AGENT_TOOL_POLICY } from "@pwragent/shared/contracts/forge-agent-tools";
 import {
-  DEFAULT_FORGE_AGENT_TOOL_POLICY,
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AppServerMcpElicitationRequestNotification,
+  AppServerPendingRequestNotification,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildCodexConnectionMcpServerName } from "../app-server/codex-thread-config";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

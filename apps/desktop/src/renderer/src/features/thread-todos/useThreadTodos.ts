@@ -13,10 +13,15 @@ import type {
   ThreadTodo,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoStatus,
-  ThreadReviewIdentity,
   TodoUnavailableInstance,
-} from "@pwragent/shared";
-import { applyThreadTodoFeedDelta, compareThreadTodosNewestFirst, ThreadTodoFeedFollower, threadTodoThreadKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadReviewIdentity } from "@pwragent/shared/contracts/thread-reviews";
+import {
+  applyThreadTodoFeedDelta,
+  compareThreadTodosNewestFirst,
+  ThreadTodoFeedFollower,
+} from "@pwragent/shared/thread-todo-feed";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import { useThreadItemGroups } from "../../lib/thread-item-groups";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadTodoResolveOptions } from "./thread-todos-view";

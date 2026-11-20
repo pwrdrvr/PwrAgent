@@ -1,4 +1,4 @@
-import type { DurableTurnReceipt } from "@pwragent/shared";
+import type { DurableTurnReceipt } from "@pwragent/shared/contracts/durable-turn-requests";
 import type { DurableRequestReceipt, DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
 import type { StateDb } from "./state-db";
 

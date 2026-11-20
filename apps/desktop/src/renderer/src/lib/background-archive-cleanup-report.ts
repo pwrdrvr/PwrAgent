@@ -1,5 +1,9 @@
 import { createElement } from "react";
-import { buildThreadUrl, type AppServerBackendKind, type ArchiveThreadCleanupResult, type ThreadLinkRef } from "@pwragent/shared";
+import { buildThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
+import {
+  type AppServerBackendKind,
+  type ArchiveThreadCleanupResult,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 import { BackgroundArchiveCleanupDetails } from "../features/notifications/BackgroundArchiveCleanupDetails";
 import type { BackgroundCleanupOutcome, BackgroundCleanupThread } from "./background-archive-cleanup-types";

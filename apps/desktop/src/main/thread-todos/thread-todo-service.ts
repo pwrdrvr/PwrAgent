@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ListThreadTodosRequest,
   ThreadTodo,
   ThreadTodoAction,
@@ -16,9 +19,8 @@ import type {
   ThreadTodoStatus,
   ThreadTodosChangedEvent,
   ThreadTodoWorkMode,
-  ThreadExecutionMode,
-  CodexSpeed,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
@@ -32,7 +34,7 @@ import {
   threadTodoItemNoun,
   threadTodoStartAccessChanged,
   threadTodoSteps,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import {
   THREAD_TODO_PLAN_DETAIL,

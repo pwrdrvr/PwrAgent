@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   classifyGithubMergeMethod,
   fallbackTerminalDetails,

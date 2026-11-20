@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import path from "node:path";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ArchiveFleetIndex, type FleetRow } from "../app-server/archive-cleanup-fleet-index";
 
 /**

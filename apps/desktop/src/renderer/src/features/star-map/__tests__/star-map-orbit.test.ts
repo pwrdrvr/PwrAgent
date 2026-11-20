@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationPeerSummary } from "@pwragent/shared";
+import type { FederationPeerSummary } from "@pwragent/shared/contracts/federation";
 import {
   cardRingExtent,
   cardRings,

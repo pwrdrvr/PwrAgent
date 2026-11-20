@@ -1,7 +1,7 @@
 import type {
   ThreadToolInvocationAlert,
   ThreadToolInvocationRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   mergeStreamedToolInvocationDeltas,

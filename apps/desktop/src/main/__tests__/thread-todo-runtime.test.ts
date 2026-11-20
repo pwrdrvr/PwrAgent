@@ -6,12 +6,13 @@ import type { HandoffSourceSettings } from "../app-server/backend-registry-types
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
-  ThreadTodo,
-  ThreadTodoProject,
-} from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-tools";
+import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import {
   createThreadTodoRunners,

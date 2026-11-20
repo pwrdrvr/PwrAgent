@@ -5,7 +5,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { TranscriptWorkPhaseGroup } from "../TranscriptWorkPhaseGroup";
 import {
   buildWorkPhaseDisplayItems,

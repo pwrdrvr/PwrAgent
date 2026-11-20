@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo } from "react";
-import type { BackendRuntimeBuild, BackendSummary } from "@pwragent/shared";
+import type { BackendRuntimeBuild, BackendSummary } from "@pwragent/shared/contracts/backend";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {

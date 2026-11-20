@@ -1,10 +1,10 @@
 import {
   describeProviderResponseBlock,
   detectProviderResponseBlock,
-  type AppServerBackendKind,
-  type AgentEvent,
-  type FederationInstanceId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/provider-response-block";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import { formatBackendLabel } from "../../lib/backend-label";
 import {
   codexWarningSuppressionId,

@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { AutomationSchedulingStatus } from "@pwragent/shared";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
 import { AutomationsIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { describeAutomationSchedulingStatus } from "../automations/useAutomationSchedulingStatus";

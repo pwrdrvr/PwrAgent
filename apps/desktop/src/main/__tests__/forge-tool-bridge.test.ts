@@ -3,12 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   FORGE_AGENT_TOOL_ACCESS_LEVELS,
-  type AgentEvent,
-  type AppServerPendingRequestNotification,
   type ForgeAgentToolPolicy,
-  type NavigationSnapshot,
-  type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationSnapshot, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import {

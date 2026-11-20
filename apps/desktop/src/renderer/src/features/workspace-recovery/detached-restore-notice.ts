@@ -1,4 +1,8 @@
-import type { AppServerBackendKind, RestoreThreadResponse, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  RestoreThreadResponse,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 
 type Detached = NonNullable<WorktreeSnapshotSummary["detachedFrom"]>;

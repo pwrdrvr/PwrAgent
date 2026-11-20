@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationHealthStatus } from "@pwragent/shared";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { FederationDisplayLabelsProvider } from "../../../lib/federation-display-label";
 import { AppNoticeToast } from "../AppNoticeToast";
 import { resolveThreadActionErrorNotice } from "../thread-action-error-notice";

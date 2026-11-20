@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { researchTurnLimitNote, type ResearchActor, type ResearchEvent, type ResearchEventData } from "@pwragent/shared";
+import {
+  researchTurnLimitNote,
+  type ResearchActor,
+  type ResearchEvent,
+  type ResearchEventData,
+} from "@pwragent/shared/research";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { StateDb } from "../../src/main/state/state-db";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";

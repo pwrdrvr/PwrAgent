@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { PrAutoFixBlock } from "../../pr-watches/useThreadPrWatchIndicators";
 import type { PrBranchDrift } from "../pr-branch-drift";
 import { PrStatusCard } from "../PrStatusCard";

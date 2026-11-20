@@ -1,7 +1,7 @@
 import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveLaunchpadComposerScope } from "../composer/launchpad-composer-handoff";
 import { buildLaunchpadComposerScopeKey } from "../composer/launchpad-composer-scope";

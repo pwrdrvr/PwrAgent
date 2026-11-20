@@ -1,4 +1,4 @@
-import type { BackendRateLimitSummary, BackendModelOption } from "@pwragent/shared";
+import type { BackendRateLimitSummary, BackendModelOption } from "@pwragent/shared/contracts/backend";
 
 export const RATE_LIMIT_RESET_BUFFER_MS = 5 * 60_000;
 export const RATE_LIMIT_RESET_JITTER_MS = 5 * 60_000;

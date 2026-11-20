@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_BACKEND_METHODS,
   additionalFederationBackendCapabilities,

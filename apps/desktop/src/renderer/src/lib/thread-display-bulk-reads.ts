@@ -1,4 +1,5 @@
-import type { FederationTarget, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /**
  * Local main, and owners that advertise `thread_display_bulk_reads`, serve a

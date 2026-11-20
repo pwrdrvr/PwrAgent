@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadSearchStore } from "../storage/thread-search-store";
 import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

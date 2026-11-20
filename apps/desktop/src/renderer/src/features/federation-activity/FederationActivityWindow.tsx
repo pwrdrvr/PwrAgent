@@ -4,7 +4,7 @@ import { FederationConnections } from "./FederationConnections";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { formatActivityReport } from "./format-activity-report";
-import type { FederationActivitySeries } from "@pwragent/shared";
+import type { FederationActivitySeries } from "@pwragent/shared/contracts/federation";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";

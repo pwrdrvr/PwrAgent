@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import * as git from "../app-server/git-executable";
 import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { clearGitHubRemoteCache, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";

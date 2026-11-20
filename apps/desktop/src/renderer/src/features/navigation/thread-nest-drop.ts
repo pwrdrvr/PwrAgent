@@ -1,5 +1,5 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
-import { resolveThreadParentKey } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import {
   federationTargetsEqual,
   threadSummaryIdentityKey,

@@ -1,10 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  AutomationDetail,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AutomationDetail } from "@pwragent/shared/contracts/automations";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadAutomationsPanel } from "../ThreadAutomationsPanel";
 

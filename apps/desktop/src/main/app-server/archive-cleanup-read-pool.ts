@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 
 type ArchiveEvidence = { generation: number; threadIds: ReadonlySet<string> };
 type Scope = {

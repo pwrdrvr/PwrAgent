@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SetThreadCheckoutHibernationResponse, ThreadHibernatedWorkspace } from "@pwragent/shared";
+import type { SetThreadCheckoutHibernationResponse } from "@pwragent/shared/contracts/navigation";
+import type { ThreadHibernatedWorkspace } from "@pwragent/shared/contracts/normalized-app-server";
 import { HibernatedCheckoutCard, removedOutputText, savedChangesText } from "../HibernatedCheckoutCard";
 
 afterEach(() => {

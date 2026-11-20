@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /**
  * A request, from a thread row's to-do chip, to show that thread's cards.

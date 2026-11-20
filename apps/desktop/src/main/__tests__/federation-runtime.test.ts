@@ -6,10 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { AgentEvent, CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
+import type { CelestialIconAssignment, SetCelestialIconResponse } from "@pwragent/shared/contracts/celestial";
 import type {
-  AgentEvent,
-  CelestialIconAssignment,
-  CodexEnvironmentSetupProgressEvent,
   FederationCapability,
   FederationEventClass,
   FederationEventSubscription,
@@ -17,20 +16,18 @@ import type {
   FederationPeerSummary,
   FederationProtocolEnvelope,
   FederationThreadSelection,
+} from "@pwragent/shared/contracts/federation";
+import type {
   GetNavigationSnapshotTransportRequest,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
-  SetCelestialIconResponse,
-  StarMapArrangementEntry,
-  ThreadDependency,
-  ThreadPricingSummary,
-} from "@pwragent/shared";
-import {
-  FEDERATION_PROTOCOL_VERSION,
-  MAX_CELESTIAL_ASSIGNMENTS,
-  buildFederatedThreadRef,
-  buildThreadIdentityKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { StarMapArrangementEntry } from "@pwragent/shared/contracts/star-map";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import type { ThreadPricingSummary } from "@pwragent/shared/token-usage-pricing";
+import { FEDERATION_PROTOCOL_VERSION, buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { MAX_CELESTIAL_ASSIGNMENTS } from "@pwragent/shared/contracts/celestial";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_EVENT_METHOD,

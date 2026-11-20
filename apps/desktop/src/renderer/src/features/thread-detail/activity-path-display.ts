@@ -1,5 +1,5 @@
-import type { AppServerThreadActivityEntry } from "@pwragent/shared";
-import { formatPathRelativeToDirectories } from "@pwragent/shared";
+import type { AppServerThreadActivityEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import { formatPathRelativeToDirectories } from "@pwragent/shared/path-display";
 
 /**
  * Rewrite absolute paths inside an activity label to directory-relative form.

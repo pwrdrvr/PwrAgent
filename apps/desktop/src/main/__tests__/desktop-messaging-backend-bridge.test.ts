@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { findPreferredReviewWorkspaceCwd } from "@pwragent/shared";
+import { findPreferredReviewWorkspaceCwd } from "@pwragent/shared/review-branches";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerThreadSummary,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadReplay,
-  CreateScheduledThreadActionRequest,
-  NavigationSnapshot,
-  ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CreateScheduledThreadActionRequest } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { NavigationSnapshot, ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { bundledSkillRootAliases } from "../agent-tools/bundled-skill-root";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";

@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildThreadIdentityKey,
-  DEFAULT_THREAD_ARCHIVE_POLICY,
-  type AppServerThreadSummary,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { sweepThreadArchiveRetention } from "../app-server/thread-archive-retention";
 
 /**

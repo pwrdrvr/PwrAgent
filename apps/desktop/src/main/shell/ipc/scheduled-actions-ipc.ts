@@ -8,8 +8,8 @@ import type {
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
-} from "@pwragent/shared";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,

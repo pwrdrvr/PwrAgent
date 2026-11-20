@@ -1,8 +1,8 @@
+import { forgeRuleRepositoryMatchKey } from "@pwragent/shared/contracts/forge-agent-tools";
 import {
-  forgeRuleRepositoryMatchKey,
   type McpConnectionProjectToolApproval,
   type McpConnectionToolApproval,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { useId, useRef, useState } from "react";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";

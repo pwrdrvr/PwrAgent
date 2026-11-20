@@ -1,7 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { HandoffThreadWorkspaceResponse, NavigationThreadSummary } from "@pwragent/shared";
+import type { HandoffThreadWorkspaceResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { MessagingHandoffWorkflow } from "../messaging/core/messaging-handoff-workflow";

@@ -3,7 +3,7 @@ import type {
   DecisionsRailBatch,
   DecisionsRailDecision,
   DecisionsRailSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
 import { SignalCount } from "../../../components/SignalCount";
 import { BanIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";

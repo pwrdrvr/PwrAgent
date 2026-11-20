@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";

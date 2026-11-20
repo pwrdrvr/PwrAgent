@@ -1,10 +1,17 @@
 import { directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveNewThreadCodexEnvironmentId, normalizeNewThreadSessionForBackend, type AcpRuntimeRiskWarningContext } from "./messaging-callback-helpers";
 import { readStringValue } from "./messaging-command-helpers";
-import { selectedCodexSpeed } from "@pwragent/shared";
+import { selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { readMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
-import { isAcpBackendId, resolveNewThreadBackend, selectableNewThreadBackends } from "@pwragent/shared";
-import type { AppServerBackendKind, BackendAcpSessionRuntimeState, BackendSummary, MessagingToolUpdateMode, ThreadExecutionMode, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { resolveNewThreadBackend, selectableNewThreadBackends } from "@pwragent/shared/backend-selection";
+import type {
+  AppServerBackendKind,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendAcpSessionRuntimeState, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type { UpdateDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import type { MessagingBrowseSessionRecord, MessagingInboundCallbackEvent, MessagingInboundEvent } from "@pwragent/messaging-interface";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";

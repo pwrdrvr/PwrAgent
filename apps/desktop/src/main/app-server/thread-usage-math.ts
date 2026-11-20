@@ -1,30 +1,34 @@
 import { type TokenMiserCachedReplayIndex } from "./token-miser-ledger-index";
-import { readUuidV7Timestamp } from "@pwragent/shared";
-import { type UsageLimitObservation } from "@pwragent/shared";
+import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
+import { type UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import {
   isUsageActivityEntry,
   usageActivityScope,
 } from "./overlay-transcript-entries";
+import { anchorTurnUsageEntries } from "@pwragent/shared/thread-usage-display";
 import {
-  anchorTurnUsageEntries,
   estimateOpenAiCodexCreditUsage,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   resolveTokenUsagePriceUnavailableReason,
-  type AgentEvent,
+  type ThreadPricingSummary,
+  type ThreadUsageLineRecord,
+} from "@pwragent/shared/token-usage-pricing";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
   type AppServerThreadReplay,
   type AppServerBackendKind,
-  type ThreadSubAgentSummary,
   type ThreadTokenMiserAccounting,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import {
   type ThreadReadEvaluationPricing,
   type ThreadReadEvaluationTokenMiser,
-  type ThreadPricingSummary,
-  type ThreadUsageLineRecord,
   MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
-  type TaskMonitorUsageSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import { type TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
 import {
   estimateTokenCount,
   type TokenMiserObjectMetadata,

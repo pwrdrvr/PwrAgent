@@ -2,11 +2,11 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
-  type PrAutoDispatchBudgetConfig,
   type PrSummary,
   type ThreadPrAutoDispatchEventKind,
   type ThreadPrAutoDispatchPending,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type PrAutoDispatchBudgetConfig } from "@pwragent/shared/contracts/settings";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import {
   MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,

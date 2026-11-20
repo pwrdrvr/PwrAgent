@@ -1,4 +1,5 @@
-import type { AcpBackendId, BackendAcpDistributionKind } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendAcpDistributionKind } from "@pwragent/shared/contracts/backend";
 
 export type AcpLaunchDescriptor = {
   backendId: AcpBackendId;

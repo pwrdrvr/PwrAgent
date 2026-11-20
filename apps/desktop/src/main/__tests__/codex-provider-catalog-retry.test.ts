@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexModelProviderCatalogState } from "@pwragent/shared";
+import type { CodexModelProviderCatalogState } from "@pwragent/shared/contracts/backend";
 import { CodexProviderCatalogRetry } from "../app-server/codex-provider-catalog-retry";
 
 const ready: CodexModelProviderCatalogState = { id: "mathos", name: "MathOS", status: "ready", listedCount: 0, discoveredCount: 3 };

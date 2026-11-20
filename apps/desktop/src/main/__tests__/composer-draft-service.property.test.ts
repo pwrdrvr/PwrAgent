@@ -1,7 +1,8 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerDraftStorage } from "@pwragent/owner-core/composer-draft-storage";
-import { buildOwnedComposerScopeKey, type ComposerDraftSnapshotRecord } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
+import { type ComposerDraftSnapshotRecord } from "@pwragent/shared/contracts/composer-drafts";
 import {
   clearComposerDraft,
   listComposerDraftLatest,

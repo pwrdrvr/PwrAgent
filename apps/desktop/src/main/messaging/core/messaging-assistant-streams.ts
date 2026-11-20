@@ -1,4 +1,8 @@
-import type { AgentEvent, AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { evictStaleStreamAnchors, type MessagingBindingRecord, type MessagingDeliveryResult, type MessagingImagePart, type MessagingInboundEvent, type MessagingStreamUpdateIntent, type MessagingSurfaceIntent, type MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { assistantItemIdForBackendEvent, assistantStreamKey, messagingSurfaceKey, turnIdForBackendEvent, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import { isSameMessagingSurface } from "./messaging-callback-helpers";

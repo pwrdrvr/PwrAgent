@@ -1,12 +1,9 @@
 import type { ForgeReadHandler } from "./pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler } from "./pwragent-forge-pr-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
-import type {
-  AgentToolCatalogId,
-  AgentToolCatalogSummary,
-  ForgeAgentToolPolicy,
-} from "@pwragent/shared";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import type { AgentToolCatalogId, AgentToolCatalogSummary } from "@pwragent/shared/contracts/agent-tools";
+import type { ForgeAgentToolPolicy } from "@pwragent/shared/contracts/forge-agent-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   buildAutomationInspectionToolRouter,

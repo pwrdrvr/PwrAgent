@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import type { ThreadExecutionMode } from "@pwragent/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useExecutionModeSelection } from "../useExecutionModeSelection";
 import { pressEscape, tabEscapes } from "../../test/tab-walk";

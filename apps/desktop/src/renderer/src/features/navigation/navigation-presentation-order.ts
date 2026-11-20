@@ -1,4 +1,4 @@
-import type { NavigationQueryEntry } from "@pwragent/shared";
+import type { NavigationQueryEntry } from "@pwragent/shared/contracts/navigation";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";

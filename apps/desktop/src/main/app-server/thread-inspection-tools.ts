@@ -5,28 +5,7 @@ import {
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
-  buildThreadIdentityKey,
-  buildThreadMarkdownLink,
-  buildThreadUrl,
-  isAppServerBackendKind,
-  isThreadExecutionMode,
-  isThreadLockRefusal,
-  isThreadSearchContentMode,
-  isThreadSearchSemanticMode,
-  normalizeThreadLockNote,
-  threadSeenWatermark,
-  type AppServerBackendKind,
-  type AppServerPendingRequestNotification,
-  type AppServerReadThreadResponse,
-  type AppServerThreadStatus,
-  type AppServerThreadSummary,
-  type AppServerToolRequestUserInputResponse,
-  type ArchiveThreadRequest,
-  type FederationInstanceId,
   type GetThreadStatusToolArgs,
-  type HandoffThreadWorkspaceRequest,
-  type HandoffThreadWorkspaceResponse,
-  type MessagingThreadBindingSummary,
   type MutateThreadParentV1Request,
   type MutateThreadToolArgs,
   type PendingThreadApprovalSummary,
@@ -35,23 +14,50 @@ import {
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ReadThreadToolArgs,
+  type ThreadInspectionSummary,
+  type ThreadMutationAppliedChange,
+} from "@pwragent/shared/contracts/thread-tools";
+import {
+  buildThreadIdentityKey,
+  isAppServerBackendKind,
+  type MessagingThreadBindingSummary,
+  type SetThreadLockResponse,
+  type ThreadLock,
+  type ThreadLockSource,
+} from "@pwragent/shared/contracts/navigation";
+import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
+import { isThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
+import { isThreadLockRefusal, normalizeThreadLockNote } from "@pwragent/shared/thread-lock";
+import {
+  isThreadSearchContentMode,
+  isThreadSearchSemanticMode,
+  type ThreadSearchFilters,
+  type ThreadSearchResult,
+} from "@pwragent/shared/contracts/thread-search";
+import { threadSeenWatermark } from "@pwragent/shared/inbox";
+import {
+  type AppServerBackendKind,
+  type AppServerPendingRequestNotification,
+  type AppServerReadThreadResponse,
+  type AppServerThreadStatus,
+  type AppServerThreadSummary,
+  type AppServerToolRequestUserInputResponse,
+  type ArchiveThreadRequest,
+  type HandoffThreadWorkspaceRequest,
+  type HandoffThreadWorkspaceResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import {
   type SetThreadExecutionModeRequest,
   type SetThreadExecutionModeResponse,
-  type SetThreadLockResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
   type SubmitServerRequestRequest,
-  type ThreadExecutionMode,
-  type ThreadInspectionSummary,
-  type ThreadLock,
-  type ThreadLockSource,
-  type ThreadMaintenanceRules,
-  type ThreadMutationAppliedChange,
-  type ThreadSearchFilters,
-  type ThreadSearchResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import { type ThreadMaintenanceRules } from "@pwragent/shared/thread-maintenance";
 import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
 import type {
   PwrAgentFederatedThreadInspectionResult,
@@ -704,7 +710,7 @@ export class ThreadInspectionTools {
       if (!allowed(["scanId", "archive", "removeCheckouts", "trashCheckouts", "removeEmptyFolders", "hibernate", "dryRun"])) {
         return threadInspectionFailure("invalid_arguments", "Pass only scanId, archive, removeCheckouts, trashCheckouts, removeEmptyFolders, hibernate and dryRun.");
       }
-      const applyArgs = request.args as import("@pwragent/shared").ApplyThreadMaintenanceToolArgs;
+      const applyArgs = request.args as import("@pwragent/shared/contracts/thread-tools").ApplyThreadMaintenanceToolArgs;
       if (typeof applyArgs.scanId !== "string" || !applyArgs.scanId.trim()) {
         return threadInspectionFailure("invalid_arguments", "Pass the scanId from scan_thread_maintenance.");
       }

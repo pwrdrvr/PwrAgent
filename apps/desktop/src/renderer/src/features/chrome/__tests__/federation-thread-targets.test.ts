@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  FederationCapability,
-  FederationHealthStatus,
-} from "@pwragent/shared";
+import type { FederationCapability, FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { buildFederationThreadTargets } from "../federation-thread-targets";
 
 const ALL_CAPABILITIES: FederationCapability[] = [

@@ -1,10 +1,10 @@
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
 import type {
-  AppServerCollaborationModeRequest,
   AppServerBackendKind,
   AppServerThreadStatus,
   ThreadExecutionMode,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { CodexRetryableOperation, PendingReviewStartRecord, ReviewSubAgentRecord, ReviewTerminal, StartingTurnOrigin } from "./backend-registry-types";
 import {
   codexThreadHasActiveTurn,

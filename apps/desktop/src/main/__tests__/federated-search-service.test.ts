@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   FederationProtocolEnvelope,
   FederationThreadSearchResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_BACKEND_METHODS,
   FederationRemoteBackendClient,

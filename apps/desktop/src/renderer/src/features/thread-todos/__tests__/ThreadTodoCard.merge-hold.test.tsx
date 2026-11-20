@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, ThreadDependency, ThreadTodo } from "@pwragent/shared";
+import type {
+  ManageThreadDependenciesRequest,
+  ManageThreadDependenciesResponse,
+  ThreadDependency,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 

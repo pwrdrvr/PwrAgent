@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
-import type { PwrAgentAppRequest } from "@pwragent/shared";
+import type { PwrAgentAppRequest } from "@pwragent/shared/contracts/app-tools";
 
 const quit = vi.fn(async (_options: { source: string; quietRestart?: boolean }) => true);
 const check = vi.fn();

@@ -2,9 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import {
-  applyResearchChanges, emptyResearchRunStore, projectResearchRun, RESEARCH_MAP_LEAVES, researchApproachLeaves, researchRunState, researchRunStoreCursor, summarizeResearchRun,
-  type ResearchEvent, type ResearchRun, type ResearchRunStore, type ResearchThread,
-} from "@pwragent/shared";
+  applyResearchChanges,
+  emptyResearchRunStore,
+  projectResearchRun,
+  RESEARCH_MAP_LEAVES,
+  researchApproachLeaves,
+  researchRunState,
+  researchRunStoreCursor,
+  summarizeResearchRun,
+  type ResearchEvent,
+  type ResearchRun,
+  type ResearchRunStore,
+  type ResearchThread,
+} from "@pwragent/shared/research";
 import { MemoryResearchStorage } from "../../../../../packages/owner-core/src/__tests__/fixtures/research-memory-storage";
 import {
   nextResearchEvent, RESEARCH_JOURNAL_COORDINATOR, researchCreatedEvent, researchJournalStepArb, researchJournalWorker, type ResearchJournalStep,

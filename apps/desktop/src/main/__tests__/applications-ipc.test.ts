@@ -9,7 +9,7 @@ import type {
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
   ReadDesktopApplicationsRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 const remoteApplications: DesktopApplicationsSnapshot = {
   editors: [],

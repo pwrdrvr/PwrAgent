@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BackendLaunchpadOptions } from "@pwragent/shared";
+import type { BackendLaunchpadOptions } from "@pwragent/shared/contracts/backend";
 import { resolveThreadTodoModel } from "../thread-todos/thread-todo-models";
 
 const OPTIONS: BackendLaunchpadOptions = {

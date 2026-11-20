@@ -1,20 +1,20 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
-import { buildTokenMiserSavingsSummary, estimateTokenUsageCost } from "@pwragent/shared";
+import { buildTokenMiserSavingsSummary } from "@pwragent/shared/token-miser-savings-summary";
+import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationSnapshot, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  AgentEvent,
-  NavigationSnapshot,
-  ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";

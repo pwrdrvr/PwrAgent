@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import {
-  buildFederatedThreadRef,
-  federatedThreadIdentityKey,
   normalizeThreadSearchLimit,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type ThreadSearchRemoteInstance,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-search";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { hasFederationErrorCode } from "./federation-rpc";
 

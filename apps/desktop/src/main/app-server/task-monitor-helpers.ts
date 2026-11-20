@@ -1,12 +1,12 @@
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import { type AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  shortenDerivedThreadTitle,
-  type AppServerThreadEntry,
   type CompleteMonitoringToolArgs,
   type InjectMonitorProgressToolArgs,
   type TaskMonitorCompletionSource,
   type TaskMonitorRequest,
   type TaskMonitorResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/task-monitor-tools";
 import {
   truncateSubAgentText,
 } from "./codex-native-subagents";

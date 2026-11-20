@@ -5,8 +5,8 @@ import type {
   InjectMonitorProgressToolArgs,
   TaskMonitorRequest,
   TaskMonitorResponse,
-} from "@pwragent/shared";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/task-monitor-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

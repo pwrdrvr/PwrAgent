@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { federatedThreadIdentityKey, type AgentEvent, type NavigationRow } from "@pwragent/shared";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type NavigationRow } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";

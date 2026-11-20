@@ -1,4 +1,6 @@
-import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind, type PrSummary, type PullRequestProviderAvailability, type PullRequestTerminalDetails } from "@pwragent/shared";
+import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
+import { type PrSummary, type PullRequestProviderAvailability } from "@pwragent/shared/contracts/navigation";
+import { type PullRequestTerminalDetails } from "@pwragent/shared/contracts/thread-tools";
 import { GithubPrFetcher, type GithubPrFetcherOptions } from "./github-pr-fetcher";
 import { GithubGraphqlPrClient } from "./github-graphql-client";
 import { GitLabPrFetcher } from "./gitlab-pr-fetcher";

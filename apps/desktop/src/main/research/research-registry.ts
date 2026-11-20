@@ -1,5 +1,8 @@
 import { ResearchAdmissionRefused, type ResearchPorts, type ResearchService } from "@pwragent/owner-core/research-service";
-import type { HandoffTaskResult, SendMessageToThreadResult } from "@pwragent/shared";
+import type {
+  HandoffTaskResult,
+  SendMessageToThreadResult,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
 import { createResearchAgentHandler } from "./research-runtime";

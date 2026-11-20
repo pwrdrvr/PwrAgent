@@ -2,7 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import type {
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { AutomationEditor } from "../AutomationEditor";
 

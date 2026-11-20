@@ -1,5 +1,5 @@
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
-import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
 import { classifyTokenMiserSavings } from "../token-miser-savings-summary";
 
 export function TokenMiserSavingsBreakdown(props: {

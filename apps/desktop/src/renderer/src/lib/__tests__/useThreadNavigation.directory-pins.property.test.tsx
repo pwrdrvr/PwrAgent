@@ -1,7 +1,8 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import fc from "fast-check";
-import type { FederationTarget, NavigationDirectorySummary } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";

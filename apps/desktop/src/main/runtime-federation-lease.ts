@@ -1,4 +1,4 @@
-import type { DesktopFederationMode } from "@pwragent/shared";
+import type { DesktopFederationMode } from "@pwragent/shared/contracts/settings";
 import { getMainLogger } from "./log";
 import { RuntimeLeaseRetry } from "./runtime-lease-retry";
 import {

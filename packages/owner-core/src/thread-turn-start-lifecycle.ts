@@ -1,4 +1,10 @@
-import { buildPendingTurnId, buildThreadIdentityKey, isAcpBackendId, type AgentEvent, type AppServerBackendKind, type SetThreadModelSettingsRequest, type ThreadExecutionMode } from "@pwragent/shared";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent, type SetThreadModelSettingsRequest } from "@pwragent/shared/contracts/agent";
+import {
+  type AppServerBackendKind,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export type TurnStartIdentity = { backend: AppServerBackendKind; threadId: string };
 

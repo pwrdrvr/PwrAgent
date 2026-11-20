@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppServerThreadActivityEntry } from "@pwragent/shared";
+import type { AppServerThreadActivityEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "./desktop-api";
 
 /** A collapsed row owns no detail read. Repeated expansion shares one request. */

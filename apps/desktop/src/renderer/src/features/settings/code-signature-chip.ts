@@ -1,7 +1,4 @@
-import type {
-  DesktopCodeSignature,
-  DesktopCodeSignatureTrust,
-} from "@pwragent/shared";
+import type { DesktopCodeSignature, DesktopCodeSignatureTrust } from "@pwragent/shared/contracts/settings";
 import type { SettingsPathRowChip } from "./SettingsPathRow";
 
 /**

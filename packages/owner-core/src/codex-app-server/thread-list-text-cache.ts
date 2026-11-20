@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AppServerThreadTitleSource } from "@pwragent/shared";
+import type { AppServerThreadTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
 
 type Inputs = readonly [string | undefined, string | undefined, string | undefined];
 type Text = { title: string; titleSource: AppServerThreadTitleSource; summary?: string };

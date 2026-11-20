@@ -1,4 +1,5 @@
-import type { NavigationThreadSummary, PrSummary, ThreadTodo } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { render } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";

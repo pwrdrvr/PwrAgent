@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { buildProviderResponseBlockEntry } from "@pwragent/shared";
+import { buildProviderResponseBlockEntry } from "@pwragent/shared/provider-response-block";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerReadThreadResponse,
@@ -13,9 +13,9 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadReviewEntry,
   AppServerThreadTurnMetadata,
-  NavigationThreadSummary,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { DesktopApi } from "../desktop-api";
 import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { afterEach, describe, expect, it, vi } from "vitest";

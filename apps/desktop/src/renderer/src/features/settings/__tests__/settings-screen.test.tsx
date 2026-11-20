@@ -1,4 +1,9 @@
-import type { NavigationQueryPage, NavigationQueryRequest, NavigationDirectoryRow, NavigationModelInventoryRow } from "@pwragent/shared";
+import type {
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationDirectoryRow,
+  NavigationModelInventoryRow,
+} from "@pwragent/shared/contracts/navigation";
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -15,21 +20,30 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AcpAgentSettingsEntry,
-  AgentEvent,
+  BackendSummary,
+  ProviderCatalogRefreshState,
+} from "@pwragent/shared/contracts/backend";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
-  BackendSummary,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopSettingsSnapshot,
   InspectDiscordThreadPermissionsResponse,
+} from "@pwragent/shared/contracts/settings";
+import type {
   ListMessagingRoutesResponse,
-  McpConnectionStatus,
   MessagingPairingEntry,
+} from "@pwragent/shared/contracts/messaging";
+import type {
+  McpConnectionStatus,
   MutateMcpConnectionResponse,
-  ProviderCatalogRefreshState,
   SetMcpConnectionEnabledRequest,
-  WorktreeSnapshotSummary,
-} from "@pwragent/shared";
-import { buildProviderPickerEntries, GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
+import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {

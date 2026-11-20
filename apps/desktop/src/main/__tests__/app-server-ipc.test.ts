@@ -4,44 +4,52 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
   AppServerReadThreadResponse,
   AppServerNotification,
   AppServerThreadSummary,
+  HandoffThreadWorkspaceRequest,
+  RenameThreadRequest,
+  RestoreWorktreeRequest,
+  RestoreThreadRequest,
+  ThreadGitWorkingState,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   FederationJumpSearchProgress,
   FederationJumpSearchRequest,
   GetNavigationSnapshotRequest,
-  HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
   NavigationThreadSummary,
   NavigationQueryPage,
   NavigationRemoteOwner,
-  FederationRemoteTarget,
-  FederationCapability,
-  FederationPeerSummary,
-  PrActivitySnapshot,
   PrSummary,
-  PullRequestTerminalDetails,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
-  RenameThreadRequest,
-  RestoreWorktreeRequest,
-  RestoreThreadRequest,
   SetDirectoryPinRequest,
   ReorderDirectoryPinsRequest,
   SetThreadParentRequest,
-  ThreadGitWorkingState,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  FederationRemoteTarget,
+  FederationCapability,
+  FederationPeerSummary,
+} from "@pwragent/shared/contracts/federation";
+import type { PrActivitySnapshot } from "@pwragent/shared/contracts/pr-activity";
+import type {
+  PullRequestTerminalDetails,
   ThreadPullRequestWatchEvent,
-  ThreadPrWatchesResponse,
   PwrAgentThreadInspectionResponse,
   WatchThreadPullRequestToolArgs,
-  ThreadSearchResponse,
-} from "@pwragent/shared";
-import { buildPullRequestStatusKey, DEFAULT_PROJECT_FORGE_AUTOMATION, expandNavigationRemoteOwner } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import {
   getProjectForgeAutomationIndex,
   resetProjectForgeAutomationIndexForTests,
@@ -2419,7 +2427,7 @@ describe("app server ipc", () => {
 
   it.each([false, true])("initializes owner PR tracking without a navigation page (fork: %s)", async (fork) => {
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
-    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared/contracts/navigation");
     const pr = githubPr({ number: 91, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Off-page PR",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/91",
       ...(fork ? { sourceRepository: { provider: "github.com", org: "contributor", repo: "PwrAgent" } } : {}),
@@ -2439,7 +2447,7 @@ describe("app server ipc", () => {
 
   it("starts owner tracking when providers finish after startup without opening navigation", async () => {
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
-    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared/contracts/navigation");
     const pr = githubPr({ number: 92, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Provider PR",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/92" });
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
@@ -2475,7 +2483,7 @@ describe("app server ipc", () => {
     // The production store is a singleton. Keep this test's owner identity
     // stable so the service loop can reuse the fresh replacement index.
     overlayStoreFixture.stable = getDesktopOverlayStore();
-    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared/contracts/navigation");
     const pr = githubPr({ number: 93, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Detached PR",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/93" });
     const thread = { id: "detached-before-startup-finished", source: "codex", title: "Thread", titleSource: "explicit",
@@ -5249,7 +5257,7 @@ describe("app server ipc", () => {
         const page = await navigationReadHandler("backend.getNavigationQueryPage")(event, {
           protocol: 2, consumer: "main-sidebar", inventory: "owner", pageSize: 10, deadlineAt,
           query: { kind: "group-members", roots: [{ backend: "codex", threadId: `root-${run}` }] },
-        }, consumerId) as import("@pwragent/shared").NavigationQueryPage;
+        }, consumerId) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
         expect(page.coverage.state).toBe(endsAfterMs === undefined ? "checking" : "complete");
         expect(Date.now()).toBeLessThan(deadlineAt);
       } finally {
@@ -5288,7 +5296,7 @@ describe("app server ipc", () => {
   });
 
   it("reconciles compact saved pins through the owner cache before projecting viewer Attention", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "saved-active", instanceId: "peer-idle" });
     const saved: NavigationThreadSummary = { id: ref.threadId, source: "codex", title: "Saved active", titleSource: "explicit",
@@ -5314,7 +5322,7 @@ describe("app server ipc", () => {
   });
 
   it("rescues an existing summaryless mount when its exact owner row loads", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "child", instanceId: "peer" });
     const row = { id: "child", source: "codex", title: "Child", titleSource: "explicit", linkedDirectories: [],
@@ -5336,7 +5344,7 @@ describe("app server ipc", () => {
   });
 
   it("projects a mounted remote child beneath its local parent through viewer IPC", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const parent: NavigationThreadSummary = { id: "local-parent", source: "codex", title: "Parent", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false } };
@@ -5351,13 +5359,13 @@ describe("app server ipc", () => {
     const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90202, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "children", parent: { backend: "codex", threadId: parent.id } },
-    }) as import("@pwragent/shared").NavigationQueryPage;
+    }) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
     expect(page.entries.map(({ row }) => row.id)).toEqual([child.id]);
     expect(page.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
   });
 
   it.each(["main-sidebar", "exact-link"] as const)("reads viewer exact rows without waiting on a peer (consumer=%s)", async (consumer) => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const base = { source: "codex" as const, titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
     const localParent: NavigationThreadSummary = { ...base, id: "local-parent", title: "Local parent" };
@@ -5388,7 +5396,7 @@ describe("app server ipc", () => {
     const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90204, once: vi.fn() } }, {
       protocol: 2, consumer, inventory: "viewer",
       query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
-    }) as import("@pwragent/shared").NavigationQueryPage;
+    }) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
     // A pinned draft already comes from the pins; only the others are watched.
     expect(federationMock.remoteThreadSummaries.resolveWatchedThreads).toHaveBeenLastCalledWith([peerRef, heldRef],
       { cacheOnly: consumer === "exact-link" });
@@ -5401,7 +5409,7 @@ describe("app server ipc", () => {
   });
 
   it("resolves a selected peer draft's local project", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
     const peerDraft: NavigationThreadSummary = { source: "codex", id: "peer-draft", title: "Peer draft", titleSource: "explicit",
@@ -5417,7 +5425,7 @@ describe("app server ipc", () => {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "peer-draft", ownerInstanceId: "peer-a" }],
         includeAncestry: true, resolveFromOwners: true },
-    }) as import("@pwragent/shared").NavigationQueryPage;
+    }) as import("@pwragent/shared/contracts/navigation").NavigationQueryPage;
     expect(page.entries.map(({ row }) => row.id)).toEqual(["peer-draft"]);
     expect(page.selectionDirectory?.key).toBe("directory:/local/PwrAgent");
   });
@@ -5815,7 +5823,7 @@ describe("app server ipc", () => {
   });
 
   it("merges pinned remote threads into the main-window navigation snapshot", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -5914,7 +5922,7 @@ describe("app server ipc", () => {
   });
 
   it("shows an unconfigured project for a mounted remote thread until Add Directory matches it", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const ref = buildFederatedThreadRef({
       backend: "codex",
       instanceId: "peer-laptop",
@@ -6028,7 +6036,7 @@ describe("app server ipc", () => {
   });
 
   it("marks a pinned remote snapshot changed when only reactions change", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const ref = buildFederatedThreadRef({
       backend: "codex",
       instanceId: "peer-laptop",
@@ -6103,7 +6111,7 @@ describe("app server ipc", () => {
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -6133,7 +6141,7 @@ describe("app server ipc", () => {
   });
 
   it("groups a multi-directory remote thread into exactly one local project", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     // Two local project groups; "agent-kit" sorts before "PwrAgent", which is
     // what made the duplicated row "jump" groups on selection.
@@ -6241,7 +6249,7 @@ describe("app server ipc", () => {
   });
 
   it("keeps a pinned remote thread in its owner's primary project", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
       backend: (params as { backend: "all" | "codex" | "acp:grok" }).backend,
@@ -6346,7 +6354,7 @@ describe("app server ipc", () => {
   });
 
   it("keeps a partial remote pin summary ungrouped", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -6390,7 +6398,7 @@ describe("app server ipc", () => {
   });
 
   it("stamps the viewer-owned local rank onto merged remote rows", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -6435,7 +6443,7 @@ describe("app server ipc", () => {
   });
 
   it("keeps viewer pin ranks separate across colliding remote owners", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
     const firstRef = buildFederatedThreadRef({
       backend: "codex",
       instanceId: "peer-first",
@@ -6521,7 +6529,7 @@ describe("app server ipc", () => {
     const { NAVIGATION_REORDER_THREAD_PINS_CHANNEL } = await import(
       "../../shared/ipc"
     );
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const remoteRef = buildFederatedThreadRef({
       backend: "codex",
@@ -6566,7 +6574,7 @@ describe("app server ipc", () => {
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -6658,7 +6666,7 @@ describe("app server ipc", () => {
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const parentRef = buildFederatedThreadRef({ backend: "codex", instanceId: "peer-parent", threadId: "parent-1" });
     const parentSummary = {
@@ -6755,7 +6763,7 @@ describe("app server ipc", () => {
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     registerAppServerIpcHandlers();
     const handler = handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL);
@@ -6801,7 +6809,7 @@ describe("app server ipc", () => {
   it.each(["wrong-owner", "wrong-backend", "archived", "incomplete", "unchanged", "cursor"])(
     "keeps the explicit pin without accepting a %s companion parent page", async (failure) => {
       const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
-      const { buildFederatedThreadRef } = await import("@pwragent/shared");
+      const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
       registerAppServerIpcHandlers();
       addRemoteThreadPinStore.mockClear();
       hasRemoteThreadPin.mockResolvedValueOnce(false);
@@ -6883,7 +6891,7 @@ describe("app server ipc", () => {
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {
-    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared/contracts/federation");
 
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -11040,7 +11048,7 @@ describe("app server ipc", () => {
 
   it("satisfies a dependency saved under a renamed repository's old URL when the PR merges", async () => {
     const appState = await import("../state/app-state");
-    const { buildThreadIdentityKey } = await import("@pwragent/shared");
+    const { buildThreadIdentityKey } = await import("@pwragent/shared/contracts/navigation");
     const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
     await withRenamedRepositoryStore("renamed-repo-dependency-", async ({ store, db }) => {
       const { service, submitTurnIfIdle, restore } = await renamedRepositoryService();
@@ -11105,7 +11113,7 @@ describe("app server ipc", () => {
 
   it("saves a new dependency's PR URL under the repository's current name", async () => {
     const appState = await import("../state/app-state");
-    const { buildThreadIdentityKey } = await import("@pwragent/shared");
+    const { buildThreadIdentityKey } = await import("@pwragent/shared/contracts/navigation");
     const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
     await withRenamedRepositoryStore("renamed-repo-dependency-create-", async ({ store, db }) => {
       const { appServerService, service, restore } = await renamedRepositoryService();
@@ -13988,7 +13996,7 @@ describe("app server ipc", () => {
 
   it("budgets remote model seeding and unchanged draft reopens", async () => {
     const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
-    const { applyNavigationLaunchpadProviderSettingsPatch } = await import("@pwragent/shared");
+    const { applyNavigationLaunchpadProviderSettingsPatch } = await import("@pwragent/shared/contracts/navigation");
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { StateDb } = await import("../state/state-db");
     const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");

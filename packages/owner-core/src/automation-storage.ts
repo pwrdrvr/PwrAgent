@@ -1,5 +1,8 @@
 import type {
   AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   AutomationBacklogPolicy,
   AutomationExecutionProfile,
   AutomationPriorRunLookback,
@@ -24,8 +27,7 @@ import type {
   AutomationStatus,
   AutomationTriggerDefinition,
   AutomationThreadSummary,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 
 export type AutomationRecord = {
   id: string;

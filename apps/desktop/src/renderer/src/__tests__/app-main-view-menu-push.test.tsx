@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../lib/desktop-api";
 import type { WindowOpenMainViewRequest } from "../../../shared/ipc";
 import { App } from "../App";

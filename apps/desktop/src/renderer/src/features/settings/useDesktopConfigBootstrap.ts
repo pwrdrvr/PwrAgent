@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DesktopConfigBootstrapSnapshot } from "@pwragent/shared";
+import type { DesktopConfigBootstrapSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export type DesktopConfigBootstrapState = Readonly<{

@@ -1,12 +1,12 @@
 import {
   isRemoteFederationTarget,
-  type AppServerBackendKind,
   type FederationHealthStatus,
   type FederationTarget,
   type FederationRemoteTarget,
-  type NavigationThreadSummary,
-  type LaunchpadCreationStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
 import type { AppBuildMetadata, AppMetadata } from "./app-metadata";
 
 export type LocalThreadDiagnosticsContext = {

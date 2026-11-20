@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AppServerFileInputItem } from "@pwragent/shared";
+import type { AppServerFileInputItem } from "@pwragent/shared/contracts/normalized-app-server";
 
 const CODEX_FILE_INPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 

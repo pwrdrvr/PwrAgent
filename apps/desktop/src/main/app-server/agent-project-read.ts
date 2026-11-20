@@ -1,4 +1,5 @@
-import type { FederationRemoteTarget, MarkProjectReadResult, MarkProjectReadToolArgs } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { MarkProjectReadResult, MarkProjectReadToolArgs } from "@pwragent/shared/contracts/thread-tools";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 
 type ProjectReadBackend = Pick<FederationBackendOperations, "markNavigationDirectorySeen">;

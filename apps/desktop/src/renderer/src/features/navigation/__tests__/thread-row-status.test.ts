@@ -1,5 +1,5 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
-import { federatedThreadIdentityKey } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { describe, expect, it } from "vitest";
 import { getThreadRowStatus, isThreadActive, isThreadNeedingAttention } from "../ThreadRowStatus";
 

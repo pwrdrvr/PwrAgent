@@ -1,5 +1,5 @@
 import { BrowserWindow } from "electron";
-import type { OpenAutomationRunWindowRequest } from "@pwragent/shared";
+import type { OpenAutomationRunWindowRequest } from "@pwragent/shared/contracts/automations";
 import { getMainLogger } from "../log";
 import {
   applyWindowSecurityHardening,

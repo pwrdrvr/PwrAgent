@@ -1,14 +1,14 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
-  buildFederatedThreadRef,
   buildThreadIdentityKey,
-  type AgentEvent,
   type NavigationQueryRequest,
   type NavigationSnapshot,
   type NavigationThreadSummary,
-  type ProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

@@ -1,10 +1,18 @@
 import type Database from "better-sqlite3";
-import type { CompactionRecoveryProtection, ThreadDependency } from "@pwragent/shared";
+import type {
+  CompactionRecoveryProtection,
+  ThreadDependency,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey,
-  COMPACTION_RECOVERY_COOLDOWN_MS, COMPACTION_RECOVERY_WINDOW_MS, COMPACTION_RECOVERY_MAX_ATTEMPTS,
-  COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN, mergeCausalMessagingContext,
-} from "@pwragent/shared";
+  isThreadDependencyLocalThreadCondition,
+  threadDependencyDeliveryKey,
+  COMPACTION_RECOVERY_COOLDOWN_MS,
+  COMPACTION_RECOVERY_WINDOW_MS,
+  COMPACTION_RECOVERY_MAX_ATTEMPTS,
+  COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 
 export { THREAD_DEPENDENCY_SCHEMA } from "./state-schema";
 

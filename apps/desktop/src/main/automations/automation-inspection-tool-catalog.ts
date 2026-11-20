@@ -1,5 +1,5 @@
-import type { AutomationInspectionOperationName } from "@pwragent/shared";
-import { AUTOMATION_INSPECTION_OPERATION_NAMES } from "@pwragent/shared";
+import type { AutomationInspectionOperationName } from "@pwragent/shared/contracts/automation-tools";
+import { AUTOMATION_INSPECTION_OPERATION_NAMES } from "@pwragent/shared/contracts/automation-tools";
 
 export type AutomationInspectionToolCatalogEntry = {
   name: AutomationInspectionOperationName;

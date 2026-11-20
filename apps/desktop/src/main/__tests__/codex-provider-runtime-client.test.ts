@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AppServerNotification, AppServerPendingRequestNotification, CodexModelProviderSettings } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  AppServerPendingRequestNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import type { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import type { NativeVoiceNotification } from "../codex-app-server/native-voice-protocol";

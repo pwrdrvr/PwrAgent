@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { useLayoutEffect, useRef } from "react";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { createSubthreadTrays, ordinaryChildCountOf, type SubthreadTrays, type SubthreadTrayOptions } from "./subthread-trays";

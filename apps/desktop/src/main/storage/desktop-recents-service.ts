@@ -1,4 +1,4 @@
-import type { ModelSettingsRecent, ModelSettingsRecentsScope } from "@pwragent/shared";
+import type { ModelSettingsRecent, ModelSettingsRecentsScope } from "@pwragent/shared/contracts/agent";
 import { getAppStateDb } from "../state/app-state";
 import { listModelSettingsRecents as listModels, recordModelSettingsRecent as recordModel } from "./model-settings-recents-store";
 import { listRecentFileReferencePaths as listFiles, recordRecentFileReferencePaths as recordFiles } from "../state/recent-file-references-store";

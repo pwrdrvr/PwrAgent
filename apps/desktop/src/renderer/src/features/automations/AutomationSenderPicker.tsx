@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type {
-  MessagingChannelKind,
-  MessagingSenderSuggestion,
-} from "@pwragent/shared";
+import type { MessagingChannelKind, MessagingSenderSuggestion } from "@pwragent/shared/contracts/messaging";
 
 const SEARCH_DEBOUNCE_MS = 200;
 const MAX_VISIBLE_SUGGESTIONS = 8;

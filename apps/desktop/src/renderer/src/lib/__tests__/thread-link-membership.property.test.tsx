@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { cleanup, render } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -1,5 +1,12 @@
-import { buildThreadIdentityKey, isRemoteFederationTarget, resolveThreadParentKey } from "@pwragent/shared";
-import type { NavigationThreadSummary, RemoteThreadPin, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
+import type {
+  NavigationThreadSummary,
+  RemoteThreadPin,
+  UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";

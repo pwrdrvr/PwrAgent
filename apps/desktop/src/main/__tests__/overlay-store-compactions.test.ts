@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  ThreadCompactionRecord,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+import type { ThreadCompactionRecord } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

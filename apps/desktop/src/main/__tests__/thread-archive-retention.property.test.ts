@@ -1,12 +1,11 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import {
-  buildThreadIdentityKey,
-  DEFAULT_THREAD_ARCHIVE_POLICY,
   type AppServerThreadSummary,
-  type ThreadOverlayState,
   type WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   archivedThreadFamilies,
   archiveRetentionFamilyEligible,

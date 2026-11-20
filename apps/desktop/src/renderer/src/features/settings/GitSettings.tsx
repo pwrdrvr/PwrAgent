@@ -2,16 +2,14 @@ import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   FORGE_AGENT_TOOL_GROUPS,
   FORGE_AGENT_TOOL_GROUP_LABELS,
-  FORGE_KINDS,
   forgeAgentToolAccessLevels,
-  type AcpAgentSettingsEntry,
-  type BackendSummary,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
-  type ForgeKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared/forge-product";
+import { type AcpAgentSettingsEntry, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { ComponentProps } from "react";
 import { useMemo, useState, type ReactNode } from "react";
 import {
@@ -25,11 +23,13 @@ import {
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
-  DEFAULT_THREAD_TODO_MERGE_METHOD,
   type DesktopSettingsSnapshot,
-  type GhStatus,
+} from "@pwragent/shared/contracts/settings";
+import {
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
   type ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { type GhStatus } from "@pwragent/shared/contracts/navigation";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";

@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type PrSummary, type PullRequestTerminalDetails, type ThreadPullRequestWatchEvent } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import {
+  type PullRequestTerminalDetails,
+  type ThreadPullRequestWatchEvent,
+} from "@pwragent/shared/contracts/thread-tools";
 import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

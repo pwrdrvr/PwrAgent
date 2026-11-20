@@ -2,11 +2,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
-  countNavigationStarMapFacets,
-  type FederationPeerSummary,
   type NavigationQueryPage,
   type NavigationQueryRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { countNavigationStarMapFacets } from "@pwragent/shared/navigation-star-map-filters";
+import { type FederationPeerSummary } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useStarMapThreads } from "../useStarMapThreads";
 import { navigationAttentionRowsBudget, NAVIGATION_METADATA_MAX_RETAINED_BYTES } from "../../../lib/navigation-metadata-budget";

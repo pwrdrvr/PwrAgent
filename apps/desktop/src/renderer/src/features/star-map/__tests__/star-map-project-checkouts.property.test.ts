@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { NavigationDirectoryRow } from "@pwragent/shared";
+import type { NavigationDirectoryRow } from "@pwragent/shared/contracts/navigation";
 import { groupThreadsByProject, starMapProjectIdentities } from "../star-map-projects";
 
 const ORIGIN = "github.com/fixture/project";

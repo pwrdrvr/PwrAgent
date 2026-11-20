@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerReadThreadResponse } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   getThreadReplayFileDiff,
   shapeReadThreadFileDiffsForRenderer,

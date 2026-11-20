@@ -1,11 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  DesktopSettingsSnapshot,
-  ThreadMaintenanceRun,
-  ThreadMaintenanceScan,
-} from "@pwragent/shared";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
+import type { ThreadMaintenanceRun, ThreadMaintenanceScan } from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../lib/desktop-api";
 import { App } from "../App";
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ResearchThread } from "@pwragent/shared";
+import type { ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchSync, type ResearchSyncState } from "./research-sync";
 

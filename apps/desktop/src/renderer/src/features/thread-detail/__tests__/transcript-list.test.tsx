@@ -1,15 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import {
-  buildThreadPricingDisplay,
-  parseCodexAsyncQuestionReply,
-} from "@pwragent/shared";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessageOrigin,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   act,
   cleanup,

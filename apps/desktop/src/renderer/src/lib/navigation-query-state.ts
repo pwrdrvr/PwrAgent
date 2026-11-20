@@ -1,13 +1,14 @@
-import { parseThreadIdentityKey, buildThreadIdentityKey, federatedThreadIdentityKey } from "@pwragent/shared";
+import { parseThreadIdentityKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  FederationTarget,
   NavigationIdentity,
   NavigationQueryAnchor,
   NavigationQueryEntry,
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationSelectedDetailResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 
 /** One resource's loaded range; it never represents the owner's population. */
 export type NavigationPageState = {

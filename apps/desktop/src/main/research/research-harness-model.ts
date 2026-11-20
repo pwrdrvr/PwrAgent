@@ -1,4 +1,4 @@
-import type { ResearchHarnessConfig } from "@pwragent/shared";
+import type { ResearchHarnessConfig } from "@pwragent/shared/research-harness";
 import type { ResearchModelTransport } from "@pwragent/owner-core/research-model-adapter";
 
 export function selectHarnessModel(config: ResearchHarnessConfig, mode: "import" | "execute") {

@@ -1,5 +1,10 @@
-import { codexProviderIdOfModel, formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG, OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared";
-import { buildThreadPricingDisplay, type ThreadPricingDisplay } from "@pwragent/shared";
+import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
+import { formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG } from "@pwragent/shared/local-model-pricing";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared/openrouter-assumed-pricing";
+import {
+  buildThreadPricingDisplay,
+  type ThreadPricingDisplay,
+} from "@pwragent/shared/thread-pricing-display";
 import {
   type PricingUsageLine,
   resolveUsageLineModel,
@@ -11,22 +16,23 @@ import {
   type PricingGateSelection,
   buildPricingGateGroupDisplay,
   partitionPricingGateCards,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-pricing-display";
 import type {
   AppServerBackendKind,
-  BackendSummary,
   ThreadCompactionRecord,
-  ThreadPricingSummary,
-  ThreadSubAgentSummary,
   ThreadTokenMiserAccounting,
-  ThreadTurnFailure,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
+  ThreadPricingSummary,
   ThreadUsageLineRecord,
   ThreadPricingSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import type { ThreadSubAgentSummary, ThreadTurnFailure } from "@pwragent/shared/contracts/navigation";
 import {
   estimateOpenAiCodexCreditUsage,
   formatTokenUsageMicrosAsUsd,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { classifyTokenMiserSavings } from "../token-miser-savings-summary";
 import {

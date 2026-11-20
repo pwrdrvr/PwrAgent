@@ -1,4 +1,4 @@
-import type { ResearchActor, ResearchEvent } from "@pwragent/shared";
+import type { ResearchActor, ResearchEvent } from "@pwragent/shared/research";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { StateDb } from "../../src/main/state/state-db";
 

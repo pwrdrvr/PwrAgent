@@ -7,7 +7,7 @@ import type {
   ThreadMaintenanceRun,
   ThreadMaintenanceScan,
   ThreadMaintenanceScanProgress,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";
 import { allocationTotal, groupProblems, largestFirst } from "../thread-maintenance-selection";

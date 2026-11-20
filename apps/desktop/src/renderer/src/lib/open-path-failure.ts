@@ -1,4 +1,4 @@
-import type { OpenPathResponse } from "@pwragent/shared";
+import type { OpenPathResponse } from "@pwragent/shared/contracts/settings";
 
 /** A thrown value's message, without the "Error invoking remote method …" wrapper Electron adds. */
 export function ipcErrorMessage(cause: unknown): string {

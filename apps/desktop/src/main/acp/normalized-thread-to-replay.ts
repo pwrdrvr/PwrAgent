@@ -27,7 +27,7 @@ import type {
   AppServerThreadPlanStep,
   AppServerThreadReplay,
   AppServerThreadStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export function normalizedThreadToReplay(thread: NormalizedThread): AppServerThreadReplay {
   const entries: AppServerThreadEntry[] = thread.entries.map((entry) => {

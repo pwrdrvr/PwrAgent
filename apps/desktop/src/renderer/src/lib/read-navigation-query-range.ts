@@ -1,5 +1,6 @@
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
+import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
 import { applyNavigationPage, beginNavigationPageRead, createNavigationPageState, isNavigationCursorExpired } from "./navigation-query-state";
 
 /** Complete compact metadata/exact demand, never an eager full thread-lens reader. */

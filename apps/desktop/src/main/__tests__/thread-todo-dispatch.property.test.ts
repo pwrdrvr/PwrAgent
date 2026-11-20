@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { listThreadTodoDispatchEnvironments } from "../thread-todos/thread-todo-dispatch";
 
 describe("handoff environment checkout selection", () => {

@@ -1,15 +1,11 @@
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey, type FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import { isThreadLinkId, parseThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 import {
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  isThreadLinkId,
-  parseThreadUrl,
   type AppServerBackendKind,
   type AppServerThreadTitleSource,
-  type FederationInstanceId,
   type LinkedDirectorySummary,
-  type NavigationThreadSummary,
-  type ThreadLinkRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   createContext,
   useCallback,

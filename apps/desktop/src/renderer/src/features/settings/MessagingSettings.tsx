@@ -19,12 +19,16 @@ import {
   validateMattermostId,
   validateSlackTeamId,
   validateSlackUserId,
-  sanitizeMessagingContactHandle,
-  sanitizeMessagingContactLabel,
   validateTelegramGroupChatId,
   validateTelegramPositiveId,
+  type IdentifierValidationResult,
+} from "@pwragent/shared/messaging-id-validation";
+import {
+  sanitizeMessagingContactHandle,
+  sanitizeMessagingContactLabel,
+} from "@pwragent/shared/messaging-contact-labels";
+import {
   type DesktopAuthorizedContact,
-  type AppServerBackendKind,
   type DesktopMessagingAuthorizationMode,
   type DesktopMessagingSlackChannelUserAccessMode,
   type DesktopMessagingSlackDmAccessMode,
@@ -34,20 +38,22 @@ import {
   type DesktopMessagingContactLookupKind,
   type DesktopMessagingContactLookupPlatform,
   type DesktopMessagingContactLookupResponse,
-  type IdentifierValidationResult,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
   type DesktopMessagingFullAccessWarningGlobalPolicy,
   type DesktopMessagingFullAccessWarningUserPolicy,
+  type InspectDiscordThreadPermissionsResponse,
+  type ListDiscordThreadPermissionChannelsResponse,
+  type SettingsCredentialTestResult,
+} from "@pwragent/shared/contracts/settings";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type MessagingChannelKind,
   type MessagingPairingApprovalTarget,
   type MessagingPairingEntry,
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
-  type InspectDiscordThreadPermissionsResponse,
-  type ListDiscordThreadPermissionChannelsResponse,
-  type SettingsCredentialTestResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import {
   CheckIcon,
   CloseIcon,

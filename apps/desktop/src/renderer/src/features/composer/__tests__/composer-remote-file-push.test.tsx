@@ -4,9 +4,9 @@ import { useMemo, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ComposerFilePushProgress,
-  FederationHealthStatus,
   PushComposerFileResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-file-push";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { Composer as ProductionComposer } from "../Composer";

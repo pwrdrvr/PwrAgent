@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendModelOption, BackendSummary, ThreadTodo } from "@pwragent/shared";
+import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import {

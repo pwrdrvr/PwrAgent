@@ -1,10 +1,10 @@
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AcpBackendId,
   BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeConfigOption,
   BackendAcpRuntimeModel,
   BackendAcpSessionRuntimeState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 import { AcpAgentClient, type AcpJsonRpcTransport } from "./acp-client.js";
 import { AcpStdioJsonRpcTransport } from "./acp-stdio-transport.js";
 import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";

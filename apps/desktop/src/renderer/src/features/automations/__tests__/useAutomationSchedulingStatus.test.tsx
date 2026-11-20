@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { AutomationSchedulingStatus } from "@pwragent/shared";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useAutomationSchedulingStatus } from "../useAutomationSchedulingStatus";
 

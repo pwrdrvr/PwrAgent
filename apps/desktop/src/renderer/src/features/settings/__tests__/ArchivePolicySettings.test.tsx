@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_THREAD_ARCHIVE_POLICY, type DesktopThreadArchiveSweepStatus } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_ARCHIVE_POLICY,
+  type DesktopThreadArchiveSweepStatus,
+} from "@pwragent/shared/thread-archive-policy";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ArchivePolicySettings, ArchiveSweepField } from "../ArchivePolicySettings";
 import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";

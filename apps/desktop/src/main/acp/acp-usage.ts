@@ -1,4 +1,4 @@
-import type { BackendAcpSessionRuntimeState } from "@pwragent/shared";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
 
 export type AcpTokenUsage = {
   cachedInputTokens?: number;

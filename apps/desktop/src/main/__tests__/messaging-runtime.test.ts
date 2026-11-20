@@ -3,12 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentEvent,
-  FederationEventSubscription,
-  NavigationSnapshot,
-  StartTurnRequest,
-} from "@pwragent/shared";
+import type { AgentEvent, StartTurnRequest } from "@pwragent/shared/contracts/agent";
+import type { FederationEventSubscription } from "@pwragent/shared/contracts/federation";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingChannelKind,
   MessagingDeliveryResult,

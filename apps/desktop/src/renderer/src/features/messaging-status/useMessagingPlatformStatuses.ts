@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  FederationRemoteTarget,
   MessagingChannelKind,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const ACTIVITY_TAIL_MS = 2_000;

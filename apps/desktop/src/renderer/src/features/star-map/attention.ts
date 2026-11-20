@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { isThreadActive } from "../navigation/ThreadRowStatus";
 import { isOpenPullRequest } from "./star-map-preferences";

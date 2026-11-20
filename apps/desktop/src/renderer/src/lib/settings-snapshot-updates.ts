@@ -3,7 +3,7 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 export function applyConfigUpdateToSettingsSnapshot(
   snapshot: DesktopSettingsSnapshot,

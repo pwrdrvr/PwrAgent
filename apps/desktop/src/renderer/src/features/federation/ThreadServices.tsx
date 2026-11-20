@@ -1,5 +1,10 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import type { ServiceForward, ServiceUiRequest, ServiceUiResponse, ThreadService } from "@pwragent/shared";
+import type {
+  ServiceForward,
+  ServiceUiRequest,
+  ServiceUiResponse,
+  ThreadService,
+} from "@pwragent/shared/contracts/federation-services";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatByteCount } from "../../lib/format-bytes";
 import { ChevronRightIcon } from "../../icons/ChevronRightIcon";

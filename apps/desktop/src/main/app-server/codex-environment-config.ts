@@ -1,9 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type {
-  CodexEnvironmentOption,
-  NavigationLaunchpadDraft,
-} from "@pwragent/shared";
+import type { CodexEnvironmentOption, NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 import { tokenizeCodexEnvironmentToml } from "./codex-environment-toml";
 
 type RawAction = {

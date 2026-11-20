@@ -4,8 +4,8 @@ import {
   decisionCameraCueAvailability,
   resolveDecisionModelSettings,
   type DesktopDecisionModelSettings,
-  type DesktopOpenAIDecisionsSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decision-models";
+import { type DesktopOpenAIDecisionsSettings } from "@pwragent/shared/contracts/settings";
 import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
 import {
   isDecisionProviderEnabled,

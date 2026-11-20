@@ -1,6 +1,6 @@
 import https from "node:https";
 import { randomBytes } from "node:crypto";
-import type { CloudflareSecurityCheck } from "@pwragent/shared";
+import type { CloudflareSecurityCheck } from "@pwragent/shared/contracts/federation-cloudflare";
 import type { CloudflareGate } from "./cloudflare-api";
 import { isUnresolvedHost, unresolvedHostMessage } from "./cloudflare-dns";
 import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";

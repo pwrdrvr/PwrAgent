@@ -1,6 +1,6 @@
 import { safeNavigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 
 export type ListingStage = "ipc" | "navigation" | "owner-page" | "owner-read" | "index" | "viewer-index" | "registry" | "provider" | "provider-rpc" | "workflow";
 type Phase = "start" | "end" | "coalesced" | "cache-hit" | "invalidate" | "overtaken" | "cancel" | "cursor-hit";

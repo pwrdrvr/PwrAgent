@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
-import type { FederationCapability } from "@pwragent/shared";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
 import { FederationRouter } from "../federation/federation-router";

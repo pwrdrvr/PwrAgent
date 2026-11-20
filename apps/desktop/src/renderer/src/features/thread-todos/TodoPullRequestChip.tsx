@@ -1,5 +1,6 @@
-import type { PrSummary, ThreadTodo } from "@pwragent/shared";
-import { threadTodoActionProject } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoActionProject } from "@pwragent/shared/contracts/thread-todos";
 import { useMemo } from "react";
 import {
   parsePullRequestUrl,

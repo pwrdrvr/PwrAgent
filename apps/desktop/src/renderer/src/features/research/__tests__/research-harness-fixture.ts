@@ -1,4 +1,13 @@
-import { applyResearchChanges, emptyResearchRunStore, researchChangePage, summarizeResearchRun, projectResearchRun, RESEARCH_HARNESS_REVISION, type ResearchRun, type ResearchEvent, type ResearchHarnessState } from "@pwragent/shared";
+import {
+  applyResearchChanges,
+  emptyResearchRunStore,
+  researchChangePage,
+  summarizeResearchRun,
+  projectResearchRun,
+  type ResearchRun,
+  type ResearchEvent,
+} from "@pwragent/shared/research";
+import { RESEARCH_HARNESS_REVISION, type ResearchHarnessState } from "@pwragent/shared/research-harness";
 
 export function harnessRun(state: ResearchHarnessState["state"] = "running", accepted = false) {
   const actor = { backend: "codex", threadId: "parent", kind: "agent" } as const;

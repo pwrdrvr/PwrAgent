@@ -1,6 +1,10 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ThreadTodo, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot } from "@pwragent/shared";
+import type {
+  ThreadTodo,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
+} from "@pwragent/shared/contracts/thread-todos";
 import { useThreadTodos } from "../useThreadTodos";
 
 afterEach(() => {

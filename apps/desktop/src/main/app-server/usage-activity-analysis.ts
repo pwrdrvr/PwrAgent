@@ -1,9 +1,14 @@
 import {
   USAGE_ANALYSIS_MODEL_BACKENDS,
-  type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse,
-  type AppServerReadThreadRequest, type AppServerReadThreadResponse, type AppServerThreadEntry,
+  type AnalyzeUsageActivityRequest,
+  type AnalyzeUsageActivityResponse,
   type UsageAnalysisModelBackend,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/usage-activity";
+import {
+  type AppServerReadThreadRequest,
+  type AppServerReadThreadResponse,
+  type AppServerThreadEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
 // The generator supplies reasoning effort from the Usage analysis row.

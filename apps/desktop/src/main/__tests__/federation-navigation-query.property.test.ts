@@ -2,15 +2,17 @@ import fc from "fast-check";
 import { expect, it } from "vitest";
 import {
   expandNavigationRemoteOwner,
-  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   navigationQueryPageBudgetBytes,
-  type FederationCapability,
+} from "@pwragent/shared/navigation-remote-owner";
+import {
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationRemoteOwner,
   type NavigationSnapshot,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type FederationCapability } from "@pwragent/shared/contracts/federation";
 import { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
 import {
   navigationRequestForOwner,

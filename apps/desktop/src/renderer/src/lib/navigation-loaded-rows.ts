@@ -1,7 +1,13 @@
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  FederationTarget, NavigationCounts, NavigationDirectoryRow, NavigationDirectoryGitStatus,
-  NavigationLaunchpadDefaults, NavigationLaunchpadDraft, NavigationThreadSummary, NavigationRow,
-} from "@pwragent/shared";
+  NavigationCounts,
+  NavigationDirectoryRow,
+  NavigationDirectoryGitStatus,
+  NavigationLaunchpadDefaults,
+  NavigationLaunchpadDraft,
+  NavigationThreadSummary,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "./federated-thread-events";
 
 /** Owner descriptors plus independently loaded configuration or a viewer-local launchpad. */

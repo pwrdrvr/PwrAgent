@@ -1,5 +1,13 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, researchApproachResumable, researchDeadlinePassed, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
+import {
+  RESEARCH_WORK_TRANSITIONS,
+  researchApproachOccupiesSlot,
+  researchApproachResumable,
+  researchDeadlinePassed,
+  type ResearchItemContext,
+  type ResearchThread,
+  type ResearchWorkCommand,
+} from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";

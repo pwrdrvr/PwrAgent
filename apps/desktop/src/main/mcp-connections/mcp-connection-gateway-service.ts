@@ -68,13 +68,10 @@ import {
 import { gatewayToolRevision, validateGatewayArguments, type McpGatewayCatalog, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
-  isMcpIpcUrl,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
-  isAcpBackendId,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
-  type AppServerBackendKind,
   type CreateMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
@@ -91,6 +88,18 @@ import {
   type McpStdioLaunchInput,
   type TestMcpStdioConnectionRequest,
   type TestMcpStdioConnectionResponse,
+  type ConnectPwrSnapResponse,
+  type OpenPwrSnapResponse,
+  type OpenSandboxerLinkResponse,
+  type PwrSnapConnectionStatus,
+  type SandboxerLinkTarget,
+  type SandboxerTransport,
+  isSandboxerTransport,
+} from "@pwragent/shared/contracts/mcp-connections";
+import { isMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
+import { isAcpBackendId, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import {
   GITHUB_MCP_HOSTED_URL,
   GITHUB_MCP_LOCAL_PROGRAM,
   GITHUB_MCP_TOKEN_ENV,
@@ -107,16 +116,8 @@ import {
   type InspectGithubMcpSetupResponse,
   type TestGithubMcpConnectionRequest,
   type TestGithubMcpConnectionResponse,
-  type ConnectPwrSnapResponse,
-  type OpenPwrSnapResponse,
-  type OpenSandboxerLinkResponse,
-  type PwrSnapConnectionStatus,
-  type SandboxerLinkTarget,
-  type SandboxerTransport,
-  isSandboxerTransport,
-  buildThreadIdentityKey,
-  MAX_TRANSCRIPT_IMAGE_BYTES,
-} from "@pwragent/shared";
+} from "@pwragent/shared/github-mcp";
+import { MAX_TRANSCRIPT_IMAGE_BYTES } from "@pwragent/shared/transcript-image-sources";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
 import { resolveActiveProfileName } from "../profile";

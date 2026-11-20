@@ -2,25 +2,31 @@ import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer
 import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } from "./backend-registry-notifications";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
-  buildPendingTurnId,
   buildThreadIdentityKey,
   isAcpBackendId,
+  type ThreadOverlayState,
+  type ThreadSubAgentSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
   type AgentEvent,
+  type StartReviewRequest,
+  type StartReviewResponse,
+} from "@pwragent/shared/contracts/agent";
+import {
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerReviewContext,
   type AppServerReviewTarget,
   type AppServerThreadReviewEntry,
   type CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type PwrAgentThreadOrchestrationRequest,
   type PwrAgentThreadOrchestrationResponse,
-  type StartReviewRequest,
-  type StartReviewResponse,
   type StartReviewToolResult,
-  type ThreadOverlayState,
-  type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
 import type {
   ThreadTurnQueue,
 } from "@pwragent/owner-core/thread-turn-queue";

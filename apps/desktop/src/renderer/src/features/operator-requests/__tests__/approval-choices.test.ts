@@ -4,9 +4,11 @@ import {
   FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { createMcpElicitationState } from "../../thread-detail/mcp-elicitation";
 import { approvalChoices } from "../approval-choices";
 import type { OperatorWait } from "../operator-waits";

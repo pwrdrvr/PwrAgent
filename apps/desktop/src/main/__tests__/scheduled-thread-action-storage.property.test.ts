@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

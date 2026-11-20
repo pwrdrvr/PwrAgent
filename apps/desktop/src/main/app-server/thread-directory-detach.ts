@@ -1,11 +1,13 @@
 import path from "node:path";
 import type {
   AppServerBackendKind,
-  DetachDirectoryFromThreadRequest,
-  DetachDirectoryFromThreadResponse,
   LinkedDirectorySummary,
   AppServerThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
 
 function normalizeLinkedDirectoryPathForMatch(

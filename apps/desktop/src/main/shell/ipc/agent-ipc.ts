@@ -3,7 +3,7 @@ import type {
   ListBackgroundTerminalsResponse,
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
 import { registerResearchIpcHandlers, disposeResearchIpcHandlers } from "./research-ipc";
 import { registerDecisionsRailIpcHandlers, disposeDecisionsRailIpcHandlers } from "./decisions-rail-ipc";
 import {
@@ -14,7 +14,7 @@ import { projectThreadDisplayEvent } from "../../app-server/thread-display-event
 import { getDesktopNavigationQueryPool } from "../../app-server/navigation-query-pool";
 import { stageQueuedFileInputs } from "../../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
-import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
+import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../../settings/provider-discovery-permit";
 import {
@@ -53,8 +53,6 @@ import {
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type LatestCodexConfigWarningResponse,
-  type ListBackendsRequest,
-  type ListBackendsResponse,
   type ListCodexMcpServersRequest,
   type ListCodexMcpServersResponse,
   type ListThreadMcpServersRequest,
@@ -112,8 +110,9 @@ import {
   type TrustCodexProjectResponse,
   type UpdateThreadExpectedBranchRequest,
   type UpdateThreadExpectedBranchResponse,
-} from "@pwragent/shared";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import { type ListBackendsRequest, type ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
@@ -1456,7 +1455,7 @@ export function registerAgentIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(AGENT_LAUNCHPAD_CREATION_CHANNEL);
-  ipcMain.handle(AGENT_LAUNCHPAD_CREATION_CHANNEL, async (_event, request: import("@pwragent/shared").LaunchpadCreationRequest) => {
+  ipcMain.handle(AGENT_LAUNCHPAD_CREATION_CHANNEL, async (_event, request: import("@pwragent/shared/contracts/agent").LaunchpadCreationRequest) => {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       return await getDesktopFederationRuntime().remoteBackend(request.federationTarget)
         .manageLaunchpadCreation(stripFederationTarget(request));

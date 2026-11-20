@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadMessageEntry } from "@pwragent/shared";
+import type { AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildTranscriptRenderItems } from "../transcript-render-items";
 import { injectQuestionnaireActivities } from "../questionnaire-activity-entries";
 

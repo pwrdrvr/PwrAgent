@@ -1,5 +1,6 @@
-import type { AppServerBackendKind, ThreadOverlayState } from "@pwragent/shared";
-import type { NavigationLaunchpadAgent } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
+import type { NavigationLaunchpadAgent } from "@pwragent/shared/contracts/navigation";
 
 type AgentOverlayStore = {
   getThreadOverlayState?(params: {

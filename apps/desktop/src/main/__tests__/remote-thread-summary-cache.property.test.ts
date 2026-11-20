@@ -1,4 +1,5 @@
-import { buildFederatedThreadRef, type NavigationSnapshot, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationSnapshot, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";

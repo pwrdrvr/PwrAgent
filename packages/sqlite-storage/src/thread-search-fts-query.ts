@@ -1,4 +1,4 @@
-import { threadSearchTextTerms } from "@pwragent/shared";
+import { threadSearchTextTerms } from "@pwragent/shared/thread-search-query";
 
 const MAX_FTS_TOKENS = 12;
 

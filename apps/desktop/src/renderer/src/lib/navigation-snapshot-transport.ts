@@ -1,4 +1,4 @@
 export {
   applyNavigationSnapshotTransportResponse,
   type NavigationSnapshotTransportState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-snapshot-transport";

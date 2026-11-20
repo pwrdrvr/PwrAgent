@@ -4,7 +4,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   type ThreadTodoProject,
   type ThreadTodosChangedEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import { listModelSettingsRecents } from "../state/model-settings-recents-store";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

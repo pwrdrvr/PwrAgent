@@ -12,7 +12,7 @@ import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, pre
 
 const log = getMainLogger("pwragent:headless");
 
-export { canonicalDurableTurnRequest } from "@pwragent/shared";
+export { canonicalDurableTurnRequest } from "@pwragent/shared/durable-turn-request";
 export { prepareOutpostProfile, handleOutpostCommand } from "./outpost";
 export { acquireHeadlessOwnerLock, type HeadlessOwnerLock } from "./owner-lock";
 

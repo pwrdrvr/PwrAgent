@@ -1,15 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ThreadReview, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
-import type { AppServerPendingRequestNotification } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import { THREAD_TODO_BUSY_RETRY_MS, threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import {
-  THREAD_TODO_BUSY_RETRY_MS,
   codexAsyncQuestionItemId,
-  threadTodoThreadKey,
-  threadReviewTodo,
-  operatorTodoItemKey,
   parseCodexAsyncQuestionReply,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-async-questions";
+import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import { copyTextWithHtml } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";

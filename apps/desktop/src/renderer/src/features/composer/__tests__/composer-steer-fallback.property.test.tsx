@@ -3,7 +3,9 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-li
 import fc from "fast-check";
 import { useMemo, type ComponentProps } from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, BackendSummary, ScheduledThreadAction, SteerTurnResponse } from "@pwragent/shared";
+import type { AgentEvent, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { applyScheduledActionProjection, syncScheduledActionProjections } from "../../../lib/useScheduledThreadActionProjection";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";

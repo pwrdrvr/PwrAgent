@@ -3,10 +3,15 @@ import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-s
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  canonicalDurableSteerRequest, canonicalDurableTurnRequest,
-  type AppServerTurnInputItem, type FederationRequestEnvelope,
-  type SubmitDurableSteerRequest, type SubmitDurableTurnRequest,
-} from "@pwragent/shared";
+  canonicalDurableSteerRequest,
+  canonicalDurableTurnRequest,
+} from "@pwragent/shared/durable-turn-request";
+import { type AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRequestEnvelope } from "@pwragent/shared/contracts/federation";
+import {
+  type SubmitDurableSteerRequest,
+  type SubmitDurableTurnRequest,
+} from "@pwragent/shared/contracts/durable-turn-requests";
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import {
   additionalFederationBackendCapabilities, durableFederationCallerScope,

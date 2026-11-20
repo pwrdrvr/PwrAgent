@@ -1,12 +1,12 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   federatedThreadIdentityKey,
-  type AppServerBackendKind,
   type FederationRemoteTarget,
   type FederationTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { planSearchResultOpen } from "../search-result-open";
 
 // The rules a click on a search result keeps:

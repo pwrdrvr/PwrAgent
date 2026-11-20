@@ -7,8 +7,8 @@ import type {
   DesktopSettingsSnapshot,
   ReplaceDesktopSettingsSecretRequest,
   WriteDesktopSettingsConfigRequest,
-} from "@pwragent/shared";
-import { DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   applySecretUpdateToSettingsSnapshot,

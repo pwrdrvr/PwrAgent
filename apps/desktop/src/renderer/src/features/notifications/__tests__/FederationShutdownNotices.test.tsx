@@ -1,6 +1,10 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, FederationPeerShutdown, ReadFederationHealthResponse } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  FederationPeerShutdown,
+  ReadFederationHealthResponse,
+} from "@pwragent/shared/contracts/federation";
 import { FederationShutdownNotices } from "../FederationShutdownNotices";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });

@@ -1,4 +1,4 @@
-import { resolveEffectivePermissions, type MessagingPermissionId } from "@pwragent/shared";
+import { resolveEffectivePermissions, type MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingRbacPolicyProvider } from "../../messaging/rbac-policy-service";
 import { MessagingActivityLog } from "../../storage/messaging-activity-log";
 import { SqliteMessagingRequestStore } from "../../state/messaging-request-store";

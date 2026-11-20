@@ -1,4 +1,8 @@
-import type { NavigationQueryPage, NavigationRow, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationQueryPage,
+  NavigationRow,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";

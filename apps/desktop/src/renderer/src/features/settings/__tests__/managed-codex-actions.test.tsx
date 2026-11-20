@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary, DesktopSettingsSnapshot, ListBackendsRequest } from "@pwragent/shared";
+import type { BackendSummary, ListBackendsRequest } from "@pwragent/shared/contracts/backend";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useBackendSummaries, BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "../managed-codex-actions";

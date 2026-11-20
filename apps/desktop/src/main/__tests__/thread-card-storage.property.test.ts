@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
-import type { ThreadTodo, ThreadTodoStatus } from "@pwragent/shared";
+import type { ThreadTodo, ThreadTodoStatus } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import { ThreadReviewService } from "../thread-reviews/thread-review-service";

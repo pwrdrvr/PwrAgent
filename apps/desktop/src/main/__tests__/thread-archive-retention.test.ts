@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import {
-  DEFAULT_THREAD_ARCHIVE_POLICY,
   type AppServerThreadSummary,
-  type ThreadOverlayState,
   type WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { sweepThreadArchiveRetention } from "../app-server/thread-archive-retention";
 
 const day = 86_400_000;

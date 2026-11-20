@@ -2,8 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalDurableTurnRequest } from "@pwragent/shared";
-import type { DurableTurnReceipt, SubmitDurableTurnRequest } from "@pwragent/shared";
+import { canonicalDurableTurnRequest } from "@pwragent/shared/durable-turn-request";
+import type {
+  DurableTurnReceipt,
+  SubmitDurableTurnRequest,
+} from "@pwragent/shared/contracts/durable-turn-requests";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteDurableTurnRequestStore } from "@pwragent/sqlite-storage/durable-turn-request-store";
 import { durableFederationCallerScope, FEDERATION_BACKEND_METHODS } from "../src/main/federation/federation-backend-bridge";

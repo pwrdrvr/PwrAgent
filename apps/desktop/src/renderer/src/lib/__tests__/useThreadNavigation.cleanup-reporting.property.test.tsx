@@ -1,7 +1,7 @@
 import { act, render, renderHook, cleanup, screen, within, fireEvent } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { AppNoticeStack } from "../../features/notifications/AppNoticeStack";
 
