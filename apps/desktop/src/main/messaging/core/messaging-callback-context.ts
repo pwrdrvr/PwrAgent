@@ -42,7 +42,7 @@ export interface MessagingCallbackHost {
   readonly sharedQueueNotices: Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>;
   readonly requireRemoteScopeForBinding: (event: MessagingInboundEvent, binding: MessagingBindingRecord | undefined, auditAction: string, opts?: { notify?: boolean; }) => Promise<boolean>;
   readonly startPreparedInput: (params: { admissionState?: MessagingThreadAdmissionState; binding: MessagingBindingRecord; event?: MessagingInboundEvent; input: AppServerTurnInputItem[]; navigation?: MessagingNavigationContext; pdfAttachments?: PendingPdfAttachment[]; privateResponseRequested?: boolean; preview: string; reportBusyRefusal?: boolean; threadKey: string; }) => Promise<PreparedInputStartResult>;
-  readonly retireQueuedTurnNotice: (entry: MessagingQueuedTurnEntry, body: string, event?: MessagingInboundCallbackEvent) => Promise<void>;
+  readonly retireQueuedTurnNotice: (entry: MessagingQueuedTurnEntry, body: string, event?: MessagingInboundCallbackEvent, title?: string) => Promise<void>;
   readonly trackQueuedTurnAction: (entry: MessagingQueuedTurnEntry, action: Promise<void>) => void;
   readonly resolveSteerableActiveTurn: (binding: MessagingBindingRecord, reason: string) => Promise<MessagingActiveTurnSummary | undefined>;
   readonly deliverQueuedTurnNotice: (entry: MessagingQueuedTurnEntry) => Promise<void>;

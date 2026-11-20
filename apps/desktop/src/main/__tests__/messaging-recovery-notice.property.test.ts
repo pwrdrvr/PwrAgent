@@ -43,10 +43,8 @@ async function runNoticeProtocol(protocol: Protocol): Promise<void> {
         await noticeRelease.promise;
         return { ...result, surface };
       }
-      if (intent.kind === "confirmation" && [
-        "Queued message was sent as a steering message.",
-        "Queued message handed to the thread queue.",
-      ].includes(intent.body)) {
+      // Recognize retirement by the delivery contract, independently of copy.
+      if (intent.kind === "confirmation" && intent.delivery?.mode === "update" && intent.delivery.replaceMarkup) {
         retirements.push(intent);
         if (intent.targetSurface && messages.has(intent.targetSurface.id)) {
           messages.set(intent.targetSurface.id, intent.actions?.map(action => action.id) ?? []);
@@ -87,8 +85,13 @@ async function runNoticeProtocol(protocol: Protocol): Promise<void> {
       expect(retirements[0]?.delivery).toMatchObject({ mode: "update", replaceMarkup: true });
       expect(messages.get(surface.id)).toEqual([]);
       expect(modules.queueRecoveries.size).toBe(0);
-      if (protocol.action === "steer") expect(real.steers.at(-1)?.input).toEqual(entry.input);
-      else expect(real.queued().map(row => row.input)).toEqual([entry.input]);
+      if (protocol.action === "steer") {
+        expect(retirements[0]).toMatchObject({ title: "Message steered", body: "Sent to the current turn." });
+        expect(real.steers.at(-1)?.input).toEqual(entry.input);
+      } else {
+        expect(retirements[0]).toMatchObject({ title: "Message queued", body: "Queued message handed to the thread queue." });
+        expect(real.queued().map(row => row.input)).toEqual([entry.input]);
+      }
     } else {
       expect(retirements).toEqual([]);
       expect(messages.get(surface.id)).toHaveLength(3);
