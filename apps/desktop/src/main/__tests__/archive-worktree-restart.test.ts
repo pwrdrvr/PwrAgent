@@ -1648,6 +1648,51 @@ describe("archive cleanup and finished helper threads", () => {
     expect([...held.values()].map((approval) => approval.bytes)).toEqual([7]);
   }, 30_000);
 
+  // Rule: Unlock and Remove acts on the checkout the operator saw under one
+  // archived thread. Any archived thread that links the checkout may name it
+  // (a parent and its sub-thread share one); a thread that does not link it
+  // is refused and the checkout is kept, still locked, even when the
+  // approval matches its lock text.
+  it("unlocks and removes a locked checkout only for an archived thread that owns it", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("archived-owner", "archived-sibling", "another-archived-thread"),
+      fc.boolean(),
+      fc.stringMatching(/^[a-z][a-z ,]{0,16}[a-z]$/),
+      async (requested, shared, reason) => {
+        const fixture = await createFixture();
+        ArchiveWorktreeTransport.threads = [
+          { id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true },
+          ...(shared ? [{ id: "archived-sibling", cwd: fixture.worktree, source: "cli", archived: true }] : []),
+          { id: "another-archived-thread", cwd: path.join(fixture.root, "elsewhere"), source: "cli", archived: true },
+        ];
+        await fixture.git(fixture.repo, ["worktree", "lock", "--reason", reason, fixture.worktree]);
+        const instance = fixture.reopen();
+        try {
+          const { results } = await instance.registry.removeLockedThreadWorktrees({ worktrees: [{
+            backend: "codex", threadId: requested, worktreePath: fixture.worktree, approvedLockReason: reason,
+          }] });
+          const owned = requested === "archived-owner" || (shared && requested === "archived-sibling");
+          expect(results).toHaveLength(1);
+          expect(results[0]).toMatchObject({ status: owned ? "removed" : "kept", worktreePath: fixture.worktree });
+          const present = await stat(fixture.worktree).then(() => true, () => false);
+          expect(present).toBe(!owned);
+          if (!owned) {
+            const lock = await readFile(path.join(fixture.repo, ".git", "worktrees", path.basename(fixture.worktree), "locked"), "utf8");
+            expect(lock.trim()).toBe(reason);
+          }
+        } finally {
+          await instance.registry.close();
+          instance.db.close();
+          ArchiveWorktreeTransport.threads = [];
+        }
+      },
+    ), { numRuns: 4, examples: [
+      ["another-archived-thread", true, "release prep, do not remove"],
+      ["archived-owner", true, "release prep"],
+      ["archived-sibling", true, "release prep"],
+    ] });
+  }, 120_000);
+
   // Rule: the background report names the archived thread. Its window rarely
   // has it loaded, so the owner must say what it was called.
   it("names the archived thread on its background cleanup completion", async () => {

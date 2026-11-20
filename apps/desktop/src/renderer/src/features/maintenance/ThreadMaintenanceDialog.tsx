@@ -1738,14 +1738,16 @@ function useUnlockAndRemove(run: ThreadMaintenanceRun, api: DesktopApi | undefin
   const rows = results.runId === run.runId ? results.rows : undefined;
   const items = useCallback((source: ThreadMaintenanceRunItem[]) => rows?.size
     ? source.map((item) => rows.get(item.itemId) ?? item) : source, [rows]);
-  const remove = api?.removeLockedThreadWorktree;
+  const remove = api?.removeLockedThreadWorktrees;
   const start = useCallback<UnlockAndRemove["start"]>((item) => {
     if (!remove) return;
     const runId = run.runId;
     setPending((current) => new Set(current).add(item.itemId));
-    void remove({ backend: item.backend as AppServerBackendKind, threadId: item.threadId, worktreePath: item.path,
-      approvedLockReason: item.lockReason })
-      .then((response) => response, (error: unknown) => ({ status: "error" as const,
+    // Maintenance runs on this instance, so its checkouts are this owner's.
+    void remove({ worktrees: [{ backend: item.backend as AppServerBackendKind, threadId: item.threadId, worktreePath: item.path,
+      approvedLockReason: item.lockReason }] })
+      .then(({ results }) => results[0] ?? { status: "error" as const, message: "No result came back." },
+        (error: unknown) => ({ status: "error" as const,
         message: error instanceof Error ? error.message : String(error) }))
       .then((outcome) => {
         setResults((current) => {

@@ -57,8 +57,8 @@ import {
   type AppServerNotification,
   type ReadThreadWorktreeLockRequest,
   type ReadThreadWorktreeLockResponse,
-  type RemoveLockedThreadWorktreeRequest,
-  type RemoveLockedThreadWorktreeResponse,
+  type RemoveLockedThreadWorktreesRequest,
+  type RemoveLockedThreadWorktreesResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   type ThreadPendingWakesList,
@@ -1839,25 +1839,33 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().moveThreadToMainCheckout(localRequest);
   }
 
-  /** Local owners only: a remote thread's handoff keeps a locked worktree. */
+  /** On the thread's owner. An owner too old to read locks reports none, so
+   * the handoff keeps a locked worktree, as before. */
   async readThreadWorktreeLock(
     request: ReadThreadWorktreeLockRequest,
   ): Promise<ReadThreadWorktreeLockResponse> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return { worktreePath: request.worktreePath };
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .readThreadWorktreeLock(remoteRequest);
     }
     const { federationTarget: _federationTarget, ...localRequest } = request;
     return await getDesktopBackendRegistry().readThreadWorktreeLock(localRequest);
   }
 
-  async removeLockedThreadWorktree(
-    request: RemoveLockedThreadWorktreeRequest,
-  ): Promise<RemoveLockedThreadWorktreeResponse> {
+  /** On the owner of every listed worktree; the caller groups by owner. */
+  async removeLockedThreadWorktrees(
+    request: RemoveLockedThreadWorktreesRequest,
+  ): Promise<RemoveLockedThreadWorktreesResponse> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      throw new Error("Unlock and remove this worktree on the PwrAgent instance that owns the thread.");
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .removeLockedThreadWorktrees(remoteRequest);
     }
     const { federationTarget: _federationTarget, ...localRequest } = request;
-    return await getDesktopBackendRegistry().removeLockedThreadWorktree(localRequest);
+    return await getDesktopBackendRegistry().removeLockedThreadWorktrees(localRequest);
   }
 
   async renameThread(

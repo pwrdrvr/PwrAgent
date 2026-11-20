@@ -1,7 +1,12 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
-import { type AppServerBackendKind, type WorktreeLockedKept } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type AppServerBackendKind,
+  type ArchiveThreadCleanupResult,
+  WORKTREE_LOCKED_SKIP_REASON,
+  type WorktreeLockedKept,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   defaultThreadMaintenanceRules,
   type ThreadMaintenanceApplyRequest,
@@ -117,12 +122,14 @@ export type ThreadMaintenanceDeps = {
   measureAllocation?: (checkout: string, signal: AbortSignal) => Promise<ThreadMaintenanceSpace | undefined>;
   isCheckoutOnDisk?: (checkout: string) => Promise<boolean>;
   buildOutputs?: { scan: typeof scanCargoBuildOutputs; remove: typeof removeCargoBuildOutput };
-  /** Archive one reviewed family as an operator archive. Resolves false when cancelled. */
+  /** Archive one reviewed family as an operator archive. Resolves false when
+   * cancelled; when archived, may list the worktrees it kept because Git has
+   * them locked by someone else. */
   archiveFamily: (family: ThreadArchiveCandidate[], options: {
     preserveWorktrees: boolean;
     /** A one-run approval to snapshot past the normal limit. */
     snapshotLimitBytes?: number;
-  }) => Promise<boolean>;
+  }) => Promise<boolean | { lockedWorktrees: WorktreeLockedKept[] }>;
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
   removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean;
     /** One-run approvals to snapshot past the normal limit, by checkout. */
@@ -199,6 +206,11 @@ type RetainedScan = {
   outputClassification: Map<string, Promise<NonNullable<ThreadMaintenanceSpace["rebuildableOutput"]>>>;
   allocation: Map<string, Promise<ThreadMaintenanceSpace | undefined>>;
 };
+
+/** The worktrees an archive kept because Git has them locked by someone else. */
+export function lockedWorktreesKeptBy(cleanup: readonly ArchiveThreadCleanupResult[]): WorktreeLockedKept[] {
+  return cleanup.flatMap((item) => item.kept && !item.removedWorktree ? [item.kept] : []);
+}
 
 /**
  * The reviewed counterpart of the hourly sweep, used by the Thread maintenance
@@ -893,10 +905,23 @@ export class ThreadMaintenanceService {
       }
       try {
         const outcome = await this.archiveReviewed(entry, item.overLimit, retained.scan.rules, () => change(row.itemId, { stage: "archiving" }));
-        if (outcome === true) {
+        if (typeof outcome !== "string") {
           threadStep.done += 1;
           archivedKeys.add(keyOf(item));
           complete(row.itemId);
+          // The thread is archived; a worktree someone else locked stays on
+          // disk. Its own row offers Unlock and Remove, as a removal row does.
+          if (outcome.lockedWorktrees.length) {
+            const finishedAt = this.now();
+            rows.splice(rows.findIndex((candidate) => candidate.itemId === row.itemId) + 1, 0,
+              ...outcome.lockedWorktrees.map((kept, lockedIndex): ThreadMaintenanceRunItem => ({
+                itemId: `${row.itemId}:locked:${lockedIndex}`, step: "threads", action: "removeCheckout",
+                object: kept.worktreePath, path: kept.worktreePath, backend: item.backend, threadId: item.threadId,
+                status: "kept", reason: WORKTREE_LOCKED_SKIP_REASON, lockReason: kept.lockReason,
+                startedAt: finishedAt, finishedAt, finishedOrder: ++finishedOrder,
+              })));
+            update();
+          }
         } else {
           threadStep.kept += 1;
           addProblem({ step: "threads", kind: "kept", object, reason: outcome, backend: item.backend, threadId: item.threadId });
@@ -1153,13 +1178,14 @@ export class ThreadMaintenanceService {
     return this.publish(finished);
   }
 
-  /** True when archived, else the reason it was kept. Throws on failure. */
+  /** When archived, the worktrees it kept locked; else the reason the thread
+   * was kept. Throws on failure. */
   private async archiveReviewed(
     entry: { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread },
     overLimit: ThreadMaintenanceApplyRequest["archive"][number]["overLimit"],
     rules: ThreadMaintenanceRules,
     onArchive: () => void,
-  ): Promise<true | string> {
+  ): Promise<{ lockedWorktrees: WorktreeLockedKept[] } | string> {
     const refreshed = await Promise.all(entry.family.map((item) => this.deps.refreshCandidate(item)));
     if (archiveCandidateLastActivity(refreshed[0]!) > entry.row.lastActivityAt) return "New activity during the run";
     const policy = { ...this.deps.getPolicy(), mode: "age" as const, inactivityDays: 0 };
@@ -1180,7 +1206,8 @@ export class ThreadMaintenanceService {
       ...(workspace.kind === "overLimit" && overLimit === "snapshotAll"
         ? { snapshotLimitBytes: reviewedSnapshotCap(workspace.bytes) } : {}),
     });
-    return archived ? true : "Archive cancelled";
+    if (archived === false) return "Archive cancelled";
+    return { lockedWorktrees: archived === true ? [] : archived.lockedWorktrees };
   }
 
   private publish(snapshot: ThreadMaintenanceRun): ThreadMaintenanceRun {

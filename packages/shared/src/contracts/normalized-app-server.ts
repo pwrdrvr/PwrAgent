@@ -1599,24 +1599,41 @@ export type ReadThreadWorktreeLockResponse = {
 };
 
 /**
- * Unlock and remove an archived thread's worktree that was kept because Git
- * has it locked by someone else. It is checkpointed first, as archive would
- * have. Only from the operator's explicit choice.
+ * One archived thread's worktree to unlock and remove: it was kept because
+ * Git has it locked by someone else. It is checkpointed first, as archive
+ * would have. Only from the operator's explicit choice.
  */
 export type RemoveLockedThreadWorktreeRequest = {
   backend: AppServerBackendKind;
-  federationTarget?: FederationTarget;
+  /** The archived thread the operator saw it under. A checkout another
+   * thread owns by now is kept. */
   threadId: ThreadIdentifier;
   worktreePath: string;
   /** The lock text the operator saw. A lock that says anything else keeps the worktree. */
   approvedLockReason: string;
 };
 
+/** One worktree's outcome. */
 export type RemoveLockedThreadWorktreeResponse =
   | { status: "removed"; worktreePath: string }
   /** Still on disk: `kept` when the lock changed, or another keep reason. */
   | { status: "kept"; worktreePath: string; reason: string; kept?: WorktreeLockedKept }
   | { status: "failed"; worktreePath: string; message: string };
+
+/**
+ * Unlock and Remove for several worktrees on one owner, in one pass over its
+ * archived checkouts. Each worktree is still admitted, checkpointed and
+ * unlocked on its own.
+ */
+export type RemoveLockedThreadWorktreesRequest = {
+  federationTarget?: FederationTarget;
+  worktrees: RemoveLockedThreadWorktreeRequest[];
+};
+
+/** One result per requested worktree, in request order. */
+export type RemoveLockedThreadWorktreesResponse = {
+  results: RemoveLockedThreadWorktreeResponse[];
+};
 
 export type RenameThreadRequest = {
   backend: AppServerBackendKind;

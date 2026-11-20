@@ -5,6 +5,7 @@ import fc from "fast-check";
 import type {
   RemoveLockedThreadWorktreeRequest,
   RemoveLockedThreadWorktreeResponse,
+  RemoveLockedThreadWorktreesRequest,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   ThreadMaintenanceRun,
@@ -16,8 +17,9 @@ import { itemAfterUnlockAndRemove, offersUnlockAndRemove } from "../thread-maint
 
 /*
  * Rule (locked-worktree design D2/D4): a maintenance run row offers Unlock
- * and Remove only for an archived checkout the operator chose to remove that
- * someone else's Git lock kept. Hibernation never unlocks, so its "Locked
+ * and Remove only for an archived checkout that someone else's Git lock
+ * kept: one the operator chose to remove, or one the archive step kept when
+ * it archived its thread. Hibernation never unlocks, so its "Locked
  * worktree" rows never offer it. The approval sent is exactly the lock text
  * the row shows.
  */
@@ -32,6 +34,11 @@ const lockedRemoval: ThreadMaintenanceRunItem = {
   itemId: "remove:0", step: "checkouts", action: "removeCheckout", object: "/w/mwokr2/orbit", path: "/w/mwokr2/orbit",
   backend: "codex", threadId: "t-orbit", status: "kept", reason: "Locked worktree",
   lockReason: "release prep, do not remove", startedAt: NOW, finishedAt: NOW + 500, finishedOrder: 2,
+};
+const lockedArchiveWorktree: ThreadMaintenanceRunItem = {
+  itemId: "threads:0:locked:0", step: "threads", action: "removeCheckout", object: "/w/mwokr4/orbit", path: "/w/mwokr4/orbit",
+  backend: "codex", threadId: "t-archived", status: "kept", reason: "Locked worktree",
+  lockReason: "pairing session", startedAt: NOW, finishedAt: NOW + 600, finishedOrder: 3,
 };
 const lockedHibernation: ThreadMaintenanceRunItem = {
   itemId: "hibernate:0", step: "hibernate", action: "hibernate", object: "Fix flaky test", path: "/w/mwokr3/orbit",
@@ -50,7 +57,9 @@ async function showFinished(items: ThreadMaintenanceRunItem[],
   const desktopApi = {
     getThreadMaintenanceRun: vi.fn(async () => ({ ...finishedRun(items), running: true, revision: 1 })),
     stopThreadMaintenance: vi.fn(async () => {}),
-    removeLockedThreadWorktree: vi.fn(removeLockedThreadWorktree),
+    removeLockedThreadWorktrees: vi.fn(async (request: RemoveLockedThreadWorktreesRequest) => ({
+      results: await Promise.all(request.worktrees.map(removeLockedThreadWorktree)),
+    })),
     onThreadMaintenanceRunChanged: vi.fn((listener: (next: ThreadMaintenanceRun) => void) => {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
@@ -65,16 +74,19 @@ async function showFinished(items: ThreadMaintenanceRunItem[],
 }
 
 describe("Unlock and Remove in a maintenance run", () => {
-  it("is offered on a kept checkout removal with a lock reason, never on a hibernation row", async () => {
-    const { dialog } = await showFinished([lockedHibernation, lockedRemoval], async () => ({
-      status: "removed", worktreePath: "/w/mwokr2/orbit",
+  it("is offered on a kept checkout removal or archived worktree with a lock reason, never on a hibernation row", async () => {
+    const { dialog } = await showFinished([lockedHibernation, lockedRemoval, lockedArchiveWorktree], async (request) => ({
+      status: "removed", worktreePath: request.worktreePath,
     }));
-    const kept = within(dialog).getByRole("region", { name: "Kept · 2" });
+    const kept = within(dialog).getByRole("region", { name: "Kept · 3" });
     const rows = within(kept).getAllByRole("listitem");
     const hibernation = rows.find((row) => row.textContent?.includes("Fix flaky test"))!;
     const removal = rows.find((row) => row.textContent?.includes("/w/mwokr2/orbit"))!;
+    const archived = rows.find((row) => row.textContent?.includes("/w/mwokr4/orbit"))!;
     expect(removal).toHaveTextContent("Git has it locked: release prep, do not remove");
     expect(within(removal).getByRole("button", { name: "Unlock and remove /w/mwokr2/orbit" })).toBeEnabled();
+    expect(archived).toHaveTextContent("Git has it locked: pairing session");
+    expect(within(archived).getByRole("button", { name: "Unlock and remove /w/mwokr4/orbit" })).toBeEnabled();
     expect(within(hibernation).queryByRole("button", { name: /Unlock and remove/i })).toBeNull();
   });
 
@@ -84,9 +96,9 @@ describe("Unlock and Remove in a maintenance run", () => {
       async () => await new Promise<RemoveLockedThreadWorktreeResponse>((resolve) => { answer = resolve; }));
     const button = within(dialog).getByRole("button", { name: "Unlock and remove /w/mwokr2/orbit" });
     fireEvent.click(button);
-    expect(desktopApi.removeLockedThreadWorktree).toHaveBeenCalledWith({
+    expect(desktopApi.removeLockedThreadWorktrees).toHaveBeenCalledWith({ worktrees: [{
       backend: "codex", threadId: "t-orbit", worktreePath: "/w/mwokr2/orbit", approvedLockReason: "release prep, do not remove",
-    });
+    }] });
     expect(button).toBeDisabled();
     await act(async () => { answer({ status: "removed", worktreePath: "/w/mwokr2/orbit" }); });
     await waitFor(() => expect(within(dialog).getByRole("region", { name: "Done · 1" })).toHaveTextContent("/w/mwokr2/orbit"));
@@ -101,8 +113,8 @@ describe("Unlock and Remove in a maintenance run", () => {
     await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Unlock and remove /w/mwokr2/orbit" })); });
     await within(dialog).findByText("hotfix in progress");
     await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Unlock and remove /w/mwokr2/orbit" })); });
-    expect(desktopApi.removeLockedThreadWorktree).toHaveBeenLastCalledWith(
-      expect.objectContaining({ approvedLockReason: "hotfix in progress" }));
+    expect(desktopApi.removeLockedThreadWorktrees).toHaveBeenLastCalledWith({ worktrees: [
+      expect.objectContaining({ approvedLockReason: "hotfix in progress" })] });
   });
 });
 
@@ -120,13 +132,14 @@ const itemArb: fc.Arbitrary<ThreadMaintenanceRunItem> = fc.record({
 }, { requiredKeys: ["itemId", "step", "action", "object", "status"] }) as fc.Arbitrary<ThreadMaintenanceRunItem>;
 
 describe("which rows offer Unlock and Remove", () => {
-  it("only a kept checkout removal that a lock holds and that names its thread and path", () => {
+  it("only a kept checkout removal or archived worktree that a lock holds and that names its thread and path", () => {
     fc.assert(fc.property(itemArb, (item) => {
-      expect(offersUnlockAndRemove(item)).toBe(item.step === "checkouts" && item.action === "removeCheckout"
+      expect(offersUnlockAndRemove(item)).toBe((item.step === "checkouts" || item.step === "threads")
+        && item.action === "removeCheckout"
         && item.status === "kept" && item.lockReason !== undefined
         && Boolean(item.backend) && Boolean(item.threadId) && Boolean(item.path));
       if (item.step === "hibernate" || item.action === "hibernate") expect(offersUnlockAndRemove(item)).toBe(false);
-    }));
+    }), { examples: [[lockedRemoval], [lockedArchiveWorktree], [lockedHibernation]] });
   });
 
   it("a row offers it again after an answer only when the lock is still there, with its new text", () => {

@@ -1,5 +1,6 @@
 import { materializeFederationThreadRead, type FederationThreadReadResponse } from "../federation/federation-thread-read";
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
@@ -26,6 +27,7 @@ import {
   QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
   PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
   QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
+  REMOVE_LOCKED_WORKTREES_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
   additionalFederationBackendCapabilities,
   authenticateMessageOrigin,
@@ -5450,6 +5452,66 @@ describe("federation workspace recovery methods", () => {
 
     expect(moveThreadToMainCheckout).not.toHaveBeenCalled();
     expect(reply).toMatchObject({ kind: "error" });
+  });
+
+  // Rule (locked-worktree design D4): a remote Unlock and Remove reaches the
+  // owner with exactly the worktrees and lock text the viewer showed, and
+  // nothing else. It changes the owner's disk, so it needs turn control.
+  it("hands the owner exactly the shown worktrees and lock text for Unlock and Remove", async () => {
+    const worktreeArb = fc.record({
+      backend: fc.constantFrom("codex", "claude"),
+      threadId: fc.string({ minLength: 1, maxLength: 8 }),
+      worktreePath: fc.string({ minLength: 1, maxLength: 12 }).map((name) => `/wt/${name}`),
+      approvedLockReason: fc.string({ maxLength: 16 }),
+      extra: fc.string(),
+    });
+    await fc.assert(fc.asyncProperty(fc.array(worktreeArb, { maxLength: 4 }), async (worktrees) => {
+      const removeLockedThreadWorktrees = vi.fn(async () => ({ results: [] }));
+      const { request } = route({ removeLockedThreadWorktrees } as never, ["turn_control"]);
+      const reply = await request("remove", FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees, {
+        worktrees, federationTarget: { scope: "remote", instanceId: "elsewhere" },
+      });
+      expect(reply).toMatchObject({ kind: "response" });
+      expect(removeLockedThreadWorktrees).toHaveBeenCalledWith({ worktrees: worktrees.map(({ extra: _extra, ...item }) => item) });
+    }), { numRuns: 50 });
+  });
+
+  it("refuses Unlock and Remove without turn control or with a malformed approval, but lets a viewer read the lock", async () => {
+    const removeLockedThreadWorktrees = vi.fn(async () => ({ results: [] }));
+    const readThreadWorktreeLock = vi.fn(async () => ({ worktreePath: "/wt" }));
+    const viewer = route({ removeLockedThreadWorktrees, readThreadWorktreeLock } as never, ["thread_detail"]);
+    expect(await viewer.request("remove", FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees, {
+      worktrees: [{ backend: "codex", threadId: "t1", worktreePath: "/wt", approvedLockReason: "release prep" }],
+    })).toMatchObject({ kind: "error" });
+    expect(await viewer.request("read", FEDERATION_BACKEND_METHODS.readThreadWorktreeLock, {
+      backend: "codex", threadId: "t1", worktreePath: "/wt", federationTarget: { scope: "remote", instanceId: "x" },
+    })).toMatchObject({ kind: "response" });
+    expect(readThreadWorktreeLock).toHaveBeenCalledWith({ backend: "codex", threadId: "t1", worktreePath: "/wt" });
+
+    const controller = route({ removeLockedThreadWorktrees } as never, ["turn_control"]);
+    for (const [index, worktrees] of [
+      undefined,
+      [{ backend: "codex", threadId: "t1", worktreePath: "/wt" }],
+      [{ backend: "codex", threadId: "t1", worktreePath: "/wt", approvedLockReason: 7 }],
+      [{ backend: "not-a-backend", threadId: "t1", worktreePath: "/wt", approvedLockReason: "" }],
+    ].entries()) {
+      expect(await controller.request(`bad-${index}`, FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees, { worktrees }))
+        .toMatchObject({ kind: "error" });
+    }
+    expect(removeLockedThreadWorktrees).not.toHaveBeenCalled();
+  });
+
+  // An owner that predates these methods keeps its locked worktrees: the
+  // viewer reads no lock, so its handoff keeps the worktree, and Unlock and
+  // Remove says the owner needs an update.
+  it("keeps the worktree on an older owner", async () => {
+    const request = vi.fn(async () => { throw Object.assign(new Error("No handler"), { code: "method_not_found" }); });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await expect(client.readThreadWorktreeLock({ backend: "codex", threadId: "t1", worktreePath: "/wt" }))
+      .resolves.toEqual({ worktreePath: "/wt" });
+    await expect(client.removeLockedThreadWorktrees({ worktrees: [
+      { backend: "codex", threadId: "t1", worktreePath: "/wt", approvedLockReason: "release prep" }] }))
+      .rejects.toThrow(REMOVE_LOCKED_WORKTREES_UNSUPPORTED_MESSAGE);
   });
 
   it("runs a new-worktree handoff on its own method and refuses other directions there", async () => {
