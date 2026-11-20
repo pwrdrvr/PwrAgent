@@ -6486,6 +6486,73 @@ describe("Sidebar", () => {
     expect(scrollTop).toBe(500);
   });
 
+  it("keeps the Directory threads count open or closed, and scrolls to the project's top from the bar", async () => {
+    // The count showed only while closed, so the label and the rules beside
+    // it changed width on every toggle. And from deep in a long list the bar
+    // beside the label is the way back to the project's top; the label (and
+    // the keyboard) still toggles.
+    const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
+    const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+    const renderSidebar = (directoryThreadsCollapsed: boolean) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[{ ...directoryWithPinnedThread, directoryThreadsCollapsed }]}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
+      />
+    );
+    const { container, rerender } = render(renderSidebar(false));
+    const countOf = (name: string) => screen.getByRole("button", { name })
+      .querySelector(".directory-row__thread-divider-count")?.textContent;
+    expect(countOf("Hide directory threads for PwrAgent")).toBe("1");
+    rerender(renderSidebar(true));
+    expect(countOf("Show directory threads for PwrAgent")).toBe("1");
+    rerender(renderSidebar(false));
+
+    const list = container.querySelector<HTMLElement>(".directory-list")!;
+    const section = container.querySelector<HTMLElement>(".directory-row")!;
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo as typeof list.scrollTo;
+    Object.defineProperty(list, "scrollTop", { configurable: true, value: 900 });
+    const rectAt = (top: number) => ({
+      x: 0, y: top, top, bottom: top + 400, left: 0, right: 300, width: 300, height: 400,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rectAt(80));
+    vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rectAt(-620));
+    const divider = screen.getByRole("button", { name: "Hide directory threads for PwrAgent" });
+
+    // A pointer click on the bar itself, beside the label.
+    await act(async () => {
+      fireEvent.click(divider, { detail: 1 });
+    });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 200, behavior: "smooth" });
+    expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
+
+    // A pointer click on the label toggles.
+    await act(async () => {
+      fireEvent.click(divider.querySelector(".directory-row__thread-divider-label")!, { detail: 1 });
+    });
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledWith(
+      expect.objectContaining({ key: directories[0].key }),
+      true,
+    );
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
   it("puts a flat lens's load more right under its last row, inside the scrolling lane", () => {
     // It rendered as a sibling after the lane, and the lane is `flex: 1`, so
     // the control landed at the rail's bottom edge — below the start actions,

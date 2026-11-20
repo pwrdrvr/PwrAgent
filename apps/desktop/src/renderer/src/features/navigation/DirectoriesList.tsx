@@ -518,6 +518,14 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     directoryThreadsCollapseAnchorRef.current = undefined;
     list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
   });
+  // Brings a project's section to the top of the lane, from its divider.
+  const scrollDirectoryToTop = (divider: HTMLElement): void => {
+    const list = directoryListRef.current;
+    const section = divider.closest<HTMLElement>(".directory-row");
+    if (!list || !section) return;
+    const offset = section.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    list.scrollTo({ top: list.scrollTop + offset, behavior: "smooth" });
+  };
 
   // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
   // Updated and Created so all of them edit the one global pin order the same way.
@@ -1982,6 +1990,19 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             ) {
                               return;
                             }
+                            // The label (chevron, name, count) toggles the
+                            // list, and so does the keyboard (`detail` 0).
+                            // The rest of the bar, the rules either side,
+                            // scrolls the project back to its top: from deep
+                            // in a long list that is the other way out.
+                            const onLabel = event.detail === 0
+                              || (event.target as Element).closest(
+                                ".directory-row__thread-divider-label",
+                              ) !== null;
+                            if (!onLabel) {
+                              scrollDirectoryToTop(event.currentTarget);
+                              return;
+                            }
                             directoryThreadsCollapseAnchorRef.current = directoryThreadsCollapsed
                               ? undefined
                               : {
@@ -2003,11 +2024,12 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                               }`}
                             />
                             <span>Directory threads</span>
-                            {directoryThreadsCollapsed ? (
-                              <span className="directory-row__thread-divider-count">
-                                {directoryUnpinnedThreadCount}
-                              </span>
-                            ) : null}
+                            {/* Open or closed: hiding it while open made
+                                the label, and the rules beside it, change
+                                width on every toggle. */}
+                            <span className="directory-row__thread-divider-count">
+                              {directoryUnpinnedThreadCount}
+                            </span>
                           </span>
                         </button>
                       </div>
