@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
 import { assertFederationEgress } from "@pwragent/federation/federation-egress";
-import type { FederationRequestEnvelope } from "@pwragent/shared";
+import type { FederationRequestEnvelope } from "@pwragent/shared/contracts/federation";
 import { installOwnerEgressPolicy } from "../federation/owner-egress-policy";
 
 it("guards direct and backpressured owner sends with the shared containment oracle, auditing before refusal", async () => {

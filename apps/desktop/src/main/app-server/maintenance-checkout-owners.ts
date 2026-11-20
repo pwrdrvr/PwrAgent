@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ThreadMaintenanceKeptThread } from "@pwragent/shared";
+import type { ThreadMaintenanceKeptThread } from "@pwragent/shared/thread-maintenance";
 import { archiveCandidateLastActivity, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { candidateCheckoutDirectories } from "./thread-owned-checkouts";
 import { checkoutHibernationLastActivity } from "./checkout-hibernation";

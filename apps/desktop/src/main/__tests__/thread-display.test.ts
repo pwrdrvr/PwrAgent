@@ -1,5 +1,15 @@
 import { expect, it } from "vitest";
-import { emptyTokenMiserGateAccountingTotals, totalTokenMiserGateAccountings, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type ThreadUsageLineRecord, type ThreadSubAgentSummary, type AgentEvent } from "@pwragent/shared";
+import {
+  emptyTokenMiserGateAccountingTotals,
+  totalTokenMiserGateAccountings,
+} from "@pwragent/shared/token-miser-savings-summary";
+import {
+  type AppServerReadThreadRequest,
+  type AppServerReadThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 import { usageLedgerStandIn } from "./helpers/usage-ledger-stand-in";

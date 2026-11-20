@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "../../../test/phase-probes";
 import { afterEach, expect, it } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryEntry,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { Sidebar } from "../Sidebar";

@@ -1,29 +1,30 @@
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
-  DEFAULT_THREAD_TODO_MERGE_METHOD,
   FORGE_AGENT_TOOL_GROUPS,
-  codexModelProviderApiKeyEnv,
-  isValidCodexModelProviderId,
-  normalizeCheckoutHibernationPolicy,
-  normalizeThreadArchivePolicy,
   upsertForgeAgentToolRule,
-  type CodexModelProviderSettings,
   type ForgeAgentRuleAgent,
   type ForgeAgentToolAccess,
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
   type ForgeAgentToolRuleGroup,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD } from "@pwragent/shared/contracts/thread-todos";
+import {
+  codexModelProviderApiKeyEnv,
+  isValidCodexModelProviderId,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import { normalizeCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
+import { normalizeThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
 import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
-  FORGE_PRODUCTS,
-  type ForgeKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
@@ -39,15 +40,10 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
-  DesktopHelperModelSettings,
-  DesktopTaskMonitorModelChoice,
-  DesktopDecisionModelSettings,
-  DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
   DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
   DesktopFederationMode,
-  FederationPeerRole,
   DesktopGitDiscoverySnapshot,
   DesktopGitRuntimeChoice,
   DesktopManagedGitSnapshot,
@@ -76,9 +72,15 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
-  MessagingToolUpdateMode,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared/helper-models";
+import type { DesktopDecisionModelSettings, DecisionProviderId } from "@pwragent/shared/decision-models";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
@@ -124,7 +126,7 @@ import {
   MIN_REPEATED_LARGE_OUTPUT_CALLS,
   MIN_REPEATED_LARGE_OUTPUT_PERCENT,
   MIN_SPEND_ALERT_THRESHOLD_USD,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,

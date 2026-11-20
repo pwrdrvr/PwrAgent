@@ -3,7 +3,7 @@ import {
   DESKTOP_LOGS_VIEWER_DEFAULTS,
   resolveDesktopLogsViewerPreferences,
   type DesktopLogsViewerPreferences,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

@@ -3,12 +3,12 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import { ThreadContextPanel } from "../thread-detail/ThreadContextPanel";
 import type { ContextTabId } from "../thread-detail/context-panels/context-tab";
 import { useStarMapCardContext } from "./star-map-card-context-store";

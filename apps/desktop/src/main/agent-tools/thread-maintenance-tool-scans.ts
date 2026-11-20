@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ThreadMaintenanceRules, ThreadMaintenanceScan } from "@pwragent/shared";
+import type { ThreadMaintenanceRules, ThreadMaintenanceScan } from "@pwragent/shared/thread-maintenance";
 
 /**
  * The longest a thread maintenance tool call waits before it answers.

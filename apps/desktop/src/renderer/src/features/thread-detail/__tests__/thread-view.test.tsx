@@ -3,8 +3,8 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { cloneElement, StrictMode, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent, StartReviewRequest } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerReadThreadRequest,
@@ -12,16 +12,18 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerPendingRequestNotification,
-  BackendSummary,
-  MessagingPlatformStatus,
+  ThreadToolAccounting,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { MessagingPlatformStatus } from "@pwragent/shared/contracts/messaging";
+import type {
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
-  StartReviewRequest,
-  ThreadToolAccounting,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
-import { buildThreadPricingDisplay, SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import { SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
-import type { NavigationBrowseMode } from "@pwragent/shared";
+import type { NavigationBrowseMode } from "@pwragent/shared/contracts/navigation";
 import type { KeybindingActionId } from "../../../../shared/keybindings";
 import { isEditableTarget } from "../../lib/keyboard-accel";
 import { keydownMatchesAction } from "../../lib/keybindings-store";

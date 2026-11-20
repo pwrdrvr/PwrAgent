@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadMessageEntry } from "@pwragent/shared";
+import type { AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { TranscriptMessage } from "../TranscriptMessage";
 
 const request = "Please check the release configuration.";

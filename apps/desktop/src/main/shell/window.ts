@@ -13,14 +13,12 @@ import {
 import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  FederationRemoteTarget,
-} from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
   DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import {
   HTML_PREVIEW_FRAME_NAME,

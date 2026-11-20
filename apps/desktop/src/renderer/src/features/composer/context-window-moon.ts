@@ -1,4 +1,4 @@
-import type { DesktopContextMoonStyle } from "@pwragent/shared";
+import type { DesktopContextMoonStyle } from "@pwragent/shared/contracts/settings";
 
 /**
  * Geometry and naming for the composer's context-window moon.

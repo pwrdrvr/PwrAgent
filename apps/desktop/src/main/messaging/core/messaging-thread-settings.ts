@@ -1,8 +1,15 @@
-import { codexSpeedOptions, codexSpeedSettings, isAcpBackendId, nextCodexSpeed } from "@pwragent/shared";
+import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared/codex-speed";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import type {
-  AppServerBackendKind, BackendAcpSessionRuntimeState, BackendSummary, FederationTarget,
-  NavigationLaunchpadDefaults, NavigationThreadSummary, ThreadExecutionMode,
-} from "@pwragent/shared";
+  AppServerBackendKind,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendAcpSessionRuntimeState, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationLaunchpadDefaults,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import type {
   MessagingBindingRecord, MessagingCapabilityProfile, MessagingConfirmationIntent, MessagingDeliveryResult,

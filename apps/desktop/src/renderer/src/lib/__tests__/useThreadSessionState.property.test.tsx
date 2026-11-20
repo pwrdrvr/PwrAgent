@@ -2,12 +2,12 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { useEffect } from "react";
 import fc from "fast-check";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSessionState } from "../useThreadSessionState";
 import { injectPermissionTransitions } from "../../features/thread-detail/permission-transition-entries";

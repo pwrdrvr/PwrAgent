@@ -1,13 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  AgentEvent,
-  NavigationThreadSummary,
   ThreadPendingWake,
   ThreadPendingWakesRequest,
   ThreadPendingWakesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-pending-wakes";
 import { useThreadPendingWakes } from "../useThreadPendingWakes";
 
 afterEach(() => {

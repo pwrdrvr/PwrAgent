@@ -16,11 +16,8 @@
 // fetched: the thread links no directory, so no branch lookup runs, and the
 // block launches without forge credentials, so the status poller's `gh` call
 // fails without changing anything.
-import {
-  buildPullRequestStatusKey,
-  type PrSummary,
-  type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { SqliteOverlayStore } from "../../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../../src/main/state/state-db";
 import { stateDbPathForHomeRoot } from "./readme-state-seeding";

@@ -1,5 +1,6 @@
-import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
-import type { AgentEvent, NavigationQueryRequest } from "@pwragent/shared";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 export type NavigationDiagnosticCause = NonNullable<NavigationQueryRequest["diagnostic"]>["cause"];
 const REFRESH_CALLERS = [
   "navigation/refresh", "scheduled/thread-lifecycle", "action/pr-detach", "action/messaging-unbind",

@@ -1,8 +1,8 @@
-import { describeModelReroute, describeModelVerification } from "@pwragent/shared";
+import { describeModelReroute, describeModelVerification } from "@pwragent/shared/model-routing";
 import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export type ModelRoutingNotification =
   | {

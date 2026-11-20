@@ -4,7 +4,7 @@ import {
   STAR_MAP_WORKSPACE_VERSION,
   type StarMapArrangementEntry,
   type StarMapWorkspaceSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

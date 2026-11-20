@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
-import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared";
+import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 

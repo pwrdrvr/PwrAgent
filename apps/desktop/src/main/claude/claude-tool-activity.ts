@@ -1,8 +1,11 @@
 import path from "node:path";
 import type {
-  AppServerThreadActivityDetail, AppServerThreadActivityEntry, AppServerThreadFileDiff, AppServerThreadImagePart,
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
+  AppServerThreadFileDiff,
+  AppServerThreadImagePart,
   AppServerThreadPlanStep,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { formatToolIdentifier, formatToolInvocation } from "../../shared/tool-activity";
 import { renderUnifiedFileDiff, unifiedDiffFileName } from "../../shared/unified-file-diff";
 

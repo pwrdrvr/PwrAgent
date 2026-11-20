@@ -1,10 +1,10 @@
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
-  formatTokenUsageMicrosAsUsd,
-  type AppServerBackendKind,
-  type FederationRemoteTarget,
   type ReadThreadFamilyPricingResponse,
   type ThreadFamilyPricingMember,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-family-pricing";
 import { memo, useEffect, useState } from "react";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useFederationInstanceNameLookup } from "../../../lib/federation-display-label";

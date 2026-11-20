@@ -1,15 +1,14 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_CHECKOUT_HIBERNATION_POLICY } from "@pwragent/shared/checkout-hibernation-policy";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
-  buildThreadIdentityKey,
-  DEFAULT_CHECKOUT_HIBERNATION_POLICY,
-  type AgentEvent,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
-  type ThreadOverlayState,
   type WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { ArchiveCleanupCancelledError } from "../app-server/archive-cleanup-queue";
 import { isArchivedCheckoutCandidate } from "../app-server/checkout-hibernation";

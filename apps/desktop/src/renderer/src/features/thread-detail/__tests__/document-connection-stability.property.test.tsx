@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReadMarkdownFileRequest } from "@pwragent/shared";
+import type { ReadMarkdownFileRequest } from "@pwragent/shared/contracts/settings";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 afterEach(cleanup);

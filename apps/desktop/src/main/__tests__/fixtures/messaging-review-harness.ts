@@ -1,4 +1,5 @@
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingReviewIntent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { messagingInboundHarness } from "./messaging-inbound-harness";

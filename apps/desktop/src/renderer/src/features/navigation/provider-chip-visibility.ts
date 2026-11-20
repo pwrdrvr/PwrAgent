@@ -1,9 +1,6 @@
 import { createContext, useContext, useMemo } from "react";
-import {
-  providerChipNeeded,
-  threadProviderIdentity,
-  type AppServerBackendKind,
-} from "@pwragent/shared";
+import { providerChipNeeded, threadProviderIdentity } from "@pwragent/shared/provider-picker";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 
 export { providerChipNeeded };
 

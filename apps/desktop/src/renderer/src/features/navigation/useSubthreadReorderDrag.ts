@@ -1,5 +1,8 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import type { NavigationRelativeChildMove, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationRelativeChildMove,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";

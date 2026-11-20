@@ -1,6 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { findThreadForBinding } from "./messaging-callback-helpers";
-import type { LinkedDirectorySummary, MessagingBindingTargetKind, MessagingToolUpdateMode, NavigationDirectorySummary, NavigationSnapshot } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  MessagingBindingTargetKind,
+  MessagingToolUpdateMode,
+} from "@pwragent/shared/contracts/messaging";
+import type { NavigationDirectorySummary, NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";

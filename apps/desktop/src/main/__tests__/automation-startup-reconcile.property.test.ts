@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AutomationRunOwner, AutomationRunSummary } from "@pwragent/shared";
+import type { AutomationRunOwner, AutomationRunSummary } from "@pwragent/shared/contracts/automations";
 import { AutomationStore } from "../storage/automation-store";
 import { AutomationScheduler } from "../automations/automation-scheduler";
 import type { StateDb } from "../state/state-db";

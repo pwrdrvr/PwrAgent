@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeThreadArchivePolicy } from "@pwragent/shared";
+import { normalizeThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 

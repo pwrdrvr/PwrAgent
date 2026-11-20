@@ -1,4 +1,10 @@
-import { FORGE_KINDS, FORGE_PRODUCTS, forgeKindForRemoteHost, normalizePullRequestProvider, type ForgeKind } from "@pwragent/shared";
+import {
+  FORGE_KINDS,
+  FORGE_PRODUCTS,
+  forgeKindForRemoteHost,
+  type ForgeKind,
+} from "@pwragent/shared/forge-product";
+import { normalizePullRequestProvider } from "@pwragent/shared/contracts/navigation";
 
 /** Attachment identities can describe hosts whose status transport is not
  * supported (such as GHE). Parsing a link does not enable network access. */

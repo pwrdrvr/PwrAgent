@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AppServerThreadFileDiff } from "@pwragent/shared";
+import type { AppServerThreadFileDiff } from "@pwragent/shared/contracts/normalized-app-server";
 import { isPathWithin } from "./path-within";
 
 /** Larger diffs keep their counts, not their text. */

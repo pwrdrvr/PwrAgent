@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { CelestialIconId, FederationConnectionState } from "@pwragent/shared";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import type { FederationConnectionState } from "@pwragent/shared/contracts/federation";
 import { CelestialIcon, PopoutIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 

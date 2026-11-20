@@ -1,8 +1,6 @@
-import type {
-  FederationTarget,
-  NavigationThreadSummary,
-  SetQueuedTurnPausedResponse,
-} from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SetQueuedTurnPausedResponse } from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 

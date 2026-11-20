@@ -1,4 +1,4 @@
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export const NO_STARTUP_BACKEND_NOTICE_ID = "provider-startup:no-backend";

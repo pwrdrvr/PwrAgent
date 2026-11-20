@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { BackendSummary, ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ModelSettingsRecent } from "@pwragent/shared/contracts/agent";
+import type { ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
 import {
   buildProviderPickerEntries,
   describeCodexModelProviderEntry,
   providerPickerValue,
+} from "@pwragent/shared/provider-picker";
+import {
   resolveThreadTodoModelSettings,
   sameThreadTodoModelSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";

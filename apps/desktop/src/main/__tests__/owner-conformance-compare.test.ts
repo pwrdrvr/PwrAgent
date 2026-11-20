@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { compareStep, describeBaselineChange, diffShapes, shapeOf, type OwnerStepRecord } from "./helpers/owner-conformance";
 
 const record = (overrides: Partial<OwnerStepRecord>): OwnerStepRecord => ({

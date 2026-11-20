@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AppServerThreadMessageOrigin, SteerTurnRequest, SteerTurnResponse } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import type { SteerTurnRequest, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
 import { ThreadSteeringLifecycle } from "../thread-steering-lifecycle";
 
 const backend = fc.constantFrom<SteerTurnRequest["backend"]>("codex", "claude", "acp:kimi", "acp:claude");

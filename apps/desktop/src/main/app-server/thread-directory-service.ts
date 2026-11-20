@@ -8,17 +8,17 @@ import { logDebug } from "./registry-debug-log";
 import { extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
-import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
 import {
   navigationLaunchpadProviderKey,
-  providerPickerValue,
   isRemoteLaunchpadStorageKey,
   launchpadStorageKey,
   parseRemoteLaunchpadStorageKey,
-  type FederationTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { providerPickerValue } from "@pwragent/shared/provider-picker";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { PendingEnvironmentLaunchStore, type PendingEnvironmentLaunch } from "./pending-environment-launch-store";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -26,30 +26,25 @@ import {
   formatReviewCommand,
 } from "../../shared/review-command";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
+import { canIsolateMcpProviderServers } from "@pwragent/shared/contracts/mcp-connections";
+import { type FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import {
-  canIsolateMcpProviderServers,
-  type FederationInstanceId,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
   type CodexEnvironmentActionRun,
-  type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
-  type CreateScheduledThreadActionRequest,
-  type BackendSummary,
-  type DesktopProviderModelDefaults,
+  type LinkedDirectorySummary,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type CodexEnvironmentSetupProgressEvent,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
-  type ListBackendsRequest,
-  type ListBackendsResponse,
-  type LinkedDirectorySummary,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type MaterializeDirectoryLaunchpadResponse,
   type MaterializedDirectoryLaunchpadThread,
-  type LaunchpadWorkMode,
-  type NavigationLaunchpadDraft,
-  type NavigationLaunchpadDefaults,
   type ResetDirectoryLaunchpadRequest,
   type ResetDirectoryLaunchpadResponse,
   type RunCodexEnvironmentActionRequest,
@@ -58,33 +53,50 @@ import {
   type StopCodexEnvironmentActionResponse,
   type SetCodexThreadEnvironmentRequest,
   type SetCodexThreadEnvironmentResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type StartReviewRequest,
+  type StartReviewResponse,
+  type UpdateDirectoryLaunchpadRequest,
+  type UpdateDirectoryLaunchpadResponse,
+  type EnsureDirectoryLaunchpadRequest,
+  type EnsureDirectoryLaunchpadResponse,
+} from "@pwragent/shared/contracts/agent";
+import {
+  type CreateScheduledThreadActionRequest,
+  type ScheduledThreadActionMutationResponse,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import {
+  type BackendSummary,
+  type ListBackendsRequest,
+  type ListBackendsResponse,
+} from "@pwragent/shared/contracts/backend";
+import { type DesktopProviderModelDefaults } from "@pwragent/shared/contracts/settings";
+import {
+  type LaunchpadWorkMode,
+  type NavigationLaunchpadDraft,
+  type NavigationLaunchpadDefaults,
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
   resolveDefaultLaunchpadExecutionMode,
-  type ScheduledThreadActionMutationResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
+  type ThreadOverlayState,
+  buildThreadIdentityKey,
+  isAcpBackendId,
+  isAppServerBackendKind,
+} from "@pwragent/shared/contracts/navigation";
+import {
   type AttachThreadDirectoryResult,
   type AttachThreadDirectoryToolArgs,
   type AttachThreadDirectoryWorkspaceMode,
   type PwrAgentThreadOrchestrationRequest,
   type PwrAgentThreadOrchestrationResponse,
-  type AcknowledgeThreadEnvironmentFailureRequest,
-  type AcknowledgeThreadEnvironmentFailureResponse,
-  type ContinueThreadEnvironmentStartupRequest,
-  type ContinueThreadEnvironmentStartupResponse,
-  type StartReviewRequest,
-  type StartReviewResponse,
-  type ThreadExecutionMode,
-  type ThreadOverlayState,
-  type UpdateDirectoryLaunchpadRequest,
-  type UpdateDirectoryLaunchpadResponse,
-  type EnsureDirectoryLaunchpadRequest,
-  type EnsureDirectoryLaunchpadResponse,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import {
   applyCodexEnvironmentActionRunUpdate,
-  buildThreadIdentityKey,
-  isAcpBackendId,
-  isAppServerBackendKind,
   readCodexEnvironmentActionRuns,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-environment-action-runs";
 import {
   GitDirectoryService,
 } from "./git-directory-service";

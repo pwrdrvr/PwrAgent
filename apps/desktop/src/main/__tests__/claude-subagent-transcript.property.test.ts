@@ -1,6 +1,9 @@
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import fc from "fast-check";
-import type { AppServerThreadActivityDetail, AppServerThreadEntry } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityDetail,
+  AppServerThreadEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it } from "vitest";
 import { claudeSubAgentTranscriptEntries } from "../claude/claude-subagent-transcript";
 

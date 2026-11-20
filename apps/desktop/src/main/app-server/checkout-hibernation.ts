@@ -2,9 +2,11 @@ import path from "node:path";
 import {
   CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS,
   type DesktopCheckoutHibernationPolicy,
+} from "@pwragent/shared/checkout-hibernation-policy";
+import {
   type LinkedDirectorySummary,
   type WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   archiveCandidateProtectionReason,
   CLAUDE_CHECKOUT_KEEP_REASON,

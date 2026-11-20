@@ -1,25 +1,27 @@
 import {
   FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
-  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
-  isGitObjectId,
-  isSecretFieldLabel,
-  isSecretFieldName,
-  mcpElicitationPurpose,
   readForgeApprovalMergeMethods,
   readForgeApprovalMergeQueue,
   readForgeApprovalRememberOptions,
-  readMcpProjectToolApprovalOffer,
-  type AppServerMcpElicitationRequestNotification,
-  type AppServerMcpElicitationResponse,
   type ForgeApprovalMergeMethods,
   type ForgeApprovalMergeQueue,
   type ForgeApprovalRememberOption,
   type ForgeApprovalRememberOptionId,
-  type McpElicitationPurpose,
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
+  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  readMcpProjectToolApprovalOffer,
   type McpProjectToolApprovalOffer,
-  type ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { isGitObjectId } from "@pwragent/shared/git-object-id";
+import { isSecretFieldLabel, isSecretFieldName } from "@pwragent/shared/secret-field-names";
+import { mcpElicitationPurpose, type McpElicitationPurpose } from "@pwragent/shared/mcp-elicitation-purpose";
+import {
+  type AppServerMcpElicitationRequestNotification,
+  type AppServerMcpElicitationResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 
 export type PendingMcpFieldOption = {
   value: string;

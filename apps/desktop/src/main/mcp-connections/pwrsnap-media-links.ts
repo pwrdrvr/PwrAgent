@@ -1,9 +1,9 @@
 import {
   isPwrSnapResourceUri,
   MAX_TRANSCRIPT_IMAGE_BYTES,
-  PWRSNAP_MCP_CONNECTION_ID,
   pwrSnapResourceLinkImageParts,
-} from "@pwragent/shared";
+} from "@pwragent/shared/transcript-image-sources";
+import { PWRSNAP_MCP_CONNECTION_ID } from "@pwragent/shared/contracts/mcp-connections";
 
 /** Links remembered per session. The oldest are forgotten first. */
 export const MAX_PWRSNAP_MEDIA_LINKS_PER_SESSION = 512;

@@ -12,12 +12,8 @@
 //
 // The third case is different — it makes CI fail, but for the wrong reason.
 // ESLint exits 2 on a CLI pattern that matches no file, with "Please check for
-// typing mistakes in the pattern". `*.ts` is kept non-empty by exactly one
-// file, so the day the root's last TypeScript file is renamed the whole lint
-// run dies pointing at a typo that does not exist. Better to fail here, naming
-// the real cause. Today that file happens to be `vitest.workspace.ts`, whose
-// removal would take the suite with it — the assertion is for the general
-// case, after Vitest 4's `projects` key retires that particular filename.
+// typing mistakes in the pattern". The root glob covers the Vitest configs,
+// so keep it in sync with the extensions they use.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -94,11 +90,11 @@ describe("unused-code lint gate", () => {
 
   it("keeps the root-level pattern matching at least one file", () => {
     const rootTypeScript = readdirSync(repoRoot).filter((entry) =>
-      entry.endsWith(".ts"),
+      /\.(?:ts|mts)$/.test(entry),
     );
 
-    // Exactly the semantics of the non-recursive `*.ts` CLI pattern.
-    expect(lintPatterns()).toContain("*.ts");
+    // Exactly the semantics of the non-recursive `*.{ts,mts}` CLI pattern.
+    expect(lintPatterns()).toContain("*.{ts,mts}");
     expect(rootTypeScript).not.toHaveLength(0);
   });
 });

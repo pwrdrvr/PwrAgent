@@ -1,4 +1,4 @@
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";

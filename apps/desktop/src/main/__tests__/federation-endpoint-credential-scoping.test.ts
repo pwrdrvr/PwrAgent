@@ -5,7 +5,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "../
 import { classifyFederationClientFailure } from "../federation/federation-redaction";
 import type { FederationClientWebSocketClient } from "../federation/federation-transport";
 import type { FederationRuntimeConfig } from "../federation/federation-runtime-config";
-import { FEDERATION_HEALTH_CHANGED_METHOD } from "@pwragent/shared";
+import { FEDERATION_HEALTH_CHANGED_METHOD } from "@pwragent/shared/contracts/federation";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());
 const clientClose = vi.hoisted(() => vi.fn());

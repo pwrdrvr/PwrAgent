@@ -1,7 +1,4 @@
-import type {
-  ModelSettingsRecent,
-  ModelSettingsRecentsScope,
-} from "@pwragent/shared";
+import type { ModelSettingsRecent, ModelSettingsRecentsScope } from "@pwragent/shared/contracts/agent";
 import type { StateDb } from "./state-db.js";
 
 /**

@@ -1,5 +1,5 @@
 import { useId, type ReactNode, type Ref } from "react";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { PrChip } from "../pr-status/PrChip";
 import { prStatusLabel, resolveLifecycleState } from "../pr-status/pr-chip-state";

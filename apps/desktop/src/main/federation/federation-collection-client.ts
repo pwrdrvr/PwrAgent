@@ -1,5 +1,12 @@
-import type { AppServerBackendKind, NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared";
-import { buildThreadIdentityKey, federatedThreadIdentityKey, parseThreadIdentityKey, NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import {
+  buildThreadIdentityKey,
+  parseThreadIdentityKey,
+  NAVIGATION_QUERY_MAX_PAGE_ROWS,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
+} from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { FEDERATION_COLLECTION_PAGE_ROWS } from "./federation-collection-reads";
 import { hasFederationErrorCode, type FederationRpcRequestOptions } from "./federation-rpc";

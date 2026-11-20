@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared";
+import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared/contracts/automations";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";

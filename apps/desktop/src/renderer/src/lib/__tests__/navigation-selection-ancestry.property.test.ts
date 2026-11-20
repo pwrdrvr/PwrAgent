@@ -1,6 +1,11 @@
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationIdentity,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { createNavigationPageState } from "../navigation-query-state";
 import { NavigationWindowQueries, type NavigationWindowResource } from "../navigation-window-queries";

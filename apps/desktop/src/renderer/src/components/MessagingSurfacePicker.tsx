@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { MessagingConversationKind } from "@pwragent/shared";
+import type { MessagingConversationKind } from "@pwragent/shared/contracts/messaging";
 import { SearchIcon } from "../icons";
 import { portalViewportTop } from "../lib/useViewportTooltip";
 

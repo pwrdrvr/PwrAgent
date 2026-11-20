@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ThreadGitWorkingState } from "@pwragent/shared";
+import type { ThreadGitWorkingState } from "@pwragent/shared/contracts/normalized-app-server";
 import { CelestialIcon, MinimizeIcon } from "../../icons";
 import { flyBetween } from "../../lib/fly-between";
 import type { ProjectIdentity } from "../../lib/federation-project-match";

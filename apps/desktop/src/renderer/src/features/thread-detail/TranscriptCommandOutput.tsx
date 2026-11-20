@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
-  isAppServerBackendKind,
   type AppServerSkillSummary,
-  formatPathRelativeToDirectories,
   type AppServerThreadActivityDetail,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { formatPathRelativeToDirectories } from "@pwragent/shared/path-display";
+import {
   type DesktopApplicationsSnapshot,
   type MarkdownFileViewerContext,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ThreadMaintenanceProblem, ThreadMaintenanceRunItem } from "@pwragent/shared";
+import type { ThreadMaintenanceProblem, ThreadMaintenanceRunItem } from "@pwragent/shared/thread-maintenance";
 import {
   outcomeText,
   problemsWithoutItems,

@@ -1,13 +1,15 @@
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  graphemePrefix,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
+import {
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
   type ThreadJumpCandidate,
-  type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-jump-match";
 
 export type HashReferenceTrigger = {
   end: number;

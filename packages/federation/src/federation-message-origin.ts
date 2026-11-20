@@ -1,8 +1,6 @@
-import {
-  threadTodoMessageOriginFromUnknown,
-  type AppServerThreadMessageOrigin,
-  type CelestialIconId,
-} from "@pwragent/shared";
+import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared/contracts/thread-todos";
+import { type AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import { type CelestialIconId } from "@pwragent/shared/contracts/celestial";
 
 export type ResolvedSourceInstance = {
   label: string;

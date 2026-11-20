@@ -1,15 +1,12 @@
+import type { FederationCapability, FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  FederationCapability,
-  FederationRemoteTarget,
   FederationThreadPrWatchesRequestV1,
   ThreadPrWatchesRequest,
   ThreadPrWatchesResponse,
-} from "@pwragent/shared";
-import {
-  isAppServerBackendKind,
-  isRemoteFederationTarget,
-  THREAD_PR_WATCH_CONTROL_CAPABILITY,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-pr-watches";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
 
 /** What a viewer hears when the owning instance cannot manage watches for it. */
 export const THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE =

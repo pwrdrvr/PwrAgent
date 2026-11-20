@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AppServerThreadEntry,
-  ThreadPermissionTransition,
-} from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadPermissionTransition } from "@pwragent/shared/contracts/navigation";
 import {
   PERMISSION_TRANSITION_ENTRY_PREFIX,
   buildPermissionTransitionActivityEntries,

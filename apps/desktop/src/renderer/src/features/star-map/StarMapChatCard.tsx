@@ -1,4 +1,5 @@
-import { buildModelMenu, codexSpeedOptions, modelMenuOtherLabel, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
+import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
+import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import {
   memo,
   useCallback,
@@ -13,16 +14,17 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
-  isCelestialIconId,
-  isRemoteFederationTarget,
-  type AppServerThreadImagePart,
-  type CelestialIconId,
   type NavigationLaunchpadFileAttachment,
   type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
-  type ReadQueuedTurnResponse,
+} from "@pwragent/shared/contracts/navigation";
+import { isCelestialIconId, type CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import {
+  type AppServerThreadImagePart,
   type ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { CelestialIcon, PauseIcon, PencilIcon, TrashIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";

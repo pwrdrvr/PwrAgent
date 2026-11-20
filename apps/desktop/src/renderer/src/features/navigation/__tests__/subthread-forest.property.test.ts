@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { canNestThread } from "../thread-nest-drop";
 import { createSubthreadTrays } from "../subthread-trays";

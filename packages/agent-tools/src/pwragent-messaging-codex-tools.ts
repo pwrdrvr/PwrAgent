@@ -1,12 +1,10 @@
-import type {
-  AppServerBackendKind,
-  PwrAgentMessagingOperationName,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentMessagingOperationName } from "@pwragent/shared/contracts/messaging-tools";
 import {
   PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,

@@ -1,7 +1,10 @@
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { CheckoutPathOwners, eventLoopPacer, type CheckoutOwnerCandidate } from "../app-server/checkout-path-owners";
 
 /**

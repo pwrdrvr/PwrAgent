@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryEntry } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationQueryEntry } from "@pwragent/shared/contracts/navigation";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import { buildPagedDirectoryRenderModel } from "../paged-directory-render-model";
 

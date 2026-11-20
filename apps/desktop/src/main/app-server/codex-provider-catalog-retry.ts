@@ -1,4 +1,4 @@
-import type { CodexModelProviderCatalogState } from "@pwragent/shared";
+import type { CodexModelProviderCatalogState } from "@pwragent/shared/contracts/backend";
 
 /** Starts and stops the retry's one timer. A test can fire it on demand. */
 export type CodexProviderCatalogRetryTimer = {

@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { SteerTurnRequest } from "@pwragent/shared";
+import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import { ThreadSteeringLifecycle } from "../thread-steering-lifecycle";
 import { ThreadSteerSubmissionLifecycle } from "../thread-steer-submission-lifecycle";
 import { ThreadInterruptionLifecycle } from "../thread-interruption-lifecycle";

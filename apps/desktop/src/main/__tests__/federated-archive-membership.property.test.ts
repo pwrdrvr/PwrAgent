@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { createFederatedThreadMutationHandler } from "../federation/federated-thread-mutation-service";
 

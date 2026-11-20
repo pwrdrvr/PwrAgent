@@ -14,36 +14,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type {
   AgentEvent,
-  AppServerBackendKind,
-  AppServerListSkillsResponse,
-  AppServerPendingRequestNotification,
-  AppServerTurnInputItem,
-  BackendSummary,
   CancelThreadExecutionModeQueueRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
-  HandoffThreadWorkspaceRequest,
-  ListBackendsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
-  MessagingToolUpdateMode,
-  NavigationSnapshot,
   SetAcpSessionRuntimeOptionRequest,
   SetThreadExecutionModeRequest,
   SetThreadModelSettingsRequest,
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
-  ScheduledThreadAction,
   SteerTurnRequest,
   SubmitServerRequestRequest,
   UpdateDirectoryLaunchpadRequest,
-} from "@pwragent/shared";
-import {
-  applyNavigationLaunchpadProviderSettingsPatch,
-  BUILT_IN_ROLES,
-  buildFederatedThreadRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  AppServerListSkillsResponse,
+  AppServerPendingRequestNotification,
+  AppServerTurnInputItem,
+  HandoffThreadWorkspaceRequest,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared/contracts/navigation";
+import { BUILT_IN_ROLES } from "@pwragent/shared/contracts/rbac";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   type MessagingCapabilityProfile,
@@ -95,7 +94,7 @@ import {
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
-import type { MessagingPermissionId } from "@pwragent/shared";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";

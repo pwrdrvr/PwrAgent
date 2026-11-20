@@ -1,7 +1,12 @@
 import { act, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode, useLayoutEffect } from "react";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationDirectoryRow, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryPage,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDisclosure";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { listThreadTodosForAvailableOwners } from "../thread-todos/thread-todo-owners";
 
 function todo(id: string, overrides: Partial<ThreadTodo> = {}): ThreadTodo {

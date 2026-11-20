@@ -1,4 +1,4 @@
-import type { EditGroupCommitState } from "@pwragent/shared";
+import type { EditGroupCommitState } from "@pwragent/shared/contracts/navigation";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type CommitBadgeStatus = {

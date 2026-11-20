@@ -1,4 +1,4 @@
-import type { HelperModelId } from "@pwragent/shared";
+import type { HelperModelId } from "@pwragent/shared/helper-models";
 
 export type EphemeralObjectResult = {
   object: unknown;

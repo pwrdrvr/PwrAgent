@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ComposerThreadOwner, NavigationQueueProjection } from "@pwragent/shared";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
+import type { NavigationQueueProjection } from "@pwragent/shared/contracts/navigation";
 import type { ComposerQueuedTurnSnapshot } from "../../features/composer/useComposerDraftStore";
 import { NAVIGATION_QUEUE_MAX_PAGES, readCompleteNavigationQueue, reconcileCompleteNavigationQueue } from "../navigation-queue-projection";
 

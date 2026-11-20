@@ -1,4 +1,4 @@
-import { type AppServerThreadSummary } from "@pwragent/shared";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   linkedDirectoryWorktreePath,
 } from "./linked-directory-identity";

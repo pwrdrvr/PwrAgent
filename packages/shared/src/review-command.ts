@@ -8,7 +8,13 @@ import {
   pullRequestSetProblem,
   pullRequestSetReviewInstructions,
 } from "./pull-request-review";
-import type { AppServerBackendKind, AppServerReviewOutput, AppServerReviewTarget, BackendSummary, ReviewRunMode } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerReviewOutput,
+  AppServerReviewTarget,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { normalizeReviewConfidenceScore } from "./review-output";
 
 export type ParsedReviewCommand = {

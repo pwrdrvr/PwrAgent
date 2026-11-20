@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { useTranscriptPullRequest } from "../../lib/transcript-pr-status";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";

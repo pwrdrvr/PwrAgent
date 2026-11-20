@@ -1,4 +1,4 @@
-import type { FederationStorage } from "@pwragent/shared";
+import type { FederationStorage } from "@pwragent/shared/contracts/federation-storage";
 import { getAppStateDb } from "../state/app-state";
 import { FederationStore } from "./federation-store";
 import { SqliteDurableTurnRequestStore } from "./durable-turn-request-store";
@@ -32,7 +32,7 @@ export const desktopFederationState = {
   },
 };
 
-export type { FederationStorage } from "@pwragent/shared";
+export type { FederationStorage } from "@pwragent/shared/contracts/federation-storage";
 export function createFederationStorage(): FederationStorage {
   return new FederationStore(getAppStateDb());
 }

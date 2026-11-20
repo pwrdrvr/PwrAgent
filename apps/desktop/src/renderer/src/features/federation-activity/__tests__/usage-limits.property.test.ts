@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { UsageLimitObservation } from "@pwragent/shared";
+import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import { buildLimitAccounts, projectLimit, sinceResetSeries } from "../usage-limits";
 
 const HOUR = 3_600_000;

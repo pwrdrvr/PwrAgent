@@ -1,6 +1,11 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { buildDirectorySummaries, type AgentEvent, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
 import { projectNavigationQuery, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";

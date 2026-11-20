@@ -1,4 +1,4 @@
-import type { CloudflareSetupLink } from "@pwragent/shared";
+import type { CloudflareSetupLink } from "@pwragent/shared/contracts/federation-cloudflare";
 
 /**
  * Fixed reference table for `open-link`.

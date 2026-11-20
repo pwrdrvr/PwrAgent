@@ -2,9 +2,9 @@ import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
   AppServerThreadTitleSource,
-  BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
 
 /** Registry and installed-agent records belong to the host's ACP integration. */
 export interface AcpAgentStorage<RegistrySnapshot, InstalledAgentRecord> {

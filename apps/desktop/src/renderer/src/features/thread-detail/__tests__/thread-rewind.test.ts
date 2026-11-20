@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadEntry } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   collectRewindableMessageIds,
   rewoundPrompt,

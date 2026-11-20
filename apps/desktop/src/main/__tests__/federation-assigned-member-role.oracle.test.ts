@@ -1,5 +1,9 @@
 import { FEDERATION_BACKEND_METHODS } from "@pwragent/federation/federation-backend-methods";
-import { FEDERATION_CAPABILITIES, type FederationPeerRole, type FederationProtocolEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_CAPABILITIES,
+  type FederationPeerRole,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createFederationEnrollmentInvite } from "../federation/federation-enrollment";
 import { generateFederationIdentityKeyPair } from "../federation/federation-identity";

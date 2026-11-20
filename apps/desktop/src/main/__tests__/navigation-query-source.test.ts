@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AgentEvent,
-  AppServerBackendScope,
-  NavigationQueryRequest,
-  NavigationThreadSummary,
-  ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
-import { buildPrependPinRank } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";

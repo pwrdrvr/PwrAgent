@@ -12,11 +12,11 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   MESSAGING_TOOL_UPDATE_MODES,
   normalizeMessagingBindingTargetKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 
 // SCHEMA-DRIFT-CHECKPOINT: when bumping CURRENT_MESSAGING_STORE_VERSION,
 // also audit `apps/desktop/e2e/fixtures/readme-state-seeding.ts`. Its

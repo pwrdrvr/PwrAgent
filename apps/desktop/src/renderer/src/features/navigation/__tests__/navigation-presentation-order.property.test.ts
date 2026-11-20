@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { NavigationIdentity, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationIdentity, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { createNavigationPageState, navigationThreadSelectionKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import type { NavigationPresentedThread } from "../../../lib/navigation-loaded-rows";

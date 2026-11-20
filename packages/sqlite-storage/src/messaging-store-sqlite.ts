@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { MessagingBindingWriteOptions, MessagingStorage, MessagingStorageRecords } from "@pwragent/owner-core/messaging-storage";
-import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared";
+import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import type { StateDb } from "./state-db.js";
 
 type TimedRecord = { id: string; createdAt: number; updatedAt: number };

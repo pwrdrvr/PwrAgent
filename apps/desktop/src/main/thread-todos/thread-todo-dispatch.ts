@@ -1,22 +1,17 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import type { BackendLaunchpadOptions, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
+import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  BackendLaunchpadOptions,
-  BackendSummary,
-  CodexSpeed,
-  CodexThreadEnvironmentRuntime,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
   ThreadTodoProject,
-} from "@pwragent/shared";
-import {
-  CODEX_SPEED_LABELS,
-  threadTodoActionProject,
-  THREAD_ENVIRONMENT_NONE,
-  codexSpeedSettings,
-  selectedCodexSpeed,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { CODEX_SPEED_LABELS, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
+import { threadTodoActionProject } from "@pwragent/shared/contracts/thread-todos";
+import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
   listCodexEnvironmentOptions,
   resolveCodexEnvironmentSelector,

@@ -1,10 +1,10 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { CodexAsyncQuestion } from "@pwragent/shared/codex-async-questions";
 import type {
-  AppServerBackendKind,
-  CodexAsyncQuestion,
   OperatorAsyncQuestion,
   ListOperatorRequestsRequest,
-} from "@pwragent/shared";
-import { normalizeCodexAsyncQuestions } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
+import { normalizeCodexAsyncQuestions } from "@pwragent/shared/codex-async-questions";
 import type { AsyncQuestionStatus, OperatorRequestStorage } from "@pwragent/owner-core/operator-request-storage";
 import type { StateDb } from "./state-db.js";
 

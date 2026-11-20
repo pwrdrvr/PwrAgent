@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { rankDirectoryMentionMatches } from "@pwragent/shared";
+import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-match";
 import { filterAtReferenceCandidates } from "../instance-references";
 
 it("preserves the owner page for the confirmed query and filters stale or legacy pages locally", () => {

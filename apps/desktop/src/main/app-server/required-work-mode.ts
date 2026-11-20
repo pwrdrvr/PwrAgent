@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, LaunchpadWorkMode } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { LaunchpadWorkMode } from "@pwragent/shared/contracts/navigation";
 import { getMainLogger } from "../log";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");

@@ -1,5 +1,5 @@
 import { ipcMain, type WebContents } from "electron";
-import { parseThreadIdentityKey } from "@pwragent/shared";
+import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   QUIT_BLOCKERS_READ_CHANNEL,
   QUIT_BLOCKER_REVEAL_CHANNEL,

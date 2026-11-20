@@ -1,4 +1,5 @@
-import { buildModelMenu, type BackendModelOption } from "@pwragent/shared";
+import { buildModelMenu } from "@pwragent/shared/model-menu";
+import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import type { SelectOption } from "../components/Select";
 
 export const OTHER_MODELS_GROUP = "Other models";

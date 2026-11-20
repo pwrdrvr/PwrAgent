@@ -1,13 +1,15 @@
 import { cameraCueLabel, VoiceCameraButton, VoiceCameraDock } from "./VoiceCameraButton";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
-  isRemoteFederationTarget,
-  type AgentEvent,
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
   type OperatorFocusSnapshot,
   type OperatorFocusView,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import type { NativeVoiceApi } from "../../../../shared/native-voice";
 import { CloseIcon, CopyIcon, MicIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";

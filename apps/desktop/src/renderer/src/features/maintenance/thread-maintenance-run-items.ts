@@ -2,7 +2,7 @@ import type {
   ThreadMaintenanceProblem,
   ThreadMaintenanceRunItem,
   ThreadMaintenanceRunStage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 import { formatBytes } from "./thread-maintenance-selection";
 
 /** A run's items by where they are. Every item appears in exactly one

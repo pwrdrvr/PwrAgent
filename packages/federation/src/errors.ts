@@ -1,1 +1,1 @@
-export { DurableTurnRequestError } from "@pwragent/shared";
+export { DurableTurnRequestError } from "@pwragent/shared/contracts/durable-turn-requests";

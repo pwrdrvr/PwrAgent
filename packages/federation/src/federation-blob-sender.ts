@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import path from "node:path";
-import { FEDERATION_PROTOCOL_VERSION, type FederationBlobChunkEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  type FederationBlobChunkEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import type { FilePushResult, PushFederationFileOptions } from "./federation-file-push";
 import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES, BLOB_WINDOW_CHUNKS, hashBlobFile, type BlobIdentity } from "./federation-resumable-blob";

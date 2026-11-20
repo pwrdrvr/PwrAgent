@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { describe, expect, it } from "vitest";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import {

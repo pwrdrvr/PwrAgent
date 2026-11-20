@@ -4,7 +4,7 @@ import type {
   DesktopGlabCandidateSource,
   DesktopGlabDiscoveryCandidate,
   DesktopGlabDiscoverySnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { GLAB_COMMAND_ENV } from "./desktop-settings-env";
 import {
   buildCommandDiscoveryCandidate,

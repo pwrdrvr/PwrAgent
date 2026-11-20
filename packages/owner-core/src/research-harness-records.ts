@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
-import type { ResearchApproach, ResearchEvent, ResearchEventData, ResearchRun, ResearchProvenance, ResearchHarnessState } from "@pwragent/shared";
-import { RESEARCH_HARNESS_REVISION } from "@pwragent/shared";
+import type {
+  ResearchApproach,
+  ResearchEvent,
+  ResearchEventData,
+  ResearchRun,
+} from "@pwragent/shared/research";
+import type { ResearchProvenance, ResearchHarnessState } from "@pwragent/shared/research-harness";
+import { RESEARCH_HARNESS_REVISION } from "@pwragent/shared/research-harness";
 
 type Normalized = { data: ResearchEventData; provenance: ResearchProvenance };
 export function harnessRecordDigest(value: unknown): string {

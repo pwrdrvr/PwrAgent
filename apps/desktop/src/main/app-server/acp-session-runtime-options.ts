@@ -1,16 +1,22 @@
 import { randomUUID } from "node:crypto";
 import {
   buildThreadIdentityKey,
-  findAcpPermissionModeConfigOption,
   isAcpBackendId,
+  type ThreadPermissionTransition,
+} from "@pwragent/shared/contracts/navigation";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import {
   type AcpBackendId,
   type AppServerBackendKind,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
+} from "@pwragent/shared/contracts/backend";
+import {
   type SetAcpSessionRuntimeOptionRequest,
   type SetAcpSessionRuntimeOptionResponse,
-  type ThreadPermissionTransition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import { getMainLogger } from "../log";
 import {
   acpRuntimeValueLooksPrivileged,

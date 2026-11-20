@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  NavigationSnapshot,
-} from "@pwragent/shared";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingRecord,
   MessagingActiveTurnSummary,

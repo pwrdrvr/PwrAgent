@@ -1,4 +1,4 @@
-import type { FederationActiveConnection } from "@pwragent/shared";
+import type { FederationActiveConnection } from "@pwragent/shared/contracts/federation";
 
 /**
  * The one word a Federation chip says about how an instance is reached.

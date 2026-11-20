@@ -4,7 +4,7 @@ import type {
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import {
   claudeShellCommand,

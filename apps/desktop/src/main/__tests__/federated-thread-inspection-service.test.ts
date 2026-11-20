@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationSelectedDetailRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationSelectedDetailRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { createFederatedThreadInspectionHandler } from "../federation/federated-thread-inspection-service";
 

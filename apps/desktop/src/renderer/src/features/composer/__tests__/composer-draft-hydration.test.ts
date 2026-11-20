@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildThreadMarkdownLink, buildThreadUrl, type AppServerSkillSummary } from "@pwragent/shared";
+import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
+import { type AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadLinkHoverStore, type ThreadLinkContextValue } from "../../../lib/thread-links";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { serializeDraftWithSkillTokens } from "../composer-mention-tokens";

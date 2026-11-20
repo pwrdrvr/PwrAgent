@@ -1,1 +1,1 @@
-export { mergeCausalMessagingContext } from "@pwragent/shared";
+export { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";

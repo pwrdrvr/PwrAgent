@@ -1,4 +1,7 @@
-import type { InspectTokenMiserOutputRequest, InspectTokenMiserOutputResponse } from "@pwragent/shared";
+import type {
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
+} from "@pwragent/shared/contracts/tool-output-incidents";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";

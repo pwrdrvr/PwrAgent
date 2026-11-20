@@ -8,10 +8,10 @@ import {
 } from "./protocol-activity-entries";
 import {
   buildProviderResponseBlockEntry,
-  parseRemoteOperatorItemKey,
   readProviderResponseBlockNotification,
-  threadTodoThreadKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/provider-response-block";
+import { parseRemoteOperatorItemKey } from "@pwragent/shared/contracts/operator-requests";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import { StartupTiming } from "../composer/StartupTiming";
 import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
@@ -41,9 +41,7 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
-  SetThreadCheckoutHibernationResponse,
   AppServerAvailableCommandSummary,
-  AppServerCollaborationModeRequest,
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
@@ -59,46 +57,50 @@ import type {
   AppServerTurnInputItem,
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
-  BackendSummary,
   CodexEnvironmentActionRun,
+  HandoffThreadWorkspaceRequest,
+  ThreadExecutionMode,
+  ThreadCompactionRecord,
+  ThreadToolAccounting,
+  ThreadToolInvocationRecord,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  SetThreadCheckoutHibernationResponse,
+  NavigationLaunchpadDraft,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type { AppServerCollaborationModeRequest, ThreadRewindMode } from "@pwragent/shared/contracts/agent";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
-  FederationRemoteTarget,
-  FederationTarget,
-  HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
-  MessagingChannelKind,
-  NavigationLaunchpadDraft,
-  NavigationThreadSummary,
-  PendingRequestAction,
-  ThreadExecutionMode,
-  ThreadCompactionRecord,
-  ThreadPricingSummary,
-  ThreadRewindMode,
-  ThreadTodo,
-  ThreadToolAccounting,
-  ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-  ToolOutputIncidentExplorerLens,
-  ForgeApprovalRememberOptionId,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { FederationRemoteTarget, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import type { PendingRequestAction } from "@pwragent/shared/pending-request-response";
+import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import type { ThreadTodo, ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import type { ToolOutputIncidentExplorerLens } from "@pwragent/shared/contracts/tool-output-incidents";
+import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
+import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import {
-  buildPendingRequestResponse,
-  buildThreadIdentityKey,
-  classifyDirectory,
-  isBranchDrifted,
-  isRemoteFederationTarget,
-  parseCodexAsyncQuestionReply,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
+} from "@pwragent/shared/contracts/mcp-connections";
+import {
   readCodexEnvironmentActionRuns,
-  resolveThreadTerminalCwd,
   withoutSupersededCodexEnvironmentActionRuns,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-environment-action-runs";
+import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   agentEventMatchesThread,

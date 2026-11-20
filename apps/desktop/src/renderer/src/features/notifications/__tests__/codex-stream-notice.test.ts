@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationInstanceId } from "@pwragent/shared";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import { codexWarningSuppressionId } from "../../codex-config/codex-warning-suppression";
 import { isStreamNoticeEvent, resolveCodexStreamNotice } from "../codex-stream-notice";
 

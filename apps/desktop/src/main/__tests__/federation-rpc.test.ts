@@ -1,4 +1,4 @@
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 

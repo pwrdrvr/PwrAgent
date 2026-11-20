@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThreadMaintenanceScan } from "@pwragent/shared";
+import type { ThreadMaintenanceScan } from "@pwragent/shared/thread-maintenance";
 import {
   ThreadMaintenanceToolScans,
   type ThreadMaintenanceToolScanOutcome,

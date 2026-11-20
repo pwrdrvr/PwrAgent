@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { AppServerThreadActivityDetail, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, expect, it } from "vitest";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSessionState } from "../useThreadSessionState";

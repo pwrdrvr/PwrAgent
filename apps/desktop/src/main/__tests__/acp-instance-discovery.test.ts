@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AcpAgentInstance,
-  AcpRejectedAgentInstance,
-} from "@pwragent/shared";
+import type { AcpAgentInstance, AcpRejectedAgentInstance } from "@pwragent/shared/contracts/backend";
 import type { LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp/discovery";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
 import {

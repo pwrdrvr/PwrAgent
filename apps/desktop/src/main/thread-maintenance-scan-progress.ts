@@ -1,4 +1,4 @@
-import type { ThreadMaintenanceScanProgress } from "@pwragent/shared";
+import type { ThreadMaintenanceScanProgress } from "@pwragent/shared/thread-maintenance";
 
 /** A scan reports every item it starts and finishes; a window needs no more
  * than one update per this many milliseconds. */

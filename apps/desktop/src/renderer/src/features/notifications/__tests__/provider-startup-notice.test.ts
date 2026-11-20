@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind, BackendSummary } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import {
   buildNoStartupBackendNotice,
   NO_STARTUP_BACKEND_NOTICE_ID,

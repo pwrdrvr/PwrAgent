@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import type { DesktopBootInfo, DesktopSettingsSnapshot } from "@pwragent/shared";
+import type { DesktopBootInfo, DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppearanceController } from "../../../lib/useAppearance";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";

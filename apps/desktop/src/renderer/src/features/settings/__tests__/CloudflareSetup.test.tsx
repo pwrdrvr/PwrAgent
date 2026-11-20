@@ -2,7 +2,10 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
 import { CloudflareSetup } from "../CloudflareSetup";
-import type { CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
+import type {
+  CloudflareSetupRequest,
+  CloudflareSetupStatus,
+} from "@pwragent/shared/contracts/federation-cloudflare";
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 const connected: CloudflareSetupStatus = {

@@ -1,30 +1,36 @@
-import { matchesAutomationConversation } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   AutomationBacklogPolicy,
   AutomationDetail,
   AutomationInboundConditionGroup,
   AutomationInboundMessageTriggerDefinition,
   AutomationMessagingConversationSnapshot,
   AutomationScheduleDefinition,
-  BackendSummary,
   AutomationSourceMessageDestination,
   AutomationWeekday,
   CreateAutomationRequest,
+  UpdateAutomationRequest,
+} from "@pwragent/shared/contracts/automations";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
   DesktopMessagingSettingsProjection,
+  ListDiscordThreadPermissionChannelsResponse,
+} from "@pwragent/shared/contracts/settings";
+import type {
   InboundPreviewMessage,
   InboundTopicOption,
-  ListDiscordThreadPermissionChannelsResponse,
   MessagingChannelKind,
   MessagingConversationKind,
   MessagingSenderSuggestion,
-  NavigationThreadSummary,
-  ThreadExecutionMode,
-  ThreadIdentifier,
-  UpdateAutomationRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS,
   AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS,
@@ -32,7 +38,6 @@ import {
   DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
   automationConversationKey,
   buildAutomationInboundTriggerId,
-  buildThreadIdentityKey,
   evaluateAutomationInboundConditions,
   findAutomationConversationIndexForMessage,
   formatAutomationConversationLabel,
@@ -40,9 +45,9 @@ import {
   formatAutomationInboundConditionGroup,
   formatAutomationScheduleSummary,
   normalizeInboundTriggerConditions,
-  parseThreadIdentityKey,
   validateAutomationScheduleDefinition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import { buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";

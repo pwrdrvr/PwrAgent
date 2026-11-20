@@ -1,17 +1,20 @@
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
-  isAcpBackendId,
   parseCodexProviderModelId,
-  providerPickerValue,
-  type AppServerBackendKind,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import { providerPickerValue } from "@pwragent/shared/provider-picker";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
-  type CodexModelProviderSettings,
-  type DesktopProviderModelDefaults,
-  type DesktopProviderThreadModelMigration,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import {
+  type DesktopProviderModelDefaults,
+  type DesktopProviderThreadModelMigration,
+} from "@pwragent/shared/contracts/settings";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { findAcpModelConfigOption, findAcpThoughtLevelConfigOption, type AcpBackendAdapter } from "./acp-backend-adapter";
 import type { BackendClient, ModelSettings } from "./backend-registry-types";

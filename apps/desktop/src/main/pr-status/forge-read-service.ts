@@ -1,4 +1,5 @@
-import { forgeKindForRemoteHost, type PrSummary } from "@pwragent/shared";
+import { forgeKindForRemoteHost } from "@pwragent/shared/forge-product";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { ForgeReadError, repositoryKey, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "./forge-tool-contract";
 import { parseForgePrRefFromUrl } from "./forge-pr-ref";
 import type { GitHubRepoRef } from "./git-remote";

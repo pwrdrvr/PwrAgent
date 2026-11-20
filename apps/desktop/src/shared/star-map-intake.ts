@@ -1,7 +1,5 @@
-import type {
-  FederationTarget,
-  StarMapIntakeRequest,
-} from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { StarMapIntakeRequest } from "@pwragent/shared/contracts/star-map";
 
 export const MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS = 5;
 

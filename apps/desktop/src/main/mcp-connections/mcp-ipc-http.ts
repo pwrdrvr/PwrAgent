@@ -4,7 +4,7 @@ import type { Socket } from "node:net";
 import { Duplex, Readable } from "node:stream";
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared";
+import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared/mcp-ipc-url";
 import { nativeRelayPath } from "../native-relay-path";
 import { mcpClientStreamableHttp } from "./mcp-sdk";
 

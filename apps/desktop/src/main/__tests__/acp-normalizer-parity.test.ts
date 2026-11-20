@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AcpSessionNormalizer, defaultQuirks, type AcpAgentQuirks } from "@pwrdrvr/agent-acp";
 import type { NormalizedThreadEvent } from "@pwrdrvr/agent-core";
-import type { AppServerThreadReplay } from "@pwragent/shared";
+import type { AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
 import { reduceNormalizedThread } from "../acp/normalized-thread-reducer";
 import { normalizedThreadToReplay } from "../acp/normalized-thread-to-replay";

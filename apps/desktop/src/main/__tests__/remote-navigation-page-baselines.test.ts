@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "a" }, query: { kind: "directory-index" } };
 const page: NavigationQueryPage = { protocol: 2, queryKey: "q", generation: "g", ownerEpoch: "o", countsRevision: "r",

@@ -3,14 +3,14 @@ import {
   findAutomationConversationIndexForMessage,
   matchesAutomationConversation,
   normalizeInboundTriggerConditions,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type {
   AutomationInboundMessageTriggerDefinition,
   AutomationReplayCandidate,
   AutomationRunSourceMetadata,
   AutomationTriggerDefinition,
-  InboundPreviewMessage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import type { InboundPreviewMessage } from "@pwragent/shared/contracts/messaging";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 

@@ -1,7 +1,7 @@
 import { FederationRouter } from "../federation/federation-router";
 import { createFederationEnrollmentInvite, completeFederationEnrollment, buildFederationProofMessage } from "../federation/federation-enrollment";
 import { generateFederationIdentityKeyPair, signFederationMessage } from "../federation/federation-identity";
-import { FEDERATION_CAPABILITIES } from "@pwragent/shared";
+import { FEDERATION_CAPABILITIES } from "@pwragent/shared/contracts/federation";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
@@ -12,7 +12,7 @@ import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
-import type { FederationPeerRole } from "@pwragent/shared";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
 
 const peer = { id: "outpost", label: "Fixture Outpost", role: "client" as const,
   status: "connected" as const, capabilities: [], pinnedPublicKeyPem: "fixture-key" };

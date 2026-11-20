@@ -1,7 +1,8 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CheckoutPathOwners } from "../app-server/checkout-path-owners";
 import { ThreadArchiveSweeper, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";

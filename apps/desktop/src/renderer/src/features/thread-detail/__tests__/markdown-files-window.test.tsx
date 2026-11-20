@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReadMarkdownFileViewerSnapshotResponse } from "@pwragent/shared";
+import type { ReadMarkdownFileViewerSnapshotResponse } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { MarkdownFilesWindow } from "../MarkdownFilesWindow";
 

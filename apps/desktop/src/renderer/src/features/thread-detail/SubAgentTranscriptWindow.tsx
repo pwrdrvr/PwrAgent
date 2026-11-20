@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isAppServerBackendKind } from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
   AppServerThreadMessage,
-  FederationInstanceId,
-  FederationTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId, FederationTarget } from "@pwragent/shared/contracts/federation";
 import { CloseIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";

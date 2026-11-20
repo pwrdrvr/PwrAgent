@@ -1,13 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ManageThreadDependenciesResponse } from "@pwragent/shared/contracts/thread-dependencies";
 import type {
-  ManageThreadDependenciesResponse,
   NavigationThreadSummary,
   PrMergeQueueStatus,
   PrSummary,
-  ThreadTodo,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { PrStatusCard } from "../../pr-status/PrStatusCard";

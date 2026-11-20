@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from "react";
-import type { DesktopSettingsValue } from "@pwragent/shared";
+import type { DesktopSettingsValue } from "@pwragent/shared/contracts/settings";
 
 /** Slack's app-name limit. Main enforces the same one. */
 const SLACK_APP_NAME_MAX_LENGTH = 35;

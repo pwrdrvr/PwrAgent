@@ -1,4 +1,4 @@
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   AcpEphemeralPromptError,
   type AcpEphemeralPromptRequest,

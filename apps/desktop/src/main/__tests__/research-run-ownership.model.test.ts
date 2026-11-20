@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import { RESEARCH_HARNESS_REVISION, type ResearchEvent, type ResearchHarnessState, type ResearchRun } from "@pwragent/shared";
+import { RESEARCH_HARNESS_REVISION, type ResearchHarnessState } from "@pwragent/shared/research-harness";
+import { type ResearchEvent, type ResearchRun } from "@pwragent/shared/research";
 import { ResearchService } from "@pwragent/owner-core/research-service";
 import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-service";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

@@ -17,7 +17,7 @@ import {
   type GithubMcpToolset,
   type InspectGithubMcpSetupResponse,
   type TestGithubMcpConnectionResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/github-mcp";
 import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 

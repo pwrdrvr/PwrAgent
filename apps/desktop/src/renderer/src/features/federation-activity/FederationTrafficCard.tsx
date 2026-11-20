@@ -1,4 +1,4 @@
-import type { FederationActivitySeries } from "@pwragent/shared";
+import type { FederationActivitySeries } from "@pwragent/shared/contracts/federation";
 import { formatTrafficBytes } from "./format-traffic-bytes";
 
 /** Seconds the popover draws; the read asks for exactly this much history. */

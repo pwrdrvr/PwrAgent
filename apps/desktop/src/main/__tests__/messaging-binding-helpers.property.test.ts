@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { normalizeConversationTitle, describeConversation, handoffContextForBinding, threadContextForAdmissionState, isDefaultAgentRouteBinding } from "../messaging/core/messaging-binding-helpers";
 

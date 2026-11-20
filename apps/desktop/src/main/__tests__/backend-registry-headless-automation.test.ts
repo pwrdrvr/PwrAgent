@@ -10,7 +10,8 @@ import {
   it,
   vi,
 } from "vitest";
-import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 
 describe("DesktopBackendRegistry", () => {
   it("refuses invalid automation models before creating a headless thread", async () => {

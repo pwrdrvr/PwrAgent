@@ -1,7 +1,6 @@
 import { ipcMain, shell, type WebContents } from "electron";
 import {
   DECISIONS_RAIL_PAGE_MAX_ITEMS,
-  isAppServerBackendKind,
   type DecisionsProfileDeleteRequest,
   type DecisionsProfileDeleteResult,
   type DecisionsProfileList,
@@ -14,7 +13,8 @@ import {
   type DecisionsRailOpenResultsResult,
   type DecisionsRailSnapshot,
   type DecisionsRailThreadRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   DECISIONS_PROFILE_DELETE_CHANNEL,
   DECISIONS_PROFILE_LIST_CHANNEL,

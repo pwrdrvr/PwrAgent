@@ -1,6 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import { useQueuedTurnProjection } from "../useQueuedTurnProjection";
 

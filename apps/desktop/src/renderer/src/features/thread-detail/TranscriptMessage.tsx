@@ -8,34 +8,35 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { hasDurableSubAgentTranscript, isCodexNativeSubAgent } from "@pwragent/shared/subagent-kind";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
+import { parseLinearPaste } from "@pwragent/shared/linear-paste";
 import {
-  hasDurableSubAgentTranscript,
-  isCodexNativeSubAgent,
-  parseCodexAsyncQuestionReply,
-  parseLinearPaste,
   parseThreadCorrespondenceMessage,
-  splitCombinedDelivery,
-  stripCodexGitActionDirectives,
   summarizeThreadDependencyPrompt,
-  threadTodoMessageOriginFromUnknown,
-  transcriptImageUnavailableReason,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-system-messages";
+import { splitCombinedDelivery } from "@pwragent/shared/combined-delivery";
+import { stripCodexGitActionDirectives } from "@pwragent/shared/codex-git-action-directives";
+import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared/contracts/thread-todos";
+import { transcriptImageUnavailableReason } from "@pwragent/shared/transcript-image-sources";
 import type {
   AppServerBackendKind,
-  CombinedDeliveryMember,
-  DesktopApplicationsSnapshot,
   AppServerSkillSummary,
   AppServerThreadFilePart,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
-  LinearPasteLayout,
-  MarkdownFileViewerContext,
-  ThreadCorrespondenceState,
-  ThreadSubAgentSummary,
   AppServerThreadTextPart,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CombinedDeliveryMember } from "@pwragent/shared/combined-delivery";
+import type {
+  DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
+} from "@pwragent/shared/contracts/settings";
+import type { LinearPasteLayout } from "@pwragent/shared/linear-paste";
+import type { ThreadCorrespondenceState } from "@pwragent/shared/contracts/thread-system-messages";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { HistoryIcon } from "../../icons/HistoryIcon";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";

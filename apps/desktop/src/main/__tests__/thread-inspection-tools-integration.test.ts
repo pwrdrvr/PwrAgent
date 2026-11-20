@@ -11,8 +11,8 @@ import {
   it,
   vi,
 } from "vitest";
-import { MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES } from "@pwragent/shared";
-import type { AppServerPendingRequestNotification } from "@pwragent/shared";
+import { MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES } from "@pwragent/shared/contracts/thread-tools";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 
 describe("DesktopBackendRegistry", () => {

@@ -1,10 +1,10 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import { threadExecutionModeExceeds } from "@pwragent/shared/thread-execution-mode";
 import {
-  threadExecutionModeExceeds,
   type AppServerThreadMessageOrigin,
   type ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "../thread-turn-queue";
 
 // Model test for the agent access ceiling across grouped agent messages.

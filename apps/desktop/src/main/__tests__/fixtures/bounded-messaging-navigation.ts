@@ -1,5 +1,6 @@
 import { vi } from "vitest";
-import type { FederationTarget, NavigationSnapshot } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryStore } from "../../app-server/navigation-query-store";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 

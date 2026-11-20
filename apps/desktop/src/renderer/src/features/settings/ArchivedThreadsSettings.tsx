@@ -6,16 +6,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { normalizeThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import {
-  normalizeThreadArchivePolicy,
   type DesktopSettingsSnapshot,
   type DesktopSettingsConfigPatch,
-  buildThreadIdentityKey,
-  isToolManagedWorktreePath,
+} from "@pwragent/shared/contracts/settings";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import {
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type ArchiveThreadCleanupResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ArchivePolicySettings } from "./ArchivePolicySettings";
 import { SearchIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";

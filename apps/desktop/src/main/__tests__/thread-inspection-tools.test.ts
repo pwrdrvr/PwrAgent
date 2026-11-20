@@ -1,7 +1,8 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, PwrAgentThreadInspectionRequest } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { PwrAgentThreadInspectionRequest } from "@pwragent/shared/contracts/thread-tools";
 import {
   THREAD_MAINTENANCE_CONFIRM_APPROVE_LABEL,
   THREAD_MAINTENANCE_CONFIRM_QUESTION_ID,

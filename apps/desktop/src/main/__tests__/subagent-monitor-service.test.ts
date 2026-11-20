@@ -1,7 +1,8 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind, TaskMonitorRequest, TaskMonitorResponse } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { TaskMonitorRequest, TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type {
   CodexNativeSubAgentReconciliation,

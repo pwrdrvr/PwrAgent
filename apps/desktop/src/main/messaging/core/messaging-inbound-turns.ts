@@ -4,8 +4,15 @@ import { messageOriginForInboundEvent } from "./messaging-command-helpers";
 import { federationTargetForBinding, isTerminalTurnLifecycle, type ActiveAgentMessagingOrigin } from "./messaging-backend-event-helpers";
 import { readMessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
-import { buildFederatedThreadRef, buildThreadIdentityKey, isAcpBackendId, parseCodexTurnErrorMessage } from "@pwragent/shared";
-import type { AppServerTurnInputItem, CodexEnvironmentSetupProgressEvent, BackendSummary, MaterializedDirectoryLaunchpadThread } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { parseCodexTurnErrorMessage } from "@pwragent/shared/codex-turn-error";
+import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CodexEnvironmentSetupProgressEvent,
+  MaterializedDirectoryLaunchpadThread,
+} from "@pwragent/shared/contracts/agent";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelRef, MessagingDefaultAgentAssignmentRecord, MessagingInboundEvent, MessagingInboundMediaEvent, MessagingInboundTextEvent, MessagingResponseMode } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { defaultAgentBackendSupport } from "./messaging-default-agent.js";

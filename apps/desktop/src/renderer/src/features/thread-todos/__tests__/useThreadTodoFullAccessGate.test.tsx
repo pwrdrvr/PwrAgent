@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import type { ThreadExecutionMode, ThreadTodo } from "@pwragent/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   threadTodoRunRaisesToFullAccess,

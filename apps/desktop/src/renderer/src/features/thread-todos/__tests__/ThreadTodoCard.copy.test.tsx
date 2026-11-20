@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThreadReviewItem, ThreadTodo } from "@pwragent/shared";
+import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
 import { threadTodoMarkdown, threadTodosMarkdown } from "../thread-todo-copy";
 

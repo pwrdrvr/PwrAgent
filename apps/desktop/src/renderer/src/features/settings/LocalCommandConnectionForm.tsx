@@ -6,7 +6,7 @@ import {
   type McpStdioLaunch,
   type McpStdioLaunchInput,
   type TestMcpStdioConnectionResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

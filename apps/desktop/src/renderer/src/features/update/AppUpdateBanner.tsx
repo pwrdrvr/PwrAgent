@@ -21,7 +21,7 @@
 // asked for from one the hour hand asked for. See AGENTS.md in this folder.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { releaseNotesUrl } from "@pwragent/shared";
+import { releaseNotesUrl } from "@pwragent/shared/release-notes";
 import type {
   AppUpdateCheckResult,
   AppUpdateStatus,

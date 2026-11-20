@@ -2,7 +2,7 @@ import fc from "fast-check";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { ScheduledThreadActionStore as SharedStore } from "@pwragent/sqlite-storage/scheduled-thread-action-store";
 import {
   FileScheduledThreadActionPayloadStore as SharedFiles,

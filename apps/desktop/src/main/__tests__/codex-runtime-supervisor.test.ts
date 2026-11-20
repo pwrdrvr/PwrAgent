@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, CodexBackgroundTerminal, ThreadCodexInvalidIdRecovery } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { CodexBackgroundTerminal } from "@pwragent/shared/contracts/background-terminals";
+import type { ThreadCodexInvalidIdRecovery } from "@pwragent/shared/contracts/navigation";
 import { DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS } from "../codex-app-server/app-server-recycle-policy";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import {

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ResearchProfileRun, ResearchProfileRunsPage, ResearchProfileRunsQuery, ResearchRunAttention } from "@pwragent/shared";
+import type {
+  ResearchProfileRun,
+  ResearchProfileRunsPage,
+  ResearchProfileRunsQuery,
+  ResearchRunAttention,
+} from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { researchErrorMessage } from "./useResearchRunActions";
 

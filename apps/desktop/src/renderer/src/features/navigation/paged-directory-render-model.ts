@@ -1,4 +1,4 @@
-import type { NavigationDirectoryRow, NavigationQueryEntry } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationQueryEntry } from "@pwragent/shared/contracts/navigation";
 import type { NavigationPageState } from "../../lib/navigation-query-state";
 import { navigationIdentityKey } from "../../lib/navigation-query-state";
 

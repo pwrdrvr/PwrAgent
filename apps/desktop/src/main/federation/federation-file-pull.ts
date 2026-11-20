@@ -1,14 +1,14 @@
 import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isFilePreviewPath } from "@pwragent/shared/file-preview";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  isAppServerBackendKind,
-  isFilePreviewPath,
-  type AppServerThreadSummary,
   type ReadMarkdownFileResponse,
   type ResolveTranscriptFilesRequest,
   type ResolveTranscriptFilesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";

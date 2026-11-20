@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AppNoticeToast } from "../../features/notifications/AppNoticeToast";
 import { resolveThreadActionErrorNotice, type ThreadActionErrorEvent } from "../../features/notifications/thread-action-error-notice";
 import type { DesktopApi } from "../desktop-api";

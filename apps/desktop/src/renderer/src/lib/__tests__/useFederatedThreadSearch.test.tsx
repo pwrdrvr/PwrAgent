@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FederationJumpSearchRequest, FederationJumpSearchResponse } from "@pwragent/shared";
+import type {
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS, useFederatedThreadSearch } from "../useFederatedThreadSearch";
 
 vi.mock("../federation-window", () => ({ readRendererFederationTarget: () => undefined }));

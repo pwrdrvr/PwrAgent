@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, FederationCapability, FederationProtocolEnvelope } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationCapability, FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 
 const announcer = vi.hoisted(() => ({ setWatched: vi.fn(), observe: vi.fn() }));
 vi.mock("../app-server/navigation-query-source", async (importOriginal) => ({

@@ -1,7 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import type { MessagingChannelRef, MessagingInboundCommandEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";

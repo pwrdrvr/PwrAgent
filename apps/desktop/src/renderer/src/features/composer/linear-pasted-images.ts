@@ -1,8 +1,8 @@
+import { findLinearPastedImages } from "@pwragent/shared/linear-paste";
 import {
-  findLinearPastedImages,
   type FetchLinearPastedImagesRequest,
   type FetchLinearPastedImagesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import {
   composerImageFileFromBase64,
   type ComposerImageFile,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationSnapshot } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import { navigationOwnerApiFixture } from "../../test/navigation-owner-api-fixture";
 
 const population = (): NavigationSnapshot => ({ backend: "all", fetchedAt: 1, unchanged: false,

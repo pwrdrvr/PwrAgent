@@ -2,7 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { ResearchHarnessRequest } from "@pwragent/shared";
+import type { ResearchHarnessRequest } from "@pwragent/shared/research-harness";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ResearchHarnessForm } from "../ResearchHarnessForm";
 

@@ -36,18 +36,17 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { buildNavigationSnapshot } from "@pwragent/shared";
+import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadSummary,
   LinkedDirectorySummary,
-  PrSummary,
-  ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { PrSummary, ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE, WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS } from "../app-server/thread-working-state-refresh-policy";
 import { GitDirectoryService } from "../app-server/git-directory-service";

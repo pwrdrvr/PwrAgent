@@ -1,4 +1,4 @@
-import { formatFilesystemPath } from "@pwragent/shared";
+import { formatFilesystemPath } from "@pwragent/shared/path-display";
 
 /**
  * A filesystem path that truncates in the middle rather than at the tail.

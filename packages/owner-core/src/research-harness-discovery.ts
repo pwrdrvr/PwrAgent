@@ -1,4 +1,5 @@
-import type { ResearchDiscoverySnapshot, ResearchEventData, ResearchProvenance, ResearchRun } from "@pwragent/shared";
+import type { ResearchDiscoverySnapshot, ResearchProvenance } from "@pwragent/shared/research-harness";
+import type { ResearchEventData, ResearchRun } from "@pwragent/shared/research";
 import { harnessRecordDigest, object, text } from "./research-harness-records";
 
 /** A bounded service snapshot. Source verification stays an observation, never a local verdict. */

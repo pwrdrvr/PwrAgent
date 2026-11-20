@@ -1,4 +1,14 @@
-import type { AppServerBackendKind, AppServerReviewTarget, BackendSummary, FederationTarget, NavigationLaunchpadDefaults, NavigationThreadSummary, ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerReviewTarget,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationLaunchpadDefaults,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import type { MessagingBindingRecord, MessagingCapabilityProfile, MessagingDeliveryResult, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import type { MessagingControllerLogger, MessagingDeliveryGuard } from "./messaging-backend-event-helpers";

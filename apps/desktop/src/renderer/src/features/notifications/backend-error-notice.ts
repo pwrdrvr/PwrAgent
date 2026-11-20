@@ -1,10 +1,11 @@
-import { describeProviderResponseBlock, isCodexAuthenticationFailure } from "@pwragent/shared";
+import { describeProviderResponseBlock } from "@pwragent/shared/provider-response-block";
+import { isCodexAuthenticationFailure } from "@pwragent/shared/codex-authentication";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
-  FederationInstanceId,
   ProviderResponseBlock,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import { turnFailureNoticeId } from "./turn-failure-acknowledgements";
 import { createElement } from "react";

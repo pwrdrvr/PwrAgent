@@ -3,11 +3,9 @@ import type { DragEvent, KeyboardEvent, ReactNode } from "react";
 import type {
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
-import {
-  normalizeProfileName,
-  profileMenuShortcutDigits,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { normalizeProfileName } from "@pwragent/shared/profile-names";
+import { profileMenuShortcutDigits } from "@pwragent/shared/profile-menu";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 import { tildifyPath } from "../../lib/tildify-path";

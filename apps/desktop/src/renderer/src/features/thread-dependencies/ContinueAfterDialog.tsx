@@ -1,27 +1,26 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  AppServerBackendKind,
-  FederationTarget,
-  NavigationThreadSummary,
-  PrSummary,
   ThreadDependency,
   ThreadDependencyCondition,
   ThreadDependencyDeliveryTarget,
   CompactionRecoveryProtection,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-dependencies";
 import {
   THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH,
   THREAD_DEPENDENCY_MAX_STEPS,
   THREAD_DEPENDENCY_STEP_MAX_LENGTH,
   THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH,
-  pullRequestMatchesRepositoryKey,
   summarizeThreadDependencyCiRun,
   threadDependencyConditionName,
   threadDependencyConditionPhrase,
   threadDependencyDeliveryTarget,
   threadDependencyMarkDoneIndex,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-dependencies";
+import { pullRequestMatchesRepositoryKey } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { Select } from "../../components/Select";
 import { readRendererFederationTarget } from "../../lib/federation-window";

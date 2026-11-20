@@ -5,7 +5,7 @@ import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { ForgeAutomationDialog, type ForgeAutomationDialogProps } from "../ForgeAutomationDialog";
 

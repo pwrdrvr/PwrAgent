@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import {
   resolveFederatedThreadTarget,

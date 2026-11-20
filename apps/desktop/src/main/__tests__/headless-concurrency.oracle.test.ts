@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";

@@ -168,7 +168,7 @@ Read this before source edits, dependency installation, test execution, lint/too
 ### Lint scope
 
 - Syntax lint covers `packages/**/*.{ts,tsx}`, `apps/*/**/*.{ts,tsx}` and
-  root-level `*.ts`, including desktop E2E helpers, scripts and configs.
+  root-level `*.ts` and `*.mts`, including desktop E2E helpers, scripts and configs.
 - JavaScript and `.mjs` files remain outside this correctness gate.
 - Typed lint covers `apps/*/src/**` and `packages/**`, excluding tests, fixtures
   and generated files. Its guard reads the same patterns from the typed config.

@@ -1,6 +1,8 @@
 import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   AttachThreadDirectoryToolArgs,
   AttachThreadDirectoryWorkspaceMode,
   AttachThreadDirectoryWorktreeBranchMode,
@@ -19,7 +21,7 @@ import type {
   SteerThreadToolArgs,
   StartReviewToolArgs,
   StopThreadToolArgs,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
 import {
   ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
   ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES,
@@ -29,10 +31,12 @@ import {
   HANDOFF_TASK_SEED_MODES,
   HANDOFF_TASK_WORKSPACE_MODES,
   PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import {
   THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
   THREAD_WORKSPACE_HANDOFF_STRATEGIES,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

@@ -1,21 +1,23 @@
 import { createHash } from "node:crypto";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
-import { findAcpPermissionModeConfigOption, stripAgentMemoryChunk } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
-  AcpThreadRewindPoint,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AcpThreadRewindPoint, GrokWorkflowBudgetPolicy } from "@pwragent/shared/contracts/agent";
+import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeConfigOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
-  GrokWorkflowBudgetPolicy,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,

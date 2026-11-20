@@ -1,5 +1,5 @@
 import { memo, type ComponentProps } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { PrChip } from "../pr-status/PrChip";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
 import {

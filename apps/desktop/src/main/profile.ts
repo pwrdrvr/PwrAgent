@@ -2,10 +2,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import {
-  isCanonicalProfileName,
-  normalizeProfileName,
-} from "@pwragent/shared";
+import { isCanonicalProfileName, normalizeProfileName } from "@pwragent/shared/profile-names";
 import {
   applyTomlEdits,
   parseTomlTables,

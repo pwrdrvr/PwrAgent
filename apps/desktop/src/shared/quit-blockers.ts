@@ -1,4 +1,4 @@
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 
 export type QuitBlockerKind = "turn" | "automation" | "terminal" | "action";
 

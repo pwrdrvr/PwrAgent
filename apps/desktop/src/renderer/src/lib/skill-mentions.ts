@@ -1,4 +1,4 @@
-import type { AppServerSkillSummary } from "@pwragent/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 
 export type SkillMentionPart =
   | {

@@ -4,11 +4,9 @@ import {
   type ForgePrToolOperation,
   type ForgeReviewComment,
 } from "../pr-status/forge-pr-tool-contract";
-import {
-  findAcpPermissionModeConfigOption,
-  finalTurnOutputText,
-} from "@pwragent/shared";
-import type { CodexBackgroundTerminal } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { finalTurnOutputText } from "@pwragent/shared/turn-output";
+import type { CodexBackgroundTerminal } from "@pwragent/shared/contracts/background-terminals";
 import { pullRequestSetLabel } from "@pwragent/shared/pull-request-review";
 import path from "node:path";
 import type {
@@ -21,17 +19,21 @@ import {
   type AppServerThreadStatus,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type BackendAcpRuntimeCapabilities,
   type BackendAcpSessionRuntimeState,
-  type ThreadQuestionnaireActivity,
-  type StartReviewRequest,
-  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/backend";
+import { type ThreadQuestionnaireActivity } from "@pwragent/shared/contracts/navigation";
+import { type StartReviewRequest } from "@pwragent/shared/contracts/agent";
+import {
   type PendingRequestDecision,
   type PendingRequestApprovalContext,
   normalizeFileChangeApprovalDiff,
-  type AgentToolCatalogId,
-  type MessagingDynamicToolCategory,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pending-request-response";
+import { type AgentToolCatalogId } from "@pwragent/shared/contracts/agent-tools";
+import { type MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
 import { type ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import {
   type ForgeWriteApprovalNotes,

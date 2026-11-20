@@ -1,8 +1,22 @@
 import { FULL_ACCESS_RISK_ACTION_PREFIX, type NewThreadOptionsSummary, type FullAccessRiskWarningContext, type FullAccessEscalationContext, type MessagingFullAccessControls, type FullAccessWarningResolution } from "./messaging-callback-helpers";
 import { federationTargetForBinding, agentMessagingTurnKey } from "./messaging-backend-event-helpers";
-import { containedMessagingBindingMatches } from "@pwragent/shared";
-import { permissionForDynamicTool, permissionsForThreadMutation, toolArgsTargetRemoteInstance } from "@pwragent/shared";
-import type { AppServerBackendKind, FederationTarget, MessagingDynamicToolCategory, MessagingPermissionId, PwrAgentMessagingRequest, RbacResolution, ThreadIdentifier } from "@pwragent/shared";
+import { containedMessagingBindingMatches } from "@pwragent/shared/contained-messaging";
+import {
+  permissionForDynamicTool,
+  permissionsForThreadMutation,
+  toolArgsTargetRemoteInstance,
+} from "@pwragent/shared/contracts/rbac";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  MessagingDynamicToolCategory,
+  MessagingPermissionId,
+  RbacResolution,
+} from "@pwragent/shared/contracts/rbac";
+import type { PwrAgentMessagingRequest } from "@pwragent/shared/contracts/messaging-tools";
 import type { MessagingRequestSource } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingConfirmationIntent, MessagingInboundEvent } from "@pwragent/messaging-interface";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";

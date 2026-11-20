@@ -1,11 +1,10 @@
 import type {
   AppServerTurnInputItem,
-  AutomationPriorRunContext,
-  AutomationRunSummary,
   ThreadExecutionMode,
-} from "@pwragent/shared";
-import type { AutomationGateRunResult } from "@pwragent/shared";
-import { automationSuppressesBindingBroadcast } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AutomationPriorRunContext, AutomationRunSummary } from "@pwragent/shared/contracts/automations";
+import type { AutomationGateRunResult } from "@pwragent/shared/contracts/automations";
+import { automationSuppressesBindingBroadcast } from "@pwragent/shared/contracts/automations";
 import { getMainLogger } from "../log.js";
 import { buildAutomationTurnInput } from "./automation-prompt.js";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";

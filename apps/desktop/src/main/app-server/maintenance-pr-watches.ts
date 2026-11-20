@@ -1,4 +1,5 @@
-import { buildPullRequestStatusKey, type PrSummary, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 
 export type MaintenancePrObservation = { pr: PrSummary; fetchedAt: number };
 

@@ -3,7 +3,7 @@ import { SecretCiphertextError } from "../settings/secret-encryption-envelope";
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   isSecretStorageDisabledByEnv,
   type DesktopSecretStore,

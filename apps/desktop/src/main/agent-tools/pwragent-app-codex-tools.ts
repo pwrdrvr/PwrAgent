@@ -1,12 +1,10 @@
-import type {
-  AppServerBackendKind,
-  PwrAgentAppOperationName,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentAppOperationName } from "@pwragent/shared/contracts/app-tools";
 import {
   PWRAGENT_APP_OPERATION_NAMES,
   PWRAGENT_APP_TOOL_NAMESPACE,
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/app-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,

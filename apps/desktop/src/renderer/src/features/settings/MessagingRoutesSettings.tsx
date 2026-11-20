@@ -10,19 +10,21 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   DesktopAuthorizedContact,
+  DesktopMessagingResponseMode,
+} from "@pwragent/shared/contracts/settings";
+import type {
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingDefaultAgentRoute,
   DesktopMessagingDefaultAgentScope,
   DesktopMessagingObservedSurface,
-  DesktopMessagingResponseMode,
   ListMessagingRoutesResponse,
   MessagingChannelKind,
   MessagingConversationKind,
   MessagingToolUpdateMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import { PlusIcon } from "../../icons";
 import {
   MESSAGING_PLATFORM_ICONS,

@@ -4,11 +4,13 @@ import { createServer, connect, type Server, type Socket, type AddressInfo } fro
 import { once } from "node:events";
 import { randomBytes } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
-import type { FederationCapability, ServiceThread } from "@pwragent/shared";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
+import type { ServiceThread } from "@pwragent/shared/contracts/federation-services";
 import {
-  FEDERATION_SERVICE_METHODS as METHODS, FEDERATION_SERVICE_V2_METHODS as V2,
+  FEDERATION_SERVICE_METHODS as METHODS,
+  FEDERATION_SERVICE_V2_METHODS as V2,
   FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-services";
 import { FederationServices } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
 import {

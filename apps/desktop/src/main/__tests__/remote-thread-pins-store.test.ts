@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  buildFederatedThreadRef,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import {

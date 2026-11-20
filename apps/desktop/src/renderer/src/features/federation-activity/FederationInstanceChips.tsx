@@ -1,10 +1,10 @@
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type {
-  CelestialIconId,
   FederationActiveConnection,
   FederationActivitySeries,
   FederationHealthStatus,
-} from "@pwragent/shared";
-import { formatFederationPeerDisplayLabelParts } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { formatFederationPeerDisplayLabelParts } from "@pwragent/shared/contracts/federation";
 import { CelestialIcon } from "../../icons";
 import { InstanceGlyph } from "../federation/InstanceGlyph";
 import { formatTrafficBytes } from "./format-traffic-bytes";

@@ -1,7 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { AppServerReviewTarget } from "@pwragent/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import { messagingReviewHarness } from "./fixtures/messaging-review-harness";
 
 describe("observable messaging review protocol", () => {

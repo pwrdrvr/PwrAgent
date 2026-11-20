@@ -3,7 +3,7 @@ import {
   formatFederationPeerDisplayLabel,
   formatFederationPeerShortDisplayLabel,
   type FederationHealthStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 
 type DisplayPeer = { label: string; profileName?: string; shortLabel?: string; revokedAt?: number };
 

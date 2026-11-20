@@ -1,4 +1,4 @@
-import { isAgentMemoryContext, stripAgentMemoryChunk } from "@pwragent/shared";
+import { isAgentMemoryContext, stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import type {
   CodexClientHost,
   CodexClientLogger,
@@ -16,12 +16,12 @@ import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "
 import type {
   ListBackgroundTerminalsResponse,
   CodexBackgroundTerminal,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
 import type {
   ThreadBackgroundTerminalsListResponse,
   ThreadBackgroundTerminalsTerminateResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
-import { buildPendingTurnId } from "@pwragent/shared";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { rememberBoundedMap } from "../bounded-map";
 import { usageAccountKey } from "../usage-account-identity";
@@ -35,45 +35,54 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
-  formatCodexProviderModelId,
-  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
+  readCodexNativeSubAgentName,
+  readSubAgentActivity,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
+} from "@pwragent/shared/subagent-activity";
+import { formatCodexProviderModelId } from "@pwragent/shared/codex-model-providers";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared/openrouter-assumed-pricing";
+import {
   isLegacyPwrSnapMediaUrl,
   pwrSnapResourceLinkImageParts,
   pwrSnapToolImageParts,
-  readCodexNativeSubAgentName,
+} from "@pwragent/shared/transcript-image-sources";
+import {
   estimateTokenUsageCost,
-  formatExplorationSummary,
-  formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
-  buildProviderResponseBlockEntry,
-  detectProviderResponseBlock,
-  formatWebSearchLabel,
-  isCodexHardwareKeyReauthenticationRequired,
-  isToolManagedWorktreePath,
-  navigationQueryEventRequiresRefresh,
-  normalizeCodexAsyncQuestions,
-  parseCodexTurnErrorMessage,
-  readSubAgentActivity,
   resolveOpenAiPricingServiceTier,
-  resolveHelperModel,
   resolveTokenUsagePriceUnavailableReason,
-  shortenDerivedThreadTitle,
-  shortSubAgentThreadId,
-  subAgentActivitySummaryParts,
-  subAgentTargetLabel,
-  type DesktopHelperModelSettings,
-  type HelperModelId,
-  type HelperModelResolution,
   type ThreadUsageLineRecord,
   type ThreadPricingSnapshot,
   type ThreadUsageTokenBreakdown,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import {
+  formatExplorationSummary,
+  formatSearchCommandActionLabel,
+  formatWebSearchLabel,
+} from "@pwragent/shared/command-action-labels";
+import {
+  buildProviderResponseBlockEntry,
+  detectProviderResponseBlock,
+} from "@pwragent/shared/provider-response-block";
+import { isCodexHardwareKeyReauthenticationRequired } from "@pwragent/shared/codex-authentication";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { normalizeCodexAsyncQuestions } from "@pwragent/shared/codex-async-questions";
+import { parseCodexTurnErrorMessage } from "@pwragent/shared/codex-turn-error";
+import {
+  resolveHelperModel,
+  type DesktopHelperModelSettings,
+  type HelperModelId,
+  type HelperModelResolution,
+} from "@pwragent/shared/helper-models";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import { shortSubAgentThreadId } from "@pwragent/shared/subagent-kind";
 import type {
   AppServerAvailableCommandSummary,
-  CodexAppServerRestartStatus,
   AppServerFileInputItem,
   AppServerLocalFileInputItem,
   AppServerNotification,
@@ -101,17 +110,22 @@ import type {
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  AppServerCollaborationModeRequest,
   AppServerReviewDelivery,
   AppServerReviewTarget,
+  CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CodexAppServerRestartStatus,
   BackendAccountSummary,
   BackendModelOption,
   BackendRateLimitSummary,
-  CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared/contracts/backend";
+import type {
+  AppServerCollaborationModeRequest,
   CodexMcpInventoryDetail,
   CodexMcpServerSummary,
-  LinkedDirectorySummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
@@ -11209,7 +11223,7 @@ export class CodexAppServerClient {
   }
 
   /** Export bytes through Codex; never open or parse its private storage. */
-  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared/contracts/thread-instance-handoff").ThreadHandoffExport> {
     await this.ensureInitialized();
     const result = await this.connection.request("thread/read", { threadId, includeTurns: false },
       this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);

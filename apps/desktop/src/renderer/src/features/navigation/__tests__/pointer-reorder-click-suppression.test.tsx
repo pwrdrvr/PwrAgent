@@ -1,7 +1,7 @@
 import { fireEvent, renderHook } from "@testing-library/react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { beginPointerReorderDrag } from "../pointer-reorder-drag";
 import { useSubthreadReorderDrag } from "../useSubthreadReorderDrag";
 

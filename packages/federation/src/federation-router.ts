@@ -10,8 +10,8 @@ import type {
   FederationRequestEnvelope,
   FederationResponseEnvelope,
   FederationServiceDataEnvelope,
-} from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import { DurableTurnRequestError } from "./errors";
 
 export type FederationRouterConnection = {

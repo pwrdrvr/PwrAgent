@@ -1,10 +1,7 @@
 import { memo, useMemo, type CSSProperties } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
-import {
-  buildThreadIdentityKey,
-  type CelestialIconId,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { CelestialIcon } from "../../icons";
 import { PrChip } from "../pr-status/PrChip";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";

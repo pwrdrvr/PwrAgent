@@ -1,8 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import {
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { describe, expect, it } from "vitest";
 import {
   buildPwrAgentMessagingToolRouter,

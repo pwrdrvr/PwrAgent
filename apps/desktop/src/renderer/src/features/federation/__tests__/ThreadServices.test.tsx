@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ServiceUiRequest, ServiceUiResponse, ThreadService } from "@pwragent/shared";
+import type {
+  ServiceUiRequest,
+  ServiceUiResponse,
+  ThreadService,
+} from "@pwragent/shared/contracts/federation-services";
 import { ThreadServices } from "../ThreadServices";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });

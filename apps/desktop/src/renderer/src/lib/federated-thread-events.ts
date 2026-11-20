@@ -1,15 +1,13 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   FederationCapability,
   FederationPeerSummary,
   FederationTarget,
-  NavigationThreadSummary,
-  ThreadIdentifier,
-} from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadIdentifier } from "@pwragent/shared/contracts/normalized-app-server";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 
 export function threadOwnerPlatform(params: {
   target?: FederationTarget;

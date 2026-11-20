@@ -1,7 +1,5 @@
-import {
-  isBranchDrifted,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /**
  * Thread-level warning banners, rendered at the top of the chat column.

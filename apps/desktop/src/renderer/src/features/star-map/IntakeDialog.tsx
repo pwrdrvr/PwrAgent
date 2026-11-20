@@ -7,13 +7,13 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  CelestialIconId,
-  FederationTarget,
   StarMapIntakeCandidate,
   StarMapIntakeCandidateSource,
   StarMapIntakePhase,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import { MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS } from "../../../../shared/star-map-intake";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";

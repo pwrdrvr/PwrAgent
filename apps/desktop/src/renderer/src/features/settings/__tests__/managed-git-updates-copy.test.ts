@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopManagedGitSnapshot } from "@pwragent/shared";
+import type { DesktopManagedGitSnapshot } from "@pwragent/shared/contracts/settings";
 import {
   managedGitTrackOptions,
   managedGitUpdatesCopy,

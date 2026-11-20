@@ -1,5 +1,10 @@
-import { NAVIGATION_QUERY_PROTOCOL_VERSION, type AppServerBackendKind,
-  type FederationRemoteTarget, type NavigationRow, type NavigationThreadSummary } from "@pwragent/shared";
+import {
+  NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type NavigationRow,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "./desktop-api";
 
 type Target = { backend: AppServerBackendKind; threadId: string; instanceId?: string };

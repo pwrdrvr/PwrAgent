@@ -1,6 +1,7 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, OperatorRequestsChangedEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { OperatorRequestsChangedEvent } from "@pwragent/shared/contracts/operator-requests";
 import {
   OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL, OPERATOR_REQUESTS_LIST_CHANNEL, OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,

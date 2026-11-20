@@ -1,5 +1,10 @@
-import { sortSubthreadSummaries } from "@pwragent/shared";
-import type { FederationTarget, NavigationIdentity, NavigationThreadSummary, SetThreadParentRequest } from "@pwragent/shared";
+import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationIdentity,
+  NavigationThreadSummary,
+  SetThreadParentRequest,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { threadSummaryIdentityKey } from "./federated-thread-events";
 import { readNavigationActionThread } from "./navigation-action-authority";

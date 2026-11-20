@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  NavigationSnapshot,
-} from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";

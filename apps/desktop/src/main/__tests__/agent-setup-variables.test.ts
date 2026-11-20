@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared";
+import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   setupVariablesForAgent,
   withAgentSetupVariablePolicy,

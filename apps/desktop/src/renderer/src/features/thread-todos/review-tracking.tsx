@@ -6,9 +6,9 @@ import type {
   ThreadReviewIdentity,
   ThreadReviewItem,
   ThreadReviewResolution,
-  ThreadTodo,
   UpdateThreadReviewRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { BanIcon, CheckIcon, ClockIcon, TodoIcon } from "../../icons";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";

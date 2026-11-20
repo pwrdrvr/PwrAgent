@@ -1,4 +1,4 @@
-import type { AppServerThreadMessageEntry } from "@pwragent/shared";
+import type { AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { useLayoutEffect, useRef, useState } from "react";
 
 // Bound preview admission, not Markdown syntax. Every admitted snapshot still

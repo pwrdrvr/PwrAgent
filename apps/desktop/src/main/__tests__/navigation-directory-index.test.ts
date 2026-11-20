@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationDirectorySummary, NavigationQueryPage } from "@pwragent/shared";
+import type { NavigationDirectorySummary, NavigationQueryPage } from "@pwragent/shared/contracts/navigation";
 
 const mocks = vi.hoisted(() => ({ loadIndex: vi.fn() }));
 vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: mocks.loadIndex }));

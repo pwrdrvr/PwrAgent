@@ -8,7 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { resolveWorktreeRepositoryDirectory } from "../app-server/thread-directory-enricher";
-import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import type { ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";

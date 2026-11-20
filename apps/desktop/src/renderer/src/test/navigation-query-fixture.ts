@@ -1,17 +1,17 @@
 import { threadSummaryIdentityKey } from "../lib/federated-thread-events";
 import { navigationThreadSelectionKey } from "../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../lib/navigation-loaded-rows";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import {
-  classifyDirectory,
   buildThreadIdentityKey,
-  rankDirectoryMentionMatches,
-  rankThreadJumpMatches,
   type NavigationDirectorySummary,
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
   type NavigationRow,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-match";
+import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import { getHomeDir } from "../lib/tildify-path";
 
 type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {

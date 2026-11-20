@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingDeliveryResult, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { NavigationQueryStore } from "../../app-server/navigation-query-store";

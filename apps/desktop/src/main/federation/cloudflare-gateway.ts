@@ -1,4 +1,4 @@
-import type { CloudflareSetupStatus } from "@pwragent/shared";
+import type { CloudflareSetupStatus } from "@pwragent/shared/contracts/federation-cloudflare";
 import type { CloudflareSetupState } from "./cloudflare-setup-service";
 import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 import { requestCloudflareProbe, type CloudflareProbeCredentials } from "./cloudflare-security-validation";

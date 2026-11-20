@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SteerTurnRequest } from "@pwragent/shared";
+import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 
 const request: SteerTurnRequest = {

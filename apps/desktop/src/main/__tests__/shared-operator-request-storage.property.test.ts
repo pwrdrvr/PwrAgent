@@ -1,7 +1,9 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AppServerBackendKind, CodexAsyncQuestion, OperatorAsyncQuestion } from "@pwragent/shared";
-import { operatorQuestionItemKey } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { CodexAsyncQuestion } from "@pwragent/shared/codex-async-questions";
+import type { OperatorAsyncQuestion } from "@pwragent/shared/contracts/operator-requests";
+import { operatorQuestionItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { AsyncQuestionStatus } from "@pwragent/owner-core/operator-request-storage";
 import { OperatorRequestStore as SharedStore } from "@pwragent/sqlite-storage/operator-request-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";

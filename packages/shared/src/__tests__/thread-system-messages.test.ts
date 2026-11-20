@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildThreadCorrespondenceHeading,
-  buildThreadMarkdownLink,
   parseThreadCorrespondenceMessage,
   summarizeThreadDependencyPrompt,
-} from "../index";
+} from "../contracts/thread-system-messages";
+import { buildThreadMarkdownLink } from "../contracts/thread-link";
 
 describe("summarizeThreadDependencyPrompt", () => {
   it("ignores text that is not a dependency prompt", () => {

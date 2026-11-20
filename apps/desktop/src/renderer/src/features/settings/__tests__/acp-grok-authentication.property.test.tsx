@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { AcpAgentsSettings } from "../AcpAgentsSettings";
 

@@ -1,4 +1,4 @@
-// Pins the disposable-root redirects in `vitest.workspace.ts`.
+// Pins the disposable-root redirects in `vitest.workspace.mts`.
 //
 // Without it, `resolvePwragentRoot` falls back to `~/.pwragent` and every test
 // that touches a root-relative path reads and writes the operator's live
@@ -27,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import workspaceConfig from "../../../../../vitest.workspace";
+import workspaceConfig from "../../../../../vitest.workspace.mts";
 import { isPathWithin } from "../../shared/path-within";
 import { PWRAGENT_HOME_ENV, resolvePwragentRoot } from "../profile";
 

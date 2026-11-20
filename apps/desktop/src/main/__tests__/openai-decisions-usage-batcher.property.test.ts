@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { buildOpenAIDecisionsUsageLine } from "../openai-decisions/openai-decisions-service";
 import { OpenAIDecisionsUsageBatcher } from "../openai-decisions/openai-decisions-usage-batcher";
 

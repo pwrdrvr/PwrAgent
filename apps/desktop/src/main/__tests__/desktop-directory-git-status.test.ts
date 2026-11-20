@@ -1,4 +1,4 @@
-import type { NavigationDirectoryGitStatus } from "@pwragent/shared";
+import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import { expect, it, vi } from "vitest";
 import { DesktopDirectoryGitStatus } from "../app-server/desktop-directory-git-status";
 import type { DirectoryGitStatusCacheEntry } from "../storage/desktop-overlay-store";

@@ -1,8 +1,8 @@
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-} from "@pwragent/shared";
-import { classifyExplorationLabel } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { classifyExplorationLabel } from "@pwragent/shared/command-action-labels";
 import {
   isPullRequestWatchToolDetail,
   isThreadReferenceToolDetail,

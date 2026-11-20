@@ -5,7 +5,7 @@
 // window the operator closed.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { WebContents } from "electron";
-import type { StarMapViewSnapshot } from "@pwragent/shared";
+import type { StarMapViewSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 
 import {
   publishStarMapView,

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES, BLOB_RETENTION_MS, FederationResumableBlobReceiver } from "@pwragent/federation/federation-resumable-blob";
 import { FederationFilePushReceiver, FILE_PUSH_METHODS } from "../federation/federation-file-push";

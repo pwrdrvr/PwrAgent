@@ -9,10 +9,9 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import {
-  findAcpPermissionModeConfigOption,
   type AcpBackendId,
-  type AgentEvent,
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
@@ -21,6 +20,10 @@ import {
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type AgentEvent, type GrokWorkflowBudgetPolicy } from "@pwragent/shared/contracts/agent";
+import {
   type BackendAcpSessionRuntimeState,
   type AcpAgentPreference,
   type BackendAcpRuntimeCapabilities,
@@ -28,12 +31,12 @@ import {
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendSummary,
-  type GrokWorkflowBudgetPolicy,
-  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/backend";
+import {
   type UsageLimitObservation,
-  isAcpBackendId,
   usageLimitProviderForBackend,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/usage-activity";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {

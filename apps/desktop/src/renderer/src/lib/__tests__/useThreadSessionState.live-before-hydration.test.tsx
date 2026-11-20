@@ -1,11 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSessionState } from "../useThreadSessionState";

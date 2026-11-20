@@ -2,10 +2,7 @@ import type {
   CollabAgentStatus,
   ThreadItem,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
-import {
-  readSubAgentActivity,
-  subAgentActivityAgentStatus,
-} from "@pwragent/shared";
+import { readSubAgentActivity, subAgentActivityAgentStatus } from "@pwragent/shared/subagent-activity";
 
 type CollabAgentToolCall = Extract<ThreadItem, { type: "collabAgentToolCall" }>;
 

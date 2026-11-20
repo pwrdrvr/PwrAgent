@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
-import type {
-  SteerTurnRequest,
-  SteerTurnResponse,
-  ScheduledThreadAction,
-} from "@pwragent/shared";
+import type { SteerTurnRequest, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import type { ScheduledThreadActionService } from "./scheduled-thread-action-service.js";
 

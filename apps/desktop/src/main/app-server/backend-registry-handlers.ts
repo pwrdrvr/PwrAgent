@@ -1,14 +1,16 @@
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
-import type { ForgeAgentToolPolicy } from "@pwragent/shared";
+import type { ForgeAgentToolPolicy } from "@pwragent/shared/contracts/forge-agent-tools";
 import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
   AppServerBackendKind,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   CreateScheduledThreadActionRequest,
   ScheduledThreadActionMutationResponse,
-  PwrAgentThreadInspectionResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { PwrAgentThreadInspectionResponse } from "@pwragent/shared/contracts/thread-tools";
 import type { AutomationInspectionHandler } from "../automations/automation-inspection-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
 import type {
@@ -76,16 +78,16 @@ export interface RegistryHandlers {
   localPullRequestAuthorityResolver?: LocalPullRequestAuthorityResolver;
   threadPullRequestWatchToolHandler?: ThreadPullRequestWatchToolHandler;
   threadMaintenanceToolHandler?: ThreadMaintenanceToolHandler;
-  threadDependencyToolHandler?: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>);
+  threadDependencyToolHandler?: ((args: import("@pwragent/shared/contracts/thread-dependencies").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>);
   agentFollowUpToolHandler?: AgentFollowUpToolHandler;
   directoryGitStatusWriter?: DirectoryGitStatusWriter;
   threadPrAutoDispatchHandler?: ThreadPrAutoDispatchHandler;
   threadPullRequestDetachHandler?: ThreadPullRequestDetachHandler;
   threadDependenciesPeerHandler?: (
-    request: import("@pwragent/shared").ManageThreadDependenciesRequest,
+    request: import("@pwragent/shared/contracts/thread-dependencies").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
-    provenance?: import("@pwragent/shared").CausalMessagingContext,
-  ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
+    provenance?: import("@pwragent/shared/messaging-causal-context").CausalMessagingContext,
+  ) => Promise<import("@pwragent/shared/contracts/thread-dependencies").ManageThreadDependenciesResponse>;
   threadPrWatchesPeerHandler?: ThreadPrWatchesPeerHandler;
   projectForgeAutomationHandler?: ProjectForgeAutomationHandler;
   threadPullRequestRefreshHandler?: ThreadPullRequestRefreshHandler;
@@ -98,7 +100,7 @@ export interface RegistryHandlers {
  * neither is a tool argument.
  */
 export type AgentFollowUpToolHandler = (
-  args: import("@pwragent/shared").ScheduleFollowUpToolArgs,
+  args: import("@pwragent/shared/contracts/scheduled-thread-actions").ScheduleFollowUpToolArgs,
   thread: { backend: AppServerBackendKind; threadId: string },
   provenance: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
 ) => Promise<PwrAgentThreadInspectionResponse>;

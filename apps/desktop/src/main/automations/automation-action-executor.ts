@@ -3,7 +3,7 @@ import type {
   AutomationOutputActionResult,
   AutomationRunArtifact,
   AutomationRunSourceMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import {
   renderAutomationDecisionForMessaging,
   renderAutomationOutputForMessaging,

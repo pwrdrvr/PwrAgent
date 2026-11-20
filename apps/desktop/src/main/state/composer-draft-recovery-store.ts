@@ -1,12 +1,12 @@
-import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import type {
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
   ComposerDraftSnapshotRecord,
   ListComposerDraftRecoveryCandidatesRequest,
-  NavigationLaunchpadDraft,
   SaveComposerDraftRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-drafts";
+import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 import type { StateDb } from "./state-db.js";
 
 type DraftLatestRow = {

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { ResearchHarnessConfig } from "@pwragent/shared";
+import type { ResearchHarnessConfig } from "@pwragent/shared/research-harness";
 import type { ResearchHarnessConnection } from "@pwragent/owner-core/research-harness-service";
 import { object } from "@pwragent/owner-core/research-harness-records";
 import { terminateOwnedProcessTree } from "../process-tree";

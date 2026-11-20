@@ -2,8 +2,8 @@ import {
   isSubthreadLaunchpadKey,
   launchpadStorageKey,
   parseRemoteLaunchpadStorageKey,
-  type FederationTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
 /**

@@ -2,7 +2,7 @@ import type {
   DesktopAuthorizedContact,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 /**
  * Compute a config patch for a Telegram/Discord save action that includes

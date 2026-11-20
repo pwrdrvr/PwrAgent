@@ -2,14 +2,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildDirectorySummaries, classifyDirectory } from "@pwragent/shared";
+import { buildDirectorySummaries, classifyDirectory } from "@pwragent/shared/directory-navigation";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   EnsureDirectoryLaunchpadResponse,
+  RegisterDirectoryFromDiskResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
-  RegisterDirectoryFromDiskResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 
 /**

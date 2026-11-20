@@ -1,14 +1,9 @@
-import type {
-  DirectorySummaryKind,
-  LinkedDirectorySummary,
-  ProjectRepositoryIdentity,
-  ThreadTodoProject,
-} from "@pwragent/shared";
-import {
-  canonicalizeNavigationPath,
-  classifyDirectory,
-  findPeerCounterpartDirectory,
-} from "@pwragent/shared";
+import type { DirectorySummaryKind } from "@pwragent/shared/contracts/navigation";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ProjectRepositoryIdentity } from "@pwragent/shared/federation-project-match";
+import type { ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
+import { canonicalizeNavigationPath, classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 
 /** One row of the Directories lens, as the directory-index query lists it. */
 export type ThreadTodoProjectCandidate = ProjectRepositoryIdentity & {

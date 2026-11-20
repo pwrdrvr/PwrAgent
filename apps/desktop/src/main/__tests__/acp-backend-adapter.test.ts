@@ -5,12 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
+import type { AcpAgentUpdateStatus } from "@pwragent/shared/contracts/backend";
 import type {
-  AcpAgentUpdateStatus,
   AcpBackendId,
-  AgentEvent,
   AppServerPendingRequestNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
   AcpBackendAdapter,
   acpSessionToThreadSummary,

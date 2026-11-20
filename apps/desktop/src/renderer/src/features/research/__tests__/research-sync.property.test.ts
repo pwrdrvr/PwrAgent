@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
-  projectResearchRun, researchApproachLeaves, researchChangePage, researchRunState, researchRunStoreSynced, summarizeResearchRun,
-  type ResearchChange, type ResearchChanges, type ResearchChangesRequest, type ResearchEvent, type ResearchPendingRequest, type ResearchRun, type ResearchRunStore, type ResearchSnapshot, type ResearchSnapshotRequest,
-} from "@pwragent/shared";
+  projectResearchRun,
+  researchApproachLeaves,
+  researchChangePage,
+  researchRunState,
+  researchRunStoreSynced,
+  summarizeResearchRun,
+  type ResearchChange,
+  type ResearchChanges,
+  type ResearchChangesRequest,
+  type ResearchEvent,
+  type ResearchPendingRequest,
+  type ResearchRun,
+  type ResearchRunStore,
+  type ResearchSnapshot,
+  type ResearchSnapshotRequest,
+} from "@pwragent/shared/research";
 import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../../../../packages/shared/src/__tests__/research-journal-arbitraries";
 import { ResearchSync, type ResearchSyncState } from "../research-sync";
 

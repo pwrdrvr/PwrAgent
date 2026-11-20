@@ -1,5 +1,18 @@
 import { BrowserWindow, ipcMain, shell } from "electron";
-import { isAppServerBackendKind, type ResearchThread, type ResearchSnapshotRequest, type ResearchChangesRequest, type ResearchUpdateReceipt, type ResearchEventsRequest, type ResearchUpdateRequest, type ResearchEvidenceRequest, type PrepareResearchRequest, type ResearchSearchRequest, type ResearchItemReadRequest, type ResearchWorkRequest } from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import {
+  type ResearchThread,
+  type ResearchSnapshotRequest,
+  type ResearchChangesRequest,
+  type ResearchUpdateReceipt,
+  type ResearchEventsRequest,
+  type ResearchUpdateRequest,
+  type ResearchEvidenceRequest,
+  type PrepareResearchRequest,
+  type ResearchSearchRequest,
+  type ResearchItemReadRequest,
+  type ResearchWorkRequest,
+} from "@pwragent/shared/research";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../../../shared/ipc";
 import { getResearchService } from "../../research/research-runtime";
 import { researchToolsOffered, researchToolSurface } from "../../agent-tools/pwragent-research-agent-tools";
@@ -8,8 +21,12 @@ import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { isLocalMainWindowWebContents, isLocalResearchWebContents } from "../window-channels";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import type { ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
-import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared";
+import type {
+  ResearchHarnessReconcileRequest,
+  ResearchHarnessRequest,
+} from "@pwragent/shared/research-harness";
+import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
+import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared/research";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
 import { researchWindowRunId, showResearchWindow } from "../research-window";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../../../shared/ipc";

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildModelMenu, modelOptionsForThreadProvider, permissionForActionId } from "@pwragent/shared";
+import { buildModelMenu } from "@pwragent/shared/model-menu";
+import { modelOptionsForThreadProvider } from "@pwragent/shared/codex-model-providers";
+import { permissionForActionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingBindingRecord, MessagingJsonValue } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { buildStatusModelPickerIntent } from "../messaging/core/messaging-status-card";

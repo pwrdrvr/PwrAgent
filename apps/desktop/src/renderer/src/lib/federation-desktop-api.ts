@@ -1,4 +1,4 @@
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "./desktop-api";
 
 export function scopeDesktopApiToFederationTarget(

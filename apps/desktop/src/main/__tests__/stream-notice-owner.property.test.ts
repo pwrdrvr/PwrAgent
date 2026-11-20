@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import type { ReviewSubAgentRecord, TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
 import type { StateDb } from "../state/state-db";

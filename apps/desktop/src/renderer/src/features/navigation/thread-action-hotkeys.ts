@@ -9,7 +9,8 @@
  * So ⇧⌘P in the composer pins the thread being read, and ⇧⌘P after
  * shift-clicking three rows pins all three.
  */
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { KeyEventLike, KeybindingActionId } from "../../../../shared/keybindings";
 import { isEditableTarget } from "../../lib/keyboard-accel";
 import { keydownMatchesAction } from "../../lib/keybindings-store";

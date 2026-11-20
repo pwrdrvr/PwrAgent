@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppServerReadThreadResponse, AppServerThreadEntry, AppServerThreadActivityEntry, NavigationThreadSummary } from "@pwragent/shared";
-import { THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS, THREAD_DISPLAY_MAX_ACCOUNTING_TURNS } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadEntry,
+  AppServerThreadActivityEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import {
+  THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS,
+  THREAD_DISPLAY_MAX_ACCOUNTING_TURNS,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { supportsBulkDisplayReads } from "./thread-display-bulk-reads";

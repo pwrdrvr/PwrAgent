@@ -4,7 +4,7 @@ import type {
   LaunchpadCreationStatus,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 
 export class LaunchpadCreationCancelledError extends Error {
   constructor() {

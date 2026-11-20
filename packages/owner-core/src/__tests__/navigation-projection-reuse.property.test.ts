@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import * as projection from "../navigation-query-projection";
 
 function inventory(n: number): projection.NavigationQueryIndex {

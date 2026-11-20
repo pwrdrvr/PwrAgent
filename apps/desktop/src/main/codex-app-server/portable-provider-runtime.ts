@@ -1,4 +1,7 @@
-import { LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS, type CodexModelProviderSettings } from "@pwragent/shared";
+import {
+  LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
 import { Readable } from "node:stream";
 import { postUpstream, providerRequestHeaders } from "./local-responses-bridge.mjs";
 import { prepareBonsaiRuntime } from "./bonsai-runtime";

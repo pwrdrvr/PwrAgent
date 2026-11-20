@@ -15,8 +15,9 @@ import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
   PrSummary,
-} from "@pwragent/shared";
-import { graphemePrefix, isKeptAtTopThread } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
+import { isKeptAtTopThread } from "@pwragent/shared/thread-pins";
 import { DraftIcon, LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";

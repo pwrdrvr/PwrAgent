@@ -1,9 +1,8 @@
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  buildPullRequestStatusKey,
-  type PrSummary,
   type PullRequestMergeMethod,
   type PullRequestTerminalDetails,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
 
 /**
  * Merge details for a PR that has merged or closed.

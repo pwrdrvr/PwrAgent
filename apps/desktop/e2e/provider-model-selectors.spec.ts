@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Locator } from "./fixtures/electron-test";
-import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
+import type { NavigationLaunchpadDefaults } from "@pwragent/shared/contracts/navigation";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { seedProfileOverlayState } from "./fixtures/overlay-state-seeding";
 import { mastheadAction } from "./fixtures/window-chrome";

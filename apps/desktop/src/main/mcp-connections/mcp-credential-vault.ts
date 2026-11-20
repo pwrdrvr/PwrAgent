@@ -3,7 +3,10 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
-import { PWRSNAP_MCP_CONNECTION_ID, PWRGIT_MCP_CONNECTION_ID } from "@pwragent/shared";
+import {
+  PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
+} from "@pwragent/shared/contracts/mcp-connections";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 export type McpOAuthCredential = {

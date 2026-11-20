@@ -1,10 +1,9 @@
 import {
   findPrimaryThreadLinkedDirectory,
   materializeNavigationThreads,
-  type AppServerThreadSummary,
-  type LinkedDirectorySummary,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-state";
+import type { AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";

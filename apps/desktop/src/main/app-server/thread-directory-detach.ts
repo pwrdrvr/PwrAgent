@@ -1,10 +1,12 @@
-import { findPrimaryThreadLinkedDirectory, mergeThreadLinkedDirectories } from "@pwragent/shared";
+import { findPrimaryThreadLinkedDirectory, mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
+import type {
+  LinkedDirectorySummary,
+  AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DetachDirectoryFromThreadRequest,
   DetachDirectoryFromThreadResponse,
-  LinkedDirectorySummary,
-  AppServerThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
 import type { DesktopBackendRegistry } from "./backend-registry";
 import {

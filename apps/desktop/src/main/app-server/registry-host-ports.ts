@@ -1,9 +1,7 @@
-import type { UsageLimitObservation } from "@pwragent/shared";
+import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
@@ -12,20 +10,25 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
+  RenameThreadRequest,
+  RenameThreadResponse,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  AgentEvent,
+  AppServerCollaborationModeRequest,
+  StartThreadRequest,
+  StartThreadResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
   BackendAcpSessionRuntimeState,
   BackendLaunchpadOptions,
   BackendModelOption,
-  CodexThreadEnvironmentRuntime,
-  LinkedDirectorySummary,
-  MessagingDynamicToolCategory,
-  NavigationLaunchpadDraft,
-  RenameThreadRequest,
-  RenameThreadResponse,
-  StartThreadRequest,
-  StartThreadResponse,
-  ThreadExecutionMode,
-  ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type { NavigationLaunchpadDraft, ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type {
   BackendClient,

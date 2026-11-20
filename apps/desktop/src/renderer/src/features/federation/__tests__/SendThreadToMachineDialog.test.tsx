@@ -7,7 +7,7 @@ import {
   type SendThreadToMachineSource,
 } from "../SendThreadToMachineDialog";
 import type { ThreadHandoffTarget } from "../thread-handoff-targets";
-import type { ThreadHandoffProgress } from "@pwragent/shared";
+import type { ThreadHandoffProgress } from "@pwragent/shared/contracts/thread-instance-handoff";
 import {
   reduceThreadHandoffTransfers,
   type ThreadHandoffChoice,

@@ -11,8 +11,8 @@ import type {
   DesktopDarkTheme,
   DesktopLightTheme,
   DesktopAppearanceTheme,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { _electron as electron, expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import {
   assertUnreachableProfileBootDecision,

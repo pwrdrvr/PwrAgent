@@ -1,9 +1,9 @@
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  FederationCapability,
-  NavigationThreadSummary,
   SetQueuedTurnPausedRequest,
   SetQueuedTurnPausedResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {

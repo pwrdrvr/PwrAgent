@@ -4,7 +4,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadFileChangeKind,
   AppServerThreadFileDiffRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 const MAX_LIVE_DIFF_CACHE_ENTRIES = 2_000;
 

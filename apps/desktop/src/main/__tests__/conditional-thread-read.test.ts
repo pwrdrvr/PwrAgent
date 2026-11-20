@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildThreadPricingDisplay } from "@pwragent/shared";
-import type { AppServerReadThreadResponse } from "@pwragent/shared";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 
 function response(): AppServerReadThreadResponse {

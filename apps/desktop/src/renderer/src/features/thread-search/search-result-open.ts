@@ -1,13 +1,13 @@
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   federatedThreadIdentityKey,
   isRemoteFederationTarget,
-  type AppServerBackendKind,
   type FederatedThreadRef,
   type FederationRemoteTarget,
   type FederationTarget,
-  type ThreadSearchResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 
 /**
  * Where an opened search result goes.

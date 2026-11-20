@@ -26,7 +26,7 @@ import type {
   DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_DARK_THEME_DEFAULT,
@@ -37,7 +37,7 @@ import {
   isDesktopDarkTheme,
   isDesktopLightTheme,
   isDesktopTextSize,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 export type ThemePreference = DesktopAppearanceTheme;
 export type DarkThemePreference = DesktopDarkTheme;

@@ -6,7 +6,7 @@
 // thread would land nowhere.
 import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StarMapCommand } from "@pwragent/shared";
+import type { StarMapCommand } from "@pwragent/shared/contracts/star-map-tools";
 import {
   STAR_MAP_COMMAND_RESULT_CHANNEL,
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,

@@ -1,6 +1,9 @@
 import { dialog, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
-import type { CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
+import type {
+  CloudflareSetupRequest,
+  CloudflareSetupStatus,
+} from "@pwragent/shared/contracts/federation-cloudflare";
 import { FEDERATION_CLOUDFLARE_SETUP_CHANNEL } from "../../../shared/ipc";
 import { CloudflareSetupService, cloudflareSetupGate, cloudflareSetupResources } from "../../federation/cloudflare-setup-service";
 import {

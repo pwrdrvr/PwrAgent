@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ensureWindowThreadMounted } from "../ensure-window-thread-mounted";
 
 const target = { scope: "remote" as const, instanceId: "peer" };

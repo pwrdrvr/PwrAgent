@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatAccessModeLabel,

@@ -1,8 +1,9 @@
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
+import type { ProbeMcpConnectionResponse } from "@pwragent/shared/contracts/mcp-connections";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
-import { isGithubMcpServerUrl, isMcpIpcUrl } from "@pwragent/shared";
+import { isGithubMcpServerUrl } from "@pwragent/shared/github-mcp";
+import { isMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
 import { createMcpIpcTransport } from "./mcp-ipc-http";
 import { isStreamableHttpError, mcpClient, mcpClientAuth } from "./mcp-sdk";
 

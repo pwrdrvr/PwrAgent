@@ -1,1 +1,5 @@
-export type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary, TerminalSnapshot } from "@pwragent/shared";
+export type {
+  IntegratedTerminalRemoteInfo,
+  IntegratedTerminalSessionSummary,
+  TerminalSnapshot,
+} from "@pwragent/shared/contracts/terminal";

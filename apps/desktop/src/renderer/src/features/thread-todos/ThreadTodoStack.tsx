@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { ThreadTodo, ThreadTodoResolution } from "@pwragent/shared";
-import { threadTodoItemProgress } from "@pwragent/shared";
+import type { ThreadTodo, ThreadTodoResolution } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoItemProgress } from "@pwragent/shared/contracts/thread-todos";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
 import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";

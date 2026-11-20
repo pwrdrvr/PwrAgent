@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import type { FederationPeerRole } from "@pwragent/shared";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyDesktopSettingsPatch,

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { FederationFilePullReader, FILE_PULL_MAX_BYTES, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "../federation/federation-file-pull";
 
 import { FederationRouter } from "../federation/federation-router";

@@ -1,10 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type {
-  CodexMcpInventoryDetail,
-  CodexMcpServerSummary,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import { describeMcpAuthStatus } from "@pwragent/shared";
+import type { CodexMcpInventoryDetail, CodexMcpServerSummary } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { describeMcpAuthStatus } from "@pwragent/shared/mcp-auth-status";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
 import { CheckIcon, CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";

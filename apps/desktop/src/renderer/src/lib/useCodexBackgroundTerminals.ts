@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CodexBackgroundTerminal, NavigationThreadSummary } from "@pwragent/shared";
+import type { CodexBackgroundTerminal } from "@pwragent/shared/contracts/background-terminals";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { agentEventThreadIdentityKey, threadSummaryIdentityKey } from "./federated-thread-events";
 import { readRendererFederationTarget } from "./federation-window";

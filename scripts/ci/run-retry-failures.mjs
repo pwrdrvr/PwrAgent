@@ -25,7 +25,7 @@ function retryUnits() {
     const report = path.join(directory, `unit-retry-${index++}.json`);
     rmSync(report, { force: true });
     const result = spawnSync(process.execPath, [
-      path.resolve("node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.workspace.ts",
+      path.resolve("node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.workspace.mts",
       `--project=${project}`, ...files, "--testNamePattern", pattern,
       "--reporter=default", "--reporter=./scripts/ci/vitest-ci-reporter.mjs",
     ], { stdio: "inherit", env: { ...process.env, PWRAGENT_CI_TEST_REPORT: report } });

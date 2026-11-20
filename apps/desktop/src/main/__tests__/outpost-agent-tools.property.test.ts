@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { describe, expect, it } from "vitest";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";

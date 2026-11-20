@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   DesktopApplicationsSnapshot,
   ReadDesktopApplicationsRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../desktop-api";
 import { useDesktopApplications } from "../useDesktopApplications";

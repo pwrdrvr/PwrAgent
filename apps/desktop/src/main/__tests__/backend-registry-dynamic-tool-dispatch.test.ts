@@ -1,11 +1,9 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AppServerPendingRequestNotification,
-  MessagingDynamicToolCategory,
-  TaskMonitorResponse,
-} from "@pwragent/shared";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type { TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
 import type { DynamicToolCallResponse, DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
