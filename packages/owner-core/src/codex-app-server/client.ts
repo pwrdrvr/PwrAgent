@@ -1565,9 +1565,9 @@ function normalizeModelRoutingNotification(
   }
   const params = record as Partial<CodexModelVerificationNotification>;
   const verifications = Array.isArray(params.verifications)
-    ? [...new Set(params.verifications.filter(
-      (value): value is CodexModelVerificationNotification["verifications"][number] =>
-        typeof value === "string" && value.trim() !== "",
+    // Kept as strings: a newer Codex can send values this schema lacks.
+    ? [...new Set((params.verifications as unknown[]).filter(
+      (value): value is string => typeof value === "string" && value.trim() !== "",
     ))]
     : [];
   if (verifications.length === 0) return null;

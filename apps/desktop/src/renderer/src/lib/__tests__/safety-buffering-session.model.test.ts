@@ -96,9 +96,27 @@ it("never names the faster model or offers a switch in the status", () => {
   expect(SAFETY_REVIEW_STATUS_TEXT).not.toMatch(/luna|faster|switch|retry/i);
 });
 
-it("shows the status only while a turn runs", () => {
+it("shows the status only while the held turn runs", () => {
   const held = { safetyBuffering: { turnId: "turn-a", model: "gpt-6.2-sol" } };
   expect(safetyReviewStatusText(held)).toBeUndefined();
   expect(safetyReviewStatusText({ ...held, backendReportedActive: true })).toBe(SAFETY_REVIEW_STATUS_TEXT);
+  expect(safetyReviewStatusText({ ...held, activeTurnId: "turn-a" })).toBe(SAFETY_REVIEW_STATUS_TEXT);
   expect(safetyReviewStatusText({ activeTurnId: "turn-a" })).toBeUndefined();
+  // A hold whose turn end this window missed does not label the next turn.
+  expect(safetyReviewStatusText({ ...held, activeTurnId: "pending:send-2" })).toBeUndefined();
+  expect(safetyReviewStatusText({ ...held, activeTurnId: "turn-b", backendReportedActive: true }))
+    .toBeUndefined();
+});
+
+it("ends a hold when another turn starts that names itself only in turn.id", () => {
+  const held = { safetyBuffering: { turnId: "turn-a", model: "gpt-6.2-sol" } };
+  const next = transitionSafetyBuffering(held, {
+    method: "turn/started",
+    params: { threadId: "thread-1", turn: { id: "turn-b" } },
+  });
+  expect(next.safetyBuffering).toBeUndefined();
+  expect(transitionSafetyBuffering(held, {
+    method: "turn/started",
+    params: { threadId: "thread-1", turn: { id: "turn-a" } },
+  })).toBe(held);
 });

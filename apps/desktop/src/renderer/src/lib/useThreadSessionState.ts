@@ -6636,6 +6636,7 @@ export function useThreadSessionState(params: {
                 ),
                 pendingAssistantMessage: undefined,
                 pendingStatusText: undefined,
+                safetyBuffering: undefined,
                 staleThinkingRecheckAt: undefined,
               };
             });
@@ -6775,6 +6776,13 @@ export function useThreadSessionState(params: {
         !isRetainedRemoteThread &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
+        // The transcript text waits for focus, but streamed text still ends
+        // a safety hold, or the thread would show the hold once focused.
+        if (event.notification.method === "item/agentMessage/delta") {
+          const notification = event.notification;
+          updateSession(targetThreadKey, (session) =>
+            transitionSafetyBuffering(session, notification));
+        }
         return;
       }
 

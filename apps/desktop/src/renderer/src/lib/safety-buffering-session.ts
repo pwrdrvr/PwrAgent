@@ -26,7 +26,7 @@ export function transitionSafetyBuffering<T extends SessionWithSafetyBuffering>(
   const params = typeof notification.params === "object" && notification.params !== null
     ? notification.params as Record<string, unknown>
     : {};
-  const turnId = typeof params.turnId === "string" && params.turnId ? params.turnId : undefined;
+  const turnId = readTurnId(params);
   const current = session.safetyBuffering;
 
   if (notification.method === "turn/safetyBuffering/updated") {
@@ -57,13 +57,29 @@ export function transitionSafetyBuffering<T extends SessionWithSafetyBuffering>(
   }
 }
 
-/** The status line for a held turn, or undefined when nothing is held. */
+/**
+ * The status line for a held turn, or undefined when nothing is held. A hold
+ * left from an earlier turn, whose end this window never saw, does not label
+ * the turn that runs now.
+ */
 export function safetyReviewStatusText(
   session: SessionWithSafetyBuffering,
 ): string | undefined {
-  return session.safetyBuffering && (session.activeTurnId || session.backendReportedActive)
-    ? SAFETY_REVIEW_STATUS_TEXT
+  const held = session.safetyBuffering;
+  if (!held) return undefined;
+  if (session.activeTurnId) {
+    return session.activeTurnId === held.turnId ? SAFETY_REVIEW_STATUS_TEXT : undefined;
+  }
+  return session.backendReportedActive ? SAFETY_REVIEW_STATUS_TEXT : undefined;
+}
+
+/** A started turn can name itself only in `turn.id`. */
+function readTurnId(params: Record<string, unknown>): string | undefined {
+  if (typeof params.turnId === "string" && params.turnId) return params.turnId;
+  const turn = typeof params.turn === "object" && params.turn !== null
+    ? params.turn as Record<string, unknown>
     : undefined;
+  return typeof turn?.id === "string" && turn.id ? turn.id : undefined;
 }
 
 function withoutSafetyBuffering<T extends SessionWithSafetyBuffering>(session: T): T {

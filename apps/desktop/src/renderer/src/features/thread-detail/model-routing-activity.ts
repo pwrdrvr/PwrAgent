@@ -70,11 +70,14 @@ function modelRoutingDetails(
       status: "completed",
     }];
   }
-  return [...new Set(notification.params.verifications)].map((verification) => ({
-    id: `verification:${verification}`,
-    kind: "command" as const,
-    label: `Verification requested: ${describeModelVerification(verification).label}`,
-    markdown: describeModelVerification(verification).detail,
-    status: "completed" as const,
-  }));
+  return [...new Set(notification.params.verifications)].map((verification) => {
+    const { label, detail } = describeModelVerification(verification);
+    return {
+      id: `verification:${verification}`,
+      kind: "command" as const,
+      label: `Verification requested: ${label}`,
+      markdown: detail,
+      status: "completed" as const,
+    };
+  });
 }
