@@ -34,11 +34,13 @@ export type BackendErrorSignal = (
       kind: "turn-failed";
       onDismiss?: () => void;
       onCodexLogin?: () => void;
+      /** Starts a fresh sign-in for the Codex profile this window owns. */
+      onCodexReauthenticate?: () => void;
       onClaudeLogin?: () => void;
       onOpenCodexSettings?: () => void;
       /** Offered when the turn's error says Claude deleted the thread's session. */
       onContinueClaudeSession?: () => void;
-      recovery?: "claudeSessionGone" | "claudeSignIn";
+      recovery?: "claudeSessionGone" | "claudeSignIn" | "codexHardwareKeySignIn";
       /** The provider refused the response; name the block, not a fault. */
       block?: ProviderResponseBlock;
       backend: AppServerBackendKind;
@@ -148,6 +150,8 @@ export function resolveBackendErrorNotice(
 
   if (signal.kind === "turn-failed") {
     const context = signal.errorNoticeContext;
+    const codexHardwareKeySignIn = signal.backend === "codex"
+      && signal.recovery === "codexHardwareKeySignIn";
     const originLabel = context?.automationName
       ? `Automation: ${context.automationName}${signal.originLabel ? ` · ${signal.originLabel}` : ""}`
       : signal.originLabel;
@@ -159,13 +163,20 @@ export function resolveBackendErrorNotice(
         ? "Automation failed"
         : context?.taskMonitor
           ? "Task monitor failed"
-          : signal.block ? "Turn blocked by content filter" : "Turn failed",
+          : signal.block
+            ? "Turn blocked by content filter"
+            : codexHardwareKeySignIn ? "Codex sign-in required" : "Turn failed",
       ...(originLabel
         ? { status: { label: originLabel, state: "error" as const } }
         : {}),
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
         ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
+        : {}),
+      // The message is the provider's instruction. A peer's window cannot
+      // sign in to the owner's Codex profile, so it shows only the text.
+      ...(codexHardwareKeySignIn && !signal.instanceId && signal.onCodexReauthenticate
+        ? { actions: [{ label: "Sign in again", onClick: signal.onCodexReauthenticate, tone: "primary" as const }] }
         : {}),
       ...(signal.backend === "claude" && !signal.instanceId && !signal.block
         && signal.onClaudeLogin && signal.recovery === "claudeSignIn"

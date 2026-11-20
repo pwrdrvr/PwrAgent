@@ -455,6 +455,12 @@ export function CodexAuthProfileLoginDialog(props: {
   desktopApi?: DesktopApi;
   displayName: string;
   profile: string;
+  /**
+   * The profile is signed in, but Codex asked it to sign in again. `codex
+   * login` ends the current session before it opens a new one, so the
+   * dialog explains that and waits for the owner to start it.
+   */
+  reauthenticate?: boolean;
   onCancel: () => void;
   onAuthenticated?: () => Promise<void>;
 }) {
@@ -523,6 +529,7 @@ export function CodexAuthProfileLoginDialog(props: {
   };
 
   useEffect(() => {
+    if (props.reauthenticate) return;
     void startLogin();
     // Start once when this modal opens. The Restart login button handles retries.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -580,6 +587,9 @@ export function CodexAuthProfileLoginDialog(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, started, props.desktopApi, props.profile, busy]);
 
+  const confirming = Boolean(props.reauthenticate) && !started && !busy && !error
+    && !authenticated;
+
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
@@ -590,10 +600,27 @@ export function CodexAuthProfileLoginDialog(props: {
         role="dialog"
         tabIndex={-1}
       >
-        <h2 id="login-codex-profile-heading">Log in to Codex profile</h2>
+        <h2 id="login-codex-profile-heading">
+          {props.reauthenticate ? "Sign in to Codex again" : "Log in to Codex profile"}
+        </h2>
         {authenticated ? (
+          props.reauthenticate ? (
+            // A completed sign-in proves only that the account authenticated;
+            // nothing reports which method the provider accepted.
+            <p>
+              <strong>{props.displayName}</strong> is signed in. Send your
+              request again when you are ready.
+            </p>
+          ) : (
+            <p>
+              <strong>{props.displayName}</strong> is logged in.
+            </p>
+          )
+        ) : confirming ? (
           <p>
-            <strong>{props.displayName}</strong> is logged in.
+            Signing in again ends the current Codex session for{" "}
+            <strong>{props.displayName}</strong>, so turns running on it may
+            stop. A browser window then opens to sign in.
           </p>
         ) : (
           <>
@@ -636,6 +663,26 @@ export function CodexAuthProfileLoginDialog(props: {
             >
               Done
             </button>
+          ) : confirming ? (
+            <>
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={props.onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                disabled={!canLogin}
+                type="button"
+                onClick={() => {
+                  void startLogin();
+                }}
+              >
+                Sign in again
+              </button>
+            </>
           ) : (
             <>
               <button

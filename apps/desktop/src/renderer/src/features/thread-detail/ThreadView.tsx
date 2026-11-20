@@ -1,5 +1,10 @@
 import { ContinueAfterStatus } from "../thread-dependencies/ContinueAfterStatus";
 import {
+  isModelRoutingActivityEntry,
+  mergeModelRoutingActivityEntry,
+  type ModelRoutingNotification,
+} from "./model-routing-activity";
+import {
   buildProviderResponseBlockEntry,
   parseRemoteOperatorItemKey,
   readProviderResponseBlockNotification,
@@ -2966,6 +2971,16 @@ export function ThreadView(props: ThreadViewProps) {
               : interruptedActivity,
           );
         }
+        // A reroute or verification request often explains why the turn
+        // ended, so it stays with the turn instead of vanishing with it. The
+        // slot is cleared at every turn end, so a routing row here is this
+        // turn's.
+        const routingActivity = pendingProtocolActivityEntryRef.current;
+        if (routingActivity && isModelRoutingActivityEntry(routingActivity)) {
+          deferLiveTranscriptEntry(
+            liveTerminalTurn ? { ...routingActivity, turn: liveTerminalTurn } : routingActivity,
+          );
+        }
         setPendingActivityEntry(undefined);
         setPendingProtocolActivityEntry(undefined);
         setPendingUsageActivityEntry(undefined);
@@ -3047,6 +3062,23 @@ export function ThreadView(props: ThreadViewProps) {
             message,
           })
         );
+        return;
+      }
+
+      if (
+        event.notification.method === "turn/modelRerouted"
+        || event.notification.method === "turn/verificationRequested"
+      ) {
+        // The notification union is too wide for the method to narrow it.
+        const notification = event.notification as ModelRoutingNotification;
+        const turn = buildLiveTurnMetadata({
+          turnId: liveNotificationTurnId(notification.params.turnId),
+          activeTurnStartedAt: props.activeTurnStartedAt,
+        });
+        setPendingProtocolActivityEntry((current) => {
+          const entry = mergeModelRoutingActivityEntry(current, notification);
+          return entry ? { ...entry, ...(turn ? { turn } : {}) } : current;
+        });
         return;
       }
 
