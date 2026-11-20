@@ -56,183 +56,6 @@ async function findUnresolvedStaticImport(environments) {
   }
 }
 
-const isPureBarrel = (source) => source.statements.length > 0
-  && source.statements.every((statement) => ts.isExportDeclaration(statement) && statement.moduleSpecifier);
-const hasExportModifier = (node) => ts.canHaveModifiers(node)
-  && ts.getModifiers(node)?.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword);
-
-function bindingNames(name, names) {
-  if (ts.isIdentifier(name)) names.push(name.text);
-  else name.elements.forEach((element) => ts.isBindingElement(element) && bindingNames(element.name, names));
-}
-
-/**
- * Narrows edges into pure re-export barrels of packages that declare
- * `"sideEffects": false`. An importer that names its bindings depends on the
- * modules that provide those names, as it does in the application bundle.
- */
-async function refineBarrelEdges(root, edges, resolveBare) {
-  const sources = new Map();
-  const parse = (file) => {
-    if (!sources.has(file)) {
-      let source = null;
-      try {
-        source = ts.createSourceFile(file, readFileSync(path.join(root, file), "utf8"), ts.ScriptTarget.Latest, false);
-      } catch {}
-      sources.set(file, source);
-    }
-    return sources.get(file);
-  };
-  const packages = new Map();
-  const sideEffectFree = (file) => {
-    for (let directory = path.posix.dirname(file); directory !== "."; directory = path.posix.dirname(directory)) {
-      if (!packages.has(directory)) {
-        let declared;
-        try {
-          declared = JSON.parse(readFileSync(path.join(root, directory, "package.json"), "utf8")).sideEffects === false;
-        } catch {}
-        packages.set(directory, declared);
-      }
-      if (packages.get(directory) !== undefined) return packages.get(directory);
-    }
-    return false;
-  };
-  const resolveRelative = (from, specifier) => {
-    if (!specifier.startsWith(".")) return undefined;
-    const base = path.posix.join(path.posix.dirname(from), specifier);
-    const stem = base.replace(/\.[cm]?js$/, "");
-    const candidates = [base, ...extensions.map((extension) => `${stem}${extension}`),
-      ...extensions.map((extension) => `${base}/index${extension}`)];
-    // A module that only declares types has no runtime edge, so it is
-    // absent from the graph while a barrel still forwards its names.
-    return candidates.find((candidate) => edges.has(candidate))
-      ?? candidates.find((candidate) => codeFile.test(candidate) && existsSync(path.join(root, candidate)));
-  };
-  const barrels = new Map();
-  const barrel = (file) => {
-    if (!barrels.has(file)) {
-      const source = codeFile.test(file) && sideEffectFree(file) ? parse(file) : null;
-      barrels.set(file, Boolean(source && isPureBarrel(source)));
-    }
-    return barrels.get(file);
-  };
-
-  // Every name a real module exports, including names it forwards.
-  const declared = new Map();
-  const declaredNames = (file, seen = new Set()) => {
-    if (declared.has(file)) return declared.get(file);
-    if (seen.has(file)) return new Set();
-    seen.add(file);
-    const names = new Set();
-    const source = parse(file);
-    if (!source) return undefined;
-    for (const statement of source.statements) {
-      if (ts.isExportAssignment(statement)) names.add("default");
-      else if (ts.isExportDeclaration(statement)) {
-        if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-          statement.exportClause.elements.forEach(({ name }) => names.add(name.text));
-        } else if (statement.exportClause) names.add(statement.exportClause.name.text);
-        else {
-          const target = statement.moduleSpecifier && resolveRelative(file, statement.moduleSpecifier.text);
-          const forwarded = target && declaredNames(target, seen);
-          if (!forwarded) return undefined;
-          forwarded.forEach((name) => name !== "default" && names.add(name));
-        }
-      } else if (hasExportModifier(statement)) {
-        if (ts.getModifiers(statement).some(({ kind }) => kind === ts.SyntaxKind.DefaultKeyword)) names.add("default");
-        else if (ts.isVariableStatement(statement)) {
-          const found = [];
-          statement.declarationList.declarations.forEach(({ name }) => bindingNames(name, found));
-          found.forEach((name) => names.add(name));
-        } else if (statement.name) names.add(statement.name.text);
-      }
-    }
-    declared.set(file, names);
-    return names;
-  };
-
-  // name -> first module on the re-export chain that has code of its own.
-  const provided = new Map();
-  const providers = (file, seen = new Set()) => {
-    if (provided.has(file)) return provided.get(file);
-    if (seen.has(file)) return undefined;
-    seen.add(file);
-    const names = new Map();
-    for (const statement of parse(file).statements) {
-      const target = resolveRelative(file, statement.moduleSpecifier.text);
-      if (!target) return undefined;
-      const nested = barrel(target) ? providers(target, seen) : undefined;
-      if (barrel(target) && !nested) return undefined;
-      if (!statement.exportClause) {
-        const forwarded = nested ?? declaredNames(target);
-        if (!forwarded) return undefined;
-        for (const name of forwarded.keys()) {
-          if (name !== "default" && !names.has(name)) names.set(name, nested ? nested.get(name) : target);
-        }
-      } else if (ts.isNamedExports(statement.exportClause)) {
-        for (const { name, propertyName } of statement.exportClause.elements) {
-          const provider = nested ? nested.get((propertyName ?? name).text) : target;
-          if (!provider) return undefined;
-          names.set(name.text, provider);
-        }
-      } else names.set(statement.exportClause.name.text, target);
-    }
-    provided.set(file, names);
-    return names;
-  };
-
-  const refined = new Map([...edges].map(([file, targets]) => [file, new Set(targets)]));
-  const used = new Set();
-  for (const [importer, targets] of edges) {
-    for (const target of targets) {
-      if (!barrel(target)) continue;
-      const names = providers(target);
-      const source = names && parse(importer);
-      if (!source) continue;
-      // Workspace packages are imported by name, so ask Vite where each
-      // named module of this importer resolves.
-      const bare = new Map();
-      for (const statement of source.statements) {
-        const specifier = (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement))
-          && statement.moduleSpecifier?.text;
-        if (specifier && !specifier.startsWith(".")) bare.set(specifier, await resolveBare(specifier, importer));
-      }
-      const matches = (node) => node && ts.isStringLiteralLike(node)
-        && (resolveRelative(importer, node.text) === target || bare.get(node.text) === target);
-      const wanted = new Set();
-      let whole = false;
-      for (const statement of source.statements) {
-        if (ts.isImportDeclaration(statement) && matches(statement.moduleSpecifier)) {
-          const clause = statement.importClause;
-          if (!clause || clause.name) whole = true;
-          else if (clause.isTypeOnly) continue;
-          else if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-            clause.namedBindings.elements.forEach(({ name, propertyName }) => wanted.add((propertyName ?? name).text));
-          } else whole = true;
-        } else if (ts.isExportDeclaration(statement) && matches(statement.moduleSpecifier)) {
-          if (statement.isTypeOnly) continue;
-          if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-            statement.exportClause.elements.forEach(({ name, propertyName }) => wanted.add((propertyName ?? name).text));
-          } else whole = true;
-        }
-      }
-      // A dynamic import, require or mock of the barrel uses all of it.
-      const visit = (node) => {
-        if (ts.isCallExpression(node) && node.arguments.some(matches)) whole = true;
-        else ts.forEachChild(node, visit);
-      };
-      visit(source);
-      // No named import explains this runtime edge: leave it alone.
-      if (whole || !wanted.size || [...wanted].some((name) => !names.has(name))) continue;
-      const narrowed = refined.get(importer);
-      narrowed.delete(target);
-      wanted.forEach((name) => narrowed.add(names.get(name)));
-      used.add(target);
-    }
-  }
-  return { refined, barrels: [...used].sort() };
-}
-
 function reverse(edges) {
   const importers = new Map();
   for (const [from, targets] of edges) {
@@ -285,7 +108,7 @@ function deletionChangesResolution(root, file) {
   return stem === "index" && extensions.some((extension) => existsSync(path.join(root, `${directory}${extension}`)));
 }
 
-export async function withVitestImpact(root, callback, config = "vitest.linux-ci.ts") {
+export async function withVitestImpact(root, callback, config = "vitest.linux-ci.mts") {
   const ctx = await createVitest("test", {
     root,
     config: path.resolve(root, config),
@@ -328,22 +151,6 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
         }
       }
       for (const spec of specs) if (!edges.has(fileOf(spec))) edges.set(fileOf(spec), new Set());
-      const resolved = new Map();
-      const resolveBare = async (specifier, importer) => {
-        if (!resolved.has(specifier)) {
-          let file;
-          for (const environment of environments) {
-            const result = await environment.pluginContainer.resolveId(specifier, path.join(root, importer)).catch(() => null);
-            if (result && path.isAbsolute(result.id)) {
-              file = relative(result.id.replace(/[?#].*$/, ""));
-              break;
-            }
-          }
-          resolved.set(specifier, file);
-        }
-        return resolved.get(specifier);
-      };
-      const { refined, barrels } = await refineBarrelEdges(root, edges, resolveBare);
       const texts = new Map();
       const text = (file) => {
         if (!texts.has(file)) {
@@ -355,13 +162,7 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
         }
         return texts.get(file);
       };
-      const setupFiles = new Set(ctx.projects.flatMap(({ config: project }) => [
-        ...project.setupFiles, ...project.globalSetup, ...project.snapshotSerializers,
-      ]).map(relative));
-      return graph = {
-        edges, barrels, text, setupFiles,
-        importers: reverse(edges), refinedImporters: reverse(refined),
-      };
+      return graph = { edges, text, importers: reverse(edges) };
     };
 
     const select = async (changes) => {
@@ -376,7 +177,7 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
       }
       const loaded = await loadGraph();
       if (loaded.full) return loaded.full;
-      const { edges, importers, refinedImporters, barrels, text, setupFiles } = loaded;
+      const { edges, importers, text } = loaded;
       const specFiles = new Map(specs.map((spec) => [fileOf(spec), spec]));
       const specsAmong = (files) => [...files].filter((file) => specFiles.has(file));
       // Files that name a changed file in a string: by basename for data,
@@ -426,13 +227,9 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
           continue;
         }
         if (edges.has(file)) {
-          const wide = dependents(importers, file);
-          specsAmong(wide).forEach((spec) => explained.add(spec));
-          // A setup file reaches tests without an import edge, and a changed
-          // barrel can rebind any name. Keep Vitest's answer for both.
-          const exact = barrels.includes(file) || [...setupFiles].some((setup) => wide.has(setup));
-          const narrow = exact ? wide : dependents(refinedImporters, file);
-          const owners = specsAmong(narrow).filter((spec) => affected.has(spec));
+          const reached = specsAmong(dependents(importers, file));
+          reached.forEach((spec) => explained.add(spec));
+          const owners = reached.filter((spec) => affected.has(spec));
           if (!owners.length) return { mode: "full", reason: "no Vitest graph owner for changed source", file };
           owners.forEach((spec) => add(spec, { file, reason: spec === file ? "edited test" : "Vitest related source" }));
           if (codeFile.test(file)) reference(literalOwners(file, true));
@@ -465,12 +262,7 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
       }
 
       const entries = [...selected.values()].sort((a, b) => keyOfEntry(a).localeCompare(keyOfEntry(b), "en"));
-      const projects = Object.fromEntries(ctx.projects.map(({ name }) => [name, {
-        total: specs.filter((spec) => spec.project.name === name).length,
-        selected: entries.filter((entry) => entry.project === name).length,
-      }]));
-      const lanes = config === "vitest.linux-ci.ts" ? await linuxLaneEstimates(ctx, specs, selected, keyOf, fileOf) : undefined;
-      return { mode: "selected", selected: entries, total: specs.length, projects, lanes, ignored, barrels };
+      return { mode: "selected", selected: entries, total: specs.length, ignored };
     };
     // Whether everything that imports this file, directly or through other
     // modules, is a test input. Product code that imports it reaches E2E.
@@ -488,40 +280,3 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
 }
 
 const keyOfEntry = ({ project, file }) => JSON.stringify([project, file]);
-
-async function linuxLaneEstimates(ctx, specs, selected, keyOf, fileOf) {
-  const table = (name) => JSON.parse(readFileSync(new URL(name, import.meta.url), "utf8"));
-  const costs = {
-    "desktop-main": table("./linux-unit-costs.json"),
-    "desktop-renderer": table("./linux-renderer-unit-costs.json"),
-  };
-  const initialShard = ctx.config.shard;
-  const count = 4;
-  const metrics = (laneSpecs) => {
-    let modeledMs = 0;
-    let measuredFiles = 0;
-    let unweightedFiles = 0;
-    for (const spec of laneSpecs) {
-      const weights = costs[spec.project.name];
-      if (!weights) {
-        unweightedFiles++;
-        continue;
-      }
-      const measured = weights.files[fileOf(spec)];
-      if (measured !== undefined) measuredFiles++;
-      modeledMs += measured ?? weights.fallbackMs;
-    }
-    return { files: laneSpecs.length, modeledMs, measuredFiles, unweightedFiles };
-  };
-  try {
-    const lanes = [];
-    for (let index = 1; index <= count; index++) {
-      ctx.config.shard = { index, count };
-      const owned = await new ctx.config.sequence.sequencer(ctx).shard([...specs]);
-      lanes.push({ lane: index, total: metrics(owned), selected: metrics(owned.filter((spec) => selected.has(keyOf(spec)))) });
-    }
-    return lanes;
-  } finally {
-    ctx.config.shard = initialShard;
-  }
-}

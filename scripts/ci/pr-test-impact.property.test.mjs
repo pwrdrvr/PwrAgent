@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { compareFailures, describeLinuxEvidence, getPrDiff, listE2eFiles, planImpact } from "./pr-test-impact.mjs";
+import { getPrDiff, listE2eFiles, planImpact, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const source = "packages/shared/src/";
@@ -102,7 +102,7 @@ it("keeps the full suite for configuration, dependency and platform inputs, and 
     { file: "pnpm-lock.yaml", status: "M" },
     { file: "patches/some-package.patch", status: "A" },
     { file: "packages/shared/package.json", status: "M" },
-    { file: "vitest.workspace.ts", status: "M" },
+    { file: "vitest.workspace.mts", status: "M" },
     { file: "apps/desktop/playwright.config.ts", status: "M" },
     { file: "apps/desktop/native/osx/example.swift", status: "M" },
     { file: "apps/desktop/e2e/windows-example.spec.ts", status: "M" },
@@ -196,12 +196,6 @@ const value = (await import("./barrel.mjs")).default; assert.equal(new AsyncLoca
       expect(staticPlan.unit.selected?.map(({ file }) => file)).toEqual([files.mixedOwner, files.owner]);
       expect(staticPlan.unit.total).toBe(5);
       expect(staticPlan.e2e.mode).toBe("full");
-      const scored = compareFailures(staticPlan, { missingSlices: [], slices: [{
-        kind: "unit", platform: "linux", key: "unit-fixture", first: { complete: true, errors: 0 },
-        failures: observed.map((file) => ({ project: staticPlan.unit.selected[0].project, file })),
-      }] });
-      expect(scored.cases.map(({ file, outcome }) => [file, outcome]))
-        .toEqual([[files.owner, "covered"], [files.mixedOwner, "covered"]]);
 
       // Neither file has an import edge. Each reader names it in a string.
       write(files.disk, "2");
@@ -255,19 +249,16 @@ it("widens for an aliased createRequire loader with a computed specifier", async
   });
 }, 30_000);
 
-it("narrows through a side-effect-free barrel by imported name, and keeps tests that list files or run source outside the graph", async () => {
+it("keeps tests that list files or run source outside the graph, and ignores type-only modules", async () => {
   await temporaryTree(async (root, write) => {
     const file = (name) => `${source}${name}`;
     write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
-    write("packages/shared/package.json", '{ "sideEffects": false }');
-    write(file("index.mjs"), 'export * from "./a.mjs";\nexport * from "./b.mjs";\n');
     write(file("a.mjs"), "export const a = 1;");
     write(file("b.mjs"), "export const b = 2;");
     write(file("types.ts"), "export interface Value { a: number }");
     write(file("kept.cjs"), "module.exports = 1;");
-    write(file("uses-a.test.mjs"), 'import { a } from "./index.mjs"; export default a;');
-    write(file("uses-b.test.mjs"), 'import { b } from "./index.mjs"; export default b;');
-    write(file("whole.test.mjs"), 'import * as all from "./index.mjs"; export default all;');
+    write(file("uses-a.test.mjs"), 'import { a } from "./a.mjs"; export default a;');
+    write(file("uses-b.test.mjs"), 'import { b } from "./b.mjs"; export default b;');
     write(file("scan.test.mjs"), 'import { readdirSync } from "node:fs"; export default readdirSync(".");');
     // Neither test imports `a.mjs`. One bundles source through a helper and
     // the other starts a worker, so both can run it.
@@ -284,16 +275,12 @@ it("narrows through a side-effect-free barrel by imported name, and keeps tests 
       const outside = "runs on product changes: executes source outside the Vitest graph";
 
       const narrowed = await plan(modified("a.mjs"));
-      expect(names(narrowed)).toEqual(["bundled.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "whole.test.mjs", "worker.test.mjs"]);
-      expect(narrowed.barrels).toEqual([file("index.mjs")]);
+      expect(names(narrowed)).toEqual(["bundled.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "worker.test.mjs"]);
       expect(reasons(narrowed, "scan.test.mjs")).toEqual([{ file: file("scan.test.mjs"), reason: "always run: enumerates files" }]);
       expect(reasons(narrowed, "bundled.test.mjs")).toEqual([{ file: file("bundle.mjs"), reason: outside }]);
       expect(reasons(narrowed, "worker.test.mjs")).toEqual([{ file: file("worker.test.mjs"), reason: outside }]);
       // A change to tests alone gives a bundle nothing new to run.
       expect(names(await plan(modified("uses-a.test.mjs")))).toEqual(["scan.test.mjs", "uses-a.test.mjs"]);
-      // An edited barrel can rebind any name, so every importer runs.
-      expect(names(await plan(modified("index.mjs"))))
-        .toEqual(["bundled.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "uses-b.test.mjs", "whole.test.mjs", "worker.test.mjs"]);
 
       const types = await plan(modified("types.ts"));
       expect(names(types)).toEqual(["scan.test.mjs"]);
@@ -330,29 +317,20 @@ it("uses Playwright's collected specs and widens when registration is absent or 
   });
 }, 30_000);
 
-it("counts omitted failures by exact project/file and leaves missing evidence visible", () => {
-  const result = compareFailures({
-    unit: { mode: "selected", selected: [{ project: "shared", file: "a.test.ts" }] },
-    e2e: { mode: "selected", selected: [{ file: spec }] },
-  }, {
-    missingSlices: [{ platform: "linux" }],
-    slices: [
-      { kind: "unit", platform: "linux", key: "unit-linux-1", first: { complete: true, errors: 0 }, failures: [
-        { project: "shared", file: "a.test.ts" }, { project: "desktop-main", file: "a.test.ts", retry: "recovered" },
-      ] },
-      { kind: "e2e", platform: "linux", key: "e2e-linux-1", first: { complete: false, errors: 1 }, failures: [
-        { file: spec }, { file: "apps/desktop/e2e/other.spec.ts" }, {},
-      ] },
-    ],
-  });
-  expect(result).toMatchObject({ covered: 2, missed: 2, missedRecovered: 1, unknown: 1, missingLinuxSlices: 1,
-    incompleteLinuxSlices: ["e2e-linux-1"], linuxSlicesWithErrors: ["e2e-linux-1"] });
-  expect(describeLinuxEvidence({ ...result, missingLinuxSlices: 0, incompleteLinuxSlices: [], linuxSlicesWithErrors: [] }))
-    .toBe("2/2/1 (1 missed passed on retry)");
-  expect(describeLinuxEvidence({ ...result, covered: 0, missed: 0, missedRecovered: 0, unknown: 0 }))
-    .toBe("0/0/0 (partial evidence: 1 missing, 1 incomplete, 1 with errors)");
-  expect(describeLinuxEvidence({
-    ...result, covered: 0, missed: 0, missedRecovered: 0, unknown: 0, missingLinuxSlices: 0,
-    incompleteLinuxSlices: [], linuxSlicesWithErrors: [],
-  })).toBe("0/0/0");
+it("splits a narrowed unit plan into lanes that cover every selected file once", () => {
+  const projects = ["desktop-main", "desktop-renderer", "desktop-renderer-node", "messaging", "owner-core", "shared"];
+  const selected = Array.from({ length: 700 }, (_, index) => ({ project: projects[index % projects.length], file: `${index}.test.ts` }));
+  // Linux runs everything. The two Windows jobs split it without overlap.
+  expect(unitGroupFiles(selected, "linux")).toEqual(selected);
+  const windows = [...unitGroupFiles(selected, "windows-main"), ...unitGroupFiles(selected, "windows-renderer")];
+  expect(windows).toHaveLength(selected.length);
+  expect(new Set(windows).size).toBe(selected.length);
+  for (const [group, { lanes }] of Object.entries(unitGroups)) {
+    expect(unitLaneCount(0, group)).toBe(0);
+    expect(unitLaneCount(1, group)).toBe(1);
+    expect(unitLaneCount(150, group)).toBe(1);
+    expect(unitLaneCount(151, group)).toBe(2);
+    // A selection of any size uses no more lanes than the full suite.
+    expect(unitLaneCount(100_000, group)).toBe(lanes);
+  }
 });

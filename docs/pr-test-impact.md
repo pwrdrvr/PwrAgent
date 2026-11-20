@@ -1,26 +1,38 @@
 # PR test impact
 
-This prototype plans which tests a pull request affects, then executes that
-plan on hosted runners beside the required jobs. It runs on code-impacting PRs
-from branches starting with `prototype/pr-test-impact`. Required jobs, their
-lanes and the classifier are unchanged, and no job depends on the narrowed
-jobs. Windows and macOS Desktop E2E, the standalone Outpost tests, and pushes
-to `main` or release branches have no plan.
+On a pull request, the `Test plan` job decides which unit tests and Linux
+Desktop E2E specs the change affects, and the test lanes run that selection
+in place of the full suite. The required checks are the same jobs as before:
+`Test` and `Desktop E2E`.
+
+Every test runs when:
+
+- the event is a push, including every push to `main` and `releases/**`;
+- the pull request has the `ci:full` label;
+- the pull request changes a platform-specific path, which also starts the
+  macOS and Windows Desktop E2E lanes;
+- the plan says `full` for the reasons listed below;
+- the `Test plan` job fails or does not run.
+
+Documentation-only pull requests still skip the test jobs.
 
 ## Jobs
 
-- `PR test impact plan` runs as soon as dependencies are installed. It writes
-  `plan.json` and the outputs that start the narrowed jobs.
-- `PR test impact unit` executes the selected Vitest files on Linux and
-  Windows. It also executes two recorded change sets (#3932 and #3889) on
-  Linux, so every run times a typical product diff.
-- `PR test impact E2E` executes the selected Playwright specs on Linux.
-- `PR test impact report` runs after the full lanes. It compares the narrowed
-  jobs with the full lanes of the same attempt and lists every failure the
-  full Linux lanes observed that the plan did not select.
+- `Test plan` runs as soon as dependencies are installed, and the lanes wait
+  for it. It writes `plan.json` to the `pr-test-impact-plan` artifact, a
+  summary of the selection, and the lane list of each job.
+- `Test (lane N of 4)` runs the selected Vitest files on Linux. A lane holds
+  about 150 selected files, so a typical plan runs one lane and a wide one
+  runs four. The lane uses the same reporter, completion check and retry step
+  as a full lane.
+- `Windows desktop-main` and `Windows renderer + packages` run the selected
+  files of their projects, in at most two lanes each. A job with no selected
+  file does not start.
+- `Linux Desktop E2E (lane 1 of 4)` runs the selected specs. When the plan
+  selects no spec, no lane starts and `Desktop E2E` reports the skip.
 
-A selected plan with no tests starts no job. A full plan starts no narrowed
-job either: the required lanes are that run.
+A lane that the plan leaves out is not reported as a missing slice in the
+consolidated retry report.
 
 ## Diff provenance
 
@@ -42,13 +54,8 @@ selects the full suite.
 Vitest's related-file resolver decides which test files a changed module
 affects. It follows static imports and literal dynamic imports, honors
 `vi.mock`, and selects a whole project when a setup file, snapshot serializer
-or environment reaches the change. The plan adds five rules.
+or environment reaches the change. The plan adds four rules.
 
-- **Barrels.** `packages/shared` declares `"sideEffects": false`, and its
-  index only re-exports. A test that reaches a changed module only through
-  that index, without importing one of the module's names, is not selected.
-  A namespace import, dynamic import, `require` or mock of the index keeps
-  every edge. An edit to the index itself selects every importer.
 - **String references.** A changed file with no import edge selects the tests
   that reach a module naming it: by basename for data such as a budget JSON,
   and by module path for code. A changed module also selects the tests behind
@@ -57,7 +64,7 @@ or environment reaches the change. The plan adds five rules.
   edge and selects nothing. Typecheck still covers it in `Lint`.
 - **Always-run tests.** A test, or test helper, that lists directories can
   read a file that nothing imports. Every plan includes those tests (79 of
-  2,307 files on 2026-11-20).
+  2,308 files on 2026-11-20).
 - **Tests that run source outside the graph.** A test that bundles source
   with esbuild or Vite, starts a worker, or runs a TypeScript loader executes
   modules that Vitest never links to it. Those tests, and the tests behind a
@@ -112,40 +119,28 @@ as an image or recorded fixture select the full suite.
   of them on the 5-second timeout, until the lane costs were rebalanced.
 - A computed import in an unchanged file is found only when that file names
   the changed module in a string.
-- Global state that one module of a side-effect-free package sets up for
-  another is not an import edge. The barrel rule relies on the package's own
-  declaration.
-- The plan is computed on Linux. The Windows job skips, and reports, a
+- The plan is computed on Linux. A Windows lane reports, and skips, a
   selected file that Windows does not collect; it cannot add a test that only
   Windows collects.
+- A pull request no longer runs the tests its plan leaves out, so a miss
+  shows first on the push to `main`, where every test runs.
 - Application code reached only through Electron, such as the preload entry,
   has no unit owner, and any change to product code runs every spec.
 
 ## Evidence
 
-Each run's `pr-test-impact-<attempt>` artifact holds `plan.json`, the result
-of every narrowed job, and `report.json`. The report records test files and
-test cases executed, the elapsed span and summed runner time of the narrowed
-and full jobs from the Actions API, and each failure the full Linux lanes
-observed as covered, missed or unknown. Missing, incomplete or errored slices
-limit that evidence even when the miss count is zero. Initial failures that
-recover on retry still count.
-
-Job durations include checkout and dependency installation. The narrowed
-jobs do not shorten the workflow while the required lanes still run.
-
 Replaying the 297 code-impacting commits that reached `main` before
 2026-11-20 against the graph of that day, with files since removed left out:
 
-| | Before | Now |
-| --- | --- | --- |
-| Commits with a narrowed Vitest plan | 71 (24%) | 208 (70%) |
-| Median share of test files, narrowed plans | | 12% |
-| Commits selecting at most 10% of test files | | 79 (27%) |
-| Commits selecting at most 20% of test files | | 132 (44%) |
-| Median share of test files, all commits | | 32% |
-| Commits with a narrowed Playwright plan | | 37 (12%) |
-| Of those, commits selecting no spec | | 31 |
+| | Count |
+| --- | --- |
+| Commits with a narrowed Vitest plan | 208 (70%) |
+| Median share of test files, narrowed plans | 12% |
+| Commits selecting at most 10% of test files | 80 (27%) |
+| Commits selecting at most 20% of test files | 134 (45%) |
+| Median share of test files, all commits | 31% |
+| Commits with a narrowed Playwright plan | 37 (12%) |
+| Of those, commits selecting no spec | 31 |
 
 This replay measures selection size. It cannot measure misses, because the
 commits it replays passed.
@@ -169,9 +164,7 @@ the rule for tests that run source outside the graph, a twentieth record was
 a real miss: the PR #3809 failure. Ten of the 15 that passed on retry are one
 case in `build-mcp-ipc-relay.oracle.test.mjs`, in ten different runs.
 
-The graph is today's, not each run's, so a dependency that has since changed
-can hide or invent a miss. The artifact fixture
-`scripts/ci/fixtures/pr-test-impact-red-runs.json` holds two archived red PR
-runs; both exercise full-suite fallback.
+The graph is that day's, not each run's, so a dependency that has since
+changed can hide or invent a miss.
 [OpenClaw's reported figures](https://vincent.build/openclaw-ci-cost-reduction/)
 come from a different workload and are not a controlled test of a selector.

@@ -190,23 +190,28 @@ it("gates every cross-platform job on the classifier and nothing else on it", ()
   );
 });
 
-// Oracle: the required `Desktop E2E` check passes only when Linux succeeded
-// and macOS either succeeded or was skipped because the classifier said so.
+// Oracle: the required `Desktop E2E` check passes only when Linux succeeded,
+// or was skipped because the test plan selected no spec, and macOS either
+// succeeded or was skipped because the classifier said so.
 // Run the step's actual shell for every result combination.
-it("accepts a skipped macOS lane in the Desktop E2E gate only when the classifier skipped it", () => {
+it("accepts a skipped lane in the Desktop E2E gate only when the classifier or the test plan skipped it", () => {
   const gate = jobSection("desktop-e2e-result");
   const script = gate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
   const results = ["success", "failure", "cancelled", "skipped"];
   for (const linux of results) {
     for (const macos of results) {
       for (const full of ["true", "false"]) {
-        const run = spawnSync("bash", ["-c", script], {
-          env: { PATH: process.env.PATH, LINUX_E2E_RESULT: linux, MACOS_E2E_RESULT: macos, FULL_PLATFORMS: full,
-            GITHUB_STEP_SUMMARY: "/dev/null" },
-          encoding: "utf8",
-        });
-        const pass = linux === "success" && (macos === "success" || (full === "false" && macos === "skipped"));
-        expect(run.status === 0, `linux=${linux} macos=${macos} full=${full}: ${run.stdout}${run.stderr}`).toBe(pass);
+        // Unset when the plan job did not succeed, then no lane and one lane.
+        for (const lanes of [undefined, "", "[]", "[1]"]) {
+          const run = spawnSync("bash", ["-c", script], {
+            env: { PATH: process.env.PATH, LINUX_E2E_RESULT: linux, MACOS_E2E_RESULT: macos, FULL_PLATFORMS: full,
+              GITHUB_STEP_SUMMARY: "/dev/null", ...(lanes === undefined ? {} : { E2E_LANES: lanes }) },
+            encoding: "utf8",
+          });
+          const pass = (linux === "success" || (lanes === "[]" && linux === "skipped"))
+            && (macos === "success" || (full === "false" && macos === "skipped"));
+          expect(run.status === 0, `linux=${linux} macos=${macos} full=${full} lanes=${lanes}: ${run.stdout}${run.stderr}`).toBe(pass);
+        }
       }
     }
   }

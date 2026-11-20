@@ -218,43 +218,20 @@ export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwrig
   return listPlaywright(root, config, [`--only-changed=${base}`, "--pass-with-no-tests"]);
 }
 
-export function describeLinuxEvidence(observed) {
-  if (observed.unavailable) return "evidence unavailable";
-  // A missed failure that passed on retry did not need the change to fail.
-  const counts = `${observed.covered}/${observed.missed}/${observed.unknown}`
-    + (observed.missedRecovered ? ` (${observed.missedRecovered} missed passed on retry)` : "");
-  const missing = observed.missingLinuxSlices;
-  const incomplete = observed.incompleteLinuxSlices.length;
-  const errors = observed.linuxSlicesWithErrors.length;
-  return missing || incomplete || errors
-    ? `${counts} (partial evidence: ${missing} missing, ${incomplete} incomplete, ${errors} with errors)`
-    : counts;
-}
+// The jobs that run unit tests. Windows splits the projects it collects
+// across two jobs; Linux runs every project in one.
+export const unitGroups = {
+  linux: { config: "vitest.linux-ci.mts", lanes: 4 },
+  "windows-main": { config: "vitest.workspace.mts", lanes: 2, projects: ["desktop-main"] },
+  "windows-renderer": {
+    config: "vitest.workspace.mts", lanes: 2,
+    projects: ["desktop-renderer", "desktop-renderer-node", "messaging", "owner-core", "shared"],
+  },
+};
 
-const testKey = ({ project, file }) => JSON.stringify([project, file]);
+export const unitGroupFiles = (selected, group) => selected.filter(({ project }) => !unitGroups[group].projects
+  || unitGroups[group].projects.includes(project));
 
-export function compareFailures(plan, report) {
-  const selected = {
-    unit: new Set((plan.unit.selected ?? []).map(testKey)),
-    e2e: new Set((plan.e2e.selected ?? []).map(({ file }) => file)),
-  };
-  const slices = report.slices.filter(({ platform }) => platform === "linux");
-  const cases = slices.flatMap(({ kind, key, failures }) => failures.map((failure) => {
-    const outcome = !failure.file || (kind === "unit" && typeof failure.project !== "string")
-      ? "unknown"
-      : plan[kind].mode === "full" || selected[kind].has(kind === "unit" ? testKey(failure) : failure.file)
-        ? "covered" : "missed";
-    return { ...failure, slice: key, outcome };
-  }));
-  return {
-    cases,
-    covered: cases.filter(({ outcome }) => outcome === "covered").length,
-    missed: cases.filter(({ outcome }) => outcome === "missed").length,
-    missedRecovered: cases.filter(({ outcome, retry }) => outcome === "missed" && retry === "recovered").length,
-    unknown: cases.filter(({ outcome }) => outcome === "unknown").length,
-    receivedLinuxSlices: slices.length,
-    missingLinuxSlices: report.missingSlices.filter(({ platform }) => platform === "linux").length,
-    incompleteLinuxSlices: slices.filter(({ first }) => !first.complete).map(({ key }) => key),
-    linuxSlicesWithErrors: slices.filter(({ first }) => first.errors > 0).map(({ key }) => key),
-  };
-}
+// A lane holds about 150 selected files. A group never uses more lanes than
+// its full run does, so a wide selection is no slower than the full suite.
+export const unitLaneCount = (files, group) => Math.min(unitGroups[group].lanes, Math.ceil(files / 150));
