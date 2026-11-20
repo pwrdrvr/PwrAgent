@@ -139,7 +139,8 @@ type TranscriptListProps = {
   linkedMessageId?: string;
   linkedMessageRequestKey?: number;
   pendingActivityEntry?: AppServerThreadActivityEntry;
-  pendingProtocolActivityEntry?: AppServerThreadActivityEntry;
+  /** MCP status, warning and model-routing rows; one per kind of notice. */
+  pendingProtocolActivityEntries?: readonly AppServerThreadActivityEntry[];
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   transientMessage?: AppServerTransientThreadMessageEntry;
@@ -874,7 +875,7 @@ export function TranscriptList(props: TranscriptListProps) {
   ]);
   const hasPendingContent = Boolean(
     props.pendingActivityEntry ||
-      props.pendingProtocolActivityEntry ||
+      props.pendingProtocolActivityEntries?.length ||
       props.pendingUsageActivityEntry ||
       props.pendingAssistantMessage ||
       props.transientMessage ||
@@ -905,7 +906,7 @@ export function TranscriptList(props: TranscriptListProps) {
     for (const pendingEntry of pendingEntriesInEventOrder([
       props.pendingPlanEntry,
       props.pendingActivityEntry,
-      props.pendingProtocolActivityEntry,
+      ...(props.pendingProtocolActivityEntries ?? []),
       props.pendingUsageActivityEntry,
       pendingAssistantPreview,
       ...transientMessageEntries,
@@ -934,7 +935,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingActivityEntry,
-    props.pendingProtocolActivityEntry,
+    props.pendingProtocolActivityEntries,
     props.pendingUsageActivityEntry,
     pendingAssistantPreview,
     props.transientMessage,
