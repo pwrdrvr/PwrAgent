@@ -45,6 +45,29 @@ export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
 /**
+ * The operator's worktree folder for `user-home` worktrees: PwrAgent's go to
+ * `<directory>/.pwragent/worktrees`, and Codex threads' to
+ * `<directory>/.codex/worktrees` only when `includeCodex` is on.
+ */
+export type DesktopWorktreeFolder = {
+  directory: string;
+  includeCodex: boolean;
+};
+
+/**
+ * Whether the configured worktree folder can be used right now, checked on
+ * demand off the settings snapshot. `not-responding`: the check timed out,
+ * as on a stale network mount.
+ */
+export type DesktopWorktreeFolderStatus = "available" | "missing" | "not-responding";
+
+export type DesktopWorktreeFolderCheck = {
+  /** The configured folder that was checked; absent when none is set. */
+  directory?: string;
+  status?: DesktopWorktreeFolderStatus;
+};
+
+/**
  * Background PR status polling is enabled by default. An explicit false value
  * remains a kill switch for operators who need to disable the poller.
  */
@@ -1799,6 +1822,13 @@ export type DesktopSettingsSnapshot = {
     hibernate?: DesktopCheckoutHibernationPolicy;
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
+    /**
+     * Folder that replaces the home folder for `user-home` worktrees, which
+     * then live in `<baseDirectory>/.pwragent/worktrees`. Absent: home folder.
+     */
+    baseDirectory?: string;
+    /** Codex threads use the folder too; Codex Desktop then does not list them. */
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 
@@ -2113,6 +2143,9 @@ export type DesktopSettingsConfigPatch = {
     archive?: Partial<DesktopThreadArchivePolicy>;
     hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
+    /** An absolute folder for `user-home` worktrees; null returns to the home folder. */
+    baseDirectory?: string | null;
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 

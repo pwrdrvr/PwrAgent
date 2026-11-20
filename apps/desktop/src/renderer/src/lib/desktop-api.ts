@@ -5,6 +5,7 @@ import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailActiveBatches, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
+import type { DesktopWorktreeFolderCheck } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
@@ -1576,6 +1577,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   receivingFolder?: (request: ReceivingFolderRequest) => Promise<ReceivingFolderResponse>;
+  /** Checks the configured worktree folder without blocking the main process. */
+  checkWorktreeFolder?: () => Promise<DesktopWorktreeFolderCheck>;
   resolveTranscriptFiles?: (
     request: ResolveTranscriptFilesRequest
   ) => Promise<ResolveTranscriptFilesResponse>;
