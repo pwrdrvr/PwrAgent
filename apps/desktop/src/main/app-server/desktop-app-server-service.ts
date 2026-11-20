@@ -8176,19 +8176,7 @@ class DesktopAppServerService {
     }
     return await detachOwnedThreadDirectory(request, {
       overlayStore: this.getOverlayStore(),
-      readThread: async (backend, threadId) => {
-        const response = await this.listThreads({ backend });
-        return response.threads.find((thread) => thread.id === threadId);
-      },
-      publishUpdate: async (backend, threadId) => {
-        await getDesktopBackendRegistry().publishLocalEvent({
-          backend,
-          notification: {
-            method: "navigation/threadDirectories/updated",
-            params: { reason: "selected-thread", threadIds: [threadId] },
-          },
-        });
-      },
+      registry: getDesktopBackendRegistry(),
     });
   }
 

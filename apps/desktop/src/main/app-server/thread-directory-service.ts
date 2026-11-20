@@ -175,6 +175,7 @@ import {
   shouldRepairCachedDirectoryRelationship,
 } from "./linked-directory-identity";
 import { refuseResolvedWorkMode } from "./required-work-mode";
+import { isPrimaryDirectoryForDetach } from "./thread-directory-detach";
 import type { RegistryHostPorts } from "./registry-host-ports";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
@@ -3042,29 +3043,30 @@ export class ThreadDirectoryService {
       );
     }
 
-    const overlay = await this.context.stores.threads.getThreadOverlayState({
-      backend,
-      threadId: sourceThreadId,
-    });
-    const matched = overlay?.extraLinkedDirectories.find((directory) =>
-      linkedDirectoryMatchesDetachArgs(directory, request.args),
-    );
-    if (!matched) {
-      return threadOrchestrationFailure(
-        "forbidden",
-        "Only secondary directories attached to this thread can be detached.",
-      );
-    }
     const sourceThread = await this.host().findThreadForWorkspaceHandoff({
       backend,
       callerReason: "agent-thread-directory-detach",
       threadId: sourceThreadId,
     });
-    const totalLinkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity([
-      ...(sourceThread?.linkedDirectories ?? []),
-      ...(overlay?.extraLinkedDirectories ?? []),
-    ]).length;
-    if (totalLinkedDirectories <= 1) {
+    if (!sourceThread) {
+      return threadOrchestrationFailure("stale_target", "Could not find the current thread.");
+    }
+    const overlay = await this.context.stores.threads.getThreadOverlayState({
+      backend,
+      threadId: sourceThreadId,
+    });
+    const attachedDirectories = overlay?.extraLinkedDirectories ?? [];
+    const matched = attachedDirectories.find((directory) =>
+      linkedDirectoryMatchesDetachArgs(directory, request.args),
+    );
+    const allDirectories = [...sourceThread.linkedDirectories, ...attachedDirectories];
+    if (!matched || isPrimaryDirectoryForDetach(matched, allDirectories, sourceThread.projectKey)) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Only secondary directories attached to this thread can be detached.",
+      );
+    }
+    if (dedupeLinkedDirectoriesByNormalizedIdentity(allDirectories).length <= 1) {
       return threadOrchestrationFailure(
         "forbidden",
         "Cannot detach the last linked directory from a thread.",

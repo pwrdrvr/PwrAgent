@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { findPrimaryThreadLinkedDirectory } from "@pwragent/shared/navigation-state";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { WorktreeSnapshotSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { FolderIcon, WorktreeIcon } from "../../../icons";
@@ -45,6 +46,7 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
   const [detachError, setDetachError] = useState<string>();
   const [detachingDirectoryId, setDetachingDirectoryId] = useState<string>();
   const directories = dedupeLinkedProjectDirectories(props.thread.linkedDirectories);
+  const primaryDirectory = findPrimaryThreadLinkedDirectory(directories, props.thread.projectKey);
   const prs = props.thread.prs ?? [];
   const canAttachDirectory = Boolean(
     props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
@@ -101,6 +103,9 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
         return;
       }
       await props.onRefreshNavigation?.();
+    } catch (error) {
+      const details = error instanceof Error && error.message ? ` ${error.message}` : "";
+      setDetachError(`Could not update linked projects.${details}`);
     } finally {
       setDetachingDirectoryId(undefined);
     }
@@ -134,17 +139,17 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
         <p className="context-empty context-empty--warning">{attachError}</p>
       ) : null}
       {detachError ? (
-        <p className="context-empty context-empty--warning">{detachError}</p>
+        <p className="context-empty context-empty--error" role="alert">{detachError}</p>
       ) : null}
       {directories.length > 0 ? (
         <ul className="context-list linked-projects-list">
-          {directories.map((directory, index) => {
+          {directories.map((directory) => {
             const worktreePath = directory.worktreePath ?? directory.path;
             const branch = directory.gitBranch ?? props.thread.gitBranch;
             const canDetachDirectory = Boolean(
               props.desktopApi?.detachDirectoryFromThread
                 && directories.length > 1
-                && (index > 0 || !props.thread.projectKey?.trim()),
+                && directory !== primaryDirectory,
             );
             const detaching = detachingDirectoryId === directory.id;
             return (

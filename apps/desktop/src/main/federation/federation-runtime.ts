@@ -8660,17 +8660,7 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<DetachDirectoryFromThreadResponse> {
       return await detachOwnedThreadDirectory(request, {
         overlayStore: getDesktopOverlayStore(),
-        readThread: async (backend, threadId) =>
-          await getDesktopBackendRegistry().resolveThread({ backend, threadId }),
-        publishUpdate: async (backend, threadId) => {
-          await getDesktopBackendRegistry().publishLocalEvent({
-            backend,
-            notification: {
-              method: "navigation/threadDirectories/updated",
-              params: { reason: "selected-thread", threadIds: [threadId] },
-            },
-          });
-        },
+        registry: getDesktopBackendRegistry(),
       });
     },
     async listWorktreeUnpublishedCommits(
