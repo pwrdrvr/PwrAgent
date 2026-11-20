@@ -109,6 +109,7 @@ import {
   attributeCodexProviderUsageLine,
   codexModelProviderPickerValue,
   navigationLaunchpadProviderKey,
+  resolveDefaultLaunchpadExecutionMode,
   withCodexProviderSnapshotRates,
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
@@ -1977,6 +1978,8 @@ export class DesktopBackendRegistry {
       generateStructuredObject: (...args: Parameters<typeof this.generateStructuredObject>) => this.generateStructuredObject(...args),
       getActiveTurnForThread: (...args: Parameters<typeof this.getActiveTurnForThread>) => this.getActiveTurnForThread(...args),
       getBackendLaunchpadOptions: (...args: Parameters<typeof this.getBackendLaunchpadOptions>) => this.getBackendLaunchpadOptions(...args),
+      projectOutpostLaunchpadSettings: <T extends NavigationLaunchpadDefaults>(settings: T, options?: BackendLaunchpadOptions) =>
+        this.projectOutpostLaunchpadSettings(settings, options),
       getCachedThreadSummary: (...args: Parameters<typeof this.getCachedThreadSummary>) => this.getCachedThreadSummary(...args),
       getClient: (...args: Parameters<typeof this.getClient>) => this.getClient(...args),
       getPendingThreadHandoffsForInspection: (...args: Parameters<ThreadWorkspaceService["getPendingThreadHandoffsForInspection"]>) => this.threadWorkspaceService.getPendingThreadHandoffsForInspection(...args),
@@ -14541,7 +14544,12 @@ export class DesktopBackendRegistry {
       owner?: FederationTarget;
     },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
-    return this.threadDirectoryService.ensureDirectoryLaunchpad(request, options);
+    const response = this.threadDirectoryService.ensureDirectoryLaunchpad(request, options);
+    if (this.codexOpenAiProviderEnabled || options?.owner?.scope === "remote") return response;
+    return response.then(({ launchpad, defaults }) => ({
+      launchpad: this.projectOutpostLaunchpadSettings(launchpad),
+      defaults: this.projectOutpostLaunchpadSettings(defaults),
+    }));
   }
 
   updateDirectoryLaunchpad(
@@ -14925,12 +14933,12 @@ export class DesktopBackendRegistry {
     settings: ModelSettings,
     callerReason: BackendModelCatalogCallerReason = "thread-start-defaults",
   ): Promise<ModelSettings> {
+    // Preserve OpenAI settings when reading a stored draft or thread. The
+    // proxy substitution belongs to launch admission and view projection.
+    if (backend === "codex" && !this.codexOpenAiProviderEnabled
+      && navigationLaunchpadProviderKey({ backend, ...settings }) === "codex") return settings;
     const options = await this.getBackendLaunchpadOptions(backend, callerReason);
-    const selection = callerReason === "launchpad-defaults" ? this.withOutpostLaunchModel(backend, options, settings) : settings;
-    // Existing OpenAI threads keep their model metadata even while inference is disabled.
-    if (backend === "codex" && !this.codexOpenAiProviderEnabled && !selection.codexModelProviderId
-      && selection.model && !parseCodexProviderModelId(selection.model).providerId) return settings;
-    const resolved = resolveModelSettingsFromOptions(backend, options, selection);
+    const resolved = resolveModelSettingsFromOptions(backend, options, settings);
     return this.applyCodexFastPolicy(backend, resolved);
   }
 
@@ -14943,10 +14951,10 @@ export class DesktopBackendRegistry {
       || (settings.model && parseCodexProviderModelId(settings.model).providerId)) return settings;
     const unavailable = new Set(this.codexModelProviderCatalog?.catalogStates()
       .filter((state) => state.status === "unavailable").map((state) => state.id));
-    const model = getDefaultModelOption("codex", {
-      ...options,
-      models: (options?.models ?? []).filter((model) => model.providerId && !unavailable.has(model.providerId)),
-    });
+    const customModels = (options?.models ?? []).filter((model) => model.providerId);
+    const preferredModels = customModels.filter((model) => model.providerId && !unavailable.has(model.providerId));
+    // A failed /models read still offers the operator's explicitly listed models.
+    const model = getDefaultModelOption("codex", { ...options, models: preferredModels.length ? preferredModels : customModels });
     if (!model?.providerId) return { ...settings, model: undefined };
     const key = codexModelProviderPickerValue(model.providerId);
     const configured = this.resolveProviderModelDefaultsFn()[key];
@@ -14956,21 +14964,25 @@ export class DesktopBackendRegistry {
   }
 
   /** Project current launch choices without saving over the operator's stored presets. */
-  projectOutpostLaunchpadSettings<T extends NavigationLaunchpadDefaults>(settings: T): T {
-    if (this.codexOpenAiProviderEnabled || settings.backend !== "codex" || navigationLaunchpadProviderKey(settings) !== "codex") return settings;
-    const launchpadOptions = this.readCodexBackendSummary().launchpadOptions;
+  projectOutpostLaunchpadSettings<T extends NavigationLaunchpadDefaults>(settings: T, options?: BackendLaunchpadOptions): T {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if (policy?.codexOpenAiProviderEnabled !== false || settings.backend !== "codex" || navigationLaunchpadProviderKey(settings) !== "codex") return settings;
+    const launchpadOptions = options ?? this.readCodexBackendSummary().launchpadOptions;
     const choice = this.withOutpostLaunchModel("codex", launchpadOptions, { providerSettings: settings.providerSettings });
     const providerId = choice.model ? parseCodexProviderModelId(choice.model).providerId : undefined;
-    const providerSettings = { ...settings.providerSettings };
-    delete providerSettings.codex;
     if (!providerId) {
+      const providerSettings = { ...settings.providerSettings };
+      delete providerSettings.codex;
       return { ...settings, providerSettings, model: undefined, reasoningEffort: undefined, serviceTier: undefined, fastMode: undefined };
     }
-    const saved = providerSettings[codexModelProviderPickerValue(providerId)];
-    const resolved = resolveModelSettingsFromOptions("codex", launchpadOptions, choice);
+    const key = codexModelProviderPickerValue(providerId);
+    const savedMode = settings.providerSettings?.[key]?.executionMode;
+    const preferredMode = savedMode ?? resolveDefaultLaunchpadExecutionMode(key, this.resolveProviderModelDefaultsFn());
+    const executionMode = policy.executionModes.includes(preferredMode) ? preferredMode : policy.executionModes[0] ?? "default";
+    const resolved = this.applyCodexFastPolicy("codex", resolveModelSettingsFromOptions("codex", launchpadOptions, choice));
     const projected = applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDefaults>(
-      { ...settings, providerSettings, model: undefined, reasoningEffort: undefined, serviceTier: undefined, fastMode: undefined },
-      { ...resolved, codexModelProviderId: providerId, executionMode: saved?.executionMode ?? settings.executionMode },
+      settings,
+      { ...resolved, codexModelProviderId: providerId, executionMode },
     );
     return { ...settings, ...projected };
   }

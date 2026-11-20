@@ -4,7 +4,22 @@ import { createHash, randomUUID } from "node:crypto";
 import { buildProviderPickerEntries, canonicalDurableTurnRequest, type NavigationLaunchpadDraft, type SubmitDurableTurnRequest } from "@pwragent/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
-import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
+import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostDaemon } from "./helpers/outpost-daemon";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+
+function prepareProxyProfile(config: string): string {
+  const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-proxy-"));
+  const profile = path.join(root, "profiles", "t");
+  fs.mkdirSync(path.join(profile, "state"), { recursive: true });
+  fs.writeFileSync(path.join(profile, "config.toml"), `
+[federation]
+mode = "gateway"
+listen_host = "127.0.0.1"
+listen_port = 0
+${config}`);
+  return root;
+}
 
 describe.skipIf(process.platform === "win32")("the E2E Outpost's real Codex protocol fixture", () => {
   let directory: string;
@@ -16,28 +31,18 @@ describe.skipIf(process.platform === "win32")("the E2E Outpost's real Codex prot
   afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 
   it("admits remote launches only through the configured provider when OpenAI is off", async () => {
-    const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-proxy-"));
-    const profile = path.join(root, "profiles", "t");
-    const data = path.join(root, "f");
-    fs.mkdirSync(profile, { recursive: true });
-    fs.mkdirSync(data);
-    const oldThread = { backend: "codex" as const, threadId: "historical-openai" };
-    const oldModel = "gpt-5.5";
-    fs.writeFileSync(path.join(data, "fixture-threads.json"), JSON.stringify({
-      [oldThread.threadId]: { id: oldThread.threadId, cwd: path.join(root, "w"), model: oldModel, modelProvider: "openai",
-        name: "Existing OpenAI conversation", turns: [{ id: "old-turn", status: "completed", items: [] }] },
-    }));
-    fs.writeFileSync(path.join(profile, "config.toml"), `
-[federation]
-mode = "gateway"
-listen_host = "127.0.0.1"
-listen_port = 0
-
+    const root = prepareProxyProfile(`
 [[models.codex.providers]]
 id = "empty-proxy"
 name = "Empty proxy"
 base_url = "http://127.0.0.1:1/v1"
 discover_models = false
+
+[[models.codex.providers]]
+id = "listed-proxy"
+name = "Listed proxy"
+base_url = "http://127.0.0.1:1/v1"
+models = ["listed-model"]
 
 [[models.codex.providers]]
 id = "proxy"
@@ -46,6 +51,14 @@ base_url = "http://127.0.0.1:1/v1"
 discover_models = false
 models = ["proxy-model"]
 `);
+    const data = path.join(root, "f");
+    fs.mkdirSync(data);
+    const oldThread = { backend: "codex" as const, threadId: "historical-openai" };
+    const oldModel = "gpt-5.5";
+    fs.writeFileSync(path.join(data, "fixture-threads.json"), JSON.stringify({
+      [oldThread.threadId]: { id: oldThread.threadId, cwd: path.join(root, "w"), model: oldModel, modelProvider: "openai",
+        name: "Existing OpenAI conversation", turns: [{ id: "old-turn", status: "completed", items: [] }] },
+    }));
     fs.writeFileSync(path.join(data, "helper-title.json"), JSON.stringify({ title: "Unwanted helper" }));
     const host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
       env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } }).catch(error => {
@@ -63,12 +76,15 @@ models = ["proxy-model"]
         launchpad: { ...draft, model }, input });
       const { backends } = await vi.waitFor(async () => {
         const response = await host.client.listBackends();
-        expect(response.backends.find(backend => backend.kind === "codex")?.available).toBe(true);
+        const codex = response.backends.find(backend => backend.kind === "codex");
+        expect(codex?.available).toBe(true);
+        expect(codex?.codexModelProviders).toContainEqual(expect.objectContaining({ id: "listed-proxy", status: "unavailable" }));
         return response;
       });
       // The static catalog is the oracle for what the owner can offer or run.
       expect(buildProviderPickerEntries(backends).map(entry => [entry.value, entry.models.map(model => model.id)]))
-        .toEqual([["codex-provider:empty-proxy", []], ["codex-provider:proxy", ["@proxy/proxy-model"]]]);
+        .toEqual([["codex-provider:empty-proxy", []], ["codex-provider:listed-proxy", ["@listed-proxy/listed-model"]],
+          ["codex-provider:proxy", ["@proxy/proxy-model"]]]);
       expect((await host.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
         .toMatchObject({ backend: "codex", codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
       const effectCalls = () => calls().filter(call => ["model/list", "thread/start", "turn/start"].includes(call.method ?? ""));
@@ -97,9 +113,97 @@ models = ["proxy-model"]
       ]);
       await expect(host.client.startTurn({ backend: "codex", threadId: created.threadId, input, model: oldModel }))
         .rejects.toThrow(/OpenAI.*disabled/i);
+      // Admission compares the provider of the thread that would be created
+      // with the collaboration model, before creating any provider work.
+      for (const model of [undefined, "@proxy/proxy-model"]) {
+        await expect(host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey, launchpad: { ...draft, model }, input,
+          collaborationMode: { mode: "plan", settings: { model: "@listed-proxy/listed-model" } } })).rejects.toThrow(/collaboration model.*proxy/i);
+      }
       expect(effectCalls()).toHaveLength(2);
     } finally {
       await host.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the proxy preset when reading and sending stored OpenAI launchpads without saving it over their defaults", async () => {
+    const root = prepareProxyProfile(`
+[[models.codex.providers]]
+id = "proxy"
+name = "Proxy"
+base_url = "http://127.0.0.1:1/v1"
+discover_models = false
+models = ["proxy-model"]
+
+[[models.model_provider_defaults]]
+provider = "codex-provider:proxy"
+execution_mode = "default"
+`);
+    const directoryKey = "saved-project";
+    const directoryPath = path.join(root, "w");
+    const database = path.join(root, "profiles/t/state/state.db");
+    const openai = { backend: "codex", executionMode: "full-access", model: "gpt-5.5" } as const;
+    const proxy = { backend: "codex", executionMode: "default", codexModelProviderId: "proxy", model: "@proxy/proxy-model" } as const;
+    let host: OutpostDaemon | undefined;
+    try {
+      const db = StateDb.open(database);
+      let before;
+      try {
+        const store = new SqliteOverlayStore(db);
+        before = await store.setLaunchpadDefaults(openai);
+        await store.upsertDirectoryLaunchpad({ ...openai, directoryKey, directoryKind: "directory", directoryLabel: "Saved project",
+          directoryPath, workMode: "local", prompt: "Continue the saved draft", createdAt: 1, updatedAt: 1 });
+      } finally { db.close(); }
+      host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
+        capabilities: [...OUTPOST_VIEWER_CAPABILITIES, "launchpad_metadata"],
+        env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off", PWRAGENT_OUTPOST_EXECUTION_MODES: "default,auto,full-access" } });
+      const { defaults, launchpad } = await host.client.getNavigationLaunchpadConfig({ protocol: 2, directoryKey });
+      expect.soft(defaults).toMatchObject(proxy);
+      expect.soft(launchpad).toMatchObject(proxy);
+      const ensured = await host.client.ensureDirectoryLaunchpad({ directoryKey: "ensured-project", directoryPath,
+        directoryKind: "directory", directoryLabel: "Saved project" });
+      expect.soft(ensured.defaults).toMatchObject(proxy);
+      expect.soft(ensured.launchpad).toMatchObject(proxy);
+
+      // The stored draft has the same effective settings as the config read.
+      await expect.soft(host.client.materializeDirectoryLaunchpad({ directoryKey, releaseLaunchpadOnSubmit: true }))
+        .resolves.toMatchObject({ backend: "codex", executionMode: "default", turnId: expect.any(String) });
+      await host.close();
+      host = undefined;
+      const reopened = StateDb.open(database);
+      try {
+        const store = new SqliteOverlayStore(reopened);
+        expect(await store.getLaunchpadDefaults()).toEqual(before);
+      } finally { reopened.close(); }
+    } finally {
+      await host?.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a listed model for an omitted-model launch when discovery fails", async () => {
+    const root = prepareProxyProfile(`
+[[models.codex.providers]]
+id = "proxy"
+name = "Proxy"
+base_url = "http://127.0.0.1:1/v1"
+models = ["proxy-model"]
+`);
+    let host: OutpostDaemon | undefined;
+    try {
+      const owner = host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
+        env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } });
+      await vi.waitFor(async () => {
+        const { backends } = await owner.client.listBackends();
+        expect(backends.find(backend => backend.kind === "codex")?.codexModelProviders)
+          .toContainEqual(expect.objectContaining({ id: "proxy", status: "unavailable" }));
+      });
+      expect.soft((await owner.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
+        .toMatchObject({ codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
+      await expect(owner.client.startThread({ backend: "codex", cwd: owner.workspace }))
+        .resolves.toMatchObject({ backend: "codex", threadId: expect.any(String) });
+    } finally {
+      await host?.close();
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
