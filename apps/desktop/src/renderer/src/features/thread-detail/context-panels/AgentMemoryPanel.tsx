@@ -1,5 +1,5 @@
 import { Select } from "../../../components/Select";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   AGENT_MEMORY_INDEX_BYTES,
   AGENT_MEMORY_NOTE_BYTES,
@@ -20,7 +20,7 @@ export function AgentMemoryPanel({ access, canEdit }: {
     <>
       <button className="context-list__action" type="button" aria-expanded={open}
         onClick={() => { setOpened(true); setOpen(!open); }}>
-        {open ? "Close memory" : "Memory"}
+        {open ? "Hide memory" : "Memory"}
       </button>
       {opened ? <div hidden={!open}><MemoryEditor access={access} canEdit={canEdit} open={open} /></div> : null}
     </>
@@ -42,9 +42,11 @@ function MemoryEditor({ access, canEdit, open }: {
   const busy = working || listing;
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const noteNameHintId = useId();
   const dirty = file !== undefined && draft !== file.content;
   const size = new TextEncoder().encode(draft).byteLength;
   const limit = selected ? AGENT_MEMORY_NOTE_BYTES : AGENT_MEMORY_INDEX_BYTES;
+  const newNoteValid = newNote !== undefined && new RegExp(AGENT_MEMORY_NOTE_ID_PATTERN, "u").test(newNote);
 
   useEffect(() => {
     let dispose = false;
@@ -127,9 +129,13 @@ function MemoryEditor({ access, canEdit, open }: {
 
   return (
     <div className="agent-memory-editor" aria-busy={busy}>
-      <p className="context-list__meta">Keep progress, prior reports, and lessons here. Never store secrets.</p>
+      <p className="context-list__meta">
+        {canEdit
+          ? "Keep progress, prior reports, and lessons here. Never store secrets."
+          : "View only. Editing needs control of this thread on its machine."}
+      </p>
       <div className="agent-memory-editor__actions">
-        <label className="agent-memory-editor__file">
+        <label className="agent-memory-editor__field agent-memory-editor__file">
           File
           <Select value={selected} disabled={busy || dirty} onChange={(noteId) => void select(noteId)}
             options={[
@@ -144,28 +150,32 @@ function MemoryEditor({ access, canEdit, open }: {
         ) : null}
       </div>
       {canEdit && newNote !== undefined ? (
-        <div className="agent-memory-editor__actions">
-          <label className="agent-memory-editor__file">
-            New note ID
-            <input value={newNote} maxLength={64} disabled={busy || dirty} placeholder="release-checks"
-              onChange={(event) => setNewNote(event.target.value)} />
-          </label>
-          <button type="button" className="context-list__action"
-            disabled={busy || dirty || !new RegExp(AGENT_MEMORY_NOTE_ID_PATTERN, "u").test(newNote)}
-            onClick={() => void select(newNote)}>Open note</button>
-          <button type="button" className="context-list__action" disabled={busy}
-            onClick={() => setNewNote(undefined)}>Cancel</button>
+        <div className="agent-memory-editor__new">
+          <div className="agent-memory-editor__actions">
+            <label className="agent-memory-editor__field agent-memory-editor__file">
+              Note name
+              <input value={newNote} maxLength={64} disabled={busy || dirty} placeholder="release-checks"
+                aria-describedby={noteNameHintId} aria-invalid={newNote !== "" && !newNoteValid}
+                onChange={(event) => setNewNote(event.target.value)} />
+            </label>
+            <button type="button" className="context-list__action"
+              disabled={busy || dirty || !newNoteValid}
+              onClick={() => void select(newNote)}>Open note</button>
+            <button type="button" className="context-list__action" disabled={busy}
+              onClick={() => setNewNote(undefined)}>Cancel</button>
+          </div>
+          <p id={noteNameHintId}
+            className={newNote !== "" && !newNoteValid ? "context-empty context-empty--error" : "context-list__meta"}>
+            Lowercase letters, numbers, and hyphens.
+          </p>
         </div>
       ) : null}
       {file ? (
         <>
-          <label>
-            {selected || "Index"}
-            <textarea rows={8} value={draft} readOnly={busy || !canEdit}
-              onChange={(event) => setDraft(event.target.value)} />
-          </label>
+          <textarea className="agent-memory-editor__text" aria-label={selected || "Index"} rows={8} value={draft} readOnly={busy || !canEdit}
+            onChange={(event) => setDraft(event.target.value)} />
           <p className={size > limit ? "context-empty context-empty--error" : "context-list__meta"}>
-            {size.toLocaleString()} / {limit.toLocaleString()} UTF-8 bytes
+            {size.toLocaleString()} / {limit.toLocaleString()} bytes
           </p>
           {canEdit ? (
             <div className="agent-memory-editor__actions">
