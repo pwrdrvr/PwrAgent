@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   agreedSha256,
   compareManagedGitVersions,
-  ManagedGitNeedsAppUpdateError,
   ManagedGitTrustError,
   managedGitPlatformKey,
   parseCustomGitCatalog,
@@ -31,7 +30,6 @@ const parse = (catalog: unknown, platform: NodeJS.Platform = "darwin", arch = "a
   parseCustomGitCatalog(JSON.stringify(catalog), {
     platform,
     arch,
-    consumerSha256: bundled.consumer_sha256,
     ...extra,
   });
 const clone = () => structuredClone(bundled);
@@ -49,10 +47,10 @@ describe("release catalog rules", () => {
     expect(() => parse(bundled, "win32", "x64")).toThrow(ManagedGitTrustError);
   });
 
-  it("treats a catalog for a different verifier as needing a newer app, never as installable", () => {
+  it("accepts a supported manifest when only the packaging script hash changes", () => {
     const catalog = clone();
-    catalog.consumer_sha256 = "f".repeat(64);
-    expect(() => parse(catalog)).toThrow(ManagedGitNeedsAppUpdateError);
+    catalog.consumer_sha256 = "0".repeat(64);
+    expect(parse(catalog).asset).toEqual(parse(bundled).asset);
   });
 
   it("rejects a catalog that is not for the release it came from", () => {
@@ -69,11 +67,18 @@ describe("release catalog rules", () => {
     ["a malformed version", (c: any) => { c.version = "2.56.0"; }],
     ["a short source revision", (c: any) => { c.source_revision = "abc"; }],
     ["a malformed archive hash", (c: any) => { c.assets["darwin-universal"].sha256 = "xyz"; }],
-    ["schema 2", (c: any) => { c.schema = 2; }],
+    ["an invalid schema", (c: any) => { c.schema = "2"; }],
   ])("rejects %s", (_name, mutate) => {
     const catalog = clone();
     mutate(catalog);
     expect(() => parse(catalog)).toThrow(ManagedGitTrustError);
+  });
+
+  it("requires a .tar.gz archive for manifest schema 1", () => {
+    const catalog = clone();
+    const asset = catalog.assets["darwin-universal"];
+    asset.url = asset.url.replace(/\.tar\.gz$/u, ".zip");
+    expect(() => parse(catalog)).toThrow(/must provide a \.tar\.gz archive/);
   });
 
   it("requires the Linux CA bundle at ssl/cacert.pem", () => {

@@ -2,8 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BUNDLED_GIT_VERSION, checkManagedGitReleases } from "../managed-git-runtime";
+import { managedGitPlatformKey } from "../managed-git-verify";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import { buildRelease, fakeGithub } from "./helpers/managed-git-fixture";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
 // test injects one; keep its probe off this machine's Codex installs.
@@ -20,6 +23,7 @@ const tempRoots: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -69,5 +73,26 @@ describe.skipIf(process.platform === "win32")("Settings → Git → Build track"
     expect(error).toBe("Not a build track.");
     expect(snapshot.applications.git.managed?.track).toBe("latest");
     expect(fs.readFileSync(configPath, "utf8")).toBe(SELECTION);
+  });
+
+  it("projects the prerelease and its rejection reason with either track selected", async () => {
+    const { service, configPath } = createService();
+    vi.stubEnv("PWRAGENT_HOME", path.dirname(configPath));
+    const version = BUNDLED_GIT_VERSION.replace(/\d+$/u, (build) => String(Number(build) + 1));
+    const prerelease = buildRelease(version, { mutate: { catalog: (c) => { c.assets = {}; } } });
+    const { fetch, fetchReleases } = fakeGithub([prerelease]);
+    await checkManagedGitReleases({ manual: true, fetch, fetchReleases });
+
+    const key = managedGitPlatformKey(process.platform, process.arch);
+    for (const track of ["latest", "prerelease"] as const) {
+      const { snapshot, error } = await service.managedGitAction({ action: "track", track });
+      expect(error).toBeUndefined();
+      expect(snapshot.applications.git.managed).toMatchObject({
+        track,
+        tracks: { prereleaseBlocked: { version: prerelease.version, reason: `PwrDrvr Git has no archive for ${key}.` } },
+      });
+      expect(snapshot.applications.git.managed?.check?.available).toBeUndefined();
+      expect(snapshot.applications.git.managed?.check?.error).toBeUndefined();
+    }
   });
 });

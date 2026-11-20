@@ -2,9 +2,8 @@
 //
 // This is an asynchronous port of the shared `scripts/stage-runtime.mjs`
 // (readRuntimeManifest + verifyRuntime), which packaging uses for the bundled
-// runtime. The rules are the same, so a downloaded runtime is trusted exactly
-// as far as a bundled one: the catalog pins the archive and its sealed file
-// inventory, every file's bytes, mode and link must match that inventory, and
+// runtime. The payload rules are the same: the catalog pins the archive and its
+// sealed file inventory, every file's bytes, mode and link must match it, and
 // on macOS every Mach-O must carry a strict PwrDrvr Developer ID signature.
 // `managed-git-verify.oracle.test.ts` runs both over the same mutated
 // payloads so the two cannot drift. The port exists because the script's
@@ -33,6 +32,9 @@ const MACH_O_MAGIC = new Set(["cffaedfe", "feedfacf", "cafebabe", "bebafeca"]);
 const VERSION_PATTERN = /^\d+\.\d+\.\d+-dev-pwrgit\.\d+$/u;
 const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)-dev-pwrgit\.(\d+)$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+// Bump the published manifest schema for breaking changes to the archive,
+// sealed inventory, build record, or verification contract.
+const MANAGED_GIT_MANIFEST_SCHEMA = 1;
 
 export type ManagedGitPlatformKey =
   | "darwin-universal"
@@ -69,7 +71,8 @@ export type CustomGitCatalog = {
   schema: number;
   version: string;
   source_revision: string;
-  consumer_sha256: string;
+  /** Build-time pin for stage-runtime.mjs. */
+  consumer_sha256?: string;
   assets: Record<string, CustomGitCatalogAsset>;
 };
 
@@ -86,27 +89,16 @@ export class ManagedGitTrustError extends Error {
   }
 }
 
-/** A catalog this build cannot verify. Not a bad release: a newer contract. */
-export class ManagedGitNeedsAppUpdateError extends ManagedGitTrustError {
-  constructor(readonly version: string) {
-    super(`PwrDrvr Git ${version} needs a newer PwrAgent.`);
-    this.name = "ManagedGitNeedsAppUpdateError";
-  }
-}
-
 /**
- * The catalog rules of `readRuntimeManifest`, plus the two a download adds:
- * the catalog must be for the release it came from, and it must target the
- * shared verifier this build shipped (`consumerSha256`, from the bundled
- * catalog). A catalog for a newer verifier is a "needs an app update", never
- * something to install with older rules.
+ * A downloaded catalog must match its release and use a manifest schema this
+ * build can verify. Packaging checks consumer_sha256 against the exact staging
+ * script. Managed installs extract and verify their own immutable generations.
  */
 export function parseCustomGitCatalog(
   bytes: string | Uint8Array,
   options: {
     platform: NodeJS.Platform;
     arch: string;
-    consumerSha256: string;
     expectedVersion?: string;
   },
 ): CustomGitPin {
@@ -135,19 +127,25 @@ export function parseCustomGitCatalog(
       `The Git release catalog is for ${catalog.version}, not ${options.expectedVersion}.`,
     );
   }
-  if (catalog.consumer_sha256 !== options.consumerSha256) {
-    throw new ManagedGitNeedsAppUpdateError(catalog.version);
+  if (catalog.schema !== MANAGED_GIT_MANIFEST_SCHEMA) {
+    throw new ManagedGitTrustError(
+      Number.isSafeInteger(catalog.schema) && catalog.schema > MANAGED_GIT_MANIFEST_SCHEMA
+        ? `Git runtime manifest schema ${catalog.schema} requires a newer PwrAgent.`
+        : "The Git release catalog has an invalid manifest schema.",
+    );
   }
   const asset = catalog.assets?.[key];
+  if (!asset) {
+    throw new ManagedGitTrustError(`PwrDrvr Git has no archive for ${key}.`);
+  }
+  if (typeof catalog.source_revision !== "string" || !/^[0-9a-f]{40}$/u.test(catalog.source_revision)) {
+    throw new ManagedGitTrustError("The Git release catalog has no valid source revision.");
+  }
   if (
-    catalog.schema !== 1
-    || typeof catalog.source_revision !== "string"
-    || !/^[0-9a-f]{40}$/u.test(catalog.source_revision)
-    || !asset
-    || !SHA256_PATTERN.test(asset.sha256 ?? "")
+    !SHA256_PATTERN.test(asset.sha256 ?? "")
     || !SHA256_PATTERN.test(asset.inventory_sha256 ?? "")
   ) {
-    throw new ManagedGitTrustError(`Unsupported or incomplete Git release catalog for ${key}.`);
+    throw new ManagedGitTrustError(`The Git release catalog has an invalid archive or inventory digest for ${key}.`);
   }
   const prefix = `${MANAGED_GIT_RELEASE_DOWNLOAD_PREFIX}v${catalog.version}/`;
   if (
@@ -157,6 +155,9 @@ export function parseCustomGitCatalog(
     || asset.url.slice(prefix.length).includes("/")
   ) {
     throw new ManagedGitTrustError("The Git archive must use its immutable versioned release URL.");
+  }
+  if (!asset.url.endsWith(".tar.gz")) {
+    throw new ManagedGitTrustError("The Git release must provide a .tar.gz archive.");
   }
   if (key === "darwin-universal" && (asset.team_id !== PWRDRVR_TEAM_ID || asset.notarized !== true)) {
     throw new ManagedGitTrustError("macOS Git must be the notarized PwrDrvr build.");

@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { lock } from "proper-lockfile";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -25,7 +28,6 @@ import {
   buildRelease,
   fakeGithub,
   FIXTURE_BUNDLED_VERSION,
-  FIXTURE_CONSUMER,
   githubRelease,
   makeRoot,
   type FakeGithub,
@@ -63,7 +65,6 @@ function setup(gh: FakeGithub) {
     rootDir,
     platform: "linux",
     arch: "x64",
-    consumerSha256: FIXTURE_CONSUMER,
     bundledVersion: FIXTURE_BUNDLED_VERSION,
     fetch: gh.fetch,
     fetchReleases: gh.fetchReleases,
@@ -95,7 +96,7 @@ const posixDescribe = describe.skipIf(process.platform === "win32");
 posixDescribe("downloading a PwrDrvr Git release", () => {
   it("installs the newest release into its own immutable directory, unchanged", async () => {
     const r5 = buildRelease("2.56.0-dev-pwrgit.5");
-    const r6 = buildRelease("2.56.0-dev-pwrgit.6");
+    const r6 = buildRelease("2.56.0-dev-pwrgit.6", { consumer: "e".repeat(64) });
     const gh = fakeGithub([r5, r6]);
     const { rootDir, options, progress } = setup(gh);
     const check = await checkManagedGitReleases({ ...options, manual: true });
@@ -108,6 +109,18 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     await expect(verifyManagedGitGeneration(installed.generation, options)).resolves.toMatchObject({ version: "2.56.0-dev-pwrgit.6" });
     expect((await listManagedGitGenerations(options)).map((g) => g.version)).toEqual(["2.56.0-dev-pwrgit.6"]);
     expect(leftovers(rootDir)).toEqual([]);
+  });
+
+  it.each(["022", "077"])("preserves the archive's sealed file modes under umask %s", async (mask) => {
+    const rootDir = makeRoot();
+    roots.push(rootDir);
+    // The child owns the umask, which is process-wide.
+    await promisify(execFile)(process.execPath, [
+      "--import", require.resolve("tsx"),
+      fileURLToPath(new URL("./fixtures/managed-git-install-permissions.ts", import.meta.url)),
+      rootDir, mask,
+    ]);
+    expect(readFileSync(path.join(rootDir, "logs", "main.log"), "utf8")).toContain("managed_git_installed");
   });
 
   it("rejects an archive whose bytes differ from the published checksum, leaving nothing behind", async () => {
@@ -129,7 +142,10 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     const a = setup(disagree);
     const check = await checkManagedGitReleases({ ...a.options, manual: true });
     expect(check?.tracks.prerelease.available).toBeUndefined();
-    expect(check?.tracks.prerelease.error).toMatch(/digest and SHA256SUMS disagree/);
+    expect(check?.tracks.prerelease.blocked).toEqual({
+      version: release.version,
+      reason: `GitHub's digest and SHA256SUMS disagree about ${release.archiveName}.`,
+    });
     await expect(installManagedGit({ ...a.options, tag: release.tag })).rejects.toThrow(/disagree/);
 
     const missing = fakeGithub([release], [githubRelease(release, { digests: { [release.archiveName]: null, "runtime-manifest.json": null } })]);
@@ -138,13 +154,16 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
   });
 
   it("offers the newest release this build can verify and names the one that needs a newer PwrAgent", async () => {
-    const newer = buildRelease("2.56.0-dev-pwrgit.6", { consumer: "e".repeat(64) });
+    const newer = buildRelease("2.56.0-dev-pwrgit.6", { mutate: { catalog: (c) => { c.schema = 2; } } });
     const usable = buildRelease("2.56.0-dev-pwrgit.5");
     const { options } = setup(fakeGithub([newer, usable]));
     const check = await checkManagedGitReleases({ ...options, manual: true });
-    expect(check?.tracks.prerelease.needsAppUpdate).toEqual({ version: "2.56.0-dev-pwrgit.6" });
+    expect(check?.tracks.prerelease.blocked).toEqual({
+      version: newer.version,
+      reason: "Git runtime manifest schema 2 requires a newer PwrAgent.",
+    });
     expect(check?.tracks.prerelease.available?.version).toBe("2.56.0-dev-pwrgit.5");
-    await expect(installManagedGit({ ...options, tag: newer.tag })).rejects.toThrow(/needs a newer PwrAgent/);
+    await expect(installManagedGit({ ...options, tag: newer.tag })).rejects.toThrow(/requires a newer PwrAgent/);
   });
 
   it("rejects a catalog that names a different version than its release", async () => {
@@ -152,6 +171,58 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     const { options } = setup(fakeGithub([release]));
     const check = await checkManagedGitReleases({ ...options, manual: true });
     expect(check?.tracks.prerelease.available).toBeUndefined();
+  });
+
+  it("reports a missing prerelease catalog and still checks the promoted release", async () => {
+    const prerelease = buildRelease("2.56.0-dev-pwrgit.6");
+    const promoted = buildRelease("2.56.0-dev-pwrgit.5");
+    const gh = fakeGithub([prerelease, promoted], [githubRelease(prerelease), githubRelease(promoted, { prerelease: false })]);
+    const { options } = setup(gh);
+    const check = await checkManagedGitReleases({
+      ...options,
+      manual: true,
+      fetch: (url, init) => String(url).endsWith(`/${prerelease.tag}/runtime-manifest.json`)
+        ? Promise.resolve(new Response(null, { status: 404 }))
+        : gh.fetch(url, init),
+    });
+    expect(check?.error).toBeUndefined();
+    expect(check?.tracks.prerelease.blocked).toEqual({
+      version: prerelease.version,
+      reason: "GitHub could not serve runtime-manifest.json (HTTP 404).",
+    });
+    expect(check?.tracks.latest.available?.version).toBe(promoted.version);
+  });
+
+  it.each([
+    { asset: "runtime-manifest.json", failure: "HTTP 503" },
+    { asset: "SHA256SUMS", failure: "HTTP 503" },
+    { asset: "runtime-manifest.json", failure: "timeout" },
+    { asset: "SHA256SUMS", failure: "timeout" },
+  ])("keeps the last verified offers and check time when $asset fails temporarily ($failure)", async ({ asset, failure }) => {
+    // An incomplete refresh leaves the last successful answers and timestamp intact.
+    const prerelease = buildRelease("2.56.0-dev-pwrgit.6");
+    const promoted = buildRelease("2.56.0-dev-pwrgit.5");
+    const gh = fakeGithub([prerelease, promoted], [githubRelease(prerelease), githubRelease(promoted, { prerelease: false })]);
+    const { options } = setup(gh);
+    const verified = await checkManagedGitReleases({ ...options, manual: true, now: () => 1_000 });
+    expect(verified?.tracks.latest.available?.tag).toBe(promoted.tag);
+    expect(verified?.tracks.prerelease.available?.tag).toBe(prerelease.tag);
+
+    const failed = await checkManagedGitReleases({
+      ...options,
+      manual: true,
+      now: () => 2_000,
+      fetch: async (url, init) => {
+        if (!String(url).endsWith(`/${prerelease.tag}/${asset}`)) return gh.fetch(url, init);
+        if (failure === "HTTP 503") return new Response(null, { status: 503 });
+        throw new DOMException("The request timed out", "TimeoutError");
+      },
+    });
+    const reason = failure === "HTTP 503"
+      ? `GitHub could not serve ${asset} (HTTP 503).`
+      : "GitHub could not be reached.";
+    expect(failed).toEqual({ ...verified, error: reason });
+    await expect(readManagedGitCheck(options)).resolves.toEqual(failed);
   });
 
   it("refuses an archive with an absolute member before extracting anything", async () => {
@@ -227,7 +298,7 @@ posixDescribe("build tracks", () => {
       const label = JSON.stringify(flags);
       expect(check?.tracks.prerelease.available?.version, label).toBe(versions.at(-1));
       expect(check?.tracks.latest.available?.version, label).toBe(newestPromoted);
-      expect(check?.tracks.latest.error, label).toBeUndefined();
+      expect(check?.tracks.latest.blocked, label).toBeUndefined();
       // Never an older prerelease while looking for a promoted build.
       const expected = [...new Set([versions.at(-1), newestPromoted].filter(Boolean))]
         .map((version) => version!.split(".").at(-1))
@@ -245,8 +316,8 @@ posixDescribe("build tracks", () => {
     expect(check?.error).toBeUndefined();
   });
 
-  it("keeps needs-a-newer-PwrAgent on the track it belongs to", async () => {
-    const newer = buildRelease("2.56.0-dev-pwrgit.6", { consumer: "e".repeat(64) });
+  it("records a blocked prerelease alongside a usable promoted build", async () => {
+    const newer = buildRelease("2.56.0-dev-pwrgit.6", { mutate: { catalog: (c) => { c.schema = 2; } } });
     const usable = buildRelease("2.56.0-dev-pwrgit.5");
     const { options } = setup(fakeGithub([newer, usable], [
       githubRelease(newer, { prerelease: true }),
@@ -254,24 +325,25 @@ posixDescribe("build tracks", () => {
     ]));
     const check = await checkManagedGitReleases({ ...options, manual: true });
     expect(check?.tracks.latest).toMatchObject({ available: { version: "2.56.0-dev-pwrgit.5" } });
-    expect(check?.tracks.latest.needsAppUpdate).toBeUndefined();
+    expect(check?.tracks.latest.blocked).toBeUndefined();
     expect(check?.tracks.prerelease).toMatchObject({
       available: { version: "2.56.0-dev-pwrgit.5" },
-      needsAppUpdate: { version: "2.56.0-dev-pwrgit.6" },
+      blocked: { version: newer.version, reason: "Git runtime manifest schema 2 requires a newer PwrAgent." },
     });
   });
 
-  it("drops a check saved before tracks existed", async () => {
+  it("drops cached results written under the packaging hash compatibility rule", async () => {
     const { rootDir, options } = setup(fakeGithub(releases()));
     await checkManagedGitReleases({ ...options, manual: true });
     const file = path.join(rootDir, "managed-release.json");
-    const saved = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    const { tracks, ...rest } = saved as { tracks: { prerelease: { available: unknown } } };
-    writeFileSync(file, JSON.stringify({ ...rest, schemaVersion: 1, available: tracks.prerelease.available }));
-    await expect(readManagedGitCheck(options)).resolves.toBeUndefined();
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    for (const schemaVersion of [1, 2]) {
+      writeFileSync(file, JSON.stringify({ ...saved, schemaVersion }));
+      await expect(readManagedGitCheck(options)).resolves.toBeUndefined();
+    }
     // The next check refills it.
     await checkManagedGitReleases({ ...options, manual: true });
-    await expect(readManagedGitCheck(options)).resolves.toMatchObject({ schemaVersion: 2 });
+    await expect(readManagedGitCheck(options)).resolves.toMatchObject({ schemaVersion: 3 });
   });
 });
 
