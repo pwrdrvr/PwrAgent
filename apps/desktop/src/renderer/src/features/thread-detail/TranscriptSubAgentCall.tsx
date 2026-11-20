@@ -119,7 +119,13 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
         </button>
       ) : null}
       {showOutput && output ? (
-        <pre className="transcript-subagent__output"><code>{output}</code></pre>
+        <pre
+          className="transcript-subagent__output"
+          aria-label="Raw details"
+          tabIndex={0}
+        >
+          <code>{output}</code>
+        </pre>
       ) : null}
     </section>
   );

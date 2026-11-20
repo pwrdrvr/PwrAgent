@@ -60,27 +60,35 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
   );
 
   return (
-    <div className="transcript-work-phase-group">
+    <div
+      className="transcript-work-phase-group"
+      data-expanded={props.collapsible && props.expanded ? "true" : undefined}
+    >
       {props.collapsible ? (
-        <button
-          type="button"
-          className="transcript-work-phase-group__toggle"
-          aria-controls={hiddenRegionId}
-          aria-expanded={props.expanded}
-          // A live review's visible text ticks every second; the name stays
-          // the group label so it does not change under a screen reader.
-          aria-label={props.label}
-          onClick={props.onToggle}
-        >
-          <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
-          <span>
-            <TranscriptWorkPhaseGroupLabel
-              activeStartedAt={props.activeStartedAt}
-              activeVerb={props.activeVerb}
-              label={props.label}
-            />
-          </span>
-        </button>
+        // The row the toggle pins in while its group is open. The toggle is
+        // only as wide as its label; the row spans the column, so nothing
+        // scrolls past beside a pinned toggle.
+        <div className="transcript-work-phase-group__header">
+          <button
+            type="button"
+            className="transcript-work-phase-group__toggle"
+            aria-controls={hiddenRegionId}
+            aria-expanded={props.expanded}
+            // A live review's visible text ticks every second; the name stays
+            // the group label so it does not change under a screen reader.
+            aria-label={props.label}
+            onClick={props.onToggle}
+          >
+            <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
+            <span>
+              <TranscriptWorkPhaseGroupLabel
+                activeStartedAt={props.activeStartedAt}
+                activeVerb={props.activeVerb}
+                label={props.label}
+              />
+            </span>
+          </button>
+        </div>
       ) : (
         <div className="transcript-work-phase-group__label">
           <TranscriptWorkPhaseGroupLabel

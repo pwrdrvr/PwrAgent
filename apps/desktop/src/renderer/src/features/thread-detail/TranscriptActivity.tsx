@@ -107,7 +107,10 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
   }
 
   return (
-    <aside className={className}>
+    <aside
+      className={className}
+      data-expanded={hasDetails && isExpanded ? "true" : undefined}
+    >
       <header className="transcript-activity__header">
         {hasDetails ? (
           <>
@@ -329,7 +332,10 @@ function TranscriptActivityDetailRow(props: {
   );
 
   return (
-    <li className="transcript-activity__detail">
+    <li
+      className="transcript-activity__detail"
+      data-expanded={hasNestedDetails && isDetailExpanded ? "true" : undefined}
+    >
       {markdownContent && !detail.fileDiff && !detail.status ? (
         markdownContent
       ) : (
