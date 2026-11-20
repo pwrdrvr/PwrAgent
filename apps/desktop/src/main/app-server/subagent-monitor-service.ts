@@ -177,6 +177,7 @@ import {
   taskMonitorRecentActivity,
 } from "./task-monitor-helpers";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
+import { combinedDeliveryInput, mergeCausalMessagingContext, splitCombinedDelivery } from "@pwragent/shared";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const TASK_MONITOR_WAKE_ENTRY_PREFIX = "task-monitor:wake:";
@@ -186,7 +187,7 @@ type MonitorParent = { backend: AppServerBackendKind; threadId: string };
 type MonitorParentDelivery = Pick<TaskMonitorCompletionData, "parentTurn" | "parentWakeSuppressed">;
 
 /** Older quiet-restart checkpoints may contain a batch as one queue entry. */
-export function taskMonitorWakeIds(entry: ThreadTurnQueueEntry): Set<string> {
+function taskMonitorWakeIds(entry: ThreadTurnQueueEntry): Set<string> {
   const ids = new Set<string>();
   const collect = (origin: AppServerThreadMessageOrigin | undefined) => {
     if (origin?.subAgent?.kind === "monitor") ids.add(origin.subAgent.monitorId);
@@ -196,6 +197,37 @@ export function taskMonitorWakeIds(entry: ThreadTurnQueueEntry): Set<string> {
   for (const message of entry.agentMessages ?? []) collect(message.origin);
   for (const message of entry.messageOrigin?.deliveredMessages ?? []) collect(message.origin);
   return ids;
+}
+
+function restoredBatchMessages(entry: ThreadTurnQueueEntry): ThreadTurnQueueEntry["agentMessages"] {
+  return entry.agentMessages ?? splitCombinedDelivery(entry.input, entry.messageOrigin?.deliveredMessages,
+    (part) => part.type === "text" ? part.text : undefined, (text) => ({ type: "text" as const, text }))
+    ?.map(({ parts, origin, receivedAt }) => ({ input: parts, origin, receivedAt }));
+}
+
+export function isOnlyTaskMonitorWake(entry: ThreadTurnQueueEntry): boolean {
+  const batch = restoredBatchMessages(entry);
+  return batch?.length ? batch.every((message) => message.origin?.subAgent?.kind === "monitor")
+    : taskMonitorWakeIds(entry).size > 0;
+}
+
+function rebuildMonitorBatch(entry: ThreadTurnQueueEntry, agentMessages: NonNullable<ThreadTurnQueueEntry["agentMessages"]>): ThreadTurnQueueEntry {
+  const messages = agentMessages.map(({ input, origin, receivedAt }) => ({ input,
+    messageOrigin: origin ?? { kind: "agent" as const }, createdAt: receivedAt,
+  }));
+  const messageOrigin: AppServerThreadMessageOrigin = messages.length === 1 ? messages[0]!.messageOrigin : {
+    kind: "agent",
+    ...(entry.messageOrigin?.operatorApproved ? { operatorApproved: true } : {}),
+    ...mergeCausalMessagingContext(messages.map((message) => message.messageOrigin)),
+    deliveredMessages: messages.map((message) => ({
+      origin: message.messageOrigin, receivedAt: message.createdAt, inputItemCount: message.input.length,
+    })),
+  };
+  const { title: _title, ...original } = entry;
+  // Keep the checkpoint's identity and its legacy sender-edit restriction.
+  return { ...original, messageOrigin, input: combinedDeliveryInput(messages), agentMessages,
+    agentMessageOrigins: agentMessages.flatMap(({ origin }) => origin ? [origin] : []),
+  };
 }
 
 /** Collaborators the composition root builds for this module. */
@@ -375,9 +407,10 @@ export class SubAgentMonitorService {
     return true;
   }
 
-  taskMonitorWakeDispatchRefusal(entry: ThreadTurnQueueEntry): string | undefined {
+  prepareTaskMonitorWakeDispatch(entry: ThreadTurnQueueEntry): ThreadTurnQueueEntry | string {
     const store = this.taskMonitorWakeStore;
-    if (!store || (!entry.messageOrigin && !entry.agentMessages && !entry.agentMessageOrigins)) return undefined;
+    if (!store || (!entry.messageOrigin && !entry.agentMessages && !entry.agentMessageOrigins)) return entry;
+    const suppressed = new Set<string>();
     try {
       for (const monitorId of taskMonitorWakeIds(entry)) {
         const decision = store.dispatch(
@@ -386,12 +419,37 @@ export class SubAgentMonitorService {
           !entry.id.startsWith(TASK_MONITOR_WAKE_ENTRY_PREFIX),
         );
         if (decision === "tripped") this.publishTaskMonitorWakeGuardChange(entry);
-        if (decision !== "admitted") return TASK_MONITOR_WAKE_SUPPRESSED;
+        if (decision !== "admitted") suppressed.add(monitorId);
       }
-      return undefined;
     } catch (error) {
       backendRegistryLog.warn("Job Monitor wake dispatch check failed", { error: String(error), entryId: entry.id });
-      return TASK_MONITOR_WAKE_SUPPRESSED;
+      for (const monitorId of taskMonitorWakeIds(entry)) suppressed.add(monitorId);
+    }
+    if (suppressed.size === 0) return entry;
+    const remaining = restoredBatchMessages(entry)?.filter((message) =>
+      message.origin?.subAgent?.kind !== "monitor" || !suppressed.has(message.origin.subAgent.monitorId));
+    return remaining?.length ? rebuildMonitorBatch(entry, remaining) : TASK_MONITOR_WAKE_SUPPRESSED;
+  }
+
+  projectHeldMonitorReleaseRefusal(entry: ThreadTurnQueueEntry): string | undefined {
+    const store = this.taskMonitorWakeStore;
+    if (!store || entry.projectHold?.source !== "monitor" || !isOnlyTaskMonitorWake(entry)) return undefined;
+    for (const monitorId of taskMonitorWakeIds(entry)) {
+      if (!store.canRelease({ backend: entry.backend, threadId: entry.threadId, monitorId }, this.host().registrySessionId,
+        !entry.id.startsWith(TASK_MONITOR_WAKE_ENTRY_PREFIX))) return TASK_MONITOR_WAKE_SUPPRESSED;
+    }
+    return undefined;
+  }
+
+  releaseUnsentTaskMonitorWakes(entries: readonly ThreadTurnQueueEntry[]): void {
+    const store = this.taskMonitorWakeStore;
+    if (!store || entries.length === 0) return;
+    const ids = new Set(entries.flatMap((entry) => [...taskMonitorWakeIds(entry)]));
+    if (ids.size === 0) return;
+    try {
+      store.releaseUnsent(entries[0]!, [...ids], this.host().registrySessionId);
+    } catch (error) {
+      backendRegistryLog.warn("Unsent Job Monitor wake could not release its dispatch claim", { error: String(error) });
     }
   }
 
@@ -658,24 +716,27 @@ export class SubAgentMonitorService {
     createdAt: number;
     lastActivityAt: number;
     pollIntervalSeconds: number;
+    wakeSuppressed?: true;
   }> {
-    return [...this.taskMonitorDelegations.values()]
+    const live = [...this.taskMonitorDelegations.values()]
       .filter((record) => record.parentBackend === params.backend
         && record.parentThreadId === params.threadId
         && !record.finalizationStarted
-        && !record.cancellation)
-      .map((record) => ({
-        monitorId: record.monitorId,
-        task: record.task,
-        backend: record.backend,
-        ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
-        ...(record.runtimeModel ?? record.preferredModel
-          ? { model: record.runtimeModel ?? record.preferredModel }
-          : {}),
-        createdAt: record.createdAt,
-        lastActivityAt: record.lastActivityAt,
-        pollIntervalSeconds: record.pollIntervalSeconds,
-      }));
+        && !record.cancellation);
+    const guard = live.length ? this.taskMonitorWakeStore?.read(params) : undefined;
+    return live.map((record) => ({
+      monitorId: record.monitorId,
+      task: record.task,
+      backend: record.backend,
+      ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
+      ...(record.runtimeModel ?? record.preferredModel
+        ? { model: record.runtimeModel ?? record.preferredModel }
+        : {}),
+      createdAt: record.createdAt,
+      lastActivityAt: record.lastActivityAt,
+      pollIntervalSeconds: record.pollIntervalSeconds,
+      ...(guard && (guard.tripped || guard.generation !== record.wakeGeneration) ? { wakeSuppressed: true as const } : {}),
+    }));
   }
 
   async stopSubAgent(

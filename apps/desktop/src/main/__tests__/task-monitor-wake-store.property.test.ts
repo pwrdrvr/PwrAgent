@@ -187,6 +187,13 @@ describe("Job Monitor wake admission", () => {
         expect(store.reserve(wake("first"), 0)).toBe("admitted");
         expect(store.dispatch(wake("first"), "owner", false)).toBe("admitted");
       });
+      await measure("job-monitor-wake-release-check", "preview 100 operator releases without changing the dispatch receipt", () => {
+        for (let index = 0; index < 100; index++) expect(store.canRelease(wake("first"), "owner", false)).toBe(true);
+      });
+      await measure("job-monitor-wake-unsent-steer", "release an owner claim for a definitively unsent steer", () => {
+        store.releaseUnsent(PARENT, ["first"], "owner");
+      });
+      expect(store.dispatch(wake("first"), "new-owner", false)).toBe("admitted");
       expect(store.reserve(wake("second"), 0)).toBe("admitted");
       expect(store.reserve(wake("third"), 0)).toBe("admitted");
       await measure("job-monitor-wake-tripped", "trip once, then suppress 100 independent terminal reports and a held dispatch", () => {

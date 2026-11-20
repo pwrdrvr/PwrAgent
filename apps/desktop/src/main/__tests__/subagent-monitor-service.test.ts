@@ -18,6 +18,7 @@ import {
 import { taskMonitorThreadKey } from "../app-server/thread-turn-keys";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 
 /** The service's own state and steps, which only its tests reach. */
 type ServiceInternals = {
@@ -134,6 +135,29 @@ afterEach(() => {
 });
 
 describe("SubAgentMonitorService", () => {
+  it("keeps observing monitors in the list while projecting which generation can wake the parent", () => {
+    // Eligibility follows the owner's current generation, including after
+    // rearm, regardless of how many monitors finish or are still observing.
+    fc.assert(fc.property(fc.integer({ min: 1, max: 6 }), (count) => {
+      const db = openInMemoryStateDb();
+      try {
+        const store = new TaskMonitorWakeStore(db.raw);
+        const { service, internals } = createService({ dependencies: { taskMonitorWakeStore: store } });
+        const parent = { backend: "codex", threadId: "parent-thread" } as const;
+        for (let index = 0; index < count; index++) {
+          internals.taskMonitorDelegations.set(`old-${index}`, monitorRecord({ monitorId: `old-${index}`, wakeGeneration: 0 }));
+        }
+        expect(service.listPendingTaskMonitorWakes(parent)).toHaveLength(count);
+        for (let index = 0; index < 4; index++) store.reserve({ ...parent, monitorId: `finished-${index}` }, 0);
+        expect(service.listPendingTaskMonitorWakes(parent)).toMatchObject(Array(count).fill({ wakeSuppressed: true }));
+        expect(service.rearmTaskMonitorWakes(parent)).toBe(true);
+        internals.taskMonitorDelegations.set("new", monitorRecord({ monitorId: "new", wakeGeneration: 1 }));
+        expect(service.listPendingTaskMonitorWakes(parent)).toMatchObject([...Array(count).fill({ wakeSuppressed: true }), { monitorId: "new" }]);
+        expect(service.listPendingTaskMonitorWakes(parent).at(-1)).not.toHaveProperty("wakeSuppressed");
+      } finally { db.close(); }
+    }), { numRuns: 8, examples: [[1]] });
+  });
+
   it("reads neither its host nor its stores until it is used", async () => {
     let bound = false;
     const reconciled: unknown[] = [];

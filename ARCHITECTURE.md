@@ -683,7 +683,13 @@ unlock, project release or restart can only deliver an eligible reservation.
 Dispatch renews its slot so an old hold cannot burst alongside fresh wakes.
 The immutable monitor ID deduplicates results across replay and restart. Rearm
 opens a new generation for monitors created afterwards and retires earlier
-automatic deliveries, including durable holds. PR Auto-fix continues to use its
+automatic deliveries, including durable holds. A restored batch keeps unrelated
+messages at their original FIFO position. Monitors from older generations stay
+visible and stoppable without contributing to the pending wake count. A steer
+claims delivery after capability discovery, and a definitive no-send releases
+the dispatch owner so a saved wake can still run after restart. Sending a
+project-held wake reports suppression when the guard already rules it out.
+PR Auto-fix continues to use its
 repair claim and refill budget. The ordinary lock, archive, workspace, handoff
 and active-turn admission checks still apply to their respective turn paths.
 
@@ -692,6 +698,8 @@ bookkeeping. Pending checks use zero commits. A reservation and dispatch claim
 use two commits and measured about 16.5 KB of WAL. Tripping uses one commit and
 about 4 KB, with zero further commits from suppressed reports. At three wakes
 per thirty minutes continuously, one parent adds about 2.4 MB of WAL per day.
+Checking an operator release writes nothing. A definitive no-send after a
+steer claim adds one commit and about 4 KB of WAL.
 
 Each accepted Outpost job retains its own input and delivery fingerprint until
 dispatch, where the combined-delivery rule above applies. At the FIFO head a

@@ -84,13 +84,13 @@ export function ResumeForgeAutomationDialog(props: ResumeForgeAutomationDialogPr
       threadId: wakeup.threadId,
       action,
     })));
-    const failed = response.results.filter((result) => result.status === "failed");
+    const failed = response.results.find((result) => result.status === "failed" || result.status === "suppressed");
     const settled = new Set(response.results
       .filter((result) => result.status !== "failed")
       .map((result) => result.entryId));
     setWakeups((current) => current.filter((wakeup) => !settled.has(wakeup.entryId)));
-    if (failed.length > 0) {
-      setError(failed[0]?.error ?? (action === "send"
+    if (failed) {
+      setError(failed.error ?? (action === "send"
         ? "A held wake-up could not be sent."
         : "A held wake-up could not be discarded."));
       return false;

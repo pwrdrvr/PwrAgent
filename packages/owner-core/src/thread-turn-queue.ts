@@ -212,7 +212,11 @@ export type ThreadTurnQueueOptions = {
   isAdmissionHeld?: () => boolean;
   startTurn: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult>;
   canSteerThread?: (entry: ThreadTurnQueueEntry) => boolean;
-  steerTurn?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult | "retry" | undefined>;
+  steerTurn?: ThreadTurnQueueSteer;
+  /** Discover a steer target before claiming delivery. Undefined leaves the FIFO waiting. */
+  prepareSteer?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueSteer | undefined>;
+  /** A prepared steer definitively did not send any members. */
+  onSteerNotSent?: (members: readonly ThreadTurnQueueEntry[]) => void;
   isThreadActive?: (params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
@@ -223,11 +227,13 @@ export type ThreadTurnQueueOptions = {
    * starts on a later drain; `drainAll` follows the gate opening.
    */
   isDispatchHeld?: (entry: ThreadTurnQueueDispatchCandidate) => boolean;
-  /** Permanently refuse an individual delivery before start/steer or batching. */
-  dispatchRefusal?: (entry: ThreadTurnQueueEntry) => string | undefined;
+  /** Prepare a delivery, or return a permanent refusal, before start/steer or batching. */
+  prepareDispatch?: (entry: ThreadTurnQueueEntry) => ThreadTurnQueueEntry | string;
   onLifecycle?: (event: ThreadTurnQueueLifecycleEvent) => void | Promise<void>;
   now?: () => number;
 };
+
+type ThreadTurnQueueSteer = (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult | "retry" | undefined>;
 
 export class ThreadTurnQueueDispatchRefused extends Error {}
 
@@ -517,6 +523,7 @@ export class ThreadTurnQueue {
   // an ordinary row covered by a FIFO hold never acquires that intent.
   private readonly heldAdmissionReasons = new Map<string, string>();
   private readonly admissions = new Map<string, QueueAdmission>();
+  private readonly steerPreflights = new Set<string>();
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
   private readonly recentlyProcessedTerminals = new Set<string>();
@@ -1021,6 +1028,7 @@ export class ThreadTurnQueue {
   async setEntryPaused(
     entryId: string,
     paused: boolean,
+    checkRelease?: (entry: ThreadTurnQueueEntry) => string | undefined,
   ): Promise<ThreadTurnQueuePauseResult> {
     const found = this.findQueuedEntry(entryId);
     if (!found) return { disposition: "not_found", entryId };
@@ -1036,6 +1044,11 @@ export class ThreadTurnQueue {
       }
       if (paused && entry.manualReleaseRequired) {
         return { disposition: "held", entryId, entry };
+      }
+      const refusal = !paused ? checkRelease?.(entry) : undefined;
+      if (refusal !== undefined) {
+        this.cancelEntry(entryId, refusal);
+        throw new ThreadTurnQueueDispatchRefused(refusal);
       }
       const { paused: _previous, ...rest } = entry;
       const pauseRevision = (entry.pauseRevision ?? 0) + 1;
@@ -1381,8 +1394,8 @@ export class ThreadTurnQueue {
     }
   }
 
-  private async startNext(key: string): Promise<StartNextResult> {
-    if (this.closed || this.admissions.has(key) || this.dispatchSuspensions.has(key)) return "none";
+  private async startNext(key: string, preflight?: { entryId: string; send?: ThreadTurnQueueSteer }): Promise<StartNextResult> {
+    if (this.closed || this.admissions.has(key) || this.dispatchSuspensions.has(key) || this.steerPreflights.has(key)) return "none";
     const queue = this.queueFor(key);
     const index = nextWaitingIndex(queue);
     const head = queue[index];
@@ -1391,14 +1404,40 @@ export class ThreadTurnQueue {
     if (!head || head.manualReleaseRequired) return "none";
     if (this.isDispatchHeld(head)) return "none";
     const steer = head.delivery === "queued-steer" && this.options.canSteerThread?.(head);
-    if (!steer && (this.runningEntries.has(key)
+    if (steer && this.options.prepareSteer && preflight?.entryId !== head.id) {
+      // Capability discovery cannot remove the wake from a concurrent
+      // checkpoint. Re-read the live FIFO and dispatch gates afterwards.
+      this.steerPreflights.add(key);
+      let send: ThreadTurnQueueSteer | undefined;
+      try {
+        send = await this.options.prepareSteer(head);
+      } catch (error) {
+        if (!this.closed && !this.isDispatchHeld(head) && this.findQueuedEntry(head.id)?.entry === head) {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          await this.holdQueue(key, failure.message, { keepHeld: true });
+          const held = this.findQueuedEntry(head.id)?.entry;
+          if (held?.manualReleaseRequired && held.holdReason === failure.message) {
+            await this.emit({ type: "blocked", entry: held, error: failure });
+          }
+          return "blocked";
+        }
+      } finally {
+        this.steerPreflights.delete(key);
+      }
+      return await this.startNext(key, { entryId: head.id, send });
+    }
+    const send = steer ? (this.options.prepareSteer ? preflight?.send : this.options.steerTurn) : undefined;
+    if (!send && ((steer && this.options.prepareSteer) || this.runningEntries.has(key)
       || (this.options.isThreadActive?.(head) ?? false))) return "none";
     const previousId = queue[index - 1]?.id;
     // The head and the agent messages waiting right behind it that can share
     // its delivery. The head starts its own group: everything before it is
     // paused, and a paused row ends a run.
     const size = planQueuedDeliveries(queue.slice(index), { maxGroups: 1 })[0]?.entryIds.length ?? 1;
-    const members = queue.splice(index, size).filter((entry) => !this.discardRefusedDispatch(entry));
+    const members = queue.splice(index, size).flatMap((entry) => {
+      const prepared = this.prepareDispatch(entry);
+      return typeof prepared === "string" ? [] : [prepared];
+    });
     if (queue.length === 0) this.queuedEntries.delete(key);
     this.dropSpentHold(key);
     if (members.length === 0) {
@@ -1409,7 +1448,7 @@ export class ThreadTurnQueue {
     const holdRevision = this.heldQueues.get(key)?.revision;
     let accepted = false;
     try {
-      if (steer && this.options.steerTurn) {
+      if (send) {
         // Shift and claim synchronously. The backend now owns these immutable
         // entries; anything admitted later goes out in a later delivery.
         const attempt = Symbol("queue admission");
@@ -1417,10 +1456,11 @@ export class ThreadTurnQueue {
         for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
         let delivered = false;
         try {
-          const result = await this.options.steerTurn(next);
+          const result = await send(next);
           const admission = this.admissions.get(key);
           if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
+            this.options.onSteerNotSent?.(members);
             for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
             this.restoreMembers(key, members, previousId);
             // A hold that arrived while it was out covers it too.
@@ -1473,13 +1513,13 @@ export class ThreadTurnQueue {
     return this.options.isDispatchHeld?.(entry) ?? false;
   }
 
-  private discardRefusedDispatch(entry: ThreadTurnQueueEntry): string | undefined {
-    const reason = this.options.dispatchRefusal?.(entry);
-    if (reason === undefined) return undefined;
+  private prepareDispatch(entry: ThreadTurnQueueEntry): ThreadTurnQueueEntry | string {
+    const prepared = this.options.prepareDispatch?.(entry) ?? entry;
+    if (typeof prepared !== "string") return prepared;
     this.heldAdmissionReasons.delete(entry.id);
     // The refusal is final even if a lifecycle observer fails.
-    void this.emit({ type: "cancelled", entry, reason }).catch(() => undefined);
-    return reason;
+    void this.emit({ type: "cancelled", entry, reason: prepared }).catch(() => undefined);
+    return prepared;
   }
 
   private scheduleDrain(key: string): void {
@@ -1519,8 +1559,9 @@ export class ThreadTurnQueue {
     },
   ): Promise<ThreadTurnQueueStartResult> {
     if (!options?.members) {
-      const refusal = this.discardRefusedDispatch(entry);
-      if (refusal !== undefined) throw new ThreadTurnQueueDispatchRefused(refusal);
+      const prepared = this.prepareDispatch(entry);
+      if (typeof prepared === "string") throw new ThreadTurnQueueDispatchRefused(prepared);
+      entry = prepared;
     }
     const key = this.keyFor(entry);
     const members = options?.members ?? [entry];

@@ -258,6 +258,14 @@ describe("WaitingForPanel", () => {
     }
   });
 
+  it("shows a suppressed monitor after rearm with Stop and zero pending wakes", () => {
+    const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
+    render(<WaitingForPanel thread={thread} controller={controller(ready([{ ...monitor, wakeSuppressed: true }], []))} now={NOW} />);
+    expect(screen.getByText("Nothing will wake this thread.")).toBeInTheDocument();
+    expect(screen.getByText(/Automatic wake suppressed for this monitor/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+  });
+
   it("stops a wake through its source and shows why a stop failed", async () => {
     const stop = vi.fn(async (key: string): Promise<ThreadPendingWakesResponse> => key === "monitor:m1"
       ? { ok: false, error: { code: "failed", message: "Sub-agent is already completing." } }

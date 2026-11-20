@@ -38,14 +38,32 @@ export class TaskMonitorWakeStore {
       const guard = this.guard(wake);
       if (guard.tripped_at !== null) return "suppressed";
       const receipt = this.admission(wake);
-      if (!receipt) {
-        return legacy && guard.generation === 0 ? this.admit(wake, guard, undefined, owner) : "suppressed";
-      }
-      if (receipt.generation !== guard.generation || (receipt.dispatch_owner && receipt.dispatch_owner !== owner)) {
-        return "suppressed";
-      }
+      if (!this.matchesGeneration(guard, receipt, owner, legacy)) return "suppressed";
       return this.admit(wake, guard, receipt, owner);
     }).immediate();
+  }
+
+  /** Checks an operator release without spending or extending a dispatch slot. */
+  canRelease(wake: Wake, owner: string, legacy: boolean): boolean {
+    return this.db.transaction(() => {
+      const guard = this.guard(wake);
+      return guard.tripped_at === null && this.matchesGeneration(guard, this.admission(wake), owner, legacy);
+    }).deferred();
+  }
+
+  /** The provider definitively did not receive this steer. Keep its slot and make its receipt portable. */
+  releaseUnsent(parent: Parent, monitorIds: readonly string[], owner: string): void {
+    this.db.transaction(() => {
+      const clear = this.db.prepare(`UPDATE thread_automatic_wake_admissions SET dispatch_owner = NULL
+        WHERE backend = ? AND thread_id = ? AND kind = ? AND wake_id = ? AND dispatch_owner = ?`);
+      for (const monitorId of monitorIds) clear.run(parent.backend, parent.threadId, KIND, monitorId, owner);
+    }).immediate();
+  }
+
+  private matchesGeneration(guard: Guard, receipt: Admission | undefined, owner: string, legacy: boolean): boolean {
+    return receipt
+      ? receipt.generation === guard.generation && (receipt.dispatch_owner === null || receipt.dispatch_owner === owner)
+      : legacy && guard.generation === 0;
   }
 
   rearm(parent: Parent): boolean {

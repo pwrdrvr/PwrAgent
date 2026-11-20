@@ -113,6 +113,8 @@ export type ThreadPendingWakeSource =
       model?: string;
       pollIntervalSeconds: number;
       lastActivityAt: number;
+      /** This job can keep observing and be stopped, but its result will not wake the parent. */
+      wakeSuppressed?: true;
     }
   | {
       kind: "scheduled_action";
@@ -238,7 +240,7 @@ export type ThreadPendingWakesResponse =
  * include only wakes this returns true for.
  */
 export function isThreadPendingWakeLive(wake: ThreadPendingWake): boolean {
-  return !(wake.kind === "pr_auto_fix" && wake.prEnded);
+  return !(wake.kind === "pr_auto_fix" && wake.prEnded) && !(wake.kind === "monitor" && wake.wakeSuppressed);
 }
 
 /** The key a wake's source gives it. */

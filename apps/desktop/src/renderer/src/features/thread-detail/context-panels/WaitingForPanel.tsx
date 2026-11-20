@@ -602,7 +602,8 @@ function describeWake(
         icon: <RadarIcon size={12} />,
         title: plainTitle,
         plainTitle,
-        sub: <>{`Checks every ${formatInterval(wake.pollIntervalSeconds)}. Last check ${formatAgo(wake.lastActivityAt, now)}.`}{transient}</>,
+        sub: <>{`Checks every ${formatInterval(wake.pollIntervalSeconds)}. Last check ${formatAgo(wake.lastActivityAt, now)}.`}
+          {wake.wakeSuppressed ? " Automatic wake suppressed for this monitor." : transient}</>,
       };
     }
     case "backend_wake": {

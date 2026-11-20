@@ -37,6 +37,7 @@ export type PendingTaskMonitorWake = {
   createdAt: number;
   lastActivityAt: number;
   pollIntervalSeconds: number;
+  wakeSuppressed?: true;
 };
 
 /** A queue entry that waits for a release, as the owner's queue holds it. */
@@ -261,6 +262,7 @@ function pullRequestWakes(
 function withHold(wakes: ThreadPendingWake[], hold: ThreadPendingWakeHold | undefined): ThreadPendingWake[] {
   if (!hold || hold.kind === "queue_held") return wakes;
   return wakes.map((wake) => {
+    if (wake.kind === "monitor" && wake.wakeSuppressed) return wake;
     const holds = hold.kind === "thread_locked"
       ? wake.kind !== "pr_auto_fix"
       : wake.kind === "pr_watch" || wake.kind === "dependency" || wake.kind === "monitor";
@@ -356,6 +358,7 @@ function monitorWake(monitor: PendingTaskMonitorWake): ThreadPendingWake {
     ...(monitor.model ? { model: monitor.model } : {}),
     pollIntervalSeconds: monitor.pollIntervalSeconds,
     lastActivityAt: monitor.lastActivityAt,
+    ...(monitor.wakeSuppressed ? { wakeSuppressed: true as const } : {}),
     createdAt: monitor.createdAt,
     createdBy: "agent",
     // A live delegation is process memory; launch marks its card failed.

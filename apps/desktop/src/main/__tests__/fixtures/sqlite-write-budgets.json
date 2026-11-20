@@ -1,4 +1,6 @@
 {
+  "job-monitor-wake-unsent-steer": {"commits": 1, "note": "release an owner claim for a definitively unsent steer", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "job-monitor-wake-release-check": {"commits": 0, "note": "preview 100 operator releases without changing the dispatch receipt", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "job-monitor-wake-rearmed": {"commits": 1, "note": "rearm once and attempt to rearm again", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "job-monitor-wake-tripped": {"commits": 1, "note": "trip once, then suppress 100 independent terminal reports and a held dispatch", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "job-monitor-wake-admitted": {"commits": 2, "note": "reserve and claim dispatch of one final result", "observedWalBytes": 16512, "rowsChanged": 2, "statements": 2},

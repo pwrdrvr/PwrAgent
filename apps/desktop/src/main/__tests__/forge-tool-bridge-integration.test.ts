@@ -468,7 +468,9 @@ describe("DesktopBackendRegistry", () => {
           expect(second.registry.rearmTaskMonitorWakes(parent)).toBe(true);
           await expect(resolve(second.registry, "send")).resolves.toMatchObject({ results: [{ status: "not_found" }] });
         } else {
-          await resolve(second.registry, "send");
+          await expect(resolve(second.registry, "send")).resolves.toMatchObject({ results: [{
+            status: "suppressed", error: expect.stringContaining("Job Monitor wake suppressed"),
+          }] });
         }
         await vi.waitFor(() => expect(rows()).toEqual([]));
         expect(second.codexClient.startTurnCallCount).toBe(0);

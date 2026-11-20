@@ -1285,7 +1285,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const threadTurnQueue = new ThreadTurnQueue({
     isAdmissionHeld: () => ports.restartGate.phase === "quieting",
     startTurn: async (entry) => await ports.startTurnNow(entry),
-    dispatchRefusal: (entry) => subAgentMonitorService.taskMonitorWakeDispatchRefusal(entry),
+    prepareDispatch: (entry) => subAgentMonitorService.prepareTaskMonitorWakeDispatch(entry),
+    onSteerNotSent: (entries) => subAgentMonitorService.releaseUnsentTaskMonitorWakes(entries),
     canSteerThread: (entry) => !ports.stoppingRunningTurnsForShutdown
       && !ports.threadHasBlockingWorkspaceMove(entry)
       && ports.getActiveTurnForThread(entry) !== undefined
@@ -1293,7 +1294,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         backend: entry.backend,
         parentThreadId: entry.threadId,
       })?.mode !== "native",
-    steerTurn: async (entry) => {
+    prepareSteer: async (entry) => {
       const active = ports.getActiveTurnForThread(entry);
       if (!active) return undefined;
       const backend = (await ports.listBackends({ includeUnavailable: true })).backends
@@ -1304,23 +1305,26 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         backend: entry.backend,
         parentThreadId: entry.threadId,
       })?.mode === "native") return undefined;
-      try {
-        const result = await ports.steerTurn({
-          backend: entry.backend,
-          threadId: entry.threadId,
-          expectedTurnId: active.turnId,
-          requestId: entry.id,
-          input: entry.input,
-        }, entry.messageOrigin);
-        return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (/no active turn|expected active turn id/.test(message)) {
-          const current = ports.getActiveTurnForThread(entry);
-          return current?.turnId !== active.turnId ? "retry" : undefined;
+      return async (delivery) => {
+        if (ports.getActiveTurnForThread(entry)?.turnId !== active.turnId) return "retry";
+        try {
+          const result = await ports.steerTurn({
+            backend: delivery.backend,
+            threadId: delivery.threadId,
+            expectedTurnId: active.turnId,
+            requestId: delivery.id,
+            input: delivery.input,
+          }, delivery.messageOrigin);
+          return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/no active turn|expected active turn id/.test(message)) {
+            const current = ports.getActiveTurnForThread(entry);
+            return current?.turnId !== active.turnId ? "retry" : undefined;
+          }
+          throw error;
         }
-        throw error;
-      }
+      };
     },
     // A turn a quit stopped releases its thread; the next queued turn must
     // not start in its place, so every thread reads as busy from then on.
