@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationRow } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationRow } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { useThreadNavigation } from "../useThreadNavigation";

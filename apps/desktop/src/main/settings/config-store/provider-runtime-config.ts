@@ -1,5 +1,5 @@
-import type { DesktopUpdateChannel } from "@pwragent/shared";
-import { MANAGED_GROK_BUILD_CHANNEL_DEFAULT } from "@pwragent/shared";
+import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
+import { MANAGED_GROK_BUILD_CHANNEL_DEFAULT } from "@pwragent/shared/contracts/settings";
 import type {
   ConfigDomainMap,
   ProviderProjection,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationSnapshot } from "@pwragent/shared";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {

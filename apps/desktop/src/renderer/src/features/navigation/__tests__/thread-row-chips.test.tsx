@@ -8,7 +8,7 @@ import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
   PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { ThreadRow } from "../ThreadRow";
 import { createThreadRowPointerDragPreview } from "../thread-row-drag-preview";
 import {

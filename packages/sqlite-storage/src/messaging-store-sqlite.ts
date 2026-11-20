@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { MessagingBindingWriteOptions, MessagingStorage, MessagingStorageRecords } from "@pwragent/owner-core/messaging-storage";
-import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared";
+import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import type { StateDb } from "./state-db.js";
 
 type TimedRecord = { id: string; createdAt: number; updatedAt: number };
@@ -1255,6 +1255,44 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
       .prepare("SELECT payload FROM deliveries WHERE delivery_id = ?")
       .get(id) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async listDeliveriesWithIdPrefix(
+    prefix: string,
+  ): Promise<Records["delivery"][]> {
+    // A primary-key range, not LIKE: LIKE is case-insensitive here and
+    // cannot use the index.
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM deliveries WHERE delivery_id >= ? AND delivery_id < ? ORDER BY delivery_id",
+      )
+      .all(prefix, `${prefix}\uffff`) as { payload: string }[];
+    return rows.map((row) => JSON.parse(row.payload));
+  }
+
+  async settleDelivery(params: {
+    openId: string;
+    delivery: Records["delivery"];
+  }): Promise<Records["delivery"]> {
+    const sanitized = this.policy.sanitizeDelivery(params.delivery);
+    const settle = this.stateDb.raw.transaction(() => {
+      this.stateDb.raw
+        .prepare("DELETE FROM deliveries WHERE delivery_id = ?")
+        .run(params.openId);
+      this.stateDb.raw
+        .prepare(
+          `INSERT OR REPLACE INTO deliveries(delivery_id, binding_id, created_at, payload)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          sanitized.id,
+          sanitized.bindingId ?? "",
+          sanitized.deliveredAt ?? Date.now(),
+          JSON.stringify(sanitized),
+        );
+    });
+    settle.immediate();
+    return structuredClone(sanitized);
   }
 
   async readSnapshot(): Promise<Records["snapshot"]> {

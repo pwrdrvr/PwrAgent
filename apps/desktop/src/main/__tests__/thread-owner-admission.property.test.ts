@@ -130,5 +130,16 @@ it("budgets one owner lifetime and zero writes for repeated turn admission and p
       admission.close();
     });
     expectSqliteWriteBudget({ budgetFile, scenario: "profile-owner-lifetime", note: "First owner admission registers the runtime and claims federation; provider shutdown releases it, schema excluded", writes: lifecycle.writes });
+    const holder = new ProfileThreadOwnerAdmission(managers[0]!);
+    const waiting = new ProfileThreadOwnerAdmission(managers[1]!);
+    holder.assertOwnership();
+    expect(() => waiting.assertOwnership()).toThrow(/another PwrAgent runtime/);
+    const denied = await measureSqliteWrites(() => {
+      for (let retry = 0; retry < 100; retry++) {
+        expect(() => waiting.assertOwnership()).toThrow(/another PwrAgent runtime/);
+      }
+    });
+    expectSqliteWriteBudget({ budgetFile, scenario: "repeated-refused-owner-admission", note: "One hundred checks after the first refused admission while another provider owner is live", writes: denied.writes });
+    holder.close();
   } finally { db.close(); rmSync(tempDir, { force: true, recursive: true }); vi.unstubAllEnvs(); }
 });

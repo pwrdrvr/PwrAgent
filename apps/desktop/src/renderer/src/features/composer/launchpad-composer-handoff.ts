@@ -1,6 +1,8 @@
 import { federationTargetsEqual } from "../../lib/federated-thread-events";
 import { notificationIncludesDraftContent } from "./queued-message-content";
-import type { FederationTarget, NavigationThreadSummary, ScheduledThreadAction } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {

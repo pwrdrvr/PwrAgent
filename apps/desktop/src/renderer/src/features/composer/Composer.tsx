@@ -1,21 +1,29 @@
 import { useComposerWorkspaceHandoffState } from "./useComposerWorkspaceHandoffState";
 import { useComposerSendPreparation } from "./useComposerSendPreparation";
 import { useComposerScheduleMenu } from "./useComposerScheduleMenu";
-import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
+import {
+  CODEX_SPEED_LABELS,
+  codexSpeedOptions,
+  codexSpeedSettings,
+  selectedCodexSpeed,
+  type CodexSpeed,
+} from "@pwragent/shared/codex-speed";
 import {
   buildProviderPickerEntries,
   codexModelProviderCatalogNote,
-  codexProviderIdOfModel,
   describeCodexModelProviderEntry,
   parseProviderPickerValue,
+} from "@pwragent/shared/provider-picker";
+import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
+import {
   navigationLaunchpadProviderKey,
   resolveDefaultLaunchpadExecutionMode,
-  type BackendModelOption,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { ModelDropdown } from "./ModelDropdown";
 import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
-import { mayContainLinearPastedImages } from "@pwragent/shared";
+import { mayContainLinearPastedImages } from "@pwragent/shared/linear-paste";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import {
@@ -118,52 +126,63 @@ import type {
   MoveThreadToMainCheckoutResponse,
   AppServerAvailableCommandSummary,
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerReviewTarget,
   AppServerSkillSummary,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
-  BackendSummary,
-  CodexEnvironmentOption,
   CodexEnvironmentActionRun,
-  CodexMcpInventoryDetail,
   CodexThreadEnvironmentRuntime,
-  DesktopApplicationDiscoveryCandidate,
-  DesktopApplicationsSnapshot,
-  DesktopChatReplyComposer,
-  DesktopProviderModelDefaults,
-  FederationTarget,
   HandoffThreadWorkspaceRequest,
+  ThreadWorkspaceHandoffStrategy,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  AppServerCollaborationModeRequest,
+  CodexMcpInventoryDetail,
   ModelSettingsRecent,
+  RenderComposerPdfPreviewResponse,
+  ReviewAfterAction,
+  ReviewRunMode,
+  SteerTurnDelivery,
+} from "@pwragent/shared/contracts/agent";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
+  CodexEnvironmentOption,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
   PrSummary,
-  RenderComposerPdfPreviewResponse,
-  ReviewAfterAction,
-  ReviewRunMode,
-  ScheduledThreadAction,
-  SteerTurnDelivery,
-  ThreadWorkspaceHandoffStrategy,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  DesktopApplicationDiscoveryCandidate,
+  DesktopApplicationsSnapshot,
+  DesktopChatReplyComposer,
+  DesktopProviderModelDefaults,
+} from "@pwragent/shared/contracts/settings";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
-  buildThreadIdentityKey,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildThreadIdentityKey, isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
+import {
   buildReviewBranchOptions,
-  federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
-  isSubthreadLaunchpadKey,
-  normalizeGitOriginUrl,
+} from "@pwragent/shared/review-branches";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
+import {
   parseCodexAsyncQuestionReply,
-  readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
-  usageLimitProviderForBackend,
+} from "@pwragent/shared/codex-async-questions";
+import {
+  readCodexEnvironmentActionRuns,
   withoutSupersededCodexEnvironmentActionRuns,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-environment-action-runs";
+import { usageLimitProviderForBackend } from "@pwragent/shared/contracts/usage-activity";
 import {
   BranchIcon,
   CheckIcon,
@@ -6119,7 +6138,7 @@ function useComposerController(props: ComposerProps) {
     tokens?: ComposerSkillToken[],
   ): NavigationDirectorySummary[] => {
     const excludePaths = [
-      props.directory?.path,
+      props.thread ? undefined : props.directory?.path,
       props.launchpad?.directoryPath,
       ...(props.thread?.linkedDirectories ?? []).flatMap((linked) => [
         linked.path,

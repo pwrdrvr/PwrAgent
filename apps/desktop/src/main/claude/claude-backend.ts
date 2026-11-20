@@ -9,17 +9,43 @@ import type {
   SDKResultMessage, SDKUserMessage, SlashCommand, UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import { loadClaudeAgentSdk } from "./claude-sdk";
-import { isClaudeAuthenticationFailure } from "@pwragent/shared";
+import { isClaudeAuthenticationFailure } from "@pwragent/shared/claude-authentication";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerBackendWake, AppServerBackgroundTask, AppServerCollaborationModeRequest,
-  AppServerPendingRequestNotification, AppServerReviewContext,
-  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart, AppServerThreadMessageEntry,
+  AgentEvent,
+  AppServerCollaborationModeRequest,
+  CodexMcpServerSummary,
+  PreviewThreadRewindResponse,
+  SteerTurnDelivery,
+  ThreadRewindMode,
+  ThreadRewindTarget,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerAvailableCommandSummary,
+  AppServerBackendWake,
+  AppServerBackgroundTask,
+  AppServerPendingRequestNotification,
+  AppServerReviewContext,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+  AppServerThreadImagePart,
+  AppServerThreadMessageEntry,
   AppServerThreadMessageOrigin,
-  AppServerThreadMessagePart, AppServerThreadPlanEntry, AppServerThreadPlanStep, AppServerThreadReplay,
-  AppServerThreadReviewEntry, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
-  CodexMcpServerSummary, PreviewThreadRewindResponse, SteerTurnDelivery, ThreadRewindMode, ThreadRewindTarget, UsageLimitObservation,
-} from "@pwragent/shared";
+  AppServerThreadMessagePart,
+  AppServerThreadPlanEntry,
+  AppServerThreadPlanStep,
+  AppServerThreadReplay,
+  AppServerThreadReviewEntry,
+  AppServerThreadSummary,
+  AppServerTurnInputItem,
+  LinkedDirectorySummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  BackendModelOption,
+  BackendRateLimitSummary,
+  BackendSummary,
+} from "@pwragent/shared/contracts/backend";
+import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
@@ -474,6 +500,7 @@ export class ClaudeTurnActiveError extends Error {}
 type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
+  readAgentMemory?: () => Promise<string | undefined>;
   mcpServers?: Options["mcpServers"];
   strictMcpConfig?: boolean;
   /**
@@ -1218,7 +1245,10 @@ export class ClaudeBackend {
         // Claude's own wake-ups and crons keep this process, which runs them, open.
         // A lock holds a turn Claude starts on its own until the thread is unlocked.
         hooks: mergeClaudeHooks(
-          claudeSelfStartedTurnHooks(async (input) => await this.holdSelfStartedTurn(current, input)),
+          claudeSelfStartedTurnHooks(
+            async (input) => await this.holdSelfStartedTurn(current, input),
+            params.readAgentMemory,
+          ),
           claudeReportFindingsHooks(),
           claudeMonitorSuggestionHooks(async (request) => {
             const turnId = current.turn?.turnId;

@@ -5,20 +5,20 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
 import {
   buildProviderResponseBlockEntry,
-  buildThreadPricingSnapshotEstimate,
   readProviderResponseBlockNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/provider-response-block";
+import { buildThreadPricingSnapshotEstimate } from "@pwragent/shared/thread-pricing-display";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  DesktopHelperModelSettings,
-  HelperModelId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopHelperModelSettings, HelperModelId } from "@pwragent/shared/helper-models";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
@@ -522,6 +522,18 @@ class MockTransport implements JsonRpcTransport {
             },
           }),
         );
+        return;
+      }
+
+      if (searchTerm === "memory-preview") {
+        const snapshot = buildAgentMemoryContext("PRIVATE-THREAD-INDEX");
+        this.messageHandler(JSON.stringify({
+          jsonrpc: "2.0", id: payload.id,
+          result: { data: [
+            { id: "thread-memory-mirror", name: "Untitled thread", preview: `Run the integration suite\n${snapshot}` },
+            { id: "thread-truncated-memory-mirror", name: "Untitled thread", preview: snapshot.slice(0, -10) },
+          ] },
+        }));
         return;
       }
 
@@ -1675,6 +1687,35 @@ describe("CodexAppServerClient", () => {
       expect(requests.some((request) => request.method === "thread/revert")).toBe(false);
     } finally {
       MockTransport.serverVersion = "1.0.0";
+      await client.close();
+    }
+  });
+
+  it("filters injected Agent memory from live and replayed user items while preserving quoted markers", async () => {
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      await client.readRateLimits();
+      const transport = MockTransport.instances.at(-1)!;
+      const ids = { threadId: "memory-thread", turnId: "memory-turn" };
+      const quoted = "What is <pwragent-agent-memory> used for?";
+      const content = [{ type: "text", text: quoted }];
+      const user = { id: "user", type: "userMessage", content: [...content, { type: "text", text: buildAgentMemoryContext("private progress") }] };
+      const assistant = { id: "assistant", type: "agentMessage", text: quoted };
+      for (const method of ["item/started", "item/completed"]) {
+        transport.emitInbound({ method, params: { ...ids, item: user } });
+      }
+      const turn = { id: ids.turnId, status: "completed", items: [user, assistant] };
+      transport.emitInbound({ method: "turn/completed", params: { ...ids, turn } });
+      await vi.waitFor(() => expect(notifications).toHaveLength(3));
+      expect(notifications[0]).toMatchObject({ method: "item/started", params: { item: { content } } });
+      expect(notifications[1]).toMatchObject({ method: "item/completed", params: { item: { content } } });
+      expect(JSON.stringify(notifications)).not.toContain("private progress");
+      const replay = extractThreadReplayFromReadResult({ thread: { turns: [turn] } });
+      expect(replay.messages.map((message) => message.text)).toEqual([quoted, quoted]);
+    } finally {
       await client.close();
     }
   });
@@ -3117,7 +3158,7 @@ describe("CodexAppServerClient", () => {
   it.each([
     [10, 1], [100, 1], [1_000, 1], [1_000, 200],
   ])("reuses unchanged text for %i fresh provider rows with preview multiplier %i while updating metadata", async (count, previewMultiplier) => {
-    const shared = await import("@pwragent/shared");
+    const shared = await import("@pwragent/shared/thread-titles");
     const normalize = vi.spyOn(shared, "shortenDerivedThreadTitle");
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const rows = Array.from({ length: count }, (_, index) => ({
@@ -3685,6 +3726,18 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it("excludes raw and truncated Agent memory from provider-derived navigation text", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const threads = await client.listThreads({ filter: "memory-preview" });
+      expect(threads.map(({ title }) => title)).toEqual(["Run the integration suite", "Untitled thread"]);
+      expect(JSON.stringify(threads)).not.toContain("PRIVATE-THREAD-INDEX");
+    } finally {
+      await client.close();
+    }
   });
 
   it("derives a title from preview when Codex returns the placeholder name", async () => {
@@ -18053,6 +18106,219 @@ describe("CodexAppServerClient", () => {
       const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
       const replay = extractThreadReplayFromReadResult(contentFilterCapture.recoveredBlock.threadRead);
       expect(blockEntries(replay.entries)).toEqual([]);
+    });
+  });
+
+  describe("model routing notifications", () => {
+    // Codex 0.164's text and error code for a response withheld until the
+    // account signs in again with a hardware key (captured with thread/read).
+    const hardwareKeyMessage =
+      "You’re approved for Daybreak Blue, but this response cannot be shown as this session"
+      + " was not authenticated with one of your authorized hardware keys. Please"
+      + " re-authenticate with your hardware key and try your request again.";
+
+    async function startClient() {
+      await installTestOwnerHost();
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      await client.getInitializeResult();
+      const seen: AppServerNotification[] = [];
+      client.onNotification((notification) => { seen.push(notification); });
+      const transport = MockTransport.instances.at(-1)!;
+      const emit = (method: string, params: Record<string, unknown>) =>
+        transport.emitInbound({ jsonrpc: "2.0", method, params });
+      return { client, seen, emit, transport };
+    }
+
+    it("reports the safety hold Codex 0.164 sent without switching to the faster model", async () => {
+      const { client, seen, emit, transport } = await startClient();
+      const sentBefore = transport.sentMessages.length;
+      // The payload 1.4.12 logged as unknown, with fixture ids.
+      emit("model/safetyBuffering/updated", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        model: "gpt-6.2-sol",
+        useCases: ["cyber"],
+        reasons: ["probes"],
+        showBufferingUi: true,
+        fasterModel: "gpt-6-luna",
+      });
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(seen).toEqual([{
+        method: "turn/safetyBuffering/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          model: "gpt-6.2-sol",
+          buffering: true,
+          fasterModel: "gpt-6-luna",
+        },
+      }]);
+      expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+        "unknown codex notification",
+        expect.anything(),
+      );
+      // Nothing is sent back: no model change, retry, or interrupt.
+      expect(transport.sentMessages.slice(sentBefore)).toEqual([]);
+      await client.close();
+    });
+
+    it("gives each routing notification its own meaning, whatever the payload", async () => {
+      const { client, seen, emit, transport } = await startClient();
+      const id = fc.stringMatching(/^[a-z0-9-]{1,12}$/);
+      const model = fc.stringMatching(/^[a-z0-9.-]{1,16}$/);
+      const notice = fc.oneof(
+        fc.record({
+          kind: fc.constant("buffering" as const),
+          threadId: id,
+          turnId: id,
+          model,
+          showBufferingUi: fc.boolean(),
+          fasterModel: fc.option(model, { nil: null }),
+        }),
+        fc.record({
+          kind: fc.constant("reroute" as const),
+          threadId: id,
+          turnId: id,
+          fromModel: model,
+          toModel: model,
+          reason: fc.constantFrom("highRiskCyberActivity", "aFutureReason"),
+        }),
+        fc.record({
+          kind: fc.constant("verification" as const),
+          threadId: id,
+          turnId: id,
+          verifications: fc.array(
+            fc.constantFrom("trustedAccessForCyber", "aFutureVerification"),
+            { minLength: 1, maxLength: 3 },
+          ),
+        }),
+      );
+      await fc.assert(fc.asyncProperty(fc.array(notice, { minLength: 1, maxLength: 6 }), async (inputs) => {
+        seen.length = 0;
+        const sentBefore = transport.sentMessages.length;
+        for (const input of inputs) {
+          if (input.kind === "buffering") {
+            emit("model/safetyBuffering/updated", {
+              threadId: input.threadId,
+              turnId: input.turnId,
+              model: input.model,
+              useCases: [],
+              reasons: [],
+              showBufferingUi: input.showBufferingUi,
+              fasterModel: input.fasterModel,
+            });
+          } else if (input.kind === "reroute") {
+            emit("model/rerouted", {
+              threadId: input.threadId,
+              turnId: input.turnId,
+              fromModel: input.fromModel,
+              toModel: input.toModel,
+              reason: input.reason,
+            });
+          } else {
+            emit("model/verification", {
+              threadId: input.threadId,
+              turnId: input.turnId,
+              verifications: input.verifications,
+            });
+          }
+        }
+        await vi.waitFor(() => expect(seen).toHaveLength(inputs.length));
+        // Oracle: the App Server schema's meaning of each method.
+        expect(seen).toEqual(inputs.map((input) => {
+          if (input.kind === "buffering") {
+            return {
+              method: "turn/safetyBuffering/updated",
+              params: {
+                threadId: input.threadId,
+                turnId: input.turnId,
+                model: input.model,
+                buffering: input.showBufferingUi,
+                ...(input.fasterModel ? { fasterModel: input.fasterModel } : {}),
+              },
+            };
+          }
+          if (input.kind === "reroute") {
+            return {
+              method: "turn/modelRerouted",
+              params: {
+                threadId: input.threadId,
+                turnId: input.turnId,
+                fromModel: input.fromModel,
+                toModel: input.toModel,
+                reason: input.reason,
+              },
+            };
+          }
+          return {
+            method: "turn/verificationRequested",
+            params: {
+              threadId: input.threadId,
+              turnId: input.turnId,
+              verifications: [...new Set(input.verifications)],
+            },
+          };
+        }));
+        // A hint, a reroute, or a verification request never makes the
+        // client change the thread's model or retry the turn.
+        expect(transport.sentMessages.slice(sentBefore)).toEqual([]);
+      }), { numRuns: 60 });
+      await client.close();
+    });
+
+    it("drops a routing notification that names no turn", async () => {
+      const { client, seen, emit } = await startClient();
+      emit("model/rerouted", { threadId: "thread-1", fromModel: "a", toModel: "b", reason: "x" });
+      emit("model/verification", { threadId: "thread-1", turnId: "turn-1", verifications: [] });
+      emit("model/safetyBuffering/updated", { threadId: "thread-1", turnId: "turn-1", model: "a" });
+      emit("warning", { threadId: "thread-1", message: "sentinel" });
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(seen[0]).toMatchObject({ method: "warning" });
+      await client.close();
+    });
+
+    function failTurn(
+      emit: (method: string, params: Record<string, unknown>) => void,
+      error: Record<string, unknown>,
+    ) {
+      emit("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "failed", items: [], error },
+      });
+    }
+
+    it("offers a fresh sign-in when Codex withholds a response for hardware-key authentication", async () => {
+      const { client, seen, emit } = await startClient();
+      failTurn(emit, { message: hardwareKeyMessage, codexErrorInfo: "cyberPolicy", additionalDetails: null });
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(seen[0]).toMatchObject({
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          // The provider's instruction is shown as written.
+          turn: { error: { message: hardwareKeyMessage, recovery: "codexHardwareKeySignIn" } },
+        },
+      });
+      await client.close();
+    });
+
+    it.each([
+      ["another cyber policy refusal", { message: "This request violates the cyber policy.", codexErrorInfo: "cyberPolicy" }],
+      ["the same text without the policy code", { message: hardwareKeyMessage, codexErrorInfo: "other" }],
+      ["a logged-out account", { message: "Your access token could not be refreshed. Please log out and sign in again.", codexErrorInfo: "unauthorized" }],
+    ])("does not offer hardware-key sign-in for %s", async (_label, error) => {
+      const { client, seen, emit } = await startClient();
+      failTurn(emit, error);
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      const failed = seen[0] as Extract<AppServerNotification, { method: "turn/failed" }>;
+      expect(failed.method).toBe("turn/failed");
+      expect(failed.params.turn.error.recovery).toBeUndefined();
+      await client.close();
     });
   });
 });

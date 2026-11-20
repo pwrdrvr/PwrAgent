@@ -2,11 +2,11 @@ import { ipcMain } from "electron";
 import type {
   DismissOperatorQuestionRequest,
   ListOperatorRequestsRequest,
-  FederationRemoteTarget,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
   OperatorQuestionThreadRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,

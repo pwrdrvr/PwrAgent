@@ -2,8 +2,8 @@ import { useState } from "react";
 import type {
   AppServerThreadActivityDetail,
   AppServerThreadSubAgentCallDetail,
-} from "@pwragent/shared";
-import { hasDurableSubAgentTranscript, shortSubAgentThreadId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { hasDurableSubAgentTranscript, shortSubAgentThreadId } from "@pwragent/shared/subagent-kind";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import type { ThreadLinkSource } from "../../lib/thread-links";

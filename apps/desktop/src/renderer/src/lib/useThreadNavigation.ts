@@ -4,7 +4,8 @@ import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thr
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
-import type { LaunchpadCreationStatus, RemoteThreadPinPublication } from "@pwragent/shared";
+import type { LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
+import type { RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
@@ -29,7 +30,6 @@ import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupP
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerRenamedTitleSource,
   AppServerReviewTarget,
   AppServerThreadImagePart,
@@ -38,38 +38,45 @@ import type {
   ArchiveThreadCleanupResult,
   ArchiveCleanupProgress,
   CodexThreadEnvironmentRuntime,
-  DesktopProviderModelDefaults,
-  FederationInstanceId,
-  FederationRemoteTarget,
-  FederationTarget,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   RestoreThreadResponse,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type { DesktopProviderModelDefaults } from "@pwragent/shared/contracts/settings";
+import type {
+  FederationInstanceId,
+  FederationRemoteTarget,
+  FederationTarget,
+  FederationPeerSummary,
+} from "@pwragent/shared/contracts/federation";
+import type {
   NavigationBrowseMode,
-  NavigationResumeState,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationRelativePinMove,
-  FederationPeerSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+  ThreadAgentMetadata,
+  ThreadLock,
+  SetThreadCheckoutHibernationResponse,
+  ThreadSubAgentSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
+import type {
   ProjectForgeAutomation,
   ProjectHeldWakeup,
   ResolveProjectHeldWakeupsRequest,
   ResolveProjectHeldWakeupsResponse,
-  ThreadAgentMetadata,
-  ThreadExecutionMode,
-  ThreadLock,
-  SetThreadCheckoutHibernationResponse,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -79,21 +86,23 @@ import {
   changedProviderModelDefaultBackends,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
-  canonicalizeNavigationPath,
-  classifyDirectory,
-  isDefaultProjectForgeAutomation,
-  parseOwnedComposerScopeKey,
-  compareThreadsByCreatedAtDesc,
   DEFAULT_NAVIGATION_BROWSE_MODE,
-  federatedThreadIdentityKey,
-  isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
   normalizeNavigationBrowseMode,
-  normalizeNavigationResumeState,
-  normalizeRenamedTitleSource,
-  resolveThreadParentKey,
-  shortenDerivedThreadTitle,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import {
+  canonicalizeNavigationPath,
+  classifyDirectory,
+  directoryIncludesCheckout,
+} from "@pwragent/shared/directory-navigation";
+import { isDefaultProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
+import { parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
+import { compareThreadsByCreatedAtDesc } from "@pwragent/shared/thread-pins";
+import { federatedThreadIdentityKey, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { normalizeNavigationResumeState } from "@pwragent/shared/navigation-resume-state";
+import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
@@ -654,9 +663,11 @@ function resolveCreateThreadTargetDirectory(args: {
   }
 
   if (!forceWorkspace && selectedThread) {
-    const threadDirectories = directories.filter(
+    const groupedDirectory = directories.find((directory) => directory.key === selectedThread.checkoutProject?.key);
+    const checkoutKeys = directoryKeysForThread(selectedThread);
+    const threadDirectories = groupedDirectory ? [groupedDirectory] : directories.filter(
       (directory) =>
-        directory.kind === "directory" && directoryKeysForThread(selectedThread).includes(directory.key)
+        directory.kind === "directory" && checkoutKeys.some((key) => directoryIncludesCheckout(directory, key))
     );
     if (threadDirectories.length === 1) {
       const [threadDirectory] = threadDirectories;
@@ -964,6 +975,9 @@ function threadSummariesEqual(
     left.titleSource === right.titleSource &&
     left.summary === right.summary &&
     left.projectKey === right.projectKey &&
+    left.checkoutProject?.key === right.checkoutProject?.key &&
+    left.checkoutProject?.label === right.checkoutProject?.label &&
+    left.checkoutProject?.repositoryKey === right.checkoutProject?.repositoryKey &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
@@ -1033,6 +1047,8 @@ function threadSummariesEqual(
     threadLocksEqual(left.lock, right.lock) &&
     subAgentsEqual(left.subAgents, right.subAgents) &&
     subAgentsEqual(left.activeSubAgents, right.activeSubAgents) &&
+    left.activeSubAgentsIncomplete === right.activeSubAgentsIncomplete &&
+    left.activeSubAgentsMoreInPanel === right.activeSubAgentsMoreInPanel &&
     permissionTransitionLogsEqual(
       left.permissionTransitionLog,
       right.permissionTransitionLog
@@ -2644,7 +2660,7 @@ function projectOptimisticThreadIntoDirectories(
   const nextDirectories = [...directories];
   for (const linkedDirectory of optimisticThread.linkedDirectories) {
     const descriptor = classifyDirectory(linkedDirectory);
-    if (nextDirectories.some((directory) => directory.key === descriptor.key)) continue;
+    if (nextDirectories.some((directory) => directoryIncludesCheckout(directory, descriptor.key))) continue;
     // A newly accepted thread can reveal a project before its descriptor arrives.
     // Its population remains unknown until the owner query returns.
     nextDirectories.push({
@@ -5487,13 +5503,16 @@ export function useThreadNavigation(
 
   const directories = useMemo(
     () => {
-      const launchpads = Object.values(localLaunchpads);
+      const ownerDirectories = loadedDirectoryRows(state.rows);
+      const launchpads = Object.values(localLaunchpads).filter((launchpad) =>
+        !ownerDirectories.some((directory) => directory.key !== launchpad.directoryKey
+          && directoryIncludesCheckout(directory, launchpad.directoryKey)));
       const currentDirectories = launchpads.reduce(
         (nextDirectories, launchpad) =>
           upsertLaunchpadDirectory(nextDirectories, launchpad, {
             preserveExistingDirectoryAuthority: Boolean(rendererFederationTarget),
           }),
-        loadedDirectoryRows(state.rows).map((directory) => {
+        ownerDirectories.map((directory) => {
           const expanded = directoryDisclosure.unpinnedExpandedByKey[directory.key];
           return expanded === undefined ? directory : { ...directory, directoryThreadsCollapsed: !expanded };
         }),
@@ -5792,7 +5811,8 @@ export function useThreadNavigation(
     // Match the primary workspace, as project grouping does. Directory-list
     // ordering must not let a secondary link become the selected project.
     const primaryDirectoryKey = directoryKeysForThread(selectedDetail.state?.detail?.thread)[0];
-    const directory = directories.find((directory) => directory.key === primaryDirectoryKey);
+    const directory = directories.find((directory) => primaryDirectoryKey !== undefined
+      && directoryIncludesCheckout(directory, primaryDirectoryKey));
     // Workspace detail retains native paths; navigation rows canonicalize
     // separators. Compare them in the same form before applying branch data.
     const workspace = selectedDetail.state?.detail?.workspaceDirectories?.find((candidate) =>
@@ -8076,7 +8096,7 @@ export function useThreadNavigation(
         });
         const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
         if (notice) setArchiveThreadNotice(notice);
-        if (!directoryKey.startsWith("directory:")) continue;
+        if (!directoryKey.startsWith("directory:") || response.registrationRetained) continue;
         updateRemovedDirectoryKey(directoryKey, true);
         setLocalLaunchpads((current) => {
           const next = { ...current };

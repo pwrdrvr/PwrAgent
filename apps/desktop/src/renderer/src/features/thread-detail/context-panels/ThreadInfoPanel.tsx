@@ -1,5 +1,8 @@
-import { memo, useEffect, useState } from "react";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import { memo, useCallback, useEffect, useState } from "react";
+import type { AgentMemoryArgs } from "@pwragent/shared/contracts/agent-memory";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { AgentMemoryPanel } from "./AgentMemoryPanel";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { formatOwnerProviderLabel } from "../../../lib/thread-provider-label";
@@ -38,6 +41,19 @@ type ThreadInfoPanelProps = {
 export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPanelProps) {
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentError, setAgentError] = useState<string>();
+  const memoryAccess = props.desktopApi?.accessAgentMemory;
+  const { id, source, federation } = props.thread;
+  const instanceId = federation?.ref.target.scope === "remote" ? federation.ref.target.instanceId : undefined;
+  const accessMemory = useCallback(async (operation: AgentMemoryArgs) => {
+    if (!memoryAccess) throw new Error("Agent memory is unavailable.");
+    return await memoryAccess({
+      threadId: id,
+      backend: source,
+      federationTarget: instanceId ? { scope: "remote", instanceId } : readRendererFederationTarget(),
+      operation,
+    });
+  }, [id, instanceId, memoryAccess, source]);
+
 
   useEffect(() => {
     setAgentError(undefined);
@@ -118,6 +134,11 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
             </button>
           </div>
         )}
+        {memoryAccess && props.thread.agent ? (
+          <AgentMemoryPanel key={JSON.stringify([instanceId, source, id])}
+            access={accessMemory}
+            canEdit={!federation || federation.capabilities?.includes("turn_control") === true} />
+        ) : null}
         {props.thread.agentChange?.error ? (
           <p className="context-empty context-empty--error" role="alert">
             {formatAgentChangeStatus(props.thread.agentChange)}

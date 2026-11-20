@@ -14,7 +14,7 @@ import {
   DESKTOP_LOGS_CONTEXT_LINE_OPTIONS,
   type DesktopLogsContextLines,
   type DesktopLogsStoredLevel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
 import { buildTroubleshootingDiagnosticsInfo } from "../../../../shared/local-diagnostics-info";
 import { Select, type SelectOption } from "../../components/Select";

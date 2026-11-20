@@ -1,8 +1,8 @@
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-  ThreadTurnFailure,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTurnFailure } from "@pwragent/shared/contracts/navigation";
 import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 /**

@@ -1,7 +1,10 @@
 import fc from "fast-check";
 import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
 import { assertFederationEgress } from "@pwragent/federation/federation-egress";
-import type { FederationProtocolEnvelope, FederationRequestEnvelope } from "@pwragent/shared";
+import type {
+  FederationProtocolEnvelope,
+  FederationRequestEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";

@@ -2,10 +2,11 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
-  type SubAgentLens,
   type ThreadSubAgentSummary,
-  type TokenMiserGateAccountingTotals,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type FailedSubAgentAttempt } from "@pwragent/shared/contracts/agent";
+import { type SubAgentLens } from "@pwragent/shared/subagent-kind";
+import { type TokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 import { LegacyPayloadArrayMove } from "./legacy-payload-array-move";
 
 /**
@@ -146,6 +147,17 @@ export const THREAD_SUB_AGENT_LENS_SQL = `(CASE
  */
 const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens_v2
   ON thread_sub_agents(thread_id, ${THREAD_SUB_AGENT_LENS_SQL}, created_at DESC, monitor_id)`;
+
+// Keep composer decisions outside the card table so its history revision
+// changes only when a card changes. One row is enough for each monitor.
+const FAILURE_DISMISSALS = `CREATE TABLE IF NOT EXISTS thread_sub_agent_failure_dismissals (
+  thread_id TEXT NOT NULL,
+  monitor_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  PRIMARY KEY (thread_id, monitor_id),
+  FOREIGN KEY (thread_id, monitor_id) REFERENCES thread_sub_agents(thread_id, monitor_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) WITHOUT ROWID`;
 
 /**
  * Per-thread sums over the Token Miser gate cards, for the Pricing savings
@@ -331,10 +343,10 @@ function columnNames(db: BetterSqlite3.Database, table: string): Set<string> {
 }
 
 /**
- * The lens index and the gate totals, added once. Later opens read the schema
- * and write nothing. The index is built from the card rows' leading columns,
- * which never touches a card body. Adding the totals marks every existing
- * thread's stale; `ThreadSubAgentTable.gateTotals` sums one thread's on its
+ * The lens index, gate totals, and composer dismissal table are added once.
+ * Later opens read the schema and write nothing. The index is built from the
+ * card rows' leading columns, which never touches a card body. Adding the
+ * totals marks every existing thread's stale. `ThreadSubAgentTable.gateTotals` sums one thread's on its
  * first read. Rows created afterwards start fresh, and the triggers keep them
  * current whichever build writes the card.
  */
@@ -342,12 +354,14 @@ export function ensureThreadSubAgentPanelSchema(db: BetterSqlite3.Database): voi
   if (!tableExists(db, "thread_sub_agents") || !tableExists(db, "thread_sub_agent_revisions")) return;
   const isCurrent = () =>
     db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens_v2'").get() !== undefined
-    && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready");
+    && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready")
+    && tableExists(db, "thread_sub_agent_failure_dismissals");
   if (isCurrent()) return;
   db.transaction(() => {
     // Another opener may have added them while this connection waited.
     if (isCurrent()) return;
     db.exec(LENS_INDEX);
+    db.exec(FAILURE_DISMISSALS);
     if (columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready")) return;
     db.exec(GATE_TOTAL_COLUMNS);
     db.exec(GATE_SHARES_VIEW);
@@ -687,10 +701,30 @@ export class ThreadSubAgentTable {
     return result;
   }
 
-  /** Unfinished cards and failures: what the composer strip and stop controls need. */
+  /** Match the attempt UUID, or the original start time for historical cards. */
+  dismissFailures(storageKey: string, attempts: readonly FailedSubAgentAttempt[]): number {
+    return this.db.prepare(`INSERT INTO thread_sub_agent_failure_dismissals(thread_id, monitor_id, attempt_id)
+      SELECT cards.thread_id, cards.monitor_id, json_extract(requested.value, '$.attemptId')
+      FROM json_each(?) AS requested
+      JOIN thread_sub_agents AS cards
+        ON cards.thread_id = ? AND cards.monitor_id = json_extract(requested.value, '$.monitorId')
+      WHERE cards.status IN ('failed', 'failure')
+        AND coalesce(json_extract(cards.card, '$.attemptId'), CAST(cards.created_at AS TEXT))
+          = json_extract(requested.value, '$.attemptId')
+      ON CONFLICT(thread_id, monitor_id) DO UPDATE SET attempt_id = excluded.attempt_id
+      WHERE thread_sub_agent_failure_dismissals.attempt_id <> excluded.attempt_id`)
+      .run(JSON.stringify(attempts), storageKey).changes;
+  }
+
+  /** Unfinished cards and undismissed failures for the composer strip. */
   listAttention(storageKey: string): ThreadSubAgentSummary[] {
-    return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_attention
-      WHERE thread_id = ? AND (completed_at IS NULL OR status IN ('failed', 'failure'))
+    return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents AS cards INDEXED BY thread_sub_agents_attention
+      WHERE cards.thread_id = ? AND (completed_at IS NULL OR status IN ('failed', 'failure'))
+        AND (status NOT IN ('failed', 'failure') OR NOT EXISTS (
+          SELECT 1 FROM thread_sub_agent_failure_dismissals AS dismissed
+          WHERE dismissed.thread_id = cards.thread_id AND dismissed.monitor_id = cards.monitor_id
+            AND dismissed.attempt_id = coalesce(json_extract(cards.card, '$.attemptId'), CAST(cards.created_at AS TEXT))
+        ))
       ORDER BY created_at DESC, monitor_id`).all(storageKey) as CardRow[]);
   }
 

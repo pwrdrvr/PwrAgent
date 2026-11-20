@@ -5,7 +5,7 @@ import type {
   NavigationQueryRequest,
   NavigationRow,
   NavigationStarMapFilterSelection,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { navigationGeometryBudget, navigationExactRowsBudget } from "../../lib/navigation-metadata-budget";
 import { navigationQueryEventRequiresRefresh } from "../../lib/navigation-query-events";

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { StateDb } from "../state/state-db";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";

@@ -4,7 +4,7 @@ import type {
   AppServerMcpElicitationRequestNotification,
   AppServerMcpElicitationSchema,
   AppServerPendingRequestNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Show an MCP server's elicitation on the same card Codex uses. Without this

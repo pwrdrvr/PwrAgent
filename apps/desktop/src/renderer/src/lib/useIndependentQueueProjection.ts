@@ -1,12 +1,11 @@
-import { buildOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
+import type { FederationTarget, FederationEventSubscription } from "@pwragent/shared/contracts/federation";
 import type {
-  ComposerThreadOwner,
-  FederationTarget,
-  FederationEventSubscription,
   NavigationQueueProjection,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   buildThreadComposerScopeKey,
   type ComposerDraftStore,

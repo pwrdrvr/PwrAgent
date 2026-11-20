@@ -5,13 +5,6 @@ import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-po
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import type {
   AgentEvent,
-  AppServerBackendKind,
-  AppServerThreadMessageOrigin,
-  AppServerThreadMessage,
-  AppServerThreadReplay,
-  AppServerListSkillsRequest,
-  AppServerListSkillsResponse,
-  AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CancelQueuedTurnRequest,
@@ -20,42 +13,13 @@ import type {
   ReadQueuedTurnResponse,
   CompactThreadRequest,
   CompactThreadResponse,
-  SetThreadLockRequest,
-  SetThreadLockResponse,
-  CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
-  FederationCapability,
-  FederationEventSubscription,
-  FederationHealthStatus,
-  FederationInstanceId,
-  FederationJumpSearchRequest,
-  FederationJumpSearchResponse,
-  FederationThreadSearchRequest,
-  FederationThreadSearchResponse,
-  FederationRemoteTarget,
-  FederationTarget,
-  FederationThreadSelection,
-  GetNavigationSnapshotRequest,
-  HandoffThreadWorkspaceRequest,
-  HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
-  ListBackendsRequest,
-  ListBackendsResponse,
-  ListScheduledThreadActionsRequest,
-  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
-  NavigationQueryRequest,
-  NavigationQueryPage,
-  NavigationSelectedDetailRequest,
-  NavigationSelectedDetailResponse,
-  NavigationLaunchpadConfigRequest,
-  NavigationLaunchpadConfigResponse,
-  NavigationSnapshot,
-  NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -64,8 +28,6 @@ import type {
   SetThreadModelSettingsResponse,
   StartTurnRequest,
   StartTurnResponse,
-  ScheduledThreadActionIdRequest,
-  ScheduledThreadActionMutationResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   StartThreadRequest,
@@ -73,20 +35,62 @@ import type {
   StartReviewRequest,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  AppServerThreadMessageOrigin,
+  AppServerThreadMessage,
+  AppServerThreadReplay,
+  AppServerListSkillsRequest,
+  AppServerListSkillsResponse,
+  AppServerThreadStatus,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  SetThreadLockRequest,
+  SetThreadLockResponse,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
+  GetNavigationSnapshotRequest,
+  NavigationQueryRequest,
+  NavigationQueryPage,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
+  NavigationSnapshot,
+  NavigationThreadSummary,
   ThreadAgentMetadata,
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  CreateScheduledThreadActionRequest,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
-  UpdateDirectoryLaunchpadRequest,
-  UpdateDirectoryLaunchpadResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
+  FederationCapability,
+  FederationEventSubscription,
+  FederationHealthStatus,
+  FederationInstanceId,
+  FederationThreadSearchRequest,
+  FederationThreadSearchResponse,
+  FederationRemoteTarget,
+  FederationTarget,
+  FederationThreadSelection,
+} from "@pwragent/shared/contracts/federation";
+import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
-import {
-  buildFederatedThreadRef,
-  expandNavigationRemoteOwner,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
@@ -758,6 +762,23 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       };
     }
     return undefined;
+  }
+
+  async readThreadAssistantReply(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<string | undefined> {
+    const response = await this.readThread({
+      backend: request.backend,
+      federationTarget: request.federationTarget,
+      threadId: request.threadId,
+      countsAsActivity: false,
+      limit: 50,
+    });
+    return findAssistantEntryText(response.replay, request.turnId, request.itemId);
   }
 
   async resolveAssistantMessageImages(request: AssistantImageRequest): Promise<MessagingImagePart[]> {
@@ -1444,6 +1465,26 @@ function findLastAssistantEntryReply(
       text,
       ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
     };
+  }
+  return undefined;
+}
+
+/** The text of one assistant item of a turn, or undefined when not in the page. */
+export function findAssistantEntryText(
+  replay: AppServerThreadReplay,
+  turnId: string,
+  itemId: string,
+): string | undefined {
+  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+    const entry = replay.entries[index];
+    if (
+      entry?.type === "message"
+      && entry.role === "assistant"
+      && entry.id === itemId
+      && (!entry.turn?.id || entry.turn.id === turnId)
+    ) {
+      return entry.text.trim() || undefined;
+    }
   }
   return undefined;
 }

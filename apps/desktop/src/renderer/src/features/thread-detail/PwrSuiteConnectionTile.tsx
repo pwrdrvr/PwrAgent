@@ -1,10 +1,10 @@
 import { useState } from "react";
 import {
   backendLoadsMcpConnections,
-  type AppServerBackendKind,
   type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   PWRSUITE_PRODUCT_URLS,
   type PwrSuiteAppId,

@@ -1,10 +1,10 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
-  buildFederatedThreadRef,
   type NavigationThreadSummary,
   type RefreshThreadPullRequestsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { usePullRequestRefresh } from "../usePullRequestRefresh";
 import type { DesktopApi } from "../../../lib/desktop-api";
 

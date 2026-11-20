@@ -1,4 +1,4 @@
-import { threadTodoThreadKey } from "@pwragent/shared";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import {
   Fragment,
   useCallback,
@@ -13,14 +13,15 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODO_BUSY_RETRY_MS,
   THREAD_TODO_RESOLUTION_RESULTS,
-  codexAsyncQuestionItemId,
-  operatorTodoItemKey,
   threadTodoItemProgress,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { codexAsyncQuestionItemId } from "@pwragent/shared/codex-async-questions";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import {
   HandoffIcon,
   MergeIcon,

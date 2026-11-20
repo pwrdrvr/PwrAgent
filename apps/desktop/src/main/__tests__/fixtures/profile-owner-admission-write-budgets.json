@@ -19,5 +19,6 @@
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
-  }
+  },
+  "repeated-refused-owner-admission": {"commits": 0, "note": "One hundred checks after the first refused admission while another provider owner is live", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
 }

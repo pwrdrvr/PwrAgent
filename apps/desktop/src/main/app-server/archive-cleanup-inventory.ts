@@ -1,13 +1,15 @@
 import {
   buildThreadIdentityKey,
   isAcpBackendId,
-  mergeThreadLinkedDirectories,
   parseThreadIdentityKey,
+  type ThreadOverlayState,
+} from "@pwragent/shared/contracts/navigation";
+import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
+import {
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { getMainLogger } from "../log";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ARCHIVE_CLEANUP_SLICE_SIZE, type ArchiveCleanupContext } from "./archive-cleanup-queue";

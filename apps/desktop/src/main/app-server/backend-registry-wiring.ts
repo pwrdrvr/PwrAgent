@@ -14,7 +14,8 @@ import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
 import { PlanLimitStore } from "./plan-limit-store";
-import { DEFAULT_CHECKOUT_HIBERNATION_POLICY, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { DEFAULT_CHECKOUT_HIBERNATION_POLICY } from "@pwragent/shared/checkout-hibernation-policy";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import { restartGateHolds } from "./restart-continuation-gate";
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
@@ -25,7 +26,10 @@ import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-ser
 import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-runtime";
 import { preparePortableProviderRuntime } from "../codex-app-server/portable-provider-runtime";
 import { verifyPortableProvider } from "../codex-app-server/portable-provider-probe";
-import { codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
+import {
+  codexModelProviderApiKeyEnv,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -47,13 +51,12 @@ import {
 } from "../storage/desktop-runtime-storage";
 import { getAppStateMode, isAppStateInitialized } from "../storage/desktop-runtime-storage";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
-  isAcpBackendId,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { AcpBackendAdapter, createLocalAcpAgentDiscovery, noLocalAcpAgentDiscovery } from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS } from "../codex-app-server/app-server-recycle-policy";
@@ -199,7 +202,18 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let threadTitleGenerationService: RegistryDependencies["threadTitleGenerationService"];
   ownerAdmission = options?.ownerAdmission;
   const managedMaintenanceRoots = options?.managedWorktreeRoots
-    ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
+    ?? (async () => {
+      // A worktree folder adds its root; the home root stays managed so
+      // worktrees created before the folder was chosen still age out.
+      let folder: ReturnType<ReturnType<typeof getDesktopSettingsService>["resolveWorktreeFolder"]>;
+      try { folder = getDesktopSettingsService().resolveWorktreeFolder(); }
+      catch { folder = undefined; }
+      return [
+        userHomeWorktreesRoot(),
+        ...(folder ? [userHomeWorktreesRoot(folder.directory)] : []),
+        resolveActiveProfilePath("worktrees"),
+      ];
+    });
   const readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
     try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
     catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
@@ -561,7 +575,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.codexEnvironmentHydrationStore ??
     createDefaultCodexEnvironmentHydrationStore();
   const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
-  const localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
+  const localFilePrivateStorageRoots = [resolveActiveProfilePath("state/agent-memory"), ...(codexHome ? [codexHome] : [])];
   const clientVersion =
     typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
   const createCodexClient = (provider?: CodexModelProviderSettings): CodexAppServerClient => {
@@ -916,6 +930,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       gitEnv: codexEnv,
       resolveWorktreeStorage: () =>
         getDesktopSettingsService().resolveWorktreeStorage(),
+      resolveWorktreeFolder: () =>
+        getDesktopSettingsService().resolveWorktreeFolder(),
     });
   const gitWorkingStateService =
     options?.gitWorkingStateService ??
@@ -1150,6 +1166,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       worktreeArchiveService: worktreeArchiveService,
       resolveWorktreeStorage: () =>
         getDesktopSettingsService().resolveWorktreeStorage(),
+      resolveWorktreeFolder: () =>
+        getDesktopSettingsService().resolveWorktreeFolder(),
     });
   const resolveAcpHelperWorkspace =
     options?.resolveAcpHelperWorkspace ?? ensureAcpHelperWorkspace;

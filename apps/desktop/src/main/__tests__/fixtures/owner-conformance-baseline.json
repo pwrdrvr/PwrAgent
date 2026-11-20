@@ -21,6 +21,7 @@
     "backend.describeThreadMcpConnections",
     "backend.detachDirectoryFromThread",
     "backend.detachThreadPullRequest",
+    "backend.dismissFailedSubAgents",
     "backend.ensureDirectoryLaunchpad",
     "backend.forkThread",
     "backend.getLoadStatus",
@@ -65,6 +66,7 @@
     "backend.openApplication",
     "backend.previewThreadRewind",
     "backend.queueThreadExecutionMode",
+    "backend.readAgentMemory",
     "backend.readApplications",
     "backend.readForge",
     "backend.readMessagingPlatformStatuses",
@@ -143,7 +145,8 @@
     "backend.updateScheduledPullRequestReview",
     "backend.updateScheduledThreadAction",
     "backend.updateSubthreadOrder",
-    "backend.updateThreadExpectedBranch"
+    "backend.updateThreadExpectedBranch",
+    "backend.writeAgentMemory"
   ],
   "differences": []
 }

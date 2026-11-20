@@ -1,7 +1,7 @@
 import {
   formatCodexProviderModelId,
   parseCodexProviderModelId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
 
 /**
  * Translates PwrAgent's qualified model ids (`@provider/model`) at the Codex

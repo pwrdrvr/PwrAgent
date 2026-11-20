@@ -1,10 +1,11 @@
-import { describeProviderResponseBlock, isCodexAuthenticationFailure } from "@pwragent/shared";
+import { describeProviderResponseBlock } from "@pwragent/shared/provider-response-block";
+import { isCodexAuthenticationFailure } from "@pwragent/shared/codex-authentication";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
-  FederationInstanceId,
   ProviderResponseBlock,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import { turnFailureNoticeId } from "./turn-failure-acknowledgements";
 import { createElement } from "react";
@@ -34,11 +35,13 @@ export type BackendErrorSignal = (
       kind: "turn-failed";
       onDismiss?: () => void;
       onCodexLogin?: () => void;
+      /** Starts a fresh sign-in for the Codex profile this window owns. */
+      onCodexReauthenticate?: () => void;
       onClaudeLogin?: () => void;
       onOpenCodexSettings?: () => void;
       /** Offered when the turn's error says Claude deleted the thread's session. */
       onContinueClaudeSession?: () => void;
-      recovery?: "claudeSessionGone" | "claudeSignIn";
+      recovery?: "claudeSessionGone" | "claudeSignIn" | "codexHardwareKeySignIn";
       /** The provider refused the response; name the block, not a fault. */
       block?: ProviderResponseBlock;
       backend: AppServerBackendKind;
@@ -148,6 +151,8 @@ export function resolveBackendErrorNotice(
 
   if (signal.kind === "turn-failed") {
     const context = signal.errorNoticeContext;
+    const codexHardwareKeySignIn = signal.backend === "codex"
+      && signal.recovery === "codexHardwareKeySignIn";
     const originLabel = context?.automationName
       ? `Automation: ${context.automationName}${signal.originLabel ? ` · ${signal.originLabel}` : ""}`
       : signal.originLabel;
@@ -159,13 +164,20 @@ export function resolveBackendErrorNotice(
         ? "Automation failed"
         : context?.taskMonitor
           ? "Task monitor failed"
-          : signal.block ? "Turn blocked by content filter" : "Turn failed",
+          : signal.block
+            ? "Turn blocked by content filter"
+            : codexHardwareKeySignIn ? "Codex sign-in required" : "Turn failed",
       ...(originLabel
         ? { status: { label: originLabel, state: "error" as const } }
         : {}),
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
         ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
+        : {}),
+      // The message is the provider's instruction. A peer's window cannot
+      // sign in to the owner's Codex profile, so it shows only the text.
+      ...(codexHardwareKeySignIn && !signal.instanceId && signal.onCodexReauthenticate
+        ? { actions: [{ label: "Sign in again", onClick: signal.onCodexReauthenticate, tone: "primary" as const }] }
         : {}),
       ...(signal.backend === "claude" && !signal.instanceId && !signal.block
         && signal.onClaudeLogin && signal.recovery === "claudeSignIn"

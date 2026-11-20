@@ -1,7 +1,10 @@
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  FederationTarget, NavigationDirectoryRow, NavigationIdentity, NavigationQueryRequest,
-} from "@pwragent/shared";
+  NavigationDirectoryRow,
+  NavigationIdentity,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import { navigationIdentityKey } from "./navigation-query-state";
 import type { NavigationPresentedThread } from "./navigation-loaded-rows";
 
@@ -159,9 +162,9 @@ export function isLensCollectionId(id: string): boolean {
 /** Child pages are useful only while their disclosed parent is reachable from a visible collection. */
 export function visibleDisclosedNavigationParents(params: {
   collectionIds: Iterable<string>;
-  pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
+  pages: ReadonlyMap<string, import("@pwragent/shared/contracts/navigation").NavigationQueryPage>;
   disclosedParents: readonly NavigationIdentity[];
-  selectionAncestry?: import("@pwragent/shared").NavigationQueryPage | null;
+  selectionAncestry?: import("@pwragent/shared/contracts/navigation").NavigationQueryPage | null;
   directoryKeysByParent?: Map<string, string>;
 }): NavigationIdentity[] {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
@@ -215,7 +218,7 @@ export function visibleDisclosedNavigationParents(params: {
 /** Visible viewer mounts resolve row metadata from their explicit owners through the shared query pool. */
 export function addVisibleMountedOwnerDemand(params: {
   demand: Map<string, NavigationQueryRequest>;
-  pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
+  pages: ReadonlyMap<string, import("@pwragent/shared/contracts/navigation").NavigationQueryPage>;
   target?: FederationTarget;
   selectedRef?: NavigationIdentity;
 }): void {

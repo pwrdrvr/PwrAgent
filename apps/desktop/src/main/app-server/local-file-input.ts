@@ -5,7 +5,7 @@ import path from "node:path";
 import type {
   AppServerLocalFileInputItem,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export const MAX_LOCAL_TEXT_FILE_BYTES = 10 * 1024;
 export const MAX_LOCAL_TEXT_PREVIEW_BYTES = 4 * 1024;

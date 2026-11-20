@@ -2,9 +2,9 @@ import { useMemo } from "react";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
   withMcpConnection,
-  type AppServerBackendKind,
   type PwrSnapConnectionStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import pwrSnapIcon from "../../assets/pwrsnap/pwrsnap-app-icon.png";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {

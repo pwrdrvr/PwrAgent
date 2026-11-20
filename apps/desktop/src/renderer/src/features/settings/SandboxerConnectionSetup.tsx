@@ -3,13 +3,13 @@ import type {
   McpConnectionStatus,
   SandboxerCliState,
   SandboxerLinkTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import {
   SANDBOXER_CLI_PATH,
   SANDBOXER_MCP_LAUNCH_ARGS,
   SANDBOXER_SETUP_COMMAND,
   isSandboxerAccountLimited,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";

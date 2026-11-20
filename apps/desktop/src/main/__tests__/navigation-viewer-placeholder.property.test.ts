@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { buildFederatedThreadRef, type NavigationThreadSummary, type ProjectForgeAutomation } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 
 const paused: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,

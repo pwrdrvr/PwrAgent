@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { expect, it, vi } from "vitest";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { ClaudeSessionStore } from "../claude/claude-session-store";

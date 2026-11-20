@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationDetail, AutomationRunSummary } from "@pwragent/shared";
+import type { AutomationDetail, AutomationRunSummary } from "@pwragent/shared/contracts/automations";
 import { CloseIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { AutomationRunArtifactDetails } from "./ThreadAutomationsPanel";
@@ -107,7 +107,7 @@ export function AutomationRunWindow() {
                   <span
                     className={`automation-run-status automation-run-status--${run.status}`}
                   >
-                    {formatRunStatus(run.status, run.failureReason)}
+                    {formatRunStatus(run.status, run.failureReason, run.resumedAt)}
                   </span>
                   <span>
                     {run.trigger} ·{" "}

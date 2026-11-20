@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, ThreadOverlayState } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import type { ClaudeSession } from "../claude/claude-session-store";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { StateDb } from "../state/state-db";

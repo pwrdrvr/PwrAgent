@@ -1,5 +1,12 @@
-import type { ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence } from "@pwragent/shared";
-import { isRepairableDependencyFailure, threadDependencyConditionName } from "@pwragent/shared";
+import type {
+  ThreadDependency,
+  ThreadDependencyCondition,
+  ThreadDependencyEvidence,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  isRepairableDependencyFailure,
+  threadDependencyConditionName,
+} from "@pwragent/shared/contracts/thread-dependencies";
 
 export const ACTIVE_DEPENDENCY_STATUSES = new Set<ThreadDependency["status"]>(["waiting", "ready", "dispatching"]);
 

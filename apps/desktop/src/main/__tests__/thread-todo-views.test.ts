@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  AgentEvent, FederationRemoteTarget, ListThreadTodosResponse, ThreadTodo, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot,
-} from "@pwragent/shared";
-import { THREAD_TODO_BUSY_RETRY_MS } from "@pwragent/shared";
+  ListThreadTodosResponse,
+  ThreadTodo,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
+} from "@pwragent/shared/contracts/thread-todos";
+import { THREAD_TODO_BUSY_RETRY_MS } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoViewHub } from "../thread-todos/thread-todo-views";
 
 const peer: FederationRemoteTarget = { scope: "remote", instanceId: "peer" };

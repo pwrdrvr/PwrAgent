@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import type { HandoffInstanceThreadResult } from "@pwragent/shared";
+import type { HandoffInstanceThreadResult } from "@pwragent/shared/contracts/thread-instance-handoff";
 import { THREAD_HANDOFF_CANCELLED_MESSAGE } from "../../../../shared/ipc";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";

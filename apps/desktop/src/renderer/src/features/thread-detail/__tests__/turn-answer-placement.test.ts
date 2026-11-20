@@ -3,7 +3,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadTurnMetadata,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { withRendererSequence } from "../live-transcript-activity";
 import {
   insertRowsAboveTurnAnswers,

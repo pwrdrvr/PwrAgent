@@ -3,15 +3,19 @@ import {
   hasStoppableSubAgentRun,
   isCodexNativeSubAgent,
   isDecisionBatchSubAgent,
+} from "@pwragent/shared/subagent-kind";
+import {
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { isTerminalSubAgent } from "./context-panels/subagent-format";
 import { useNowWhileActive } from "./context-panels/RailCardTiming";
 import { SignalCount } from "../../components/SignalCount";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { statusPulseRef } from "../../lib/status-pulse";
 
 /**
@@ -47,8 +51,8 @@ function isRunningSubAgent(subAgent: ThreadSubAgentSummary): boolean {
  * Covers every producer at once — PwrAgent task monitors, code review (which
  * is also the ACP path), Codex's own `spawnAgent`, and the title helper —
  * because all four persist the same `ThreadSubAgentSummary` through one store.
- * Reads compact owner-projected rows from selected navigation detail; adds no
- * IPC or polling and does not need the lazily loaded sub-agent history.
+ * Reads compact owner-projected rows from selected navigation detail, without
+ * polling or loading the sub-agent history.
  *
  * The rail panel remains the full-detail surface. This is a presence indicator
  * with a Stop button, deliberately not a second copy of the card.
@@ -58,9 +62,16 @@ export function ActiveSubAgentsStrip(props: {
   onRefreshNavigation?: () => Promise<void>;
   thread?: NavigationThreadSummary;
 }): ReactNode {
-  const [dismissedFailures, setDismissedFailures] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const thread = props.thread;
+  const threadKey = thread && threadSummaryIdentityKey(thread);
+  const ref = thread?.federation?.ref;
+  const target = ref?.target ?? readRendererFederationTarget();
+  const capabilities = thread?.federation?.capabilities;
+  const canOfferDismiss = target?.scope !== "remote"
+    || (capabilities?.includes("turn_control") && capabilities.includes("sub_agent_failure_dismissal"));
+  const dismiss = props.desktopApi?.dismissFailedSubAgents;
+  const [dismissal, setDismissal] = useState<{ threadKey: string; phase: "saving" | "failed" }>();
+  const dismissalPhase = dismissal?.threadKey === threadKey ? dismissal?.phase : undefined;
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
 
   // The owner's projection already drops cards an earlier build wrote for
@@ -73,11 +84,12 @@ export function ActiveSubAgentsStrip(props: {
   // rail panel already hold them. Failures linger until dismissed: the strip
   // vanishing is how an operator misses one, and neither of those surfaces is
   // in their eyeline while they are typing.
-  const failed = subAgents.filter(
-    (subAgent) =>
-      isFailedSubAgent(subAgent) && !dismissedFailures.has(subAgent.monitorId),
-  );
+  const failed = subAgents.filter(isFailedSubAgent);
   const visible = [...running, ...blocked, ...failed];
+  const previewIncomplete = props.thread?.activeSubAgentsIncomplete;
+  const moreInPanel = props.thread?.activeSubAgentsMoreInPanel
+    ? <span className="live-strip__note">More in Sub-agents</span>
+    : null;
 
   // One or two rows cost almost nothing and saying what is running is the
   // point; three or more is the wall this strip exists to avoid. A later count
@@ -107,21 +119,30 @@ export function ActiveSubAgentsStrip(props: {
   const now = useNowWhileActive(running.length > 0);
 
   if (visible.length === 0) {
-    return null;
+    return moreInPanel;
   }
 
-  const dismissFailure = (monitorId: string): void => {
-    setDismissedFailures((current) => new Set(current).add(monitorId));
-  };
-
-  const dismissAllFailures = (): void => {
-    setDismissedFailures((current) => {
-      const next = new Set(current);
-      for (const subAgent of failed) {
-        next.add(subAgent.monitorId);
-      }
-      return next;
-    });
+  const dismissFailures = async (failures: readonly ThreadSubAgentSummary[]): Promise<void> => {
+    if (!canOfferDismiss || !dismiss || !thread || !threadKey) return;
+    const pending = { threadKey, phase: "saving" } as const;
+    setDismissal(pending);
+    try {
+      await dismiss({
+        backend: ref?.backend ?? thread.source,
+        ...(target ? { federationTarget: target } : {}),
+        threadId: ref?.threadId ?? thread.id,
+        attempts: failures.map(({ monitorId, attemptId, createdAt }) => ({
+          monitorId, attemptId: attemptId ?? String(createdAt),
+        })),
+      });
+    } catch {
+      setDismissal((current) => current === pending ? { threadKey, phase: "failed" } : current);
+      return;
+    }
+    setDismissal((current) => current === pending ? undefined : current);
+    // The owner event refreshes subscribed viewers. Also request a read from
+    // this viewer in case its peer grants detail reads without an event stream.
+    void props.onRefreshNavigation?.().catch(() => undefined);
   };
 
   // The heading and the count must agree, and both must describe what is
@@ -209,20 +230,25 @@ export function ActiveSubAgentsStrip(props: {
             <span className="live-strip__note">{failedNote}</span>
           ) : null}
         </button>
+        {moreInPanel}
         {/* Clearing failures one at a time is fine for one or two and a chore
             at a dozen. Only ever clears failures — a running sub-agent is
             never swept up by it. */}
-        {failed.length > 1 ? (
+        {canOfferDismiss && failed.length > 1 ? (
           <button
-            aria-label={`Dismiss all ${failed.length} failed sub-agents`}
+            aria-label={previewIncomplete ? `Dismiss ${failed.length} shown failures` : `Dismiss all ${failed.length} failed sub-agents`}
             className="live-strip__item-action live-strip__dismiss-all"
+            disabled={!dismiss || dismissalPhase === "saving"}
             type="button"
-            onClick={dismissAllFailures}
+            onClick={() => void dismissFailures(failed)}
           >
-            Dismiss all
+            {previewIncomplete ? "Dismiss shown" : "Dismiss all"}
           </button>
         ) : null}
       </div>
+      {dismissalPhase === "failed" && failed.length > 0 ? (
+        <div className="live-strip__note" role="alert">Couldn’t dismiss failed sub-agents.</div>
+      ) : null}
       {expanded ? (
         <ul className="live-strip__list">
           {visible.map((subAgent) => {
@@ -232,9 +258,9 @@ export function ActiveSubAgentsStrip(props: {
             // A Codex worker goes by the name the rail and sidebar show; its
             // task is a placeholder unless Codex titled the thread, and the
             // placeholder carries the id the name falls back to.
-            const label = isCodexNativeSubAgent(subAgent)
+            const label = (isCodexNativeSubAgent(subAgent)
               ? subAgent.agentName ?? subAgent.task
-              : subAgent.task;
+              : subAgent.task) || subAgent.monitorId;
             const canStop =
               (subAgent.status === "pending"
                 || subAgent.status === "running"
@@ -285,12 +311,13 @@ export function ActiveSubAgentsStrip(props: {
                     state text slid right to the edge while every neighbour's
                     stopped short — the right rail stopped being a column. */}
                 <span className="live-strip__item-slot">
-                  {failedRow ? (
+                  {failedRow && canOfferDismiss ? (
                     <button
                       aria-label={`Dismiss failed sub-agent: ${label}`}
                       className="live-strip__item-action"
+                      disabled={!dismiss || dismissalPhase === "saving"}
                       type="button"
-                      onClick={() => dismissFailure(subAgent.monitorId)}
+                      onClick={() => void dismissFailures([subAgent])}
                     >
                       Dismiss
                     </button>

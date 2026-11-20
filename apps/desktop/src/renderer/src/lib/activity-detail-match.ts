@@ -1,4 +1,4 @@
-import type { AppServerThreadActivityDetail } from "@pwragent/shared";
+import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
 
 type DetailIndex = {
   ids: Set<string>;

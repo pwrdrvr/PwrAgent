@@ -1,8 +1,6 @@
 import type BetterSqlite3 from "better-sqlite3";
-import {
-  MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
-  type AppServerThreadActivityEntry,
-} from "@pwragent/shared";
+import { MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES } from "@pwragent/shared/contracts/navigation";
+import { type AppServerThreadActivityEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { LegacyPayloadArrayMove } from "./legacy-payload-array-move";
 
 /**

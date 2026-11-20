@@ -3,8 +3,8 @@ import {
   CHECKOUT_HIBERNATION_SNAPSHOT_MB_CHOICES,
   normalizeCheckoutHibernationPolicy,
   type DesktopCheckoutHibernationPolicy,
-  type DesktopSettingsConfigPatch,
-} from "@pwragent/shared";
+} from "@pwragent/shared/checkout-hibernation-policy";
+import { type DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ArchiveSweepField } from "./ArchivePolicySettings";

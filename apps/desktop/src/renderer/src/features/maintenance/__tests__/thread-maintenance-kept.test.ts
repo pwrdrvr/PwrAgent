@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { ThreadMaintenanceKeptCheckout } from "@pwragent/shared";
+import type { ThreadMaintenanceKeptCheckout } from "@pwragent/shared/thread-maintenance";
 import { groupKeptCheckouts, keptGuidance, pullRequestHref } from "../thread-maintenance-kept";
 
 const REASONS = ["Watching a PR", "Recently active", "Kept awake", "Uncommitted changes", "Shared with another thread",

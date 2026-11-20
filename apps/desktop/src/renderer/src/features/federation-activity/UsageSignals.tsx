@@ -1,4 +1,5 @@
-import type { ThreadUsageLineRecord, UsageActivityRollup } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import type { UsageActivityRollup } from "@pwragent/shared/contracts/usage-activity";
 import { usageRollupLabel } from "./usage-activity-presentation";
 import type { UsageGroup } from "./usage-activity-summary";
 

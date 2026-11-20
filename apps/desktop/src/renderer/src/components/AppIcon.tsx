@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared";
+import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
 import { EditorIcon, TerminalIcon } from "../icons";
 
 /**

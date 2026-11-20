@@ -1,6 +1,7 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, McpConnectionStatus } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
 import { McpAccessPanel, ThreadMcpAccessPanel, useThreadMcpConnectionCount } from "./McpAccessPanel";
 
 function connection(

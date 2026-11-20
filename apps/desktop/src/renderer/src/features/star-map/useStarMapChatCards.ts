@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   snapshotStarMapWorkspaceThread,
   starMapWorkspaceCardKey,
   STAR_MAP_WORKSPACE_VERSION,
-  type NavigationThreadSummary,
   type StarMapWorkspaceAnchor,
   type StarMapWorkspaceLayout,
   type StarMapWorkspaceSnapshot,
   type StarMapWorkspaceThreadSnapshot,
   type StarMapWorkspaceView,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   cascadeChatCardRect,

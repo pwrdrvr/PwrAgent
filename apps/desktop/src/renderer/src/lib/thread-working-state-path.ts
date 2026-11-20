@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /** Mirrors the main-process working-state owner-path resolution contract. */
 export function resolveThreadWorkingStatePath(

@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName, NavigationSelectedDetailResponse } from "@pwragent/shared";
-import { buildPullRequestStatusKey, isThreadPendingWakeInvalidation, NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
+import type { FederationTarget, FederationPeerSummary } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationIdentity,
+  NavigationDetailCollections,
+  NavigationDetailCollectionName,
+  NavigationSelectedDetailResponse,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  buildPullRequestStatusKey,
+  NAVIGATION_DETAIL_COLLECTION_NAMES,
+} from "@pwragent/shared/contracts/navigation";
+import { isThreadPendingWakeInvalidation } from "@pwragent/shared/contracts/thread-pending-wakes";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
@@ -270,6 +280,7 @@ export function useNavigationSelectedDetail(params: {
         && notification.method !== "thread/codexEnvironment/updated"
         && notification.method !== "thread/acpRuntime/updated"
         && notification.method !== "thread/prWatches/updated"
+        && notification.method !== "thread/subAgentFailures/dismissed"
         && !(selectedOwner && isThreadPendingWakeInvalidation(notification.method, notification.params))) return;
       // A canonical event supersedes the retained collection too. Otherwise
       // the configuration read overlays its older cache and briefly erases

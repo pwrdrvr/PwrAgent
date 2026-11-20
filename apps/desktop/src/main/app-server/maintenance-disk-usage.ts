@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { ThreadMaintenanceSpace } from "@pwragent/shared";
-import { maintenanceLockHelperPath } from "./maintenance-native-lock";
+import type { ThreadMaintenanceSpace } from "@pwragent/shared/thread-maintenance";
+import { nativeRelayPath } from "../native-relay-path";
 
 const execute = promisify(execFile);
 
@@ -33,7 +33,7 @@ export async function measureMaintenanceAllocation(
   signal: AbortSignal,
   options: { helperPath?: string } = {},
 ): Promise<ThreadMaintenanceSpace | undefined> {
-  if (process.platform === "win32") return measureWindowsAllocation([checkout], signal, options.helperPath ?? maintenanceLockHelperPath());
+  if (process.platform === "win32") return measureWindowsAllocation([checkout], signal, options.helperPath ?? nativeRelayPath());
   try {
     const { stdout } = await execute("/usr/bin/du", ["-sk", path.resolve(checkout)], {
       signal, timeout: 30_000, maxBuffer: 8192,
@@ -53,7 +53,7 @@ export async function measureMaintenanceAllocationPaths(paths: string[], signal:
   options: { helperPath?: string } = {}): Promise<ThreadMaintenanceSpace | undefined> {
   if (!paths.length) return { allocatedBytes: 0 };
   if (paths.length > 1000) return undefined;
-  if (process.platform === "win32") return measureWindowsAllocation(paths, signal, options.helperPath ?? maintenanceLockHelperPath());
+  if (process.platform === "win32") return measureWindowsAllocation(paths, signal, options.helperPath ?? nativeRelayPath());
   try {
     const { stdout } = await execute("/usr/bin/du", ["-skc", ...paths.map((value) => path.resolve(value))], {
       signal, timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, BLOCK_SIZE: "1024", LC_ALL: "C" },

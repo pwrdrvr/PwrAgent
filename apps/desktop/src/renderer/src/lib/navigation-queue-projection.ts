@@ -1,9 +1,12 @@
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import {
+  NAVIGATION_QUERY_MAX_PAGE_ROWS,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
+} from "@pwragent/shared/contracts/navigation";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
 import type {
-  ComposerThreadOwner,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { ComposerQueuedTurnSnapshot } from "../features/composer/useComposerDraftStore";
 import { isNavigationCursorExpired } from "./navigation-query-state";
 import { withOwnerPause } from "../features/composer/queued-turn-pause";

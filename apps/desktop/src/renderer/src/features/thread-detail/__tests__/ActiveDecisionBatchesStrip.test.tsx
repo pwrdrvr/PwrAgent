@@ -1,7 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, DecisionsRailBatch, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { DecisionsRailBatch } from "@pwragent/shared/decisions-rail";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ActiveDecisionBatchesStrip } from "../ActiveDecisionBatchesStrip";
 
 afterEach(cleanup);

@@ -12,12 +12,13 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
+import { PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION } from "@pwragent/shared/contracts/messaging-tools";
 import {
-  PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
-} from "@pwragent/shared";
-import type { McpConnectionStatus, AppServerPendingRequestNotification } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

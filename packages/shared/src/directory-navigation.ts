@@ -4,6 +4,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationThreadSummary,
+  ProjectCheckoutGroup,
 } from "./contracts/navigation.js";
 import type { LinkedDirectorySummary } from "./contracts/normalized-app-server.js";
 import {
@@ -50,6 +51,14 @@ function pathBaseName(value?: string): string {
 // already listed. Assert against the contract, not against a restatement of it.
 export function canonicalizeNavigationPath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+export function directoryIncludesCheckout(
+  directory: Pick<NavigationDirectorySummary, "key" | "checkoutPaths">,
+  checkoutKey: string,
+): boolean {
+  return directory.key === checkoutKey
+    || Boolean(directory.checkoutPaths?.some((path) => `directory:${path}` === checkoutKey));
 }
 
 function normalizeComparablePath(value?: string): string | undefined {
@@ -547,6 +556,7 @@ export function buildDirectorySummaries(params: {
    */
   directoryOverlayByKey?: Record<string, DirectoryOverlayState | undefined>;
   workspaceRoots?: string[];
+  checkoutGroups?: readonly ProjectCheckoutGroup[];
 }): NavigationDirectorySummary[] {
   const summaries = new Map<string, NavigationDirectorySummary>();
   const stablePathByLabel = collectStablePathByLabel(params.threads);
@@ -672,6 +682,13 @@ export function buildDirectorySummaries(params: {
     summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, launchpad.updatedAt);
   }
 
+  for (const { preferredPath } of params.checkoutGroups ?? []) {
+    ensureSummary(summaries, {
+      key: `directory:${preferredPath}`, kind: "directory",
+      label: pathBaseName(preferredPath), path: preferredPath,
+    });
+  }
+
   for (const [directoryKey, gitStatus] of Object.entries(params.gitStatusByKey ?? {})) {
     if (!gitStatus) {
       continue;
@@ -713,6 +730,24 @@ export function buildDirectorySummaries(params: {
           summary.forgeAutomation = automation;
         }
       }
+    }
+  }
+
+  for (const group of params.checkoutGroups ?? []) {
+    const key = `directory:${group.preferredPath}`;
+    const members = group.paths.flatMap((path) => {
+      const member = summaries.get(`directory:${path}`);
+      return member ? [member] : [];
+    });
+    const project = summaries.get(key)!;
+    project.label = pathBaseName(group.preferredPath);
+    project.checkoutPaths = group.paths;
+    project.repositoryKey = group.repositoryKey;
+    project.threadKeys = [...new Set(members.flatMap((member) => member.threadKeys))];
+    project.needsAttentionCount = members.reduce((count, member) => count + member.needsAttentionCount, 0);
+    project.latestUpdatedAt = Math.max(...members.map((member) => member.latestUpdatedAt ?? 0), 0);
+    for (const member of members) {
+      if (member.key !== key) summaries.delete(member.key);
     }
   }
 

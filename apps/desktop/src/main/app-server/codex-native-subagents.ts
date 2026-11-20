@@ -1,14 +1,14 @@
-import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
+import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared/subagent-activity";
+import { isCodexNativeSubAgentVisibleInNavigation } from "@pwragent/shared/subagent-visibility";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import { shortSubAgentThreadId } from "@pwragent/shared/subagent-kind";
 import {
-  isCodexNativeSubAgentVisibleInNavigation,
-  shortenDerivedThreadTitle,
-  shortSubAgentThreadId,
   type AppServerNotification,
   type AppServerThreadCommandDetail,
   type AppServerThreadSummary,
   type CodexNativeSubAgentSummary,
-  type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { subAgentActivityToolCall } from "../codex-app-server/subagent-activity";
 import {
   type CodexNativeSubAgentCall,

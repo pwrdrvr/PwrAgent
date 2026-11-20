@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { rmSync } from "node:fs";
-import type { AgentEvent, FederationCapability } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,

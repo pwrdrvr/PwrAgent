@@ -1,10 +1,10 @@
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import {
-  isAcpBackendId,
   type AcpBackendId,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
-  type SteerTurnRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { ThreadSteeringSubmission } from "./thread-steering-lifecycle";
 
 type ProviderSteerResult = { threadId: string; turnId: string };

@@ -1,8 +1,9 @@
 import { codexAuthState } from "../../codex-auth-state";
 import { registerReceivingFolderIpc } from "./receiving-folder";
+import { registerWorktreeFolderIpc } from "./worktree-folder";
 import { CodexAppServerClient } from "../../codex-app-server/desktop-client";
 import { validateGlabCommand } from "../../settings/glab-discovery";
-import { validateCodexModelProviders } from "@pwragent/shared";
+import { validateCodexModelProviders } from "@pwragent/shared/codex-model-providers";
 import { CodexModelProviderCatalog } from "../../app-server/codex-model-provider-catalog";
 import { verifyPortableProvider } from "../../codex-app-server/portable-provider-probe";
 import {
@@ -17,6 +18,13 @@ import type {
   AcpManagedBuildStatus,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
+  ListAcpAgentSettingsRequest,
+  ListAcpAgentSettingsResponse,
+  CancelProviderCatalogRefreshRequest,
+  ReadProviderCatalogRefreshResponse,
+  ProviderCatalogRefreshState,
+} from "@pwragent/shared/contracts/backend";
+import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -37,11 +45,6 @@ import type {
   InspectDiscordThreadPermissionsResponse,
   ListDiscordThreadPermissionChannelsRequest,
   ListDiscordThreadPermissionChannelsResponse,
-  ListAcpAgentSettingsRequest,
-  ListAcpAgentSettingsResponse,
-  CancelProviderCatalogRefreshRequest,
-  ReadProviderCatalogRefreshResponse,
-  ProviderCatalogRefreshState,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   ReadDesktopConfigBootstrapResponse,
@@ -57,8 +60,6 @@ import type {
   SetCodexModelProviderApiKeyRequest,
   SetCodexModelProviderApiKeyResponse,
   TestCodexModelProviderRequest,
-  CodexModelProviderTestResult,
-  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
@@ -72,15 +73,21 @@ import type {
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   WriteDesktopSettingsConfigRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type {
+  CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
+} from "@pwragent/shared/codex-model-providers";
 import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
-  isAcpBackendId,
   isMessagingRuntimeSecret,
   resolveDesktopLogsViewerPreferences,
+} from "@pwragent/shared/contracts/settings";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import {
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/messaging-contact-labels";
 import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
@@ -1637,6 +1644,7 @@ export function registerSettingsIpcHandlers(
   },
 ): void {
   registerReceivingFolderIpc();
+  registerWorktreeFolderIpc(() => getService(service).resolveWorktreeFolder());
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.handle(

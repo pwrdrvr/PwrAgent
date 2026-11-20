@@ -3,9 +3,16 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
-  projectResearchRun, researchChangePage, researchEventPage, summarizeResearchRun,
-  type NavigationThreadSummary, type ResearchChange, type ResearchEvent, type ResearchRun, type ResearchUpdateReceipt,
-} from "@pwragent/shared";
+  projectResearchRun,
+  researchChangePage,
+  researchEventPage,
+  summarizeResearchRun,
+  type ResearchChange,
+  type ResearchEvent,
+  type ResearchRun,
+  type ResearchUpdateReceipt,
+} from "@pwragent/shared/research";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption } from "../../../test/select";
 import { ResearchPanel } from "../ResearchPanel";

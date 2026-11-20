@@ -2,7 +2,7 @@ import type { SettingsSecretStorage } from "@pwragent/owner-core/settings-secret
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 /**
  * Opt-out env var for keychain access. When set to `"1"`, `"true"`,

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import {
   AGENT_FOLLOW_UP_FIRED_WINDOW_MS,
   AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type {
   AgentFollowUpProtection,
   ListScheduledThreadActionsRequest,
@@ -13,8 +13,8 @@ import type {
   ScheduledThreadActionHoldCause,
   ScheduledThreadActionOrigin,
   ScheduledThreadActionStatus,
-  PendingWakeScheduledActions,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { PendingWakeScheduledActions } from "@pwragent/shared/contracts/thread-pending-wakes";
 import type {
   CreateScheduledThreadActionRecord,
   ScheduledThreadActionClaim as ClaimParams,

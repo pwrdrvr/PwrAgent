@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerReviewTarget, ReviewRunMode, ScheduledThreadReviewPayload } from "@pwragent/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ReviewRunMode } from "@pwragent/shared/contracts/agent";
+import type { ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { federationReviewRoute } from "@pwragent/federation/federation-backend-methods";
 import { keepsCapturedReview } from "../scheduled-actions/scheduled-thread-action-service";
 

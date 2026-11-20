@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { prRollupLabel, prStackTimeLabel, resolvePrRollup } from "../pr-rollup";
 
 function pr(number: number, overrides: Partial<PrSummary> = {}): PrSummary {

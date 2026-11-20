@@ -1,4 +1,4 @@
-import type { AppServerNotification } from "@pwragent/shared";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export const CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID =

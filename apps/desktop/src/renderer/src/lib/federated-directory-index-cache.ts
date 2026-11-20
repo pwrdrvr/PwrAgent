@@ -1,8 +1,8 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-query-events";
 import {
   findPeerCounterpartDirectory,
   type ProjectIdentity,

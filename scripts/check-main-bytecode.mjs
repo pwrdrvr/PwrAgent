@@ -34,7 +34,7 @@ async function check() {
   const discovery = discoverMainBytecodeSources(root, roots, additional);
   if (discovery.dynamic.length) throw new Error(`Nonliteral module imports cannot define a closed bytecode scope: ${JSON.stringify(discovery.dynamic)}`);
   const { createVitest } = await import("vitest/node");
-  const context = await createVitest({ root, config: resolve(root, "vitest.workspace.ts"), project: ["desktop-main"], watch: false });
+  const context = await createVitest({ root, config: resolve(root, "vitest.workspace.mts"), project: ["desktop-main"], watch: false });
   try {
     await context.standalone();
     const environment = context.projects[0]?.vite.environments.ssr;

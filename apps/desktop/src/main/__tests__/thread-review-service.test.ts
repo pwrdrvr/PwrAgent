@@ -1,7 +1,9 @@
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AgentEvent, AppServerThreadReviewEntry, ThreadTodosChangedEvent } from "@pwragent/shared";
-import { threadReviewTodo } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerThreadReviewEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTodosChangedEvent } from "@pwragent/shared/contracts/thread-todos";
+import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import {
   ALL_FINDINGS_SETTLED_NOTE,
   REPORTED_FIXED_NOTE,

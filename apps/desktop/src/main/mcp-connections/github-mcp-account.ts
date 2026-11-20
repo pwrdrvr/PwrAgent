@@ -5,7 +5,7 @@ import {
   type GithubMcpAccountCheck,
   type GithubMcpAccountSource,
   type GithubMcpSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/github-mcp";
 
 /**
  * Where a GitHub connection's token comes from, and what GitHub says about it.

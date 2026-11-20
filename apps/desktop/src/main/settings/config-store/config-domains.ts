@@ -11,7 +11,7 @@ import type {
   DesktopTextSize,
   DesktopToolOutputAlertPolicy,
   PrAutoDispatchBudgetConfig,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
@@ -35,7 +35,7 @@ import {
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MIN_SPEND_ALERT_THRESHOLD_USD,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopSettingsConfig } from "../desktop-config";
 
 export const CONFIG_STORE_DURABLE_SCHEMA_VERSION = 1;

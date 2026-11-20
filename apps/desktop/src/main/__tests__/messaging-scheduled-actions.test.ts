@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   parseMessagingSchedule,
   resolveScheduledAction,

@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /** Search rows are navigation-compatible placeholders, not hydrated thread state.
  * Use an allowlist so new overlay fields never silently become search payloads.

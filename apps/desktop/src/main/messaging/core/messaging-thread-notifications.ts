@@ -1,10 +1,12 @@
 import {
   parseThreadCorrespondenceMessage,
   threadNotificationSnippet,
-  type AgentEvent,
+} from "@pwragent/shared/contracts/thread-system-messages";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
   type AppServerThreadMessageOrigin,
   type ThreadIncomingWorkSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 function senderLabel(origin: AppServerThreadMessageOrigin): string {
   const source = origin.sourceThread;
@@ -71,7 +73,9 @@ export function automationRunFailureNotice(params: {
   const name = params.automationName?.trim();
   const label = params.failureReason === "interrupted"
     ? "Automation interrupted"
-    : "Automation failed";
+    : params.failureReason === "timed_out"
+      ? "Automation timed out"
+      : "Automation failed";
   const heading = name ? `${label}: ${threadNotificationSnippet(name, 80)}` : label;
   const error = threadNotificationSnippet(params.errorMessage ?? "");
   if (error) return `${heading} · ${error}`;

@@ -1,6 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, researchHarnessEffectiveState, sameResearchThread, type ResearchActor, type ResearchEvent,
-  type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
+import {
+  RESEARCH_HARNESS_RECONCILABLE,
+  RESEARCH_HARNESS_REVISION,
+  type ResearchHarnessCapabilities,
+  type ResearchHarnessCheck,
+  type ResearchHarnessRequest,
+  type ResearchHarnessState,
+} from "@pwragent/shared/research-harness";
+import {
+  RESEARCH_MAX_EVENTS,
+  RESEARCH_MAX_WORKERS,
+  researchDeadlinePassed,
+  validResearchMinutes,
+  researchHarnessEffectiveState,
+  sameResearchThread,
+  type ResearchActor,
+  type ResearchEvent,
+  type ResearchEventData,
+  type ResearchRunHeader,
+} from "@pwragent/shared/research";
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
 import { harnessMemberSlot, normalizeHarnessRecords, object, text } from "./research-harness-records";

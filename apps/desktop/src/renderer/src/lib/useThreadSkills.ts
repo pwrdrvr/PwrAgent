@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   compareSkillOrigins,
   withSkillOrigins,
+  type SkillOriginDirectory,
+} from "@pwragent/shared/skill-origin";
+import {
   type AppServerAvailableCommandSummary,
   type AppServerListSkillsResponse,
   type AppServerSkillSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
-  type SkillOriginDirectory,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import {
   agentEventMatchesThread,

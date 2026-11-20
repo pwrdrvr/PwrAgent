@@ -5,13 +5,15 @@ import path from "node:path";
 import type {
   AppServerBackendKind,
   WorktreeSnapshotSummary,
-  ThreadMaintenanceRunStage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadMaintenanceRunStage } from "@pwragent/shared/thread-maintenance";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { sameRegisteredWorktree, worktreeDirectoryIdentity, type CheckoutIdentity } from "./worktree-maintenance-registration";
+import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
+import { readWorktreeLockHolder } from "./worktree-volume-lock";
 
 type GitResult = {
   stdout: string;
@@ -298,13 +300,10 @@ async function checkArchiveRegistration(params: {
       || (error as NodeJS.ErrnoException).code === "ENOTDIR") throw unregistered();
     throw error;
   }
-  try {
-    await lstat(path.join(gitDirectory, "locked"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
+  // PwrAgent's own drive lock is cleared by the removal; any other lock is a hold.
+  if (await readWorktreeLockHolder(gitDirectory) === "other") {
+    throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
   }
-  throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
 }
 
 async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: () => void): Promise<void> {
@@ -574,14 +573,19 @@ export class WorktreeArchiveService {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
       }
       assertRemoval?.();
-      await this.runGit(
-        repositoryPath,
-        ["worktree", "remove", "--force", worktreePath],
-        // Git for Windows can hand work to another git.exe after the launcher
-        // exits. Own that complete process tree atomically and do not report the
-        // archive complete until the Job's active-process count reaches zero.
-        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
-      );
+      await removeManagedWorktree({
+        worktreePath,
+        force: true,
+        git: async (args) => (await this.runGit(repositoryPath, args)).stdout,
+        removeGit: async (args) => (await this.runGit(
+          repositoryPath,
+          args,
+          // Git for Windows can hand work to another git.exe after the launcher
+          // exits. Own that complete process tree atomically and do not report the
+          // archive complete until the Job's active-process count reaches zero.
+          { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
+        )).stdout,
+      });
     }, assertRemoval));
   }
 
@@ -653,10 +657,14 @@ export class WorktreeArchiveService {
         detachedFrom = { branch, head: sourceHead, reason: "missing" };
       }
     }
-    await this.runGit(repositoryPath, sourceBranch
-      ? ["worktree", "add", worktreePath, sourceBranch]
-      : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit],
-    { ownProcessTree: params.restoreSourceCheckout });
+    await addManagedWorktree({
+      repoRoot: repositoryPath,
+      worktreePath,
+      addArgs: sourceBranch
+        ? [worktreePath, sourceBranch]
+        : ["--detach", worktreePath, sourceHead ?? restoreCommit],
+      git: (args) => this.runGit(repositoryPath, args, { ownProcessTree: params.restoreSourceCheckout }),
+    });
     if (sourceHead && sourceHead !== restoreCommit) {
       // Populate the saved file tree, then return the index to the original
       // HEAD. Dirty and non-ignored untracked files remain working-tree edits;
@@ -724,13 +732,12 @@ export class WorktreeArchiveService {
     );
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await this.runGit(repositoryPath, [
-      "worktree",
-      "add",
-      "--detach",
+    await addManagedWorktree({
+      repoRoot: repositoryPath,
       worktreePath,
-      snapshotCommit,
-    ]);
+      addArgs: ["--detach", worktreePath, snapshotCommit],
+      git: (args) => this.runGit(repositoryPath, args),
+    });
 
     const restoredAt = params.now ?? Date.now();
     return {

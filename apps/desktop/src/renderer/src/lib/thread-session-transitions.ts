@@ -1,4 +1,7 @@
-import type { AppServerPendingRequestNotification, AppServerThreadTurnMetadata } from "@pwragent/shared";
+import type {
+  AppServerPendingRequestNotification,
+  AppServerThreadTurnMetadata,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { PendingQuestionnaireState } from "../features/thread-detail/questionnaire";
 import type { PendingMcpInteractionState } from "../features/thread-detail/mcp-elicitation";
 

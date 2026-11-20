@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { OwnerJobRecord } from "./owner-job-storage";
 import type { OwnerThreadRecord } from "./thread-storage";
 

@@ -1,5 +1,6 @@
 import path from "node:path";
-import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 
 /** The parts of a housekeeping candidate that say which checkouts it uses. */
 export type CheckoutOwnerCandidate = {

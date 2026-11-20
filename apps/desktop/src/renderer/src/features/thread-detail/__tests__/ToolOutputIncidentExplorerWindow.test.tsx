@@ -10,7 +10,7 @@ import {
 import type {
   AppServerReadThreadResponse,
   ThreadToolInvocationRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readStoredSavingsLayout,

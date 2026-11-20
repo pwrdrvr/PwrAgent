@@ -1,7 +1,16 @@
 import { correspondenceNotice } from "./messaging-thread-notifications";
 import { rememberBoundedMap } from "../../bounded-map";
-import { readCodexAsyncQuestionRepliesFromNotification, readCodexAsyncQuestionsFromNotification, readProviderResponseBlockNotification } from "@pwragent/shared";
-import type { AgentEvent, ThreadIncomingWorkSummary, AppServerThreadPlanEntry, AppServerThreadReviewEntry } from "@pwragent/shared";
+import {
+  readCodexAsyncQuestionRepliesFromNotification,
+  readCodexAsyncQuestionsFromNotification,
+} from "@pwragent/shared/codex-async-questions";
+import { readProviderResponseBlockNotification } from "@pwragent/shared/provider-response-block";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  ThreadIncomingWorkSummary,
+  AppServerThreadPlanEntry,
+  AppServerThreadReviewEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { buildErrorIntent } from "./messaging-renderer.js";
 import { artifactFromPlanEntry, artifactFromReviewEntry } from "./messaging-artifact-renderer.js";
@@ -777,6 +786,7 @@ export class MessagingBackendEventRouter {
                 binding,
                 assistantImages,
                 undefined,
+                true,
                 true,
               );
             }

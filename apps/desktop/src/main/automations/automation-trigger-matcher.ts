@@ -3,14 +3,14 @@ import {
   findAutomationConversationIndexForMessage,
   matchesAutomationConversation,
   normalizeInboundTriggerConditions,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type {
   AutomationInboundMessageTriggerDefinition,
   AutomationReplayCandidate,
   AutomationRunSourceMetadata,
   AutomationTriggerDefinition,
-  InboundPreviewMessage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import type { InboundPreviewMessage } from "@pwragent/shared/contracts/messaging";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
@@ -32,7 +32,7 @@ export function matchAutomationInboundEvent(params: {
 
   const matches: AutomationInboundTriggerMatch[] = [];
   for (const automation of params.automations) {
-    if (automation.status !== "enabled") continue;
+    if (!acceptsInboundTriggers(automation)) continue;
     for (const trigger of automation.triggers) {
       if (trigger.kind !== "inbound_message") continue;
       if (!matchesInboundTrigger(trigger, params.event)) continue;
@@ -63,13 +63,22 @@ export function anyAutomationInboundMatch(params: {
     return false;
   }
   for (const automation of params.automations) {
-    if (automation.status !== "enabled") continue;
+    if (!acceptsInboundTriggers(automation)) continue;
     for (const trigger of automation.triggers) {
       if (trigger.kind !== "inbound_message") continue;
       if (matchesInboundTrigger(trigger, params.event)) return true;
     }
   }
   return false;
+}
+
+/**
+ * Enabled automations match. So does one the daily run limit paused: its
+ * caller records the message as skipped rather than running it.
+ */
+function acceptsInboundTriggers(automation: AutomationRecord): boolean {
+  return automation.status === "enabled"
+    || (automation.status === "paused" && automation.pausedReason === "daily_run_limit");
 }
 
 function matchesInboundTrigger(

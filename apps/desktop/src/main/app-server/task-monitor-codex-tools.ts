@@ -1,5 +1,5 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   CancelMonitorDelegationToolArgs,
   CompleteMonitoringToolArgs,
   CreateMonitorDelegationToolArgs,
@@ -8,14 +8,14 @@ import type {
   TaskMonitorOperationName,
   TaskMonitorRequest,
   TaskMonitorResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/task-monitor-tools";
 import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
-  PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
   isTaskMonitorOperationName,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/task-monitor-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,

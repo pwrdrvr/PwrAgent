@@ -1,11 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  AutomationDetail,
-  AutomationRunStatus,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AutomationDetail, AutomationRunStatus } from "@pwragent/shared/contracts/automations";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ActiveAutomationRunsStrip } from "../ActiveAutomationRunsStrip";
 
@@ -137,5 +134,46 @@ describe("ActiveAutomationRunsStrip", () => {
       screen.getByRole("button", { name: "Dismiss failed automation Search Bots" }),
     );
     expect(screen.queryByText("Failed automations")).not.toBeInTheDocument();
+  });
+});
+
+describe("ActiveAutomationRunsStrip limits", () => {
+  it("says a run timed out, and raises a paused-at-limit card with Resume", async () => {
+    const resumeAutomation = vi.fn(async () => ({
+      automation: automation({ id: "a2", name: "Busy channel" }),
+    }));
+    const api = {
+      ...apiWith([
+        automation({
+          id: "a1",
+          name: "Nightly sweep",
+          lastRunStatus: "failed",
+          lastRunFailureReason: "timed_out",
+          lastRunId: "run-1",
+          lastRunAt: 1_000,
+        }),
+        automation({
+          id: "a2",
+          name: "Busy channel",
+          status: "paused",
+          pausedReason: "daily_run_limit",
+          lastRunStatus: "skipped",
+          lastRunAt: 2_000,
+        }),
+      ]),
+      resumeAutomation,
+    } as unknown as DesktopApi;
+    await act(async () => {
+      render(<ActiveAutomationRunsStrip desktopApi={api} thread={thread} />);
+    });
+
+    expect(await screen.findByText("Timed out")).toBeInTheDocument();
+    expect(screen.getByText("Daily limit reached")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", {
+        name: "Resume Busy channel, paused at its daily run limit",
+      }));
+    });
+    expect(resumeAutomation).toHaveBeenCalledWith({ automationId: "a2" });
   });
 });

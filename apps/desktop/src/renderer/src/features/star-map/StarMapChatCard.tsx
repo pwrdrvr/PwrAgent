@@ -1,4 +1,5 @@
-import { buildModelMenu, codexSpeedOptions, modelMenuOtherLabel, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
+import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
+import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import {
   memo,
   useCallback,
@@ -13,16 +14,17 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
-  isCelestialIconId,
-  isRemoteFederationTarget,
-  type AppServerThreadImagePart,
-  type CelestialIconId,
   type NavigationLaunchpadFileAttachment,
   type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
-  type ReadQueuedTurnResponse,
+} from "@pwragent/shared/contracts/navigation";
+import { isCelestialIconId, type CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import {
+  type AppServerThreadImagePart,
   type ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { CelestialIcon, PauseIcon, PencilIcon, TrashIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -399,6 +401,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
   });
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
+  const { refresh: refreshSelectedDetail } = selectedDetail;
+  const refreshSubAgentDetail = useCallback(async () => {
+    await Promise.all([refreshSelectedDetail(), props.onRefreshNavigation?.()]);
+  }, [refreshSelectedDetail, props.onRefreshNavigation]);
   // The queue term also covers an inactive card: `useIndependentQueueProjection`
   // is passed no thread when `props.active === false`, and reports `loading`
   // for a selection key it holds no state for.
@@ -2120,8 +2126,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <div className="star-map-chat-card__band">
           <MemoizedActiveSubAgentsStrip
             desktopApi={desktopApi}
-            onRefreshNavigation={props.onRefreshNavigation}
-            thread={thread}
+            onRefreshNavigation={refreshSubAgentDetail}
+            thread={selectedConfiguration ?? thread}
           />
           <MemoizedActiveDecisionBatchesStrip desktopApi={desktopApi} thread={thread} />
 

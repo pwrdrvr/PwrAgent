@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { FEDERATION_PROTOCOL_VERSION, type FederationProtocolEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { scheduleFederationBlob, waitForFederationSendCapacity } from "../federation/federation-transport";
 import { FederationRouter } from "../federation/federation-router";
 

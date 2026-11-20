@@ -1,16 +1,16 @@
-import { isThreadLockRefusal } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import type {
   AgentFollowUpProtection,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
-  PendingWakeScheduledActions,
   ScheduledThreadAction,
   ScheduledThreadActionHoldCause,
   ScheduledThreadActionKind,
   ScheduledThreadActionOrigin,
   ScheduledThreadReviewPayload,
   ScheduledThreadTurnPayload,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { PendingWakeScheduledActions } from "@pwragent/shared/contracts/thread-pending-wakes";
 
 const SCHEDULED_TURN_QUEUE_PREFIX = "scheduled-turn:";
 

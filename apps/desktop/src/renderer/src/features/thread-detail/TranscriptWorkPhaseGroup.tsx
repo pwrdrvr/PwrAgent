@@ -4,10 +4,12 @@ import type {
   AppServerSkillSummary,
   AppServerThreadEntry,
   AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import { TranscriptActivity, TranscriptActivityRun } from "./TranscriptActivity";

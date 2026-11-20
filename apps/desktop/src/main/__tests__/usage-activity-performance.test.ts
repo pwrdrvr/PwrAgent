@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";

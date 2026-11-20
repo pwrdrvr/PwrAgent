@@ -128,7 +128,7 @@ function createOverlayStoreMock() {
     }: {
       backend: "codex" | "acp:grok";
       threadId: string;
-      agent: import("@pwragent/shared").ThreadOverlayState["agent"] | null;
+      agent: import("@pwragent/shared/contracts/navigation").ThreadOverlayState["agent"] | null;
     }) => ({
       backend,
       threadId,

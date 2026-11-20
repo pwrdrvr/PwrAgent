@@ -1,8 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef, type CSSProperties } from "react";
-import {
-  filePreviewKindLabel,
-  type FilePreviewKind,
-} from "@pwragent/shared";
+import { filePreviewKindLabel, type FilePreviewKind } from "@pwragent/shared/file-preview";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   buildFilePreviewText,

@@ -1,6 +1,8 @@
 import { act, fireEvent, render, waitFor } from "../../test/phase-probes";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, FederationTarget, NavigationIdentity, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationIdentity, NavigationRow } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDisclosure";

@@ -1,12 +1,13 @@
 import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
-import { matchesAutomationConversation } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import type {
   MessagingController,
   MessagingControllerDeliveryBudgetEvent,
+  MessagingControllerOptions,
 } from "./core/messaging-controller";
 import { isMessagingInteractivePendingRequest } from "./core/messaging-pending-request";
 import { getRbacPolicyService } from "./rbac-policy-service";
@@ -19,12 +20,11 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
 } from "./core/messaging-adapter";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AgentEvent,
-  AppServerBackendKind,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
-  FederationEventSubscription,
   InboundPreviewMessage,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
@@ -36,11 +36,14 @@ import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   MessagingToolUpdateMode,
+} from "@pwragent/shared/contracts/messaging";
+import type { FederationEventSubscription } from "@pwragent/shared/contracts/federation";
+import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
   PwrAgentMessagingContext,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging-tools";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingRecord,
   MessagingAdapterAuthorizationUpdate,
@@ -573,6 +576,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
        * them once when it first starts.
        */
       interruptedAutomationRunUpdates?: () => readonly AgentEvent[];
+      /** Raises a reminder card when a final reply's delivery is in doubt. */
+      raiseDeliveryCheck?: MessagingControllerOptions["raiseDeliveryCheck"];
       adapterStartTimeoutMs?: number;
     },
   ) {
@@ -1649,6 +1654,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       fullAccessControlsSource: "runtime-snapshot",
       fullAccessPolicyRevision: () => this.fullAccessPolicySnapshot.revision,
       onBindingChanged: () => this.broadcastBindingsChanged(),
+      raiseDeliveryCheck: this.options.raiseDeliveryCheck,
       onDeliveryBudgetEvent: (event) => {
         void this.handleDeliveryBudgetEvent(event);
       },
@@ -1879,6 +1885,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       channel: adapter.channel,
     });
     await this.replayInterruptedAutomationRuns(adapter.channel, controller);
+    await this.recoverDeliveryReceipts(adapter.channel, controller);
     return "started";
   }
 
@@ -2434,6 +2441,25 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+  }
+
+  /**
+   * Sends the final replies and approval cards the last adapter for this
+   * channel provably never sent, and flags the ones in doubt. It runs on
+   * every start, so a launch and an adapter restart are covered alike.
+   */
+  private async recoverDeliveryReceipts(
+    channel: MessagingChannelKind,
+    controller: MessagingController,
+  ): Promise<void> {
+    try {
+      await controller.recoverDeliveryReceipts();
+    } catch (error) {
+      messagingLog.warn("messaging delivery receipt recovery failed", {
+        channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -3516,6 +3542,16 @@ export function initializeDesktopMessagingRuntime(
         getDesktopAutomationService().matchesInboundEvent(event),
       interruptedAutomationRunUpdates: () =>
         getDesktopAutomationService().listInterruptedRunUpdates(),
+      // Loaded on first use, like the controller, so starting messaging does
+      // not pull in the to-do runtime.
+      raiseDeliveryCheck: async (params) => {
+        const { getThreadTodoService } = await import("../thread-todos/thread-todo-runtime");
+        getThreadTodoService().add({
+          backend: params.backend,
+          threadId: params.threadId,
+          input: { title: params.title, detail: params.detail, key: params.key },
+        });
+      },
     });
   }
 

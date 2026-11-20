@@ -17,7 +17,7 @@
 // window afterwards: the renderer does not re-poll on a direct sqlite
 // mutation. Same shape as the README capture spec's seeders.
 import Database from "better-sqlite3";
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 
 type ThreadOverlayPayload = {
   backend: string;

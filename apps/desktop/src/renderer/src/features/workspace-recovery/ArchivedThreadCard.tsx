@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
-import type { NavigationThreadSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { WorktreeSnapshotSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ArchiveIcon } from "../../icons";
 import { formatAge } from "../maintenance/thread-maintenance-selection";
 

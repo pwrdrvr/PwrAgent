@@ -1,5 +1,9 @@
 import path from "node:path";
-import type { AppServerBackendKind, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { canonicalWorktreePaths } from "./archive-worktree-references";
 
 /** What a change notification says about the identity's archive membership. */

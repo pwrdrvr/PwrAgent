@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchService } from "@pwragent/owner-core/research-service";
-import type { ResearchSearchPage, ResearchItemContext } from "@pwragent/shared";
+import type { ResearchSearchPage, ResearchItemContext } from "@pwragent/shared/research";
 import { MemoryResearchStorage } from "../../../../../../packages/owner-core/src/__tests__/fixtures/research-memory-storage";
 import type { ResearchAssignmentReceipt } from "@pwragent/owner-core/research-service";
 import { createResearchAgentHandler } from "../../research/research-runtime";

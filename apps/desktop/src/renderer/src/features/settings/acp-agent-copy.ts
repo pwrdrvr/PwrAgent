@@ -1,7 +1,5 @@
-import type {
-  AcpAgentSettingsEntry,
-  DesktopUpdateChannel,
-} from "@pwragent/shared";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
+import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
 
 /** Local discovery can mark Grok as not requiring auth even when opening a
  * session returned an authentication rejection. The session is authoritative. */

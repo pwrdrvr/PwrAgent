@@ -3,7 +3,7 @@ import type {
   ComposerDraftSnapshotRecord,
   ListComposerDraftRecoveryCandidatesRequest,
   SaveComposerDraftRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-drafts";
 
 /**
  * Viewer-local composer persistence, including drafts for peer-owned threads.

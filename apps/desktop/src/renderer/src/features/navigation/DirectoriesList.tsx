@@ -5,7 +5,7 @@ import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
 import { usePagedDirectoryChildren } from "./usePagedDirectoryChildren";
-import { classifyDirectory } from "@pwragent/shared";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   memo,
@@ -22,21 +22,21 @@ import {
   type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   comparePinnedDirectories,
-  isKeptAtTopThread,
   isPinnedDirectory,
-  isSubthreadLaunchpadKey,
   moveDirectoryKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/directory-pins";
+import { isKeptAtTopThread } from "@pwragent/shared/thread-pins";
+import { isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
 import {
   ChevronDownIcon,
   NewThreadIcon,
@@ -550,7 +550,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   );
   const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
-    if (parent) return parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
+    if (parent) return parent.checkoutProject ? [parent.checkoutProject.key]
+      : parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
     const homeKey = startingThreadHomeKey(creation);
     return homeKey ? [homeKey] : [];
   }, [startingThreadHomeKey, threadsByKey]);

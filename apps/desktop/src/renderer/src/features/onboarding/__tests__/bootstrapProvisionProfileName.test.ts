@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopBootInfo } from "@pwragent/shared";
+import type { DesktopBootInfo } from "@pwragent/shared/contracts/settings";
 import { bootstrapProvisionProfileName } from "../OnboardingWizard";
 
 /**

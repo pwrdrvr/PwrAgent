@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { MessagingBackendEventContext } from "../messaging/core/messaging-backend-event-context";
 import { MessagingBackendEventRouter } from "../messaging/core/messaging-backend-event-router";

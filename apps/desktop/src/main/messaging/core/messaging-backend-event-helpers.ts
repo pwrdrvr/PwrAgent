@@ -1,18 +1,20 @@
-import { finalTurnOutputText } from "@pwragent/shared";
-import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, parseCodexTurnErrorMessage } from "@pwragent/shared";
+import { finalTurnOutputText } from "@pwragent/shared/turn-output";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { parseCodexTurnErrorMessage } from "@pwragent/shared/codex-turn-error";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   ThreadIncomingWorkSummary,
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
-  AutomationRunOutputDecision,
   AppServerThreadMessageOrigin,
-  FederationTarget,
-  ScheduledThreadAction,
   ThreadExecutionMode,
   ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AutomationRunOutputDecision } from "@pwragent/shared/contracts/automations";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { MessagingRequestSource } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { planEntryFromUpdate } from "./messaging-artifact-renderer.js";
@@ -374,6 +376,25 @@ export function artifactTurnKey(
   turnId: string,
 ): string {
   return `${backend}:${threadId}:${turnId}`;
+}
+
+/** The backend item an `item/started` or `item/completed` event names. */
+export function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {
+  if (
+    event.notification.method !== "item/started"
+    && event.notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+  const item = (event.notification.params as {
+    item?: { id?: unknown; itemId?: unknown; item_id?: unknown };
+  }).item;
+  for (const value of [item?.id, item?.itemId, item?.item_id]) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 export function turnIdForBackendEvent(event: AgentEvent): string | undefined {

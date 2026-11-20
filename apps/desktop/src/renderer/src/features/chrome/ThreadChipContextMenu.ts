@@ -1,8 +1,5 @@
-import {
-  buildThreadUrl,
-  type LinkedDirectorySummary,
-  type ThreadLinkRef,
-} from "@pwragent/shared";
+import { buildThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
+import { type LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ChipContextMenuItem } from "./ChipContextMenu";
 
 export type ThreadChipMenuLink = ThreadLinkRef & {

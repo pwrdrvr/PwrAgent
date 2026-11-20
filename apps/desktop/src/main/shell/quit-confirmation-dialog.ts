@@ -1,9 +1,6 @@
 import { app, BrowserWindow, nativeTheme, screen, type Rectangle } from "electron";
-import { parseThreadIdentityKey } from "@pwragent/shared";
-import type {
-  DesktopAppearanceTheme,
-  DesktopColorTheme,
-} from "@pwragent/shared";
+import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type { DesktopAppearanceTheme, DesktopColorTheme } from "@pwragent/shared/contracts/settings";
 import type {
   QuitBlockerItem,
   QuitBlockerQueueSnapshot,

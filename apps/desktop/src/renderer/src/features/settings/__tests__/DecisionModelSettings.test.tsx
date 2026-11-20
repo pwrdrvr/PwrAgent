@@ -1,11 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
 import type {
-  DesktopDecisionModelSettings,
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { DecisionModelDefaults, DecisionProviderScreen } from "../DecisionModelSettings";
 

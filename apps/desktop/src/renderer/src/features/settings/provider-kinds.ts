@@ -3,8 +3,8 @@ import {
   decisionLocalEndpointProblem,
   resolveDecisionModelSettings,
   type DecisionProviderId,
-  type DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decision-models";
+import { type DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import {
   DECISION_PROVIDER_FOCUS,
   DECISION_PROVIDER_NAMES,

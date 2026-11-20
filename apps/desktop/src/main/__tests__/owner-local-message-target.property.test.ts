@@ -1,12 +1,12 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerThreadSummary,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
-  ThreadTodoMessageTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import type { ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import * as appState from "../state/app-state";

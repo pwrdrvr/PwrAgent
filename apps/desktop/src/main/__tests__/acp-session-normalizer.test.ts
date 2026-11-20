@@ -1,3 +1,4 @@
+import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
 import { describe, expect, it } from "vitest";
 import {
   AcpSessionReplayNormalizer,
@@ -355,6 +356,21 @@ describe("AcpSessionReplayNormalizer", () => {
         text: "Grok timestamp. Qwen timestamp.",
       }),
     ]);
+  });
+
+  it("filters the memory envelope at every possible user replay chunk boundary", () => {
+    const envelope = buildAgentMemoryContext("private progress");
+    for (let split = 1; split < envelope.length; split += 1) {
+      const normalizer = new AcpSessionReplayNormalizer();
+      const chunks = [envelope.slice(0, split), envelope.slice(split), "Operator text"];
+      for (const text of chunks) {
+        const replay = normalizer.apply({
+          sessionId: "session", receivedAt: 1000,
+          update: { kind: "user_message_chunk", messageId: "user", text },
+        });
+        expect(replay.messages.map((message) => message.text)).toEqual(text === "Operator text" ? [text] : []);
+      }
+    }
   });
 
   it("drops Gemini's <session_context> boilerplate user_message_chunk", () => {

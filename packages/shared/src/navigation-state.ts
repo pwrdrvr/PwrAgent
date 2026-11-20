@@ -7,6 +7,7 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   NavigationLaunchpadDefaults,
+  ProjectCheckoutGroup,
   ThreadOverlayState,
 } from "./contracts/navigation.js";
 import type { AutomationThreadSummary } from "./contracts/automations.js";
@@ -347,6 +348,7 @@ export function buildNavigationSnapshot(params: {
    * doesn't have to call the builder twice.
    */
   directoryOverlayByKey?: Record<string, DirectoryOverlayState | undefined>;
+  checkoutGroups?: readonly ProjectCheckoutGroup[];
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
@@ -376,6 +378,7 @@ export function buildNavigationSnapshot(params: {
       launchpadsByKey: params.launchpadsByKey,
       gitStatusByKey: params.gitStatusByDirectoryKey,
       directoryOverlayByKey: params.directoryOverlayByKey,
+      checkoutGroups: params.checkoutGroups,
       workspaceRoots: params.workspaceRoots,
     }),
     launchpadDefaults: params.launchpadDefaults ?? {

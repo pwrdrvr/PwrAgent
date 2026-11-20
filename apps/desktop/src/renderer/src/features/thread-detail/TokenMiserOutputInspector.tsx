@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import type { InspectTokenMiserOutputRequest, InspectTokenMiserOutputResponse } from "@pwragent/shared";
+import type {
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
+} from "@pwragent/shared/contracts/tool-output-incidents";
 import { useDesktopApi } from "../../lib/desktop-api";
 
 type Props = Omit<InspectTokenMiserOutputRequest, "source" | "offset">;

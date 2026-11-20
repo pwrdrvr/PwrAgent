@@ -18,7 +18,7 @@ import type {
   AppServerLocalFileInputItem,
   AppServerLocalImageInputItem,
   AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { resolveActiveProfilePath } from "../profile";
 import { normalizeExplicitLocalFileReferencePath } from "../explicit-local-file-reference";
 import { imageInputFileRoot } from "./image-input-files";

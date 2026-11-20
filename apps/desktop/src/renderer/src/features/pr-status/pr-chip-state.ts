@@ -1,6 +1,10 @@
+import { describeMergeQueueState, isMergeQueueActive } from "@pwragent/shared/pr-merge-queue";
 import {
-  describeMergeQueueState, isMergeQueueActive, isPrStatusUnknown, resolveCheckState, resolveLifecycleState, type PrSummary,
-} from "@pwragent/shared";
+  isPrStatusUnknown,
+  resolveCheckState,
+  resolveLifecycleState,
+} from "@pwragent/shared/pull-request-rollup";
+import { type PrSummary } from "@pwragent/shared/contracts/navigation";
 
 export { isPrStatusUnknown, resolveCheckState, resolveLifecycleState };
 

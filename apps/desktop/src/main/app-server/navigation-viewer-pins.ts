@@ -1,7 +1,15 @@
-import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey,
-  findRemoteHomeDirectoryIndex, remoteThreadPlaceholderDirectory } from "@pwragent/shared";
-import type { FederationRemoteTarget, NavigationDirectorySummary, NavigationIdentity,
-  NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import {
+  findRemoteHomeDirectoryIndex,
+  remoteThreadPlaceholderDirectory,
+} from "@pwragent/shared/federation-project-match";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationDirectorySummary,
+  NavigationIdentity,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";

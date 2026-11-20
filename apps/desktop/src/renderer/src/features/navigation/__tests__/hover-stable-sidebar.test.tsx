@@ -9,11 +9,11 @@ import {
   within,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
-  BackendSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { BrowseMode } from "../../../lib/useThreadNavigation";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";

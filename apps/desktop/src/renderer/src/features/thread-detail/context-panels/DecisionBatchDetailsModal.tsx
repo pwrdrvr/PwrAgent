@@ -4,7 +4,7 @@ import type {
   DecisionsRailBatch,
   DecisionsRailItem,
   DecisionsRailItemFilter,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
 import { CloseIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useModalDialog } from "../../../lib/useModalDialog";

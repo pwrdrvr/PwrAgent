@@ -1,4 +1,4 @@
-import type { AppServerNotification } from "@pwragent/shared";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, expect, it, vi } from "vitest";
 import { HeadlessAutomationTurns } from "../app-server/headless-automation-turns";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";

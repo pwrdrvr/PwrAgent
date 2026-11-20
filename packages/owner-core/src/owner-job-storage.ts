@@ -1,4 +1,4 @@
-import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** Durable acceptance/outcome metadata. Input and transcript text are provider-owned. */
 export type OwnerJobRecord = {

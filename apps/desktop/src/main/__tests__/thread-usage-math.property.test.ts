@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { estimateCodexCreditsForLine } from "@pwragent/shared";
+import { estimateCodexCreditsForLine } from "@pwragent/shared/thread-pricing-display";
 import type { LiveThreadRequestUsage } from "../app-server/backend-registry-types";
 import { buildLiveThreadUsageLine, foldLiveThreadRequestUsage } from "../app-server/thread-usage-math";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

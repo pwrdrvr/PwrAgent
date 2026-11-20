@@ -15,17 +15,24 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  type NavigationIdentity,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
   formatFederationPeerDisplayLabel,
   formatFederationPeerDisplayLabelParts,
   isRemoteFederationTarget,
+  type FederationPeerSummary,
+} from "@pwragent/shared/contracts/federation";
+import {
   starMapProjectArrangementKey,
   starMapWorkspaceCardKey,
   STAR_MAP_LOAD_CARD_KEY,
   STAR_MAP_LOAD_CARD_POSITION_KEY,
-  threadSeenWatermark,
-  type FederationPeerSummary,
-  type NavigationIdentity,
-  type NavigationThreadSummary,
+  type StarMapWorkspaceAnchor,
+} from "@pwragent/shared/contracts/star-map";
+import { threadSeenWatermark } from "@pwragent/shared/inbox";
+import {
   type PwrAgentStarMapErrorCode,
   type SetStarMapViewToolArgs,
   type StarMapFlightTarget,
@@ -33,8 +40,7 @@ import {
   type StarMapThreadRef,
   type StarMapViewRect,
   type StarMapViewSurface,
-  type StarMapWorkspaceAnchor,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import {
   ThreadProvidersContext,
   useStableThreadProviders,

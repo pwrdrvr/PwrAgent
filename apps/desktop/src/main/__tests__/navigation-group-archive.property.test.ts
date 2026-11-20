@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { buildThreadIdentityKey, type AppServerBackendKind, type AppServerThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import {
+  type AppServerBackendKind,
+  type AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { readNavigationArchiveGroup } from "../../renderer/src/lib/navigation-archive-group";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

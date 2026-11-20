@@ -4,7 +4,7 @@ import { createResearchOwnerIdentity } from "./research/research-owner-identity"
 import { initializeResearchRuntime, closeResearchRuntime } from "./research/research-runtime";
 import { bindResearchRegistry, createResearchRegistryPorts } from "./research/research-registry";
 import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tools";
-import { isAcpBackendId } from "@pwragent/shared";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { initializeDesktopAutomationService, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
@@ -22,7 +22,11 @@ import { getExistingRuntimeLeaseManager } from "./runtime-lease-manager";
 import { stopAllCodexEnvironmentDetachedCommands } from "./app-server/codex-environment-runtime";
 import { disposeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
 import { stopProfileRuntimeHeartbeatRefresh } from "./storage/desktop-state-lifecycle";
-import type { AppServerThreadMessageOrigin, DesktopProviderModelDefaults, DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  DesktopProviderModelDefaults,
+  DesktopSettingsConfigPatch,
+} from "@pwragent/shared/contracts/settings";
 import { type OwnerHostServices, getOwnerHostServices, rendererSubscribers } from "./owner-host";
 import { initializeDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { initializeDesktopSettingsService } from "./settings/desktop-settings-singleton";
@@ -43,7 +47,10 @@ import { getDesktopStorageMaintenanceStorage } from "./storage/desktop-storage-m
 import { getDesktopOverlayStore } from "./storage/desktop-overlay-store";
 import { createOpenAIDecisionsAgentToolsHandler, flushOpenAIDecisionsUsage } from "./openai-decisions/openai-decisions-runtime";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
-import type { CreateInstanceThreadResult, PwrAgentFederationContext } from "@pwragent/shared";
+import type {
+  CreateInstanceThreadResult,
+  PwrAgentFederationContext,
+} from "@pwragent/shared/contracts/federation-tools";
 import { createStarMapAgentToolsHandler } from "./star-map/star-map-agent-tools-service";
 import { isVoiceManagerThread } from "./native-voice/voice-manager-thread";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
@@ -66,7 +73,9 @@ import type { AgentToolCallContext } from "./agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "./federation/federated-forge-read-service";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../shared/navigation-diagnostic-cause";
 import { setBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
-import { navigationQueryEventRequiresRefresh, type AgentEvent, forgeRuleProjectLabel } from "@pwragent/shared";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { forgeRuleProjectLabel } from "@pwragent/shared/contracts/forge-agent-tools";
 import { AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import { disposeThreadMaintenanceService, getThreadMaintenanceService } from "./thread-maintenance-runtime";
 import { readFederationThreadPrWatchesRequest } from "./pr-status/thread-pr-watches-federation";
@@ -116,6 +125,12 @@ async function closeResearchOwner(): Promise<void> {
 const navigationQueryPool = getDesktopNavigationQueryPool();
 
 function invalidateNavigationEvent(event: AgentEvent): void {
+  if (event.notification.method === "thread/subAgentFailures/dismissed") {
+    navigationQueryPool.invalidateExactOwner(event.federationTarget, {
+      backend: event.backend, threadId: event.notification.params.threadId,
+    }, "detail");
+    return;
+  }
   appServerService.invalidateThreadPendingWakes(event);
   getDesktopNavigationQueryStore().observeAttentionEvent(event);
   if (event.notification.method === "federation/eventStream/changed" && event.notification.params.navigationContinuous) return;

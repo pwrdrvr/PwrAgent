@@ -292,6 +292,7 @@ export const CODEX_MCP_SERVER_LOGIN_CHANNEL = "codex-mcp-server:login";
 export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
+export const AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL = "agent:dismiss-failed-sub-agents";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
 export const AGENT_REWIND_THREAD_CHANNEL = "agent:rewind-thread";
 export const AGENT_PREVIEW_THREAD_REWIND_CHANNEL = "agent:preview-thread-rewind";
@@ -438,6 +439,7 @@ export const NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL =
   "navigation:acknowledge-thread-environment-failure";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
+export const AGENT_MEMORY_CHANNEL = "agent-memory:access";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =
@@ -473,6 +475,8 @@ export const NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL =
  */
 export const NAVIGATION_SET_DIRECTORY_PIN_CHANNEL =
   "navigation:set-directory-pin";
+export const NAVIGATION_SET_PROJECT_CHECKOUT_GROUP_CHANNEL =
+  "navigation:set-project-checkout-group";
 export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
   "navigation:reorder-directory-pins";
 export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =
@@ -888,6 +892,7 @@ export const SETTINGS_PICK_GLAB_COMMAND_CHANNEL =
 export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
   "settings:pick-git-command";
 export const SETTINGS_RECEIVING_FOLDER_CHANNEL = "settings:receiving-folder";
+export const SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL = "settings:worktree-folder-check";
 export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =
   "settings:refresh-git-discovery";
 export const SETTINGS_MANAGED_GIT_ACTION_CHANNEL =

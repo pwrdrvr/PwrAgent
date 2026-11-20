@@ -3,7 +3,7 @@ import { secretEncryption } from "../owner-host";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { CloudflareSetupDraft } from "@pwragent/shared";
+import type { CloudflareSetupDraft } from "@pwragent/shared/contracts/federation-cloudflare";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
 import { isSecretStorageDisabledByEnv } from "../settings/desktop-secret-store";
 import type { CloudflareAccessSession } from "./cloudflare-access-oauth";

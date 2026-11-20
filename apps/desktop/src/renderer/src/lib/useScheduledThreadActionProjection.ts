@@ -1,7 +1,8 @@
 import { buildThreadComposerScopeKey } from "../features/composer/useComposerDraftStore";
 import { observeLaunchpadScheduledAction } from "../features/composer/launchpad-composer-handoff";
 import { useEffect, useReducer } from "react";
-import type { FederationTarget, ScheduledThreadAction } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";

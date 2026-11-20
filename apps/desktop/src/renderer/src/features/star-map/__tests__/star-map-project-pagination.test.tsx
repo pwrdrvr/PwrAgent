@@ -1,7 +1,12 @@
 import "./foreground-fixture";
 import { act, cleanup, fireEvent, probe, render, waitFor } from "../../../test/phase-probes";
 import { afterEach, expect, it, vi } from "vitest";
-import { classifyDirectory, type AgentEvent, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { StarMapScreen } from "../StarMapScreen";

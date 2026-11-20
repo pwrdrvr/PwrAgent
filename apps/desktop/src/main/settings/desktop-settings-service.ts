@@ -1,29 +1,30 @@
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
-  DEFAULT_THREAD_TODO_MERGE_METHOD,
   FORGE_AGENT_TOOL_GROUPS,
-  codexModelProviderApiKeyEnv,
-  isValidCodexModelProviderId,
-  normalizeCheckoutHibernationPolicy,
-  normalizeThreadArchivePolicy,
   upsertForgeAgentToolRule,
-  type CodexModelProviderSettings,
   type ForgeAgentRuleAgent,
   type ForgeAgentToolAccess,
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
   type ForgeAgentToolRuleGroup,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD } from "@pwragent/shared/contracts/thread-todos";
+import {
+  codexModelProviderApiKeyEnv,
+  isValidCodexModelProviderId,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import { normalizeCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
+import { normalizeThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
 import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
-  FORGE_PRODUCTS,
-  type ForgeKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
@@ -39,15 +40,10 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
-  DesktopHelperModelSettings,
-  DesktopTaskMonitorModelChoice,
-  DesktopDecisionModelSettings,
-  DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
   DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
   DesktopFederationMode,
-  FederationPeerRole,
   DesktopGitDiscoverySnapshot,
   DesktopGitRuntimeChoice,
   DesktopManagedGitSnapshot,
@@ -74,10 +70,17 @@ import type {
   DesktopUpdateSelectionSource,
   DesktopUpdateSettingsSnapshot,
   DesktopUpdateTrain,
+  DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
-  MessagingToolUpdateMode,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared/helper-models";
+import type { DesktopDecisionModelSettings, DecisionProviderId } from "@pwragent/shared/decision-models";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
@@ -123,7 +126,7 @@ import {
   MIN_REPEATED_LARGE_OUTPUT_CALLS,
   MIN_REPEATED_LARGE_OUTPUT_PERCENT,
   MIN_SPEND_ALERT_THRESHOLD_USD,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
@@ -1863,7 +1866,10 @@ export class DesktopSettingsService {
         agentTools: this.resolveForgeAgentToolSettings(config.git?.agentTools),
       },
       worktrees: {
-        ...this.resolveWorktrees(config.worktrees?.storage),
+        ...this.resolveWorktrees(config.worktrees?.storage, config.worktrees?.baseDirectory),
+        ...(config.worktrees?.baseDirectory && config.worktrees.baseDirectoryIncludesCodex
+          ? { baseDirectoryIncludesCodex: true }
+          : {}),
         archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
         hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate),
       },
@@ -2166,6 +2172,15 @@ export class DesktopSettingsService {
     const storage = this.configStore.read("worktrees").storage;
     return this.resolveWorktrees(storage)
       .storage.value;
+  }
+
+  /** The operator's worktree folder, replacing the home folder for `user-home`. */
+  resolveWorktreeFolder(): DesktopWorktreeFolder | undefined {
+    const worktrees = this.configStore.read("worktrees");
+    const directory = worktrees.baseDirectory?.trim();
+    return directory
+      ? { directory, includeCodex: worktrees.baseDirectoryIncludesCodex === true }
+      : undefined;
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
@@ -4959,9 +4974,11 @@ export class DesktopSettingsService {
 
   private resolveWorktrees(
     configValue: DesktopWorktreeStorageLocation | undefined,
+    baseDirectoryValue?: string,
   ): {
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
+    baseDirectory?: string;
   } {
     const envValue = readEnvWorktreeStorage(this.env);
     const resolved: DesktopSettingsValue<DesktopWorktreeStorageLocation> =
@@ -4976,12 +4993,16 @@ export class DesktopSettingsService {
             source: configValue === undefined ? "default" : "config",
             error: envValue.error,
           };
+    const baseDirectory = baseDirectoryValue?.trim() || undefined;
     return {
       storage: resolved,
       effectivePath:
         resolved.value === "user-home"
-          ? toForwardSlashes(userHomeWorktreesRoot())
+          ? toForwardSlashes(userHomeWorktreesRoot(baseDirectory))
           : ".worktrees",
+      // Availability is checked on demand (settings:worktree-folder), never
+      // here: a stat on a stale network mount would block the main process.
+      ...(baseDirectory ? { baseDirectory } : {}),
     };
   }
 
@@ -5150,3 +5171,4 @@ function parseCodexModelProviderKeys(value: string | undefined): Record<string, 
 function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {
   return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
 }
+

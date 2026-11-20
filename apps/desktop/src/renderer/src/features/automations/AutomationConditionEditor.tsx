@@ -5,9 +5,11 @@ import {
   type AutomationInboundConditionGroup,
   type AutomationInboundConditionJoin,
   type AutomationInboundConditionOperator,
+} from "@pwragent/shared/contracts/automations";
+import {
   type MessagingChannelKind,
   type MessagingSenderSuggestion,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import { Select, type SelectOption } from "../../components/Select";
 import { CloseIcon } from "../../icons";
 import { AutomationSenderPicker } from "./AutomationSenderPicker";

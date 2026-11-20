@@ -1,6 +1,11 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import { isAgentMemoryRead } from "@pwragent/shared/contracts/agent-memory";
 import { registerNavigationBackendHandlers, type NavigationBackendOperations } from "./federation-navigation-handlers";
 import { startTurnInputOutcome, steerInputOutcome, type TurnInputOutcome } from "./turn-input-viewers";
-import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse } from "@pwragent/shared";
+import type {
+  ManageThreadDependenciesRequest,
+  ManageThreadDependenciesResponse,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 import {
   FEDERATION_BACKEND_METHODS,
@@ -8,21 +13,34 @@ import {
   federationReviewRoute,
   type FederationBackendMethod,
 } from "@pwragent/federation/federation-backend-methods";
-import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
-import { HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE } from "@pwragent/shared";
+import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
-} from "@pwragent/shared";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
-import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
-import type { FederationThreadPrWatchesRequestV1, ThreadPrWatchesResponse } from "@pwragent/shared";
-import type { AppServerThreadMessage } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
+import type {
+  ReadUsageActivityRequest,
+  ReadUsageActivityResponse,
+  AnalyzeUsageActivityRequest,
+  AnalyzeUsageActivityResponse,
+} from "@pwragent/shared/contracts/usage-activity";
+import type {
+  ReadThreadFamilyPricingRequest,
+  ReadThreadFamilyPricingResponse,
+} from "@pwragent/shared/thread-family-pricing";
+import type {
+  FederationThreadPrWatchesRequestV1,
+  ThreadPrWatchesResponse,
+} from "@pwragent/shared/contracts/thread-pr-watches";
+import type { AppServerThreadMessage } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   ListProjectHeldWakeupsRequest,
   ListProjectHeldWakeupsResponse,
@@ -30,11 +48,17 @@ import type {
   ResolveProjectHeldWakeupsResponse,
   SetProjectForgeAutomationRequest,
   SetProjectForgeAutomationResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
-import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
-import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
-import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared/contracts/navigation";
+import type {
+  MarkNavigationDirectorySeenRequest,
+  MarkNavigationDirectorySeenResponse,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  RemoveNavigationDirectoryRequest,
+  RemoveNavigationDirectoryResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
   validateArchivedThreadLookup,
@@ -48,6 +72,8 @@ import type {
   InspectTokenMiserOutputResponse,
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import type {
   AppServerBackendKind,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
@@ -63,6 +89,18 @@ import type {
   ArchiveThreadResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
+  ResolveThreadRequest,
+  ResolveThreadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ReadQueuedTurnRequest,
   ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
@@ -87,63 +125,91 @@ import type {
   UndoThreadRewindResponse,
   ControlActiveTurnRequest,
   ControlActiveTurnResponse,
-  CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
-  DetachThreadPullRequestRequest,
-  DetachThreadPullRequestResponse,
-  FederationCapability,
-  FederationJumpSearchRequest,
-  FederationJumpSearchResponse,
-  FederationContentSearchRequest,
-  ThreadSearchResponse,
-  FederationThreadSearchRequest,
-  FederationThreadSearchResponse,
-  FederationInstanceId,
-  FederatedThreadRef,
-  FederationLoadStatus,
-  FederationRequestEnvelope,
   ForkThreadRequest,
   ForkThreadResponse,
-  GetNavigationSnapshotRequest,
-  GetNavigationSnapshotTransportRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
-  GetWorktreeUnpublishedCommitDiffRequest,
-  GetWorktreeUnpublishedCommitDiffResponse,
-  HandoffThreadWorkspaceRequest,
-  HandoffThreadWorkspaceResponse,
-  MoveThreadToMainCheckoutRequest,
-  MoveThreadToMainCheckoutResponse,
-  RecreateThreadWorktreeRequest,
-  RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
-  ListBackendsRequest,
-  ListBackendsResponse,
-  DescribeThreadMcpConnectionsRequest,
-  DescribeThreadMcpConnectionsResponse,
-  ListMcpConnectionsResponse,
-  ReadThreadMcpConnectionsRequest,
-  SetThreadMcpConnectionsRequest,
-  SetThreadMcpConnectionsResponse,
   ListThreadMcpServersRequest,
   ListThreadMcpServersResponse,
   ListModelSettingsRecentsRequest,
   ListModelSettingsRecentsResponse,
   ListRecentFileReferencesResponse,
-  ListScheduledThreadActionsRequest,
-  ListScheduledThreadActionsResponse,
-  ListWorktreeUnpublishedCommitsRequest,
-  ListWorktreeUnpublishedCommitsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
-  MarkThreadSeenRequest,
-  MarkThreadSeenResponse,
-  MessagingPlatformStatus,
-  PwrSnapConnectionStatus,
   ContinueThreadEnvironmentStartupRequest,
   ContinueThreadEnvironmentStartupResponse,
+  SetThreadPrAutoDispatchRequest,
+  SetThreadPrAutoDispatchResponse,
+  CancelThreadPrAutoDispatchRequest,
+  CancelThreadPrAutoDispatchResponse,
+  SendThreadPrAutoDispatchNowRequest,
+  SendThreadPrAutoDispatchNowResponse,
+  QueueThreadExecutionModeRequest,
+  QueueThreadExecutionModeResponse,
+  RecordModelSettingsRecentRequest,
+  RecordRecentFileReferencesRequest,
+  RetainThreadBranchDriftRequest,
+  RetainThreadBranchDriftResponse,
+  ReloadCodexMcpConfigRequest,
+  ReloadCodexMcpConfigResponse,
+  ResolveActiveTurnRequest,
+  ResolveActiveTurnResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
+  SetCodexThreadEnvironmentRequest,
+  SetCodexThreadEnvironmentResponse,
+  SetThreadExecutionModeRequest,
+  SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
+  SteerTurnRequest,
+  SteerTurnResponse,
+  StartTurnRequest,
+  StartTurnResponse,
+  StartReviewRequest,
+  StartReviewResponse,
+  StartThreadRequest,
+  StartThreadResponse,
+  DismissFailedSubAgentsRequest,
+  DismissFailedSubAgentsResponse,
+  StopSubAgentRequest,
+  StopSubAgentResponse,
+  StopCodexEnvironmentActionRequest,
+  StopCodexEnvironmentActionResponse,
+  SubmitServerRequestRequest,
+  SubmitServerRequestResponse,
+  TrustCodexProjectRequest,
+  TrustCodexProjectResponse,
+  UpdateThreadExpectedBranchRequest,
+  UpdateThreadExpectedBranchResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  CreateScheduledThreadActionRequest,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
+  UpdateScheduledThreadActionRequest,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
+  DetachThreadPullRequestRequest,
+  DetachThreadPullRequestResponse,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
+  GetNavigationSnapshotRequest,
+  GetNavigationSnapshotTransportRequest,
+  GetWorktreeUnpublishedCommitDiffRequest,
+  GetWorktreeUnpublishedCommitDiffResponse,
+  ListWorktreeUnpublishedCommitsRequest,
+  ListWorktreeUnpublishedCommitsResponse,
+  MarkThreadSeenRequest,
+  MarkThreadSeenResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   SetThreadReactionRequest,
@@ -154,12 +220,6 @@ import type {
   SetThreadLockResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
-  SetThreadPrAutoDispatchRequest,
-  SetThreadPrAutoDispatchResponse,
-  CancelThreadPrAutoDispatchRequest,
-  CancelThreadPrAutoDispatchResponse,
-  SendThreadPrAutoDispatchNowRequest,
-  SendThreadPrAutoDispatchNowResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   SetDirectoryPinRequest,
@@ -177,89 +237,72 @@ import type {
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
   NavigationThreadSummary,
-  DesktopApplicationsSnapshot,
-  OpenDesktopApplicationRequest,
-  OpenDesktopApplicationResponse,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
   DetachDirectoryFromThreadRequest,
   DetachDirectoryFromThreadResponse,
-  QueueThreadExecutionModeRequest,
-  QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
   RefreshOwnedThreadGitWorkingStateRequest,
   RefreshOwnedThreadPullRequestsRequest,
   RefreshThreadGitWorkingStateResponse,
   RefreshThreadPullRequestsResponse,
-  RecordModelSettingsRecentRequest,
-  RecordRecentFileReferencesRequest,
-  ResolveThreadRequest,
-  ResolveThreadResponse,
-  RetainThreadBranchDriftRequest,
-  RetainThreadBranchDriftResponse,
-  ReloadCodexMcpConfigRequest,
-  ReloadCodexMcpConfigResponse,
-  RenameThreadRequest,
-  RenameThreadResponse,
-  ResolveActiveTurnRequest,
-  ResolveActiveTurnResponse,
-  RunCodexEnvironmentActionRequest,
-  RunCodexEnvironmentActionResponse,
-  ScheduledThreadActionIdRequest,
-  ScheduledThreadActionMutationResponse,
-  SetAcpSessionRuntimeOptionRequest,
-  SetAcpSessionRuntimeOptionResponse,
-  SetCelestialIconRequest,
-  SetCelestialIconResponse,
-  SetFederationShortNameRequest,
-  SetFederationShortNameResponse,
-  StarMapIntakeRequest,
-  StarMapIntakeResponse,
-  SetCodexThreadEnvironmentRequest,
-  SetCodexThreadEnvironmentResponse,
-  SetThreadExecutionModeRequest,
-  SetThreadExecutionModeResponse,
   SetThreadAgentRequest,
   SetThreadAgentResponse,
   SetThreadTokenMiserRequest,
   SetThreadTokenMiserResponse,
-  SetThreadModelSettingsRequest,
-  SetThreadModelSettingsResponse,
-  MutateThreadParentV1Request,
-  PwrAgentThreadInspectionResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetSubthreadsCollapsedRequest,
   SetSubthreadsCollapsedResponse,
-  SteerTurnRequest,
-  SteerTurnResponse,
-  StartTurnRequest,
-  StartTurnResponse,
-  StartReviewRequest,
-  StartReviewResponse,
-  StartThreadRequest,
-  StartThreadResponse,
-  StopSubAgentRequest,
-  StopSubAgentResponse,
-  StopCodexEnvironmentActionRequest,
-  StopCodexEnvironmentActionResponse,
-  SubmitServerRequestRequest,
-  SubmitServerRequestResponse,
-  TrustCodexProjectRequest,
-  TrustCodexProjectResponse,
   ThreadAdmissionState,
   UpdateSubthreadOrderRequest,
   UpdateSubthreadOrderResponse,
-  UpdateScheduledThreadActionRequest,
-  UpdateThreadExpectedBranchRequest,
-  UpdateThreadExpectedBranchResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  FederationCapability,
+  FederationThreadSearchRequest,
+  FederationThreadSearchResponse,
+  FederationInstanceId,
+  FederatedThreadRef,
+  FederationLoadStatus,
+  FederationRequestEnvelope,
+} from "@pwragent/shared/contracts/federation";
+import type {
+  FederationContentSearchRequest,
+  ThreadSearchResponse,
+} from "@pwragent/shared/contracts/thread-search";
+import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import type {
+  DescribeThreadMcpConnectionsRequest,
+  DescribeThreadMcpConnectionsResponse,
+  ListMcpConnectionsResponse,
+  ReadThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsResponse,
+  PwrSnapConnectionStatus,
+} from "@pwragent/shared/contracts/mcp-connections";
+import type { MessagingPlatformStatus } from "@pwragent/shared/contracts/messaging";
+import type {
+  DesktopApplicationsSnapshot,
+  OpenDesktopApplicationRequest,
+  OpenDesktopApplicationResponse,
+} from "@pwragent/shared/contracts/settings";
+import type { SetCelestialIconRequest, SetCelestialIconResponse } from "@pwragent/shared/contracts/celestial";
+import type {
+  SetFederationShortNameRequest,
+  SetFederationShortNameResponse,
+} from "@pwragent/shared/contracts/federation-short-names";
+import type { StarMapIntakeRequest, StarMapIntakeResponse } from "@pwragent/shared/contracts/star-map";
+import type {
+  MutateThreadParentV1Request,
+  PwrAgentThreadInspectionResponse,
+} from "@pwragent/shared/contracts/thread-tools";
 import {
   isAppServerBackendKind,
   normalizeNavigationSnapshotThreadKeys,
-  qualifyThreadUrlsInText,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { qualifyThreadUrlsInText } from "@pwragent/shared/contracts/thread-link";
 import type { FederationRouter } from "./federation-router";
 import { hasFederationErrorCode } from "./federation-rpc";
 import type {
@@ -278,14 +321,14 @@ import type {
   FederationGetDurableTurnRequest,
   DurableSteerReceipt,
   FederationSubmitDurableSteerRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/durable-turn-requests";
 import { DurableTurnRequestError, type DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 
 export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
 
-import { durableFederationCallerScope } from "@pwragent/shared";
-export { durableFederationCallerScope } from "@pwragent/shared";
+import { durableFederationCallerScope } from "@pwragent/shared/contracts/durable-turn-requests";
+export { durableFederationCallerScope } from "@pwragent/shared/contracts/durable-turn-requests";
 
 /**
  * Load queries answer from in-memory OS counters plus one statfs, so a
@@ -837,6 +880,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
     request: ResolveActiveTurnRequest,
   ): Promise<ResolveActiveTurnResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
+  dismissFailedSubAgents(request: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse>;
   stopSubAgent(request: StopSubAgentRequest): Promise<StopSubAgentResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
   setThreadExecutionMode(
@@ -851,6 +895,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   setAcpSessionRuntimeOption(
     request: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse>;
+  accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult>;
   setThreadAgent(
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse>;
@@ -1819,6 +1864,11 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.dismissFailedSubAgents,
+    async (envelope) =>
+      await params.backend.dismissFailedSubAgents(envelope.params as DismissFailedSubAgentsRequest),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.stopSubAgent,
     async (envelope) =>
       await params.backend.stopSubAgent(
@@ -1864,6 +1914,15 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SetAcpSessionRuntimeOptionRequest,
       ),
   );
+  for (const method of [FEDERATION_BACKEND_METHODS.readAgentMemory, FEDERATION_BACKEND_METHODS.writeAgentMemory]) {
+    params.router.registerHandler(method, async (envelope) => {
+      const request = envelope.params as AgentMemoryRequest;
+      if (!request || isAgentMemoryRead(request.operation) !== (method === FEDERATION_BACKEND_METHODS.readAgentMemory)) {
+        throw new Error("Agent memory action does not match this request.");
+      }
+      return await params.backend.accessAgentMemory(request);
+    });
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadAgent,
     async (envelope) =>
@@ -3150,6 +3209,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async dismissFailedSubAgents(
+    request: DismissFailedSubAgentsRequest,
+  ): Promise<DismissFailedSubAgentsResponse> {
+    return await this.rpc.request<DismissFailedSubAgentsResponse>({
+      method: FEDERATION_BACKEND_METHODS.dismissFailedSubAgents,
+      params: request,
+    });
+  }
+
   async stopSubAgent(
     request: StopSubAgentRequest,
   ): Promise<StopSubAgentResponse> {
@@ -3200,6 +3268,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
     return await this.rpc.request<SetAcpSessionRuntimeOptionResponse>({
       method: FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption,
+      params: request,
+    });
+  }
+
+  async accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
+    return await this.rpc.request<AgentMemoryResult>({
+      method: isAgentMemoryRead(request.operation)
+        ? FEDERATION_BACKEND_METHODS.readAgentMemory
+        : FEDERATION_BACKEND_METHODS.writeAgentMemory,
       params: request,
     });
   }

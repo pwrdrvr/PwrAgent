@@ -2,9 +2,10 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
-import type { ThreadWorktreeRegistration } from "@pwragent/shared";
+import type { ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
+import { removeManagedWorktree } from "./managed-worktree";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { resolveOwnedMaintenanceCheckouts } from "./thread-owned-checkouts";
@@ -12,15 +13,13 @@ import { mapMaintenanceAudit } from "./maintenance-audit-pool";
 import type { FleetChange } from "./archive-cleanup-fleet-index";
 import { ArchiveCleanupInventory, type ArchiveCleanupInventoryHost } from "./archive-cleanup-inventory";
 import { ArchiveRemovalNeedsFreshInventoryError, ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import {
-  classifyDirectory,
-  type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
-} from "@pwragent/shared";
-import type {
-  CodexBackgroundTerminal,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-archive-policy";
+import type { CodexBackgroundTerminal } from "@pwragent/shared/contracts/background-terminals";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import type { ArchiveCleanupCheckpointStorage, ArchiveCleanupIntent } from "../storage/desktop-runtime-storage";
@@ -42,7 +41,6 @@ import type {
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
-  isToolManagedWorktreePath,
   type ArchiveWorktreeRequest,
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
@@ -51,29 +49,34 @@ import {
   type AppServerNotification,
   type AppServerThreadSummary,
   type AppServerBackendKind,
-  type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
   type LinkedDirectorySummary,
-  type LaunchpadWorkMode,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type RestoreThreadWorktreeResult,
-  type ThreadMessagingBindingTransition,
-  type ThreadOverlayState,
-  type ThreadPullRequestWatchSummary,
-  type ThreadMaintenanceRunStage,
-  type ThreadMaintenanceRunItem,
-  type SetThreadCheckoutHibernationResponse,
   type ThreadHibernatedWorkspace,
   type WorktreeRecoveryFailureReason,
   type WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { type CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
+import {
+  type LaunchpadWorkMode,
+  type ThreadMessagingBindingTransition,
+  type ThreadOverlayState,
+  type SetThreadCheckoutHibernationResponse,
   buildThreadIdentityKey,
   parseThreadIdentityKey,
-  mergeThreadLinkedDirectories,
   isAcpBackendId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import {
+  type ThreadMaintenanceRunStage,
+  type ThreadMaintenanceRunItem,
+} from "@pwragent/shared/thread-maintenance";
+import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   ThreadInfoStore,
@@ -110,7 +113,7 @@ import {
 import {
   ThreadTurnQueue,
 } from "@pwragent/owner-core/thread-turn-queue";
-import { deleteThreadAssets } from "./thread-assets";
+import type { ThreadAssetOwner } from "./thread-assets";
 import {
   readStatusType,
 } from "./backend-registry-notifications";
@@ -192,6 +195,7 @@ export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
   "getCachedThreadSummary" | "getClient" | "publishLocalEvent" | "threadHasActiveTurn"
   | "resolveThreadEnvironmentCwd" | "withCodexThreadClient"
 >, ArchiveCleanupInventoryHost {
+  deleteOwnedThreadAssets(owner: ThreadAssetOwner): Promise<void>;
   readonly codexBackgroundTerminals: ReadonlyMap<string, CodexBackgroundTerminal[]>;
   readonly messagingStore?: MessagingArchiveCleanupStore | null;
   readonly pendingEnvironmentLaunchStore: PendingEnvironmentLaunchStore;
@@ -912,12 +916,12 @@ export class ThreadArchiveCoordinator {
       confirmAbsent: async (state) => {
         if (state.backend === "claude") {
           const absent = await this.context.providers.claude.confirmThreadAbsent(state.threadId);
-          if (absent) await deleteThreadAssets(state);
+          if (absent) await this.host().deleteOwnedThreadAssets(state);
           return absent;
         }
         if (isAcpBackendId(state.backend)) {
           const absent = !this.context.providers.acp.getSession(state.backend, state.threadId);
-          if (absent) await deleteThreadAssets(state);
+          if (absent) await this.host().deleteOwnedThreadAssets(state);
           return absent;
         }
         return await this.host().withCodexThreadClient(state.threadId, async (client) => {
@@ -927,7 +931,7 @@ export class ThreadArchiveCoordinator {
             // Only an explicit provider not-found response confirms deletion.
             // Transport errors, unloaded threads and profile changes retain refs.
             const absent = error instanceof Error && error.message.toLowerCase().includes("thread not found:");
-            if (absent) await deleteThreadAssets(state);
+            if (absent) await this.host().deleteOwnedThreadAssets(state);
             return absent;
           }
         });
@@ -974,7 +978,7 @@ export class ThreadArchiveCoordinator {
         // The provider deletes the complete family. Child notifications may
         // be missed, so release every owner's assets before forgetting refs.
         for (const thread of family) {
-          await deleteThreadAssets({ backend: thread.source, threadId: thread.id });
+          await this.host().deleteOwnedThreadAssets({ backend: thread.source, threadId: thread.id });
         }
         this.host().invalidateThreadListCache(root.source);
         for (const thread of family) this.invalidateArchiveCleanupReads(thread.source, undefined, true, thread.id, [], "deleted");
@@ -1493,7 +1497,11 @@ export class ThreadArchiveCoordinator {
     if (result.checkpoint && !result.checkpoint.restored) {
       // The checkout came back without its changes. Remove it again so the
       // snapshot stays the only copy and the next attempt starts clean.
-      await runGitCommand(snapshot.repositoryPath, ["worktree", "remove", "--force", snapshot.worktreePath]).catch(() => {});
+      await removeManagedWorktree({
+        worktreePath: snapshot.worktreePath,
+        force: true,
+        git: async (args) => (await runGitCommand(snapshot.repositoryPath, args)).stdout,
+      }).catch(() => {});
       return await fail("The saved changes did not apply to the restored checkout. They are kept in its snapshot.");
     }
     const restoredAt = Date.now();

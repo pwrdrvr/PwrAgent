@@ -1,4 +1,4 @@
-import type { BackendRateLimitSummary, BackendModelOption } from "@pwragent/shared";
+import type { BackendRateLimitSummary, BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRateLimitResetSendAt, getShortTermRateLimitResetAt } from "../rate-limit-schedule";
 

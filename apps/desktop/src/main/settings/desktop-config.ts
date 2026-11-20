@@ -1,25 +1,32 @@
-import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchiveConfig, FederationPeerRole, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
+import type { DesktopThreadArchiveConfig } from "@pwragent/shared/thread-archive-policy";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import {
   FORGE_AGENT_TOOL_GROUPS,
   FORGE_AGENT_TOOL_RULE_GROUPS,
-  isAcpBackendId,
   isForgeAgentToolAccess,
   isForgeAgentToolRuleGroup,
-  isThreadTodoMergeMethod,
   normalizeForgeAgentToolRules,
   normalizeForgeRuleRepository,
-  normalizeTaskMonitorModelChoice,
-  normalizeModelProviderDefaults,
-  providerPickerValue,
-  validateCodexModelProviders,
   validateForgeAgentToolRule,
-  validateLocalModelIds,
-  type CodexModelProviderSettings,
-  type DesktopTaskMonitorModelChoice,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
   type ForgeAgentToolRule,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { isThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import {
+  normalizeTaskMonitorModelChoice,
+  type DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared/helper-models";
+import { normalizeModelProviderDefaults, providerPickerValue } from "@pwragent/shared/provider-picker";
+import {
+  validateCodexModelProviders,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import { normalizeOpenAIDecisionsAccountId } from "@pwragent/shared/openai-decisions";
@@ -34,11 +41,8 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
   DesktopContextMoonStyle,
-  DesktopDecisionModelSettings,
   DesktopOpenAIDecisionsSettings,
   DesktopFederationMode,
-  DesktopHelperModelChoice,
-  DesktopHelperModelSettings,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
@@ -63,8 +67,10 @@ import type {
   DesktopUpdateSelectionSource,
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
-  MessagingToolUpdateMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
+import type { DesktopHelperModelChoice, DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_DARK_THEME_DEFAULT,
@@ -83,8 +89,6 @@ import {
   isDesktopContextMoonStyle,
   isDesktopCodexProfileModel,
   isDesktopFederationMode,
-  isFederationGatewayEndpointUrl,
-  normalizeDecisionModelSettings,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
   isDesktopIntegratedTerminalWindowsShell,
@@ -97,9 +101,13 @@ import {
   isDesktopUpdateSelectionSource,
   isDesktopUpdateTrain,
   parseDesktopUpdateChannel,
+} from "@pwragent/shared/contracts/settings";
+import { isFederationGatewayEndpointUrl } from "@pwragent/shared/contracts/federation";
+import { normalizeDecisionModelSettings } from "@pwragent/shared/decision-models";
+import {
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/messaging-contact-labels";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
@@ -135,7 +143,7 @@ type StoredChatReplyComposer =
   | LegacyChatReplyComposer;
 
 export type DesktopSettingsConfig = {
-  research?: { harness?: import("@pwragent/shared").ResearchHarnessConfig };
+  research?: { harness?: import("@pwragent/shared/research-harness").ResearchHarnessConfig };
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
@@ -453,6 +461,10 @@ export type DesktopSettingsConfig = {
     archive?: DesktopThreadArchiveConfig;
     hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
+    /** `base_directory`: replaces the home folder for `user-home` worktrees. */
+    baseDirectory?: string;
+    /** `base_directory_includes_codex`: Codex threads use the folder too. */
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 
@@ -2407,7 +2419,36 @@ export function desktopSettingsPatchToEdits(
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
   }
+  if (patch.worktrees) edits.push(...worktreeFolderEdits(patch.worktrees, currentTables));
 
+  return edits;
+}
+
+/** `[worktrees]` folder keys, kept out of the patch function's bytecode budget. */
+function worktreeFolderEdits(
+  worktrees: NonNullable<DesktopSettingsConfigPatch["worktrees"]>,
+  currentTables: TomlTables,
+): TomlEdit[] {
+  const edits: TomlEdit[] = [];
+  if (worktrees.baseDirectory !== undefined) {
+    const baseDirectory = worktrees.baseDirectory?.trim();
+    if (baseDirectory) {
+      edits.push({ op: "set", path: ["worktrees", "base_directory"], value: baseDirectory });
+    } else {
+      // Use home folder clears the Codex opt-in too, so a later folder
+      // never moves Codex worktrees without being asked again.
+      for (const key of ["base_directory", "base_directory_includes_codex"]) {
+        if (currentTables["worktrees"]?.[key] !== undefined) edits.push({ op: "delete", path: ["worktrees", key] });
+      }
+    }
+  }
+  if (worktrees.baseDirectoryIncludesCodex !== undefined && worktrees.baseDirectory !== null) {
+    edits.push({
+      op: "set",
+      path: ["worktrees", "base_directory_includes_codex"],
+      value: worktrees.baseDirectoryIncludesCodex,
+    });
+  }
   return edits;
 }
 
@@ -2978,11 +3019,13 @@ function normalizeDesktopConfig(
         restoreOn: hibernate.restore_on === "send" || hibernate.restore_on === "open" ? hibernate.restore_on : undefined,
       } : undefined,
       storage: readWorktreeStorage(worktrees?.storage),
+      baseDirectory: readWorktreeBaseDirectory(worktrees?.base_directory),
+      baseDirectoryIncludesCodex: readBoolean(worktrees?.base_directory_includes_codex),
     },
   });
 }
 
-function readResearchHarnessConfig(table: Record<string, TomlScalar>): import("@pwragent/shared").ResearchHarnessConfig {
+function readResearchHarnessConfig(table: Record<string, TomlScalar>): import("@pwragent/shared/research-harness").ResearchHarnessConfig {
   if (typeof table.command !== "string" || !table.command.trim()) throw new Error("research.harness.command must name an installed executable");
   const args = table.args ?? [];
   if (!Array.isArray(args) || args.length > 64 || !args.every((v): v is string => typeof v === "string") || JSON.stringify(args).length > 16_000) throw new Error("research.harness.args must be a bounded string array");
@@ -4473,6 +4516,12 @@ function isDesktopMessagingImageProfile(
   value: string,
 ): value is DesktopMessagingImageProfile {
   return value === "low" || value === "medium" || value === "high" || value === "actual";
+}
+
+/** Only an absolute folder; a relative one would follow the process cwd. */
+function readWorktreeBaseDirectory(value: TomlScalar | undefined): string | undefined {
+  const directory = typeof value === "string" ? value.trim() : "";
+  return directory && path.isAbsolute(directory) ? directory : undefined;
 }
 
 function readWorktreeStorage(

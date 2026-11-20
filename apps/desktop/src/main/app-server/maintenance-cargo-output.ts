@@ -1,6 +1,9 @@
 import { lstat, open, readFile, readdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
-import { REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceBuildOutput } from "@pwragent/shared";
+import {
+  REBUILDABLE_OUTPUT_NAMES,
+  type ThreadMaintenanceBuildOutput,
+} from "@pwragent/shared/thread-maintenance";
 import { runGitCommand } from "./git-executable";
 import { acquireMaintenanceLock, type MaintenanceLock } from "./maintenance-native-lock";
 import { measureMaintenanceAllocationPaths } from "./maintenance-disk-usage";

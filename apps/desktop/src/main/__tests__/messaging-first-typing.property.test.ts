@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { StartTurnRequest } from "@pwragent/shared";
+import type { StartTurnRequest } from "@pwragent/shared/contracts/agent";
 import type {
   MessagingInboundTextEvent,
   MessagingSurfaceIntent,

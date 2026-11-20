@@ -1,5 +1,11 @@
-import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { FederationTarget, NavigationDetailCollections, NavigationDetailCollectionName, NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationDetailCollections,
+  NavigationDetailCollectionName,
+  NavigationSelectedDetailResponse,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationSelectedDetail, selectNavigationIdentity } from "./navigation-query-state";
 

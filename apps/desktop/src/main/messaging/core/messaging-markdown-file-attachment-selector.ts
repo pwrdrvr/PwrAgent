@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { MessagingArtifact } from "./messaging-artifact-renderer.js";
 
 const DEFAULT_MAX_MARKDOWN_FILE_BYTES = 50 * 1024;

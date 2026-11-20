@@ -157,7 +157,7 @@ vi.mock("../settings/appearance-bootstrap", () => ({
 }));
 
 import { app, BrowserWindow, type WebContents } from "electron";
-import { parseThreadIdentityKey } from "@pwragent/shared";
+import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { primaryMainWindowWebContents } from "../shell/primary-main-window";
 import { revealIntegratedTerminal } from "../shell/ipc/integrated-terminal";
 import { requestShowThread } from "../shell/window-show-thread";
@@ -301,11 +301,9 @@ describe("raising the open quit dialog", () => {
     dialogWindows.length = 0;
   });
 
-  it("reports nothing to raise when no dialog is open", () => {
+  it("restores, shows, and focuses the dialog only while one is on screen", async () => {
     expect(focusActiveQuitConfirmationDialog()).toBe(false);
-  });
 
-  it("restores, shows, and focuses the dialog that is on screen", async () => {
     const { pending, window } = openDialog();
     // `ready-to-show` shows and focuses it once; a raise is the second of each.
     window.minimized = true;

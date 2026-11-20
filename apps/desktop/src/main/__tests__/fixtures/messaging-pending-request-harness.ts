@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
-import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingQuestionnaireIntent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { messagingInboundHarness } from "./messaging-inbound-harness";

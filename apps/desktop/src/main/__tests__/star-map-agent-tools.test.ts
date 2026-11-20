@@ -5,10 +5,7 @@
 // list has to say it truncated, and a cloud's counts must not shrink just
 // because the list did.
 import { describe, expect, it, vi } from "vitest";
-import type {
-  PwrAgentStarMapResponse,
-  StarMapViewSnapshot,
-} from "@pwragent/shared";
+import type { PwrAgentStarMapResponse, StarMapViewSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 import {
   createStarMapAgentToolsHandler,
   type StarMapAgentToolsDeps,

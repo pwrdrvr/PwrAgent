@@ -1,8 +1,8 @@
 import { BrowserWindow, type WebContents } from "electron";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   type OpenToolOutputIncidentExplorerWindowRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
 import {
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,

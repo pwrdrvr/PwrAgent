@@ -3,7 +3,7 @@ import type {
   SetDirectoryPinResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { getMainLogger } from "../log";

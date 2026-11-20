@@ -1,4 +1,4 @@
-import type { UsageLimitObservation, UsageLimitReading } from "@pwragent/shared";
+import type { UsageLimitObservation, UsageLimitReading } from "@pwragent/shared/contracts/usage-activity";
 
 /**
  * One owner's limit readings, as returned by its usage read. An owner can

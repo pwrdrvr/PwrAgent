@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AppServerBackendKind } from "@pwragent/shared";
-import { resolveThreadTodoModelSettings } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { resolveThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { buildPwrAgentThreadTodoToolDefinitions } from "../agent-tools/pwragent-thread-todo-agent-tools";

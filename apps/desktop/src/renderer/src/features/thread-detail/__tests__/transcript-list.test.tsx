@@ -1,15 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import {
-  buildThreadPricingDisplay,
-  parseCodexAsyncQuestionReply,
-} from "@pwragent/shared";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessageOrigin,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   act,
   cleanup,
@@ -311,7 +309,7 @@ describe("TranscriptList", () => {
           loading={false}
           loadingMore={false}
           messagingBindingTransitions={[telegramBinding]}
-          pendingProtocolActivityEntry={lateLiveRow}
+          pendingProtocolActivityEntries={[lateLiveRow]}
           onLoadOlder={async () => undefined}
         />
       );
@@ -3877,7 +3875,7 @@ Implementation notes remain in a readable bubble.`;
         ]}
         loading={false}
         loadingMore={false}
-        pendingProtocolActivityEntry={{
+        pendingProtocolActivityEntries={[{
           type: "activity",
           id: "protocol-activity-1",
           summary: "MCP status updates (3)",
@@ -3891,7 +3889,7 @@ Implementation notes remain in a readable bubble.`;
             }
           ],
           turn: { id: "turn-1", status: "completed" }
-        }}
+        }]}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
@@ -3927,7 +3925,7 @@ Implementation notes remain in a readable bubble.`;
         ]}
         loading={false}
         loadingMore={false}
-        pendingProtocolActivityEntry={{
+        pendingProtocolActivityEntries={[{
           type: "activity",
           id: "live-mcp-protocol-status",
           summary: "MCP server ready",
@@ -3940,7 +3938,7 @@ Implementation notes remain in a readable bubble.`;
               status: "completed"
             }
           ]
-        }}
+        }]}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />

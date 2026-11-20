@@ -1,8 +1,8 @@
+import type { CodexMcpServerSummary } from "@pwragent/shared/contracts/agent";
 import type {
-  CodexMcpServerSummary,
   McpConnectionStatus,
   McpConnectionSetupSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 
 /**
  * What the pane can honestly say about one MCP server.

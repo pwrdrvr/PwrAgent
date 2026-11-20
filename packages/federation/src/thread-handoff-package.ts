@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { gzip, gunzip } from "node:zlib";
-import type { AppServerThreadReplay, ThreadHandoffGitReference, ThreadHandoffPackage } from "@pwragent/shared";
+import type { AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  ThreadHandoffGitReference,
+  ThreadHandoffPackage,
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 
 export const THREAD_HANDOFF_MAX_BYTES = 128 * 1024 * 1024;
 const compress = promisify(gzip);

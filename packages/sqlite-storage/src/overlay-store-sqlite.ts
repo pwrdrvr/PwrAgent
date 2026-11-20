@@ -25,20 +25,32 @@ export type {
 } from "@pwragent/owner-core/pr-status-storage";
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
-import { buildLegacyEncodedThreadIdentityKey, mergeCausalMessagingContext, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
+import {
+  parseUsageLimitObservation,
+  validateUsageActivityWindow,
+  type ReadUsageActivityRequest,
+  type UsageActivityRollup,
+  type UsageActivityRow,
+  type UsageLimitObservation,
+  usageRollupStep,
+} from "@pwragent/shared/contracts/usage-activity";
 import { createHash, randomUUID } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
-import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
-import { buildAppendPinRank, insertSubthreadIdAfter, navigationLaunchpadProviderKey, sortSubthreadSummaries } from "@pwragent/shared";
+import { PROJECT_CHECKOUT_GROUPS_META_KEY, sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
+import { buildAppendPinRank } from "@pwragent/shared/thread-pins";
+import { insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
+import { navigationLaunchpadProviderKey } from "@pwragent/shared/contracts/navigation";
 import {
   isDefaultProjectForgeAutomation,
   resolveProjectForgeAutomation,
   type ProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
@@ -47,22 +59,12 @@ import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
   NavigationLaunchpadAgent,
-  AppServerBackendKind,
   ArchiveSubthreadPromotion,
-  AppServerBackendScope,
-  AppServerThreadActivityEntry,
-  AppServerThreadMessageOrigin,
-  AppServerThreadSummary,
-  AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
-  DesktopProviderModelDefaults,
   DirectoryOverlayState,
-  FederatedThreadRef,
-  LinkedDirectorySummary,
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
-  NavigationResumeState,
   NavigationRelativePinMove,
   NavigationRelativeChildMove,
   ThreadQueuedTurnSummary,
@@ -71,14 +73,32 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
+  ProjectCheckoutGroup,
+  SetProjectCheckoutGroupRequest,
   PrSummary,
-  PrAutoDispatchBudgetConfig,
-  PrAutoDispatchBudgetStatus,
-  ThreadExecutionMode,
-  ThreadGitWorkingState,
   ThreadMessagingBindingTransition,
   ThreadLock,
   ThreadOverlayState,
+  ThreadPermissionTransition,
+  ListPendingThreadSpendAlertsRequest,
+  ListPendingThreadSpendAlertsResponse,
+  ThreadPrAutoDispatchEventKind,
+  ThreadPrAutoDispatchPending,
+  RemoteThreadPin,
+  ThreadQuestionnaireActivity,
+  ThreadRewindRecord,
+  ThreadSubAgentSummary,
+  ThreadTurnFailure,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  AppServerBackendKind,
+  AppServerBackendScope,
+  AppServerThreadActivityEntry,
+  AppServerThreadMessageOrigin,
+  AppServerThreadSummary,
+  LinkedDirectorySummary,
+  ThreadExecutionMode,
+  ThreadGitWorkingState,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
   ThreadToolInvocationAlert,
@@ -86,29 +106,32 @@ import type {
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
   ThreadToolInvocationSummary,
-  ThreadPermissionTransition,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AutomationThreadSummary } from "@pwragent/shared/contracts/automations";
+import type {
+  DesktopProviderModelDefaults,
+  PrAutoDispatchBudgetConfig,
+  PrAutoDispatchBudgetStatus,
+} from "@pwragent/shared/contracts/settings";
+import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
+import type {
   ThreadPricingSummary,
   ThreadSpendAlert,
-  ListPendingThreadSpendAlertsRequest,
-  ListPendingThreadSpendAlertsResponse,
-  ThreadPrAutoDispatchEventKind,
-  ThreadPrAutoDispatchPending,
-  ThreadPullRequestWatchSummary,
-  ThreadPrWatchHistoryEntry,
-  ThreadDependency,
-  RemoteThreadPin,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared/token-usage-pricing";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import type {
   StarMapArrangementEntry,
   StarMapWorkspaceSnapshot,
   StarMapWorkspaceState,
-  ThreadQuestionnaireActivity,
-  SubAgentLens,
-  ThreadRewindRecord,
-  ThreadSubAgentSummary,
-  TokenMiserGateAccountingTotals,
-  ThreadTurnFailure,
-  ThreadUsageLineRecord,
-  WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
+import type { SubAgentLens } from "@pwragent/shared/subagent-kind";
+import type { FailedSubAgentAttempt } from "@pwragent/shared/contracts/agent";
+import type { TokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 import {
   isStarMapArrangementEntry,
   isStarMapWorkspaceSnapshot,
@@ -118,6 +141,8 @@ import {
   emptyStarMapWorkspaceState,
   STAR_MAP_WORKSPACE_KEY,
   STAR_MAP_WORKSPACE_VERSION,
+} from "@pwragent/shared/contracts/star-map";
+import {
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
@@ -128,14 +153,8 @@ import {
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
   resolvePullRequestIdentity,
-  buildFederatedThreadRef,
-  federatedThreadIdentityKey,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
-  buildNavigationSnapshot,
-  buildDirectorySummaries,
-  materializeNavigationThreads,
-  serializeNavigationSnapshotForHash,
   applyNavigationLaunchpadDefaultsPatch,
   applyNavigationLaunchpadProviderSettingsPatch,
   applyNavigationLaunchpadProviderExecutionModeDefaults,
@@ -143,21 +162,35 @@ import {
   changedProviderExecutionModeDefaultBackends,
   changedProviderModelDefaultBackends,
   forgetLegacyDefaultLaunchpadExecutionModes,
-  estimateTokenUsageCost,
-  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
   isAcpBackendId,
-  isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
-  normalizeNavigationResumeState,
   normalizeThreadIdentityKey,
-  forgetRecentThreadLockNote,
-  parseRecentThreadLockNotes,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
-  rememberRecentThreadLockNote,
   resolveDefaultLaunchpadExecutionMode,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  buildFederatedThreadRef,
+  federatedThreadIdentityKey,
+  isRemoteFederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import {
+  buildNavigationSnapshot,
+  materializeNavigationThreads,
+  serializeNavigationSnapshotForHash,
+} from "@pwragent/shared/navigation-state";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import {
+  estimateTokenUsageCost,
   resolveTokenUsagePriceUnavailableReason,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared/openrouter-assumed-pricing";
+import { normalizeNavigationResumeState } from "@pwragent/shared/navigation-resume-state";
+import {
+  forgetRecentThreadLockNote,
+  parseRecentThreadLockNotes,
+  rememberRecentThreadLockNote,
+} from "@pwragent/shared/thread-lock";
 import type BetterSqlite3 from "better-sqlite3";
 import type { StateDb } from "./state-db.js";
 import type {
@@ -1154,7 +1187,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
       });
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
-      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });
+      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots,
+      checkoutGroups: this.readProjectCheckoutGroups() });
     return { threads, directories };
   }
 
@@ -1460,6 +1494,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       launchpadDefaults,
       launchpadsByKey,
       directoryOverlayByKey,
+      checkoutGroups: this.readProjectCheckoutGroups(),
       automationsByThreadKey: params.automationsByThreadKey,
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
@@ -4486,7 +4521,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return result;
   }
 
-  /** Unfinished cards and failures, from a partial index that gate cards never enter. */
+  async dismissFailedThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    attempts: readonly FailedSubAgentAttempt[];
+  }): Promise<number> {
+    if (params.attempts.length === 0) return 0;
+    // As with detail reads, bring any legacy cards into the table first.
+    return this.subAgentTable.dismissFailures(this.subAgentStorageKey(params), params.attempts);
+  }
+
+  /** Unfinished cards and undismissed failures, from the attention index. */
   async listActiveThreadSubAgents(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -6057,6 +6102,46 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return params.move
       ? (pinnedRanks[params.move.key] ? { [params.move.key]: pinnedRanks[params.move.key]! } : {})
       : pinnedRanks;
+  }
+
+  private readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
+    const payload = this.stateDb.getMeta(PROJECT_CHECKOUT_GROUPS_META_KEY);
+    if (!payload) return [];
+    // Every navigation read passes through here; an unreadable row must not
+    // take Directories down with it. The next save replaces it.
+    let groups: unknown;
+    try {
+      groups = JSON.parse(payload);
+    } catch {
+      return [];
+    }
+    return Array.isArray(groups) ? groups.filter((group): group is ProjectCheckoutGroup =>
+      typeof group?.preferredPath === "string"
+      && Array.isArray(group.paths)
+      && group.paths.every((path: unknown) => typeof path === "string")) : [];
+  }
+
+  /** The filesystem was checked before this write. Check group membership again inside the transaction. */
+  setProjectCheckoutGroup({ projectPath, previousPaths, group }: SetProjectCheckoutGroupRequest): boolean {
+    return this.stateDb.raw.transaction(() => {
+      const groups = this.readProjectCheckoutGroups();
+      const current = groups.find((candidate) => candidate.paths.includes(projectPath));
+      if ((current && current.preferredPath !== projectPath)
+        || previousPaths.length !== (current?.paths.length ?? 0)
+        || previousPaths.some((path) => !current?.paths.includes(path))) {
+        throw new Error("The project checkouts changed. Reopen the editor and try again.");
+      }
+      const otherGroups = groups.filter((candidate) => candidate !== current);
+      if (otherGroups.some((candidate) => candidate.paths.some((path) => group.paths.includes(path)))) {
+        throw new Error("A checkout is already grouped with another project.");
+      }
+      const next = group.paths.length > 1 ? group : undefined;
+      if (current?.preferredPath === next?.preferredPath && current?.repositoryKey === next?.repositoryKey
+        && (!current || current.paths.length === group.paths.length
+          && current.paths.every((path) => group.paths.includes(path)))) return false;
+      this.stateDb.setMeta(PROJECT_CHECKOUT_GROUPS_META_KEY, JSON.stringify(next ? [...otherGroups, next] : otherGroups));
+      return true;
+    }).immediate();
   }
 
   async setDirectoryThreadsCollapsed(params: {
@@ -12748,6 +12833,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadSubAgent"
   | "listThreadSubAgents"
   | "listActiveThreadSubAgents"
+  | "dismissFailedThreadSubAgents"
   | "listArchiveActiveSubAgentThreadIds"
   | "readThreadSubAgentRevision"
   | "listThreadSubAgentsByMonitorIdPrefix"

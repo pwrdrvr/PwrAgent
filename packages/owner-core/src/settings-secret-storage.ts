@@ -1,4 +1,7 @@
-import type { DesktopSettingsSecretName, DesktopSettingsSecretStorageState } from "@pwragent/shared";
+import type {
+  DesktopSettingsSecretName,
+  DesktopSettingsSecretStorageState,
+} from "@pwragent/shared/contracts/settings";
 
 /** Encryption is supplied by the host operating system. */
 export interface SettingsSecretEncryption<Ciphertext> {

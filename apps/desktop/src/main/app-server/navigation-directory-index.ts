@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { NavigationDirectoryRow, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import { getDesktopNavigationQueryPool } from "./navigation-query-pool";
 import { getDesktopNavigationQueryStore, NavigationQueryError } from "./navigation-query-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";

@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary, ReadUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
+  ReadUsageActivityResponse,
+  UsageLimitObservation,
+} from "@pwragent/shared/contracts/usage-activity";
 import { ClaudeUsageLimits, UsagePaceCard } from "../UsagePaceCard";
 import { usageFixture } from "../../../federation-activity/usage-activity-fixture";
 import { usageWhen } from "../../../federation-activity/usage-activity-presentation";

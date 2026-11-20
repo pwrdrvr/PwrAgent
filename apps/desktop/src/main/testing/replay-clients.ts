@@ -1,6 +1,5 @@
 import type {
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -9,8 +8,9 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  BackendModelOption,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 import type { ReplayStepOverride } from "./replay-fixture";
 export type ReplayRuntimeClient = {
   advance?(params?: {

@@ -1,8 +1,10 @@
 import { Profiler } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey, readNavigationMetadataDependencies } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { ThreadRow } from "../../features/navigation/ThreadRow";
 import * as order from "../../features/navigation/navigation-presentation-order";

@@ -1,13 +1,15 @@
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
   AppServerBackendKind,
-  FederatedThreadRef,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
   NavigationRow,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingBindingPreferences,
   MessagingBrowseLaunchAction,
@@ -20,12 +22,8 @@ import type {
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
 } from "@pwragent/messaging-interface";
-import {
-  buildFederatedThreadRef,
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  isAppServerBackendKind,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 

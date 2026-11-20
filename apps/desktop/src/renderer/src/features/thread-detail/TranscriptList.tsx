@@ -21,26 +21,32 @@ import type {
   AppServerThreadFileChangeKind,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
+} from "@pwragent/shared/contracts/settings";
+import type {
   PendingRequestAction,
   PendingRequestApprovalContext,
   PendingRequestApprovalFileContext,
+} from "@pwragent/shared/pending-request-response";
+import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
   ThreadRewindRecord,
   ThreadTurnFailure,
   ThreadSubAgentSummary,
-  MarkdownFileViewerContext,
-  ForgeApprovalRememberOptionId,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import { anchorTurnUsageEntries } from "@pwragent/shared/thread-usage-display";
 import {
-  anchorTurnUsageEntries,
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
-  parseCodexAsyncQuestionReply,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pending-request-response";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
@@ -139,7 +145,8 @@ type TranscriptListProps = {
   linkedMessageId?: string;
   linkedMessageRequestKey?: number;
   pendingActivityEntry?: AppServerThreadActivityEntry;
-  pendingProtocolActivityEntry?: AppServerThreadActivityEntry;
+  /** MCP status, warning and model-routing rows; one per kind of notice. */
+  pendingProtocolActivityEntries?: readonly AppServerThreadActivityEntry[];
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   transientMessage?: AppServerTransientThreadMessageEntry;
@@ -874,7 +881,7 @@ export function TranscriptList(props: TranscriptListProps) {
   ]);
   const hasPendingContent = Boolean(
     props.pendingActivityEntry ||
-      props.pendingProtocolActivityEntry ||
+      props.pendingProtocolActivityEntries?.length ||
       props.pendingUsageActivityEntry ||
       props.pendingAssistantMessage ||
       props.transientMessage ||
@@ -905,7 +912,7 @@ export function TranscriptList(props: TranscriptListProps) {
     for (const pendingEntry of pendingEntriesInEventOrder([
       props.pendingPlanEntry,
       props.pendingActivityEntry,
-      props.pendingProtocolActivityEntry,
+      ...(props.pendingProtocolActivityEntries ?? []),
       props.pendingUsageActivityEntry,
       pendingAssistantPreview,
       ...transientMessageEntries,
@@ -934,7 +941,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingActivityEntry,
-    props.pendingProtocolActivityEntry,
+    props.pendingProtocolActivityEntries,
     props.pendingUsageActivityEntry,
     pendingAssistantPreview,
     props.transientMessage,

@@ -1,6 +1,11 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { materializeNavigationThreads, type AppServerThreadSummary, type LinkedDirectorySummary, type NavigationThreadSummary } from "@pwragent/shared";
+import { materializeNavigationThreads } from "@pwragent/shared/navigation-state";
+import {
+  type AppServerThreadSummary,
+  type LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadMetaChips } from "../ThreadMetaChips";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });

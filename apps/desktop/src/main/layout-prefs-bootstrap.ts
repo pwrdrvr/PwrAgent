@@ -39,7 +39,7 @@
  * store the browse-mode bootstrap reads.
  */
 
-import { DESKTOP_UI_LAYOUT_DEFAULTS } from "@pwragent/shared";
+import { DESKTOP_UI_LAYOUT_DEFAULTS } from "@pwragent/shared/contracts/settings";
 import { resolveDesktopConfigPath } from "./settings/desktop-config";
 import { readProfileConfigFile } from "./settings/config-store/profile-config-file";
 import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";

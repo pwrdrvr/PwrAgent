@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode, type Ref } from "react";
-import { filePreviewKindLabel, type FilePreviewKind } from "@pwragent/shared";
+import { filePreviewKindLabel, type FilePreviewKind } from "@pwragent/shared/file-preview";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";

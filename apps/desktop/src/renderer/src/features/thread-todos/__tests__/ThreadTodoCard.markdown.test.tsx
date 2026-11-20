@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadReviewItem, ThreadTodo } from "@pwragent/shared";
+import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 import { copyTodoMarkdown, threadTodoMarkdown } from "../thread-todo-copy";

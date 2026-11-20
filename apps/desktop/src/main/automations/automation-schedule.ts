@@ -1,7 +1,4 @@
-import type {
-  AutomationScheduleDefinition,
-  AutomationWeekday,
-} from "@pwragent/shared";
+import type { AutomationScheduleDefinition, AutomationWeekday } from "@pwragent/shared/contracts/automations";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;

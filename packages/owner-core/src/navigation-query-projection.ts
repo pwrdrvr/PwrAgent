@@ -1,12 +1,14 @@
-import { sortSubthreadSummaries, threadProviderIdentity } from "@pwragent/shared";
+import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
+import { threadProviderIdentity } from "@pwragent/shared/provider-picker";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import type {
   AppServerBackendKind,
   LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   NavigationCounts,
   NavigationStarMapFacetCounts,
-  NavigationStarMapSignals,
   NavigationDirectorySummary,
   NavigationDirectoryRow,
   NavigationIdentity,
@@ -21,25 +23,30 @@ import type {
   NavigationThreadSummary,
   NavigationMetadataDependencies,
   PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import {
   buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  comparePinnedThreads,
-  comparePullRequestStack,
-  classifyDirectory,
-  countNavigationStarMapFacets,
-  passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
-  rankDirectoryMentionMatches,
-  rankThreadJumpMatches,
-  textMatchesJumpQuery,
   buildPullRequestStatusKey,
-  navigationWorkingStatePath,
-  readNavigationMetadataDependencies,
+} from "@pwragent/shared/contracts/navigation";
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { comparePinnedThreads } from "@pwragent/shared/thread-pins";
+import {
+  comparePullRequestStack,
   pullRequestRollupPriority,
   resolveLifecycleState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pull-request-rollup";
+import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import {
+  countNavigationStarMapFacets,
+  passesNavigationStarMapFilters,
+} from "@pwragent/shared/navigation-star-map-filters";
+import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-match";
+import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
+import { textMatchesJumpQuery } from "@pwragent/shared/jump-search-text";
+import { navigationWorkingStatePath } from "@pwragent/shared/navigation-query-events";
+import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import {
   navigationAttentionIdentity,
   type NavigationAttentionOrder,
@@ -78,6 +85,7 @@ type ProjectionIndex = {
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
   parentCandidates: Map<string, NavigationThreadSummary[]>;
   repositories: ReturnType<typeof repositoryIdentitiesByPath>;
+  checkoutProjects: ReadonlyMap<string, NavigationDirectorySummary>;
   childCountByParent: Map<string, number>;
   viewerChildCountByParent: Map<string, number>;
 };
@@ -439,6 +447,7 @@ function projectNavigationRow(params: {
   repositories: ReadonlyMap<string, RepositoryIdentity>;
   thread: NavigationThreadSummary & { nativeSubAgentCount?: number };
   homeProject?: NavigationRowHomeProject;
+  checkoutProject?: NavigationDirectorySummary;
 }): NavigationRow {
   const { thread } = params;
   const linkedDirectories = limitRecords(thread.federation
@@ -467,6 +476,13 @@ function projectNavigationRow(params: {
     ...(thread.hasAgentCommands ? { hasAgentCommands: true } : {}),
     inbox: thread.inbox,
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(params.checkoutProject ? {
+      checkoutProject: {
+        key: params.checkoutProject.key,
+        label: params.checkoutProject.label,
+        repositoryKey: params.checkoutProject.gitStatus?.originRepository ?? params.checkoutProject.repositoryKey,
+      },
+    } : thread.checkoutProject ? { checkoutProject: thread.checkoutProject } : {}),
     linkedDirectories: linkedDirectories.items ?? [],
     ...(linkedDirectories.truncated ? { linkedDirectoriesTruncated: true } : {}),
     ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
@@ -649,6 +665,7 @@ function buildDirectoryRows(params: {
       kind: directory.kind,
       label: directory.label,
       ...(directory.path ? { path: directory.path } : {}),
+      ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
       ...(repositoryKey ? { repositoryKey } : {}),
       ...(repositoryKeys?.length ? { repositoryKeys } : {}),
       ...(directory.localAvailability
@@ -685,13 +702,16 @@ function selectIndexedDirectories(
   query: Extract<NavigationQuery, { kind: "directory-index" }>,
 ): NavigationDirectorySummary[] {
   const candidates = query.keys || query.paths ? directories.filter((directory) =>
-    query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))) : directories;
+    query.keys?.some((key) => directoryIncludesCheckout(directory, key))
+    || (directory.path !== undefined && query.paths?.includes(directory.path))
+    || directory.checkoutPaths?.some((path) => query.paths?.includes(path))) : directories;
   const filter = query.filter?.trim() ?? "";
   if (query.match === "mention") {
     return rankDirectoryMentionMatches(candidates, filter, homedir());
   }
   return filter ? candidates.filter((directory) => textMatchesJumpQuery(directory.label, filter)
-    || textMatchesJumpQuery(directory.path, filter)) : candidates;
+    || textMatchesJumpQuery(directory.path, filter)
+    || directory.checkoutPaths?.some((path) => textMatchesJumpQuery(path, filter))) : candidates;
 }
 
 /**
@@ -712,7 +732,7 @@ function repositoryIdentitiesByPath(
     // thread carries, and normalizing on only one side is a miss that reads
     // as a repository silently failing to match.
     const path = directory.path;
-    const repositoryKey = directory.gitStatus?.originRepository;
+    const repositoryKey = directory.gitStatus?.originRepository ?? directory.repositoryKey;
     const repositoryKeys = directory.gitStatus?.remoteRepositories;
     if (!path || (!repositoryKey && !repositoryKeys?.length)) continue;
     identities.set(path, {
@@ -747,7 +767,10 @@ function withRepositoryIdentities(
 }
 
 /** Project geometry counts primary membership once, independent of loaded cards. */
-function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryRow[] {
+function buildProjectGeometry(
+  index: NavigationQueryIndex,
+  checkoutProjects: ProjectionIndex["checkoutProjects"],
+): NavigationDirectoryRow[] {
   const projects = new Map<string, NavigationDirectoryRow>();
   const launchpads = new Set(index.directories.filter((directory) => directory.launchpad).map((directory) => directory.key));
   const repositories = repositoryIdentitiesByPath(index);
@@ -756,7 +779,8 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
     if (!isStarMapOwnerThread(thread) || seen.has(threadKey(thread))) continue;
     seen.add(threadKey(thread));
     const primary = thread.linkedDirectories[0];
-    const descriptor = primary ? classifyDirectory(primary) : undefined;
+    const checkoutProject = checkoutProjectForThread(thread, checkoutProjects);
+    const descriptor = checkoutProject ?? (primary ? classifyDirectory(primary) : undefined);
     const key = descriptor?.key ?? "__no-project__";
     let project = projects.get(key);
     if (!project) {
@@ -766,12 +790,13 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
       // only one of them may have a cached status.
       const repositoryKey =
         (descriptor?.path ? repositories.get(descriptor.path)?.repositoryKey : undefined)
-        ?? (primary?.path ? repositories.get(primary.path)?.repositoryKey : undefined);
+        ?? (checkoutProject ? undefined : primary?.path ? repositories.get(primary.path)?.repositoryKey : undefined);
       project = {
         key,
         kind: descriptor?.kind ?? "unlinked",
-        label: descriptor ? (descriptor.label !== primary?.label ? descriptor.label : segments?.at(-1) ?? descriptor.label) : "No project",
+        label: checkoutProject?.label ?? (descriptor ? (descriptor.label !== primary?.label ? descriptor.label : segments?.at(-1) ?? descriptor.label) : "No project"),
         path: descriptor?.path,
+        ...(checkoutProject?.checkoutPaths ? { checkoutPaths: checkoutProject.checkoutPaths } : {}),
         ...(repositoryKey ? { repositoryKey } : {}),
         counts: { total: 0, active: 0, unread: 0, review: 0 },
         pinnedRootCount: 0,
@@ -792,6 +817,22 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
       else project.unpinnedRootCount += 1;
     }
     project.latestUpdatedAt = Math.max(project.latestUpdatedAt ?? 0, thread.updatedAt ?? 0);
+  }
+
+  // Keep checkout exclusions when a configured group loses its last visible
+  // thread. Carry the group on the geometry of the same origin without
+  // adding an empty project or a new card page for it.
+  const emptyGroupsByOrigin = new Map<string, number>();
+  for (const directory of index.directories) {
+    if (!directory.checkoutPaths?.length || !directory.path || projects.has(directory.key)) continue;
+    const origin = repositories.get(directory.path)?.repositoryKey;
+    if (origin) emptyGroupsByOrigin.set(origin, (emptyGroupsByOrigin.get(origin) ?? 0) + 1);
+  }
+  if (emptyGroupsByOrigin.size > 0) {
+    for (const project of projects.values()) {
+      const emptyGroupCount = project.repositoryKey && emptyGroupsByOrigin.get(project.repositoryKey);
+      if (emptyGroupCount) project.emptyCheckoutGroupCount = emptyGroupCount;
+    }
   }
   return [...projects.values()].sort((left, right) => left.key.localeCompare(right.key));
 }
@@ -881,7 +922,19 @@ function isStarMapOwnerThread(thread: NavigationThreadSummary): boolean {
     && thread.federation?.ref.target.scope !== "remote";
 }
 
-function starMapProjectKey(thread: NavigationThreadSummary): string {
+function checkoutProjectForThread(
+  thread: NavigationThreadSummary,
+  checkoutProjects: ProjectionIndex["checkoutProjects"],
+): NavigationDirectorySummary | undefined {
+  return thread.federation ? undefined : checkoutProjects.get(buildThreadIdentityKey(thread.source, thread.id));
+}
+
+function starMapProjectKey(
+  thread: NavigationThreadSummary,
+  checkoutProjects: ProjectionIndex["checkoutProjects"],
+): string {
+  const checkoutProject = checkoutProjectForThread(thread, checkoutProjects);
+  if (checkoutProject) return checkoutProject.key;
   const primary = thread.linkedDirectories[0];
   return primary ? classifyDirectory(primary).key : "__no-project__";
 }
@@ -908,6 +961,7 @@ function selectQueryThreads(params: {
   threadsByIdentity: Map<string, NavigationThreadSummary>;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
+  checkoutProjects: ProjectionIndex["checkoutProjects"];
   /** A split lens's root resolver, shared with the page's collection size. */
   lensRootOf?: (thread: NavigationThreadSummary) => NavigationThreadSummary;
 }): NavigationThreadSummary[] {
@@ -939,7 +993,7 @@ function selectQueryThreads(params: {
   }
   if (query.kind === "star-map") {
     return ordinaryThreads.filter(isStarMapOwnerThread)
-      .filter((thread) => query.projectKey === undefined || starMapProjectKey(thread) === query.projectKey)
+      .filter((thread) => query.projectKey === undefined || starMapProjectKey(thread, params.checkoutProjects) === query.projectKey)
       .filter((thread) => (thread.pinnedRank !== undefined && query.filters.pinned !== "exclude")
         || passesNavigationStarMapFilters(starMapSignals(thread, params.index), query.filters))
       .sort((left, right) => {
@@ -1164,6 +1218,8 @@ function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationPr
     threadsByLegacyKey: buildThreadsByLegacyKey(index),
     parentCandidates: buildParentCandidates(index),
     repositories: repositoryIdentitiesByPath(index),
+    checkoutProjects: new Map(index.directories.flatMap((directory) =>
+      directory.checkoutPaths ? directory.threadKeys.map((key) => [key, directory] as const) : [])),
   };
   return { ...maps, ...(includeChildCounts ? buildChildCounts(index.threads, maps, onWork)
     : { childCountByParent: new Map<string, number>(), viewerChildCountByParent: new Map<string, number>() }) };
@@ -1275,7 +1331,7 @@ export function projectNavigationQuery(params: {
   const snapshot = snapshots.get(params.index);
   const onWork = params.onIndexWork ?? snapshot?.onWork;
   const prepared = snapshot?.projection ?? buildProjectionIndex(params.index, onWork, false);
-  const { threadsByIdentity, threadsByLegacyKey, parentCandidates, repositories } = prepared;
+  const { threadsByIdentity, threadsByLegacyKey, parentCandidates, repositories, checkoutProjects } = prepared;
   const scopedDirectory = queryDirectory({ query, index: params.index, threadsByLegacyKey });
   const scopedMembers = scopedDirectory ? new Set(directoryMemberThreads(scopedDirectory, threadsByLegacyKey)) : undefined;
   const { childCountByParent, viewerChildCountByParent } = scopedMembers
@@ -1289,6 +1345,7 @@ export function projectNavigationQuery(params: {
     threadsByIdentity,
     threadsByLegacyKey,
     parentCandidates,
+    checkoutProjects,
     lensRootOf,
   });
   if (((query.kind === "lens" && query.lens === "attention")
@@ -1382,6 +1439,7 @@ export function projectNavigationQuery(params: {
         thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
         homeProject: homeProjects?.get(thread),
+        checkoutProject: checkoutProjectForThread(thread, checkoutProjects),
       }),
       orderKey: rowOrderKey(index),
       ...(siblingOrders.has(threadKey(thread)) ? { siblingOrder: siblingOrders.get(threadKey(thread))! } : {}),
@@ -1442,7 +1500,7 @@ export function projectNavigationQuery(params: {
     } : {}),
     ...(includeDirectories ? { collectionKind: "directories" as const } : {}),
     ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
-    directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
+    directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index, checkoutProjects)
       : query.kind === "directory-index" ? buildDirectoryRows({
         snapshot: { ...params.index, directories: selectIndexedDirectories(params.index.directories, query) },
         threadsByLegacyKey,

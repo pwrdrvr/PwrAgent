@@ -59,6 +59,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "rename_current_thread",
   "manage_thread_dependencies",
   "schedule_follow_up",
+  "agent_memory",
   "mutate_thread",
   "mark_project_read",
   "scan_thread_maintenance",
@@ -982,6 +983,7 @@ export type ThreadReadEvaluationTokenMiser = {
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {
   manage_thread_dependencies: import("./thread-dependencies").ManageThreadDependenciesRequest;
+  agent_memory: import("./agent-memory").AgentMemoryArgs;
   schedule_follow_up: import("./scheduled-thread-actions").ScheduleFollowUpToolArgs;
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
@@ -1025,6 +1027,7 @@ export type PwrAgentThreadInspectionResponse =
         | {
             followUps: import("./scheduled-thread-actions").ScheduleFollowUpToolResult;
           }
+        | { memory: import("./agent-memory").AgentMemoryResult }
         | {
             threads: ThreadInspectionSummary[];
             totalCount: number;

@@ -40,34 +40,40 @@ import type {
 } from "react";
 import type {
   AppServerBackendKind,
-  BackendSummary,
-  DesktopPwrAgentProfileSummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
+import type {
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type {
   ProjectForgeAutomation,
   ProjectHeldWakeup,
   ResolveProjectHeldWakeupsRequest,
   ResolveProjectHeldWakeupsResponse,
-  ThreadExecutionMode,
-  AutomationSchedulingStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
+import { buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import {
-  buildThreadUrl,
   comparePinnedDirectories,
-  toolWorktreeRootOwner,
+  isPinnedDirectory,
+  moveDirectoryKey,
+} from "@pwragent/shared/directory-pins";
+import { toolWorktreeRootOwner } from "@pwragent/shared/worktree-paths";
+import {
   comparePinnedThreads,
   isKeptAtTopThread,
-  isPinnedDirectory,
   isPinnedThread,
-  isRemoteFederationTarget,
-  moveDirectoryKey,
   moveThreadKey,
-  isSubthreadLaunchpadKey,
-  resolveThreadParentKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-pins";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import {
   isFederationViewerWindow,
   readRendererFederationLabel,
@@ -249,6 +255,8 @@ function useRevealListChange<Args extends unknown[], Result>(
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
+import { ProjectCheckoutsDialog } from "./ProjectCheckoutsDialog";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared/contracts/navigation";
 import { readThreadDependencyIndicator, useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 
 type SidebarProps = {
@@ -523,6 +531,8 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     pinned: boolean,
   ) => Promise<void>;
+  onSetProjectCheckoutGroup?: (request: SetProjectCheckoutGroupRequest) => Promise<void>;
+  onPickProjectCheckout?: () => Promise<string | undefined>;
   onReorderDirectoryPins?: (directoryKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetDirectoryThreadsCollapsed?: (
     directory: NavigationDirectorySummary,
@@ -687,6 +697,7 @@ function federationProjectDirectory(
     kind: directory.kind,
     label: directory.label,
     ...(directory.path !== undefined ? { path: directory.path } : {}),
+    ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
     ...(directory.repositoryKey !== undefined
       ? { repositoryKey: directory.repositoryKey }
       : {}),
@@ -857,6 +868,7 @@ function SidebarContent(props: SidebarProps) {
       }
     | undefined
   >();
+  const [projectCheckoutsDirectory, setProjectCheckoutsDirectory] = useState<NavigationDirectorySummary>();
   /** The project whose Forge Automation dialog is open. */
   const [forgeAutomationDialog, setForgeAutomationDialog] = useState<
     { directory: NavigationDirectorySummary } | undefined
@@ -3339,6 +3351,7 @@ function SidebarContent(props: SidebarProps) {
       && !directoryMenuIsPlaceholder
       && props.onRemoveDirectory
       && directoryContextMenu?.directory.kind === "directory"
+      && !directoryContextMenu.directory.checkoutPaths
       && directoryContextMenu.directory.counts?.total === 0,
   );
 
@@ -4757,6 +4770,13 @@ function SidebarContent(props: SidebarProps) {
                 >
                   Copy Path
                 </button>
+                {props.onSetProjectCheckoutGroup && props.onPickProjectCheckout && !federationViewer
+                  && directoryContextMenu.directory.kind === "directory" ? (
+                    <button role="menuitem" type="button" onClick={() => {
+                      setProjectCheckoutsDirectory(directoryContextMenu.directory);
+                      setDirectoryContextMenu(undefined);
+                    }}>Project Checkouts…</button>
+                  ) : null}
               </div>
             ) : null}
             {directoryMenuHasForgeSection
@@ -4833,7 +4853,9 @@ function SidebarContent(props: SidebarProps) {
                       void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
                     }}
                   >
-                    {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
+                    {directoryContextMenuDirectories.some((directory) => directory.checkoutPaths)
+                      ? "Archive Project Threads"
+                      : directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
                       ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
                       : "Archive Threads"}
                   </button>
@@ -4871,6 +4893,25 @@ function SidebarContent(props: SidebarProps) {
               await props.onSetThreadLock?.(lockDialog.thread, true, note);
               setLockDialog(undefined);
             }}
+          />
+        ) : null}
+
+        {projectCheckoutsDirectory?.path && props.onSetProjectCheckoutGroup && props.onPickProjectCheckout ? (
+          <ProjectCheckoutsDialog
+            projectPath={projectCheckoutsDirectory.path}
+            checkoutPaths={projectCheckoutsDirectory.checkoutPaths}
+            projectLabel={projectCheckoutsDirectory.label}
+            repositoryKey={projectCheckoutsDirectory.repositoryKey}
+            suggestions={props.directories.flatMap((directory) =>
+              projectCheckoutsDirectory.repositoryKey && directory.repositoryKey === projectCheckoutsDirectory.repositoryKey
+                && directory.path && !directory.checkoutPaths && !directory.localAvailability ? [directory.path] : [])}
+            returnFocus={directoryContextMenuOpenerRef}
+            pickCheckout={props.onPickProjectCheckout}
+            copyPath={(path) => { void copyText(path); }}
+            revealLabel={canRevealPath ? revealInFileManagerLabel(props.platform) : undefined}
+            revealPath={canRevealPath ? (path) => revealProjectPath(path, projectCheckoutsDirectory.label) : undefined}
+            onSave={props.onSetProjectCheckoutGroup}
+            onClose={() => setProjectCheckoutsDirectory(undefined)}
           />
         ) : null}
 

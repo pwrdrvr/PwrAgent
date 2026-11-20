@@ -2,7 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryEntry,
+  NavigationQueryRequest,
+  NavigationRow,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { Sidebar } from "../Sidebar";

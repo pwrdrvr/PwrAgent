@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   FederationBlobChunkEnvelope,
   FederationProtocolEnvelope,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import { imageInputFileRoot } from "../app-server/image-input-files";
 import {
   stageTurnInputAttachment,

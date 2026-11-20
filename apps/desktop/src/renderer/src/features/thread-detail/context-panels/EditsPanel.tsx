@@ -2,13 +2,15 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "
 import type {
   AppServerBackendKind,
   AppServerThreadActivityDetail,
-  DesktopApplicationDiscoveryCandidate,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
+import type {
   EditGroupCommitState,
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
   WorktreeUnpublishedCommit,
   WorktreeUnpublishedCommitFile,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { ArrowUpIcon, EditorIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { formatFileSize } from "../../../lib/format-bytes";

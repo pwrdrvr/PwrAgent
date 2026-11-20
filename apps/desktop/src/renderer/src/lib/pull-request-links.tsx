@@ -2,12 +2,12 @@ import {
   buildPullRequestStatusKey,
   pullRequestMatchesRepositoryKey,
   resolvePullRequestIdentity,
-  threadTodoThreadKey,
-  type AppServerBackendKind,
-  type FederationRemoteTarget,
   type NavigationThreadSummary,
   type PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
   createContext,
   useCallback,

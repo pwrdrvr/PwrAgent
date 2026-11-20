@@ -4,15 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
+import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import {
-  buildProviderPickerEntries,
   formatCodexProviderModelId,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
+import {
   type BackendModelOption,
   type BackendSummary,
-  type CodexModelProviderSettings,
-  type FederationProtocolEnvelope,
   type ListBackendsResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
+import { type FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import {

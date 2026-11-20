@@ -214,7 +214,7 @@ Desktop Vitest fails a test that spawns a real agent CLI, runs Git against the
 checkout, makes an outbound request, or touches operator state. Fix a failure
 by injecting a seam, never by widening a guard. Before fixing a guard failure,
 or changing the guards, `PWRAGENT_HOME`, XDG, or `PATH` sandboxing in
-`vitest.workspace.ts`, read [docs/vitest-guards.md](docs/vitest-guards.md).
+`vitest.workspace.mts`, read [docs/vitest-guards.md](docs/vitest-guards.md).
 
 ## Sqlite Write-Volume Instrumentation
 
@@ -259,7 +259,8 @@ changing quit, shutdown, or `before-quit` handling, read
 
 Every worktree path comes from `computeWorktreePath`
 (`src/main/app-server/git-directory-service.ts`); add no other builder. Before
-changing worktree creation or handoff, read
+changing worktree creation, handoff, or where worktrees are stored (including
+the `[worktrees] base_directory` Worktree folder), read
 [docs/worktree-paths.md](docs/worktree-paths.md#worktree-path-computation).
 
 ## Release Notes

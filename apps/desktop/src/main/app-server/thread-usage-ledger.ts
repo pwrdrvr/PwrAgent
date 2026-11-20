@@ -1,5 +1,5 @@
 import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
-import type { AppServerNotification } from "@pwragent/shared";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ManagedReviewService } from "./managed-review-service";
@@ -12,10 +12,10 @@ import {
 } from "./token-miser-ledger-index";
 import {
   addTokenMiserGateAccountingTotals,
-  isTokenMiserSubAgent,
   totalTokenMiserGateAccountings,
-  readUuidV7Timestamp,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-miser-savings-summary";
+import { isTokenMiserSubAgent } from "@pwragent/shared/subagent-kind";
+import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
 import {
   buildMonitorJobHeuristicPrompt,
   MonitorJobHeuristicDetector,
@@ -28,7 +28,7 @@ import {
   parseMonitorJobHeuristicDecision,
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
-import { priceLocalModelUsage } from "@pwragent/shared";
+import { priceLocalModelUsage } from "@pwragent/shared/local-model-pricing";
 import {
   type ThreadDisplayCards,
 } from "./thread-display";
@@ -36,28 +36,36 @@ import { randomUUID } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   type AgentEvent,
+  type SteerTurnRequest,
+  type SteerTurnResponse,
+} from "@pwragent/shared/contracts/agent";
+import {
   type AppServerThreadActivityEntry,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReplay,
   type AppServerBackendKind,
-  type BackendSummary,
-  type DesktopSpendAlertPolicy,
-  type DesktopToolOutputAlertPolicy,
-  type NavigationSnapshot,
-  type SteerTurnRequest,
-  type SteerTurnResponse,
-  type ThreadOverlayState,
-  type ThreadSubAgentSummary,
   type ThreadToolAccounting,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
   type ThreadTokenMiserSavings,
-  type ThreadUsageLineRecord,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import {
+  type DesktopSpendAlertPolicy,
+  type DesktopToolOutputAlertPolicy,
+} from "@pwragent/shared/contracts/settings";
+import {
+  type NavigationSnapshot,
+  type ThreadOverlayState,
+  type ThreadSubAgentSummary,
   buildThreadIdentityKey,
   isAcpBackendId,
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import {
   TOOL_OUTPUT_CAP_CHARS,
   toolOutputWarningChars,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
 import { type TokenMiserDiagnosticContext } from "../token-miser/token-miser-diagnostics";
 import { type TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";

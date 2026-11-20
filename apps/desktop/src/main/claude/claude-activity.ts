@@ -1,4 +1,7 @@
-import type { AppServerThreadActivityEntry, AppServerThreadEntry } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
 import { claudeSavedToolOutput, claudeToolCallDetail } from "./claude-tool-activity";
 

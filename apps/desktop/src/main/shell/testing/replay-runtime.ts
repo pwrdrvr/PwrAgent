@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { app } from "electron";
 import type {
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -11,9 +10,10 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  BackendModelOption,
   ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { ReplayClient } from "./replay-client";
 import type { ReplayFixture, ReplayStepOverride } from "../../testing/replay-fixture";
 import { validateReplayFixture } from "../../testing/replay-fixture";

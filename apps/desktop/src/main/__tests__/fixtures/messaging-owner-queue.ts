@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 
 // Native backend is a double; admission, held failures, cancellation and drain

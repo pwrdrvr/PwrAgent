@@ -1,16 +1,18 @@
+import type { CausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import type {
-  CausalMessagingContext,
   FederationCapability,
   FederationRemoteTarget,
   FederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import type {
   ManageThreadDependenciesRequest,
   ManageThreadDependenciesResponse,
   ThreadDependency,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-dependencies";
 import {
   THREAD_DEPENDENCIES_FEDERATION_CAPABILITY,
   THREAD_DEPENDENCY_PROVENANCE_FEDERATION_CAPABILITY,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-dependencies";
 
 /** What a viewer hears when a contact's create would reach an owner that drops the contact. */
 export const THREAD_DEPENDENCY_PROVENANCE_UNSUPPORTED_MESSAGE =

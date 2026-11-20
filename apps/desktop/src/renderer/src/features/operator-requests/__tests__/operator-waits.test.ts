@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerPendingRequestNotification, OperatorServerRequest } from "@pwragent/shared";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import type { OperatorServerRequest } from "@pwragent/shared/contracts/operator-requests";
 import {
   OPERATOR_WAIT_LABELS,
   buildOperatorWaits,

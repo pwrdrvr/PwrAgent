@@ -3,7 +3,11 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { expect, it } from "vitest";
-import { FEDERATION_PROTOCOL_VERSION, type FederationProtocolEnvelope, type ThreadHandoffPackage } from "@pwragent/shared";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/federation";
+import { type ThreadHandoffPackage } from "@pwragent/shared/contracts/thread-instance-handoff";
 import { encodeThreadHandoff } from "../federation/thread-handoff-package";
 import { federationTransportCodecForTest } from "../federation/federation-transport";
 import { encodeFederationFramePayload } from "@pwragent/federation/federation-frame-codec";

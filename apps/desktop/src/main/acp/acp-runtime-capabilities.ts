@@ -5,7 +5,7 @@ import type {
   BackendAcpRuntimeModel,
   BackendAcpRuntimeMode,
   BackendAcpSessionRuntimeState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
 
 export function normalizeAcpRuntimeCapabilities(params: {
   value: unknown;

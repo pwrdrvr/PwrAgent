@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   FederatedDirectoryIndexCache,

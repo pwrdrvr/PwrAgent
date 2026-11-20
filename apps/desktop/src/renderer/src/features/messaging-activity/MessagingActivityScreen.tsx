@@ -6,11 +6,11 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { sanitizeMessagingContactHandle } from "@pwragent/shared/messaging-contact-labels";
 import {
-  sanitizeMessagingContactHandle,
   type MessagingActivityEntry,
   type MessagingActivityKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ChevronRightIcon, SettingsIcon } from "../../icons";

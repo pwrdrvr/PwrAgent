@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { formatBackendLabel } from "../backend-label";
 
 describe("formatBackendLabel", () => {

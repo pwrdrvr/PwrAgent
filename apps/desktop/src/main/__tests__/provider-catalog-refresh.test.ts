@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProviderCatalogRefreshState } from "@pwragent/shared";
+import type { ProviderCatalogRefreshState } from "@pwragent/shared/contracts/backend";
 import {
   ProviderCatalogRefreshCoordinator,
   type ProviderCatalogRefreshCodexProgress,

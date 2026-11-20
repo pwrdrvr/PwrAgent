@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, PrSummary, ThreadTodo } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
 

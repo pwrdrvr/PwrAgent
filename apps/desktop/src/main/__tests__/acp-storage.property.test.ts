@@ -7,7 +7,7 @@ import type {
   AcpSessionMetadata,
   AcpSessionStorage,
 } from "@pwragent/owner-core/acp-storage";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpAvailableCommandsStore } from "../storage/acp-available-commands-store";

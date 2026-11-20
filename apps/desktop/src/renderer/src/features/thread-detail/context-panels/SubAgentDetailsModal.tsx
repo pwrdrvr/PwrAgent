@@ -1,16 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type {
-  AppServerBackendKind,
-  FederationTarget,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import {
   claudeSubAgentTranscriptThreadIdForMonitor,
   hasDurableSubAgentTranscript,
   isClaudeNativeSubAgent,
   isCodexNativeSubAgent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/subagent-kind";
 import { CloseIcon } from "../../../icons";
 import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { copyText } from "../../../lib/copy-text";

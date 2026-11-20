@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import type { AcpAgentUpdateStatus } from "@pwragent/shared";
+import type { AcpAgentUpdateStatus } from "@pwragent/shared/contracts/backend";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import { isPwrAgentSuppliedGrokCommand } from "./grok-build-channel.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";

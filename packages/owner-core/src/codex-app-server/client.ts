@@ -1,3 +1,4 @@
+import { isAgentMemoryContext, stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import type {
   CodexClientHost,
   CodexClientLogger,
@@ -15,12 +16,12 @@ import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "
 import type {
   ListBackgroundTerminalsResponse,
   CodexBackgroundTerminal,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
 import type {
   ThreadBackgroundTerminalsListResponse,
   ThreadBackgroundTerminalsTerminateResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
-import { buildPendingTurnId } from "@pwragent/shared";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { rememberBoundedMap } from "../bounded-map";
 import { usageAccountKey } from "../usage-account-identity";
@@ -34,44 +35,54 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
-  formatCodexProviderModelId,
-  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
+  readCodexNativeSubAgentName,
+  readSubAgentActivity,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
+} from "@pwragent/shared/subagent-activity";
+import { formatCodexProviderModelId } from "@pwragent/shared/codex-model-providers";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared/openrouter-assumed-pricing";
+import {
   isLegacyPwrSnapMediaUrl,
   pwrSnapResourceLinkImageParts,
   pwrSnapToolImageParts,
-  readCodexNativeSubAgentName,
+} from "@pwragent/shared/transcript-image-sources";
+import {
   estimateTokenUsageCost,
-  formatExplorationSummary,
-  formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
-  buildProviderResponseBlockEntry,
-  detectProviderResponseBlock,
-  formatWebSearchLabel,
-  isToolManagedWorktreePath,
-  navigationQueryEventRequiresRefresh,
-  normalizeCodexAsyncQuestions,
-  parseCodexTurnErrorMessage,
-  readSubAgentActivity,
   resolveOpenAiPricingServiceTier,
-  resolveHelperModel,
   resolveTokenUsagePriceUnavailableReason,
-  shortenDerivedThreadTitle,
-  shortSubAgentThreadId,
-  subAgentActivitySummaryParts,
-  subAgentTargetLabel,
-  type DesktopHelperModelSettings,
-  type HelperModelId,
-  type HelperModelResolution,
   type ThreadUsageLineRecord,
   type ThreadPricingSnapshot,
   type ThreadUsageTokenBreakdown,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import {
+  formatExplorationSummary,
+  formatSearchCommandActionLabel,
+  formatWebSearchLabel,
+} from "@pwragent/shared/command-action-labels";
+import {
+  buildProviderResponseBlockEntry,
+  detectProviderResponseBlock,
+} from "@pwragent/shared/provider-response-block";
+import { isCodexHardwareKeyReauthenticationRequired } from "@pwragent/shared/codex-authentication";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { normalizeCodexAsyncQuestions } from "@pwragent/shared/codex-async-questions";
+import { parseCodexTurnErrorMessage } from "@pwragent/shared/codex-turn-error";
+import {
+  resolveHelperModel,
+  type DesktopHelperModelSettings,
+  type HelperModelId,
+  type HelperModelResolution,
+} from "@pwragent/shared/helper-models";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
+import { shortSubAgentThreadId } from "@pwragent/shared/subagent-kind";
 import type {
   AppServerAvailableCommandSummary,
-  CodexAppServerRestartStatus,
   AppServerFileInputItem,
   AppServerLocalFileInputItem,
   AppServerNotification,
@@ -99,17 +110,22 @@ import type {
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  AppServerCollaborationModeRequest,
   AppServerReviewDelivery,
   AppServerReviewTarget,
+  CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CodexAppServerRestartStatus,
   BackendAccountSummary,
   BackendModelOption,
   BackendRateLimitSummary,
-  CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared/contracts/backend";
+import type {
+  AppServerCollaborationModeRequest,
   CodexMcpInventoryDetail,
   CodexMcpServerSummary,
-  LinkedDirectorySummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
@@ -124,6 +140,9 @@ import type {
   ConfigValueWriteParams as CodexConfigValueWriteParams,
   Model as CodexModel,
   ModelListParams as CodexModelListParams,
+  ModelReroutedNotification as CodexModelReroutedNotification,
+  ModelSafetyBufferingUpdatedNotification as CodexModelSafetyBufferingUpdatedNotification,
+  ModelVerificationNotification as CodexModelVerificationNotification,
   ModelListResponse as CodexModelListResponse,
   SandboxMode as CodexSandboxMode,
   SandboxPolicy as CodexSandboxPolicy,
@@ -631,6 +650,9 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "hook/completed",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
+  "model/safetyBuffering/updated",
+  "model/rerouted",
+  "model/verification",
 ]);
 const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
   "item/commandExecution/requestApproval",
@@ -1464,6 +1486,11 @@ function normalizeFailedTurnCompletedNotification(
     pickStringAllowEmpty(turnError, ["message"]) ?? guardianDenialLimitMessage,
   );
   const block = detectProviderResponseBlock(turnError);
+  // The provider's text is the instruction; the tag only lets the owner offer
+  // a fresh Codex sign-in beside it.
+  const recovery = status === "failed" && isCodexHardwareKeyReauthenticationRequired(turnError)
+    ? "codexHardwareKeySignIn" as const
+    : undefined;
   const startedAt = normalizeEpochTimestamp(
     pickNumber(turn, ["startedAt", "started_at"]),
   );
@@ -1485,9 +1512,83 @@ function normalizeFailedTurnCompletedNotification(
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
-        error: { message, ...(block ? { block } : {}) },
+        error: {
+          message,
+          ...(recovery ? { recovery } : {}),
+          ...(block ? { block } : {}),
+        },
       },
     },
+  };
+}
+
+/**
+ * Codex's model-routing notifications, aliased to PwrAgent's turn notices.
+ * Each reports something different about one turn:
+ * - `model/safetyBuffering/updated`: output is held for a safety review, or
+ *   the hold ended. `fasterModel` is only a hint; nothing switches models.
+ * - `model/rerouted`: a different model answered than the one requested.
+ * - `model/verification`: the account is asked to complete a verification.
+ * A payload without its thread, turn, or required fields is dropped rather
+ * than forwarded half-formed.
+ */
+function normalizeModelRoutingNotification(
+  method: string,
+  record: Record<string, unknown>,
+): AppServerNotification | null | undefined {
+  if (
+    method !== "model/safetyBuffering/updated"
+    && method !== "model/rerouted"
+    && method !== "model/verification"
+  ) {
+    return undefined;
+  }
+  const threadId = pickString(record, ["threadId"]);
+  const turnId = pickString(record, ["turnId"]);
+  if (!threadId || !turnId) return null;
+  if (method === "model/safetyBuffering/updated") {
+    const params = record as Partial<CodexModelSafetyBufferingUpdatedNotification>;
+    const model = typeof params.model === "string" ? params.model.trim() : "";
+    if (!model || typeof params.showBufferingUi !== "boolean") return null;
+    const fasterModel = typeof params.fasterModel === "string" ? params.fasterModel.trim() : "";
+    return {
+      method: "turn/safetyBuffering/updated",
+      params: {
+        threadId,
+        turnId,
+        model,
+        buffering: params.showBufferingUi,
+        ...(fasterModel ? { fasterModel } : {}),
+      },
+    };
+  }
+  if (method === "model/rerouted") {
+    const params = record as Partial<CodexModelReroutedNotification>;
+    const fromModel = typeof params.fromModel === "string" ? params.fromModel.trim() : "";
+    const toModel = typeof params.toModel === "string" ? params.toModel.trim() : "";
+    if (!fromModel || !toModel) return null;
+    return {
+      method: "turn/modelRerouted",
+      params: {
+        threadId,
+        turnId,
+        fromModel,
+        toModel,
+        reason: typeof params.reason === "string" ? params.reason : "",
+      },
+    };
+  }
+  const params = record as Partial<CodexModelVerificationNotification>;
+  const verifications = Array.isArray(params.verifications)
+    // Kept as strings: a newer Codex can send values this schema lacks.
+    ? [...new Set((params.verifications as unknown[]).filter(
+      (value): value is string => typeof value === "string" && value.trim() !== "",
+    ))]
+    : [];
+  if (verifications.length === 0) return null;
+  return {
+    method: "turn/verificationRequested",
+    params: { threadId, turnId, verifications },
   };
 }
 
@@ -1563,9 +1664,16 @@ function normalizeServerNotification(
   // session-error banner, messaging delivery, and headless-automation error
   // extraction all already key on `turn/failed`. Doing the alias here keeps the
   // Codex-specific shape out of every downstream consumer.
+  const turnRecord = asRecord(record.turn);
+  const turnWithSafeItems = turnRecord && Array.isArray(turnRecord.items)
+    ? { ...turnRecord, items: turnRecord.items.map((value) => {
+      const item = asRecord(value);
+      return item ? withoutAgentMemoryInput(item) : value;
+    }) }
+    : undefined;
   const failedTurn = normalizeFailedTurnCompletedNotification(
     method,
-    record,
+    turnWithSafeItems ? { ...record, turn: turnWithSafeItems } : record,
     metadata,
     guardianDenialLimitMessage,
   );
@@ -1607,6 +1715,7 @@ function normalizeServerNotification(
     method: method as AppServerNotification["method"],
     params: {
       ...record,
+      ...(turnWithSafeItems ? { turn: turnWithSafeItems } : {}),
       ...(configWarningMetadata ?? {}),
       ...(blockedError ? { error: blockedError } : {}),
       ...(normalizedItem ? {
@@ -1737,7 +1846,7 @@ function extractConfigWarningMetadata(
 function normalizeLiveNotificationItem(
   item: Record<string, unknown>
 ): Record<string, unknown> {
-  const normalized = { ...item };
+  const normalized = { ...withoutAgentMemoryInput(item) };
   if (item.type === "agentMessage") {
     const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
     if (phase) normalized.phase = phase;
@@ -2707,11 +2816,35 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
   return [];
 }
 
+function stripAgentMemoryText(text: string): string {
+  return stripAgentMemoryChunk(text).text.trim();
+}
+
+function withoutAgentMemoryInput(item: Record<string, unknown>): Record<string, unknown> {
+  const role = normalizeConversationRole(pickString(item, ["type"]))
+    ?? normalizeConversationRole(pickString(item, ["role", "author", "speaker", "source"]));
+  if (role !== "user") return item;
+  const isSynthetic = (value: unknown) => {
+    const part = asRecord(value);
+    return typeof value === "string" ? isAgentMemoryContext(value)
+      : (part?.type === "text" || part?.type === "input_text")
+        && typeof part.text === "string" && isAgentMemoryContext(part.text);
+  };
+  const result = { ...item };
+  for (const field of ["content", "parts", "input", "text", "message", "messages"]) {
+    const value = result[field];
+    if (Array.isArray(value)) result[field] = value.filter((part) => !isSynthetic(part));
+    else if (isSynthetic(value)) delete result[field];
+  }
+  return result;
+}
+
 /** The text and parts a replay message gets from one raw message item. */
-export function buildMessageContent(record: Record<string, unknown>): {
+export function buildMessageContent(item: Record<string, unknown>): {
   parts?: AppServerThreadMessagePart[];
   text: string;
 } {
+  const record = withoutAgentMemoryInput(item);
   const structuredParts = [
     ...extractStructuredMessageParts(record.content),
     ...extractStructuredMessageParts(record.parts),
@@ -5691,8 +5824,9 @@ function extractThreadNameRecordFromValue(
       pickString(record, ["threadName", "thread_name", "name", "title"]) ??
         pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"])
     );
-  const indexName =
-    rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+  const cleanPreview = stripAgentMemoryText(preview ?? "");
+  const cleanName = stripAgentMemoryText(rawName ?? "");
+  const indexName = cleanName || (cleanPreview ? shortenDerivedThreadTitle(cleanPreview) ?? cleanPreview : undefined);
   return {
     id: threadId,
     threadName: indexName?.trim() || "Untitled thread",
@@ -6506,12 +6640,13 @@ function* threadSummariesFromValue(value: unknown, textCache: ThreadListTextCach
           "first_user_message",
         ]);
     const text = textCache.read(threadId, [rawExplicitTitle, rawDerivedTitle, rawSummary], () => {
-      const titleInfo = getThreadTitleInfo(rawExplicitTitle, rawDerivedTitle);
-      const summary = normalizeThreadSummary(rawSummary);
+      const derivedTitle = stripAgentMemoryText(rawDerivedTitle ?? "") || undefined;
+      const titleInfo = getThreadTitleInfo(stripAgentMemoryText(rawExplicitTitle ?? "") || undefined, derivedTitle);
+      const summary = normalizeThreadSummary(stripAgentMemoryText(rawSummary ?? "") || undefined);
       return {
         ...titleInfo,
         summary: summary === titleInfo.title
-          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(rawDerivedTitle))
+          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(derivedTitle))
           ? undefined : summary,
       };
     });
@@ -8210,7 +8345,15 @@ export class CodexAppServerClient {
         for (const listener of this.realtimeListeners) listener(event);
         return;
       }
-      const normalized = normalizeServerNotification(
+      const modelRouting = normalizeModelRoutingNotification(method, asRecord(params) ?? {});
+      if (modelRouting === null) {
+        this.host.logger.warn("malformed codex model routing notification", {
+          method,
+          ...describePayloadShape(params),
+        });
+        return;
+      }
+      const normalized = modelRouting ?? normalizeServerNotification(
         method,
         params,
         this.liveMessagePhases,
@@ -11080,7 +11223,7 @@ export class CodexAppServerClient {
   }
 
   /** Export bytes through Codex; never open or parse its private storage. */
-  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared/contracts/thread-instance-handoff").ThreadHandoffExport> {
     await this.ensureInitialized();
     const result = await this.connection.request("thread/read", { threadId, includeTurns: false },
       this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
@@ -11430,6 +11573,7 @@ export class CodexAppServerClient {
       threadId: string;
       turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message: string } };
     }) => void;
+    agentMemoryContext?: string;
     /** Delegation attribution only. */
     parentTurnId?: string;
     rootTurnId?: string;
@@ -11586,7 +11730,9 @@ export class CodexAppServerClient {
         buildTurnStartPayload(
           {
             threadId: params.threadId,
-            input: codexInput,
+            input: params.agentMemoryContext
+              ? [...codexInput, { type: "text", text: params.agentMemoryContext, text_elements: [] }]
+              : codexInput,
             parentTurnId: params.parentTurnId,
             rootTurnId: params.rootTurnId,
             cwd: params.cwd,

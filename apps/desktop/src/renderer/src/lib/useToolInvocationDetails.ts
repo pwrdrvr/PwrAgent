@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppServerThreadActivityDetail, ThreadToolInvocationRecord } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityDetail,
+  ThreadToolInvocationRecord,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "./desktop-api";
 
 /** Item bodies are view-local. They never enter the ordered transcript. */

@@ -1,12 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AgentEvent,
-  AppServerBackendKind,
-  StartReviewRequest,
-  TaskMonitorUsageSnapshot,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+import type { AgentEvent, StartReviewRequest } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { BackendClient, ReviewTerminal } from "../app-server/backend-registry-types";
 import { ManagedReviewService, type ManagedReviewServiceHost } from "../app-server/managed-review-service";

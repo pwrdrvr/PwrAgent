@@ -5,7 +5,7 @@ import type {
   ReadThreadFamilyPricingRequest,
   ReadThreadFamilyPricingResponse,
   ThreadFamilyPricingMember,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-family-pricing";
 import { ThreadLinkProvider } from "../../../../lib/thread-links";
 import { ThreadFamilyPricingCard } from "../ThreadFamilyPricingCard";
 

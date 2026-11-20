@@ -1,6 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { buildThreadPricingDisplay, type AgentEvent, type AppServerReadThreadResponse, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadDisplayResource } from "../useThreadDisplayResource";
 
@@ -92,6 +95,24 @@ it("preserves requested history pages across coalesced live updates and isolates
   expect(h.readThread).toHaveBeenCalledTimes(4);
   expect(result.current.data?.subAgents?.map((agent) => agent.monitorId)).toEqual(["new-first", "new-second"]);
   unmount();
+});
+
+it("keeps using the history cursor after a composer-only dismissal", async () => {
+  const h = harness();
+  h.readThread.mockResolvedValueOnce(page("first", "revision:20")).mockResolvedValueOnce(page("second"));
+  const view = renderHook(() => useThreadDisplayResource({ desktopApi: h.api, thread: thread(), resource: "subagents" }));
+  try {
+    await waitFor(() => expect(view.result.current.data?.nextCursor).toBe("revision:20"));
+    vi.useFakeTimers();
+    h.emit({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/subAgentFailures/dismissed", params: { threadId: "thread" },
+    } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_050); });
+    expect(h.readThread).toHaveBeenCalledTimes(1);
+    await act(async () => { await view.result.current.loadMore(); });
+    expect(h.readThread.mock.calls[1]?.[0].display?.cursor).toBe("revision:20");
+    expect(view.result.current.data?.subAgents?.map((agent) => agent.monitorId)).toEqual(["first", "second"]);
+  } finally { view.unmount(); }
 });
 
 it("refreshes snapshot-only peers on a changed navigation version without duplicating the initial read", async () => {

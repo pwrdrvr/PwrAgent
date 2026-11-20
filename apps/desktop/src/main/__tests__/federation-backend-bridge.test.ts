@@ -4,18 +4,19 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerTurnInputItem,
-  FederationCapability,
-  FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationCapability, FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
+import type {
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   NavigationThreadSummary,
-  TrustCodexProjectRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { TrustCodexProjectRequest } from "@pwragent/shared/contracts/agent";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
-  buildFederatedThreadRef,
-  rankThreadJumpMatches,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -576,6 +577,34 @@ describe("federation backend bridge", () => {
       setThreadAgent.mockRejectedValueOnce(new Error("Wait for the current turn to finish."));
       await expect(client.setThreadAgent({ threadId: "collision", agent: null })).rejects.toThrow("Wait for the current turn");
     }
+  });
+
+  it.each([true, false])("keeps Agent memory read and write grants separate (%s)", async (canWrite) => {
+    const accessAgentMemory = vi.fn(async () => ({ content: "fixture", revision: "revision", exists: true }));
+    const router = new FederationRouter({
+      localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); },
+    });
+    router.registerConnection({
+      peerId: "viewer", capabilities: canWrite ? ["thread_detail", "turn_control"] : ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: { accessAgentMemory } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    const identity = { backend: "codex", threadId: "agent" } as const;
+    const read = { ...identity, operation: { action: "read_index" } } as const;
+    const write = { ...identity, operation: { action: "write_index", content: "update", revision: "revision" } } as const;
+    await expect(client.accessAgentMemory(read)).resolves.toMatchObject({ content: "fixture" });
+    await expect(rpc.request({ method: FEDERATION_BACKEND_METHODS.readAgentMemory, params: write })).rejects.toThrow();
+    if (canWrite) {
+      await expect(client.accessAgentMemory(write)).resolves.toMatchObject({ content: "fixture" });
+    } else {
+      await expect(client.accessAgentMemory(write)).rejects.toThrow();
+    }
+    expect(accessAgentMemory.mock.calls).toEqual(canWrite ? [[read], [write]] : [[read]]);
   });
 
   it("fails closed with an actionable explanation on older owners", async () => {
@@ -4318,12 +4347,14 @@ describe("federation backend bridge", () => {
       })),
       interruptTurn: vi.fn(),
       stopSubAgent: vi.fn(),
+      dismissFailedSubAgents: vi.fn(),
       steerTurn: vi.fn(),
       setThreadExecutionMode: vi.fn(),
       queueThreadExecutionMode: vi.fn(),
       cancelThreadExecutionModeQueue: vi.fn(),
       setAcpSessionRuntimeOption: vi.fn(),
       setThreadAgent: vi.fn(),
+      accessAgentMemory: vi.fn(),
       setThreadTokenMiser: vi.fn(),
       setThreadModelSettings: vi.fn(),
       checkThreadBranchDrift: vi.fn(),
@@ -4796,12 +4827,14 @@ describe("federation backend bridge", () => {
         resolveActiveTurn: vi.fn(),
         interruptTurn: vi.fn(),
         stopSubAgent: vi.fn(),
+        dismissFailedSubAgents: vi.fn(),
         steerTurn: vi.fn(),
         setThreadExecutionMode: vi.fn(),
         queueThreadExecutionMode: vi.fn(),
         cancelThreadExecutionModeQueue: vi.fn(),
         setAcpSessionRuntimeOption: vi.fn(),
         setThreadAgent: vi.fn(),
+        accessAgentMemory: vi.fn(),
       setThreadTokenMiser: vi.fn(),
       setThreadModelSettings: vi.fn(),
         checkThreadBranchDrift: vi.fn(),

@@ -1,13 +1,13 @@
 import { memo, useState } from "react";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerThreadEntry,
   AutomationDetail,
   AutomationRunTranscriptEvent,
   AutomationRunRollout,
   AutomationRunStatus,
   AutomationRunWindow,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ChevronRightIcon } from "../../icons";
 import { useProviderLabelFormatter } from "../../lib/thread-provider-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -385,7 +385,7 @@ export function AutomationRunHistoryItem(props: {
           <ChevronRightIcon aria-hidden="true" size={13} />
         </button>
         <span className={`automation-run-status automation-run-status--${props.run.status}`}>
-          {formatRunStatus(props.run.status, props.run.failureReason)}
+          {formatRunStatus(props.run.status, props.run.failureReason, props.run.resumedAt)}
         </span>
         <span>
           {props.run.trigger}

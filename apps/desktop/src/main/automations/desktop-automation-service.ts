@@ -1,10 +1,7 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AgentEvent,
-  AppServerNotification,
   AutomationDetail,
-  AutomationInspectionFailure,
-  AutomationInspectionErrorCode,
-  AutomationInspectionResponse,
   AutomationIdRequest,
   AutomationInboundMessageTriggerDefinition,
   AutomationLoadIssue,
@@ -27,24 +24,32 @@ import type {
   ListAutomationReplayCandidatesResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  ReplayAutomationInboundRequest,
+  RunAutomationNowResponse,
+  UpdateAutomationRequest,
+} from "@pwragent/shared/contracts/automations";
+import type {
+  AutomationInspectionFailure,
+  AutomationInspectionErrorCode,
+  AutomationInspectionResponse,
+} from "@pwragent/shared/contracts/automation-tools";
+import type {
   InboundPreviewMessage,
   MessagingChannelKind,
   MessagingSenderSuggestion,
-  ReplayAutomationInboundRequest,
-  RunAutomationNowResponse,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
-  UpdateAutomationRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingDirectoryActor,
   MessagingInboundEvent,
 } from "@pwragent/messaging-interface";
 import {
+  AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS,
   automationSuppressesBindingBroadcast,
-  finalTurnOutputText,
   validateAutomationScheduleDefinition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import { finalTurnOutputText } from "@pwragent/shared/turn-output";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -70,7 +75,7 @@ import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler, type AutomationSchedulerOptions } from "./automation-scheduler.js";
-import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
+import type { AutomationRecord, AutomationStorage, StartupReconciliationResult } from "@pwragent/owner-core/automation-storage";
 import {
   anyAutomationInboundMatch,
   buildAutomationReplayCandidates,
@@ -196,6 +201,7 @@ export class DesktopAutomationService {
    */
   private readonly pendingRunUsage = new Map<string, AutomationRunUsage>();
   private runOwnerRecheckTimer: NodeJS.Timeout | undefined;
+  private readonly unconfirmedStartupOwnerIds = new Set<string>();
   /** Runs already handed to a report pass in this process. */
   private readonly reportingInterruptedRunIds = new Set<string>();
   /**
@@ -250,7 +256,12 @@ export class DesktopAutomationService {
       now: options.now,
       setTimer: options.scheduler?.setTimer,
       clearTimer: options.scheduler?.clearTimer,
-      releaseDeadOwnerRuns: () => this.releaseDeadOwnerRuns({ reschedule: false }),
+      admitResumedRun: () => options.registry.tryAdmitAutomationProvider?.() ?? true,
+      releaseDeadOwnerRuns: () => freedLanes(
+        this.releaseDeadOwnerRuns({ reschedule: false }).interruptedRuns,
+      ),
+      onDailyLimitReached: (params) => this.reportDailyLimitPause(params),
+      onRunTimedOut: (run) => this.reportTimedOutRun(run),
     });
     this.inspectionBus = new AutomationInspectionBus(options.store, {
       readRunArtifact: (runId) => this.readRunArtifactSnapshot(runId),
@@ -416,6 +427,7 @@ export class DesktopAutomationService {
       clearTimeout(this.runOwnerRecheckTimer);
       this.runOwnerRecheckTimer = undefined;
     }
+    this.unconfirmedStartupOwnerIds.clear();
     if (this.pendingRunUsageTimer) {
       clearTimeout(this.pendingRunUsageTimer);
       this.pendingRunUsageTimer = undefined;
@@ -475,12 +487,17 @@ export class DesktopAutomationService {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const todayMs = startOfToday.getTime();
+    const now = this.options.now?.() ?? Date.now();
     return {
       automations: automations.map((automation) =>
         toAutomationDetail(
           automation,
           this.options.store.getLatestRunForAutomation(automation.id),
           this.sumRunCostSince(automation.id, todayMs),
+          this.options.store.countRunsSince({
+            automationId: automation.id,
+            sinceMs: now - AUTOMATION_DAILY_RUN_LIMIT_WINDOW_MS,
+          }),
         ),
       ),
     };
@@ -697,6 +714,8 @@ export class DesktopAutomationService {
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       maxRunsPerHour: request.maxRunsPerHour,
+      runTimeoutMs: request.runTimeoutMs,
+      dailyRunLimit: request.dailyRunLimit,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
         request.nextRunAt ??
@@ -763,6 +782,8 @@ export class DesktopAutomationService {
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       maxRunsPerHour: request.maxRunsPerHour,
+      runTimeoutMs: request.runTimeoutMs,
+      dailyRunLimit: request.dailyRunLimit,
       status:
         request.enabled === undefined
           ? undefined
@@ -1005,6 +1026,17 @@ export class DesktopAutomationService {
       return false;
     }
     for (const match of matches) {
+      if (match.automation.status === "paused") {
+        // Held at its daily run limit: the message is recorded, not run.
+        const skipped = this.scheduler.recordSkipWhilePaused(match.automation, {
+          trigger: "inbound_message",
+          source: match.source,
+        });
+        if (skipped) {
+          await this.publishSkippedRunUpdate(match.automation, skipped);
+        }
+        continue;
+      }
       await this.scheduler.runFromInboundEvent({
         automation: match.automation,
         source: match.source,
@@ -1041,7 +1073,76 @@ export class DesktopAutomationService {
     if (this.options.runtime?.disabled) {
       return [];
     }
-    return this.options.store.listEnabledInboundAutomations();
+    // An automation the daily run limit paused still matches, so a message
+    // that arrives while it is paused is recorded as skipped, not dropped.
+    return [
+      ...this.options.store.listEnabledInboundAutomations(),
+      ...this.options.store.listDailyLimitPausedAutomations().filter((automation) =>
+        automation.triggers.some((trigger) => trigger.kind === "inbound_message")),
+    ];
+  }
+
+  /**
+   * The daily run limit paused an automation. The skipped run's update
+   * refreshes the Agent thread, whose strip above the composer shows the
+   * pause with a Resume action.
+   */
+  private async reportDailyLimitPause(params: {
+    automation: AutomationRecord;
+    limit: number;
+    runsInWindow: number;
+    skippedRunId: string;
+  }): Promise<void> {
+    automationServiceLog.info("automation paused at its daily run limit", {
+      automationId: params.automation.id,
+      automationName: params.automation.name,
+      dailyRunLimit: params.limit,
+      runsInWindow: params.runsInWindow,
+    });
+    const skipped = this.options.store.getRun(params.skippedRunId);
+    if (skipped) {
+      await this.publishSkippedRunUpdate(params.automation, skipped);
+    }
+    this.notifyAutomationsChanged();
+  }
+
+  private async publishSkippedRunUpdate(
+    automation: AutomationRecord,
+    run: AutomationRunSummary,
+  ): Promise<void> {
+    await this.options.registry.publishLocalEvent({
+      backend: automation.backend,
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          threadId: automation.threadId,
+          automationId: automation.id,
+          automationName: automation.name,
+          errorMessage: run.errorMessage,
+          runId: run.id,
+          status: run.status,
+          suppressBindingBroadcast: automationSuppressesBindingBroadcast(automation),
+        },
+      },
+    });
+    await this.notifyThreadAutomationsUpdated(automation);
+  }
+
+  /** A timed-out run is reported as any failed run is: artifact, actions, card. */
+  private async reportTimedOutRun(run: AutomationRunSummary): Promise<void> {
+    const automation = this.options.store.getAutomation(run.automationId, {
+      includeDeleted: true,
+    });
+    if (!automation) return;
+    this.flushPendingRunTranscriptEvents(run.id);
+    this.flushPendingRunUsage(run.id);
+    await this.publishAutomationRunUpdate({
+      backend: automation.backend,
+      runId: run.id,
+      status: "failed",
+      threadId: automation.threadId,
+      errorMessage: run.errorMessage,
+    });
   }
 
   buildThreadSummaries() {
@@ -1178,6 +1279,11 @@ export class DesktopAutomationService {
       terminalStatus?: string;
       backendThreadId?: string;
     };
+    // A run its timeout ended was already reported. Its interrupted turn's
+    // own end must not rewrite that report or notify bound conversations again.
+    const timedOutBefore = params.automationRunId
+      ? this.options.store.getRun(params.automationRunId)?.failureReason === "timed_out"
+      : false;
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: params.automationRunId,
       status: params.status,
@@ -1186,7 +1292,7 @@ export class DesktopAutomationService {
       turnId: params.turnId,
       errorMessage: params.errorMessage,
     });
-    if (params.automationRunId) {
+    if (params.automationRunId && !timedOutBefore) {
       if (
         params.status === "failed"
         || params.status === "cancelled"
@@ -1596,10 +1702,25 @@ export class DesktopAutomationService {
   }
 
   private reconcileStartupRuns(options: { reschedule: boolean }): void {
+    const startup = !this.startupRunsReconciled;
     this.startupRunsReconciled = true;
-    const freedAutomationIds = this.releaseDeadOwnerRuns({ ...options, startup: true });
-    for (const automationId of freedAutomationIds) {
-      void this.scheduler.startNextQueuedRun(automationId).catch((error: unknown) => {
+    this.dispatchReconciledLanes(this.releaseDeadOwnerRuns({ ...options, startup }));
+  }
+
+  private dispatchReconciledLanes(result: StartupReconciliationResult): void {
+    const adoptedByLane = new Map<string, Set<string>>();
+    for (const run of result.resumedRuns) {
+      const ids = adoptedByLane.get(run.automationId) ?? new Set<string>();
+      ids.add(run.id);
+      adoptedByLane.set(run.automationId, ids);
+      automationServiceLog.debug("automation run queued after restart", {
+        automationId: run.automationId,
+        runId: run.id,
+      });
+    }
+    const automationIds = new Set([...adoptedByLane.keys(), ...freedLanes(result.interruptedRuns)]);
+    for (const automationId of automationIds) {
+      void this.scheduler.startNextQueuedRun(automationId, adoptedByLane.get(automationId)).catch((error: unknown) => {
         automationServiceLog.warn("automation lane resume after reconcile failed", {
           automationId,
           error: error instanceof Error ? error.message : String(error),
@@ -1609,12 +1730,11 @@ export class DesktopAutomationService {
   }
 
   /**
-   * Ends every run whose owner is proved dead and returns the automations
-   * whose running run that ended. `reschedule` also moves missed schedule
+   * Reconciles runs whose owner is proved dead. `reschedule` moves missed schedule
    * windows forward, which only the scheduling lease holder may do: a
    * window another instance has not evaluated yet is not missed.
    */
-  private releaseDeadOwnerRuns(options: { reschedule: boolean; startup?: boolean }): string[] {
+  private releaseDeadOwnerRuns(options: { reschedule: boolean; startup?: boolean }): StartupReconciliationResult {
     const now = this.options.now?.() ?? Date.now();
     const nextRunAtByAutomationId = options.reschedule
       ? Object.fromEntries(
@@ -1624,7 +1744,9 @@ export class DesktopAutomationService {
           // load; the explicit `schedule` guard is belt-and-suspenders so a
           // schedule-less record can never reach computeNextAutomationRunAt and
           // abort the whole startup reconcile.
-          .filter((automation) => automation.status === "enabled" && automation.schedule)
+          .filter((automation) =>
+            (automation.status === "enabled" || automation.pausedReason === "daily_run_limit")
+            && automation.schedule)
           .map((automation) => [
             automation.id,
             computeNextAutomationRunAt(automation.schedule!, now),
@@ -1636,10 +1758,15 @@ export class DesktopAutomationService {
     const result = this.options.store.reconcileStartup({
       now,
       nextRunAtByAutomationId,
+      resumeUnstartedRuns: options.startup,
       // An unconfirmed owner keeps its runs for now and is checked once more.
       isOwnerAlive: (owner) => {
+        if (this.unconfirmedStartupOwnerIds.has(owner.instanceId)) return true;
         const state = liveness(owner);
-        if (state === "unconfirmed") unconfirmedOwner = true;
+        if (state === "unconfirmed") {
+          unconfirmedOwner = true;
+          if (options.startup) this.unconfirmedStartupOwnerIds.add(owner.instanceId);
+        }
         return state !== "dead";
       },
     });
@@ -1648,6 +1775,7 @@ export class DesktopAutomationService {
         options.startup ? "automation startup reconcile finished" : "automation runs of a stopped instance interrupted",
         {
           interruptedRunCount: result.interruptedRuns.length,
+          resumedRunCount: result.resumedRuns.length,
           liveOwnerRunCount: result.liveOwnerRunCount,
           rescheduledAutomationCount: result.rescheduledAutomationCount,
           unconfirmedOwner,
@@ -1657,14 +1785,17 @@ export class DesktopAutomationService {
     if (result.interruptedRuns.length > 0 || options.startup) {
       this.reportUnreportedInterruptedRuns();
     }
-    if (unconfirmedOwner && !this.runOwnerRecheckTimer) {
-      this.runOwnerRecheckTimer = setTimeout(
-        () => this.recheckUnconfirmedRunOwners(),
-        this.options.runOwnerRecheckDelayMs ?? RUN_OWNER_RECHECK_DELAY_MS,
-      );
-      this.runOwnerRecheckTimer.unref?.();
-    }
-    return freedLanes(result.interruptedRuns);
+    if (unconfirmedOwner) this.scheduleRunOwnerRecheck();
+    return result;
+  }
+
+  private scheduleRunOwnerRecheck(): void {
+    if (this.runOwnerRecheckTimer) return;
+    this.runOwnerRecheckTimer = setTimeout(
+      () => this.recheckUnconfirmedRunOwners(),
+      this.options.runOwnerRecheckDelayMs ?? RUN_OWNER_RECHECK_DELAY_MS,
+    );
+    this.runOwnerRecheckTimer.unref?.();
   }
 
   /**
@@ -1673,31 +1804,31 @@ export class DesktopAutomationService {
    */
   private recheckUnconfirmedRunOwners(): void {
     this.runOwnerRecheckTimer = undefined;
+    const startupOwners = this.unconfirmedStartupOwnerIds;
+    const resumeUnstartedRuns = startupOwners.size > 0;
     try {
       const liveness = this.options.runOwnerLiveness ?? readAutomationRunOwnerLiveness;
       const result = this.options.store.reconcileStartup({
-        now: Date.now(),
-        isOwnerAlive: (owner) => liveness(owner) === "alive",
+        now: this.options.now?.() ?? Date.now(),
+        resumeUnstartedRuns,
+        isOwnerAlive: (owner) =>
+          (resumeUnstartedRuns && !startupOwners.has(owner.instanceId)) || liveness(owner) === "alive",
       });
-      if (result.interruptedRuns.length > 0) {
-        automationServiceLog.info("automation run owner recheck interrupted runs", {
+      startupOwners.clear();
+      if (result.interruptedRuns.length > 0 || result.resumedRuns.length > 0) {
+        automationServiceLog.debug("automation run owner recheck reconciled runs", {
           interruptedRunCount: result.interruptedRuns.length,
+          resumedRunCount: result.resumedRuns.length,
           liveOwnerRunCount: result.liveOwnerRunCount,
         });
       }
       this.reportUnreportedInterruptedRuns();
-      for (const automationId of freedLanes(result.interruptedRuns)) {
-        void this.scheduler.startNextQueuedRun(automationId).catch((error: unknown) => {
-          automationServiceLog.warn("automation lane resume after recheck failed", {
-            automationId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
+      this.dispatchReconciledLanes(result);
     } catch (error) {
       automationServiceLog.warn("automation run owner recheck failed", {
         error: error instanceof Error ? error.message : String(error),
       });
+      if (startupOwners.size > 0) this.scheduleRunOwnerRecheck();
     }
   }
 
@@ -1724,7 +1855,6 @@ export class DesktopAutomationService {
    * Tells the operator what the previous process lost, through the path a
    * failed run takes: the run artifact, the automation's output actions, and
    * `automation/run/updated` for the Agent thread and its bound conversation.
-   * Nothing is resumed.
    */
   private async reportInterruptedRuns(runs: AutomationRunSummary[]): Promise<void> {
     for (const run of runs) {
@@ -1876,6 +2006,7 @@ function toAutomationDetail(
   record: AutomationRecord,
   latestRun?: AutomationRunSummary,
   costTodayMicros?: number,
+  runsInLast24Hours?: number,
 ): AutomationDetail {
   const latestRunAt = latestRun ? automationRunActivityAt(latestRun) : undefined;
   const useLatestRun =
@@ -1900,10 +2031,17 @@ function toAutomationDetail(
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     maxRunsPerHour: record.maxRunsPerHour,
+    ...(record.runTimeoutMs !== undefined ? { runTimeoutMs: record.runTimeoutMs } : {}),
+    ...(record.dailyRunLimit !== undefined ? { dailyRunLimit: record.dailyRunLimit } : {}),
+    ...(runsInLast24Hours !== undefined ? { runsInLast24Hours } : {}),
+    ...(record.pausedReason !== undefined ? { pausedReason: record.pausedReason } : {}),
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
     ...(useLatestRun ? { lastRunId: latestRun.id } : {}),
+    ...(useLatestRun && latestRun.failureReason
+      ? { lastRunFailureReason: latestRun.failureReason }
+      : {}),
     updatedAt: record.updatedAt,
     createdAt: record.createdAt,
     deletedAt: record.deletedAt,

@@ -1,8 +1,6 @@
-import type {
-  FederationTarget,
-  MoveQueuedTurnResponse,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MoveQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import type { QueuedReorderRow } from "./useQueuedRowReorder";

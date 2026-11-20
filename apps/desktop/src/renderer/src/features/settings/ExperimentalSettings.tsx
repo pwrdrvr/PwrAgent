@@ -1,8 +1,8 @@
+import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import {
-  formatFilesystemPath,
   type DesktopSettingsSnapshot,
   type DesktopTokenMiserUsage,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { useEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {

@@ -1,9 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { buildProviderResponseBlockEntry } from "@pwragent/shared";
+import { buildProviderResponseBlockEntry } from "@pwragent/shared/provider-response-block";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
+  AppServerNotification,
   AppServerReadThreadResponse,
   AppServerToolRequestUserInputNotification,
   AppServerThreadActivityEntry,
@@ -12,9 +13,9 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadReviewEntry,
   AppServerThreadTurnMetadata,
-  NavigationThreadSummary,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { DesktopApi } from "../desktop-api";
 import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12395,6 +12396,73 @@ describe("useThreadSessionState", () => {
         "Durable final response."
       );
     });
+  });
+
+  it("shows a Codex safety hold for the running turn until model text streams", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const emit = (notification: AppServerNotification) => {
+      for (const listener of agentEventListeners) {
+        listener({ backend: "codex", notification });
+      }
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await flushReactUpdates();
+    await waitForThreadHydration(result);
+
+    await act(async () => {
+      emit({
+        method: "turn/started",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "inProgress" } },
+      });
+      emit({
+        method: "turn/safetyBuffering/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          model: "gpt-6.2-sol",
+          buffering: true,
+          fasterModel: "gpt-6-luna",
+        },
+      });
+    });
+    expect(result.current.pendingStatusText).toBe("Safety review in progress");
+
+    await act(async () => {
+      emit({
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "message-1", delta: "Done." },
+      });
+    });
+    expect(result.current.pendingStatusText).not.toBe("Safety review in progress");
   });
 
   it("shows a transcript status when context compaction starts", async () => {

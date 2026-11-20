@@ -1,10 +1,10 @@
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type PwrAgentThreadInspectionResponse } from "@pwragent/shared/contracts/thread-tools";
 import {
-  type AgentEvent,
-  type PwrAgentThreadInspectionResponse,
   type ScheduleFollowUpToolArgs,
   type ScheduleFollowUpToolResult,
   type ScheduledThreadAction,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { MemoryScheduledThreadActionPayloadStore } from "@pwragent/sqlite-storage/scheduled-thread-action-payload-store";
 import type { DesktopBackendRegistry } from "../../app-server/backend-registry";
 import { buildAgentFollowUpToolHandler } from "../../scheduled-actions/agent-follow-up-tool";

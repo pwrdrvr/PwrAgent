@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
-import type { SetThreadCheckoutHibernationResponse, ThreadHibernatedWorkspace } from "@pwragent/shared";
+import type { SetThreadCheckoutHibernationResponse } from "@pwragent/shared/contracts/navigation";
+import type { ThreadHibernatedWorkspace } from "@pwragent/shared/contracts/normalized-app-server";
 import { CheckIcon, MoonIcon } from "../../icons";
 import { formatAge, formatBytes } from "../maintenance/thread-maintenance-selection";
 

@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ThreadExecutionMode } from "@pwragent/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 
 export type AcpClientRequestResult =
   | { outcome: "allowed"; result?: unknown }

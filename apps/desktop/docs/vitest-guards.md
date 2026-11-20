@@ -77,7 +77,7 @@ checks the classifier against Git's own `rev-parse --show-toplevel`.
 
 Two more suite-wide guards, both pure test infrastructure. Production code has
 no test-awareness and behaves identically either way — the seams are in
-`vitest.workspace.ts`.
+`vitest.workspace.mts`.
 
 **Where.** Every desktop project sets `PWRAGENT_HOME` to
 `<os.tmpdir()>/pwragent-vitest-home-<pid>`. `resolvePwragentRoot` otherwise

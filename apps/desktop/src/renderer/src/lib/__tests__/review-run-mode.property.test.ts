@@ -1,11 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type {
-  AppServerBackendKind,
-  BackendSummary,
-  NavigationThreadSummary,
-  ReviewRunMode,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { PULL_REQUEST_SET_RUN_MODE_REASON, resolveReviewRunMode } from "../review-run-mode";
 
 function thread(source: AppServerBackendKind): NavigationThreadSummary {

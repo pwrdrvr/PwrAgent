@@ -1,13 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopAuthorizedContact } from "@pwragent/shared/contracts/settings";
 import type {
-  AppServerBackendKind,
-  DesktopAuthorizedContact,
   DesktopMessagingObservedSurface,
   ListMessagingRoutesResponse,
   MessagingChannelKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   ApprovedSurfaceDefaultAgent,

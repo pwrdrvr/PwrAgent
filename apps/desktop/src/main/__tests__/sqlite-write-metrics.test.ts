@@ -4,16 +4,21 @@ import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage 
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerThreadMessageOrigin,
-  StarMapWorkspaceSnapshot,
-  TaskMonitorUsageSnapshot,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
-import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { StarMapWorkspaceSnapshot } from "@pwragent/shared/contracts/star-map";
+import type { TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildTurnUsageActivityEntryFromLine } from "@pwragent/shared/thread-usage-display";
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
+import { projectActiveThreadSubAgents } from "@pwragent/shared/subagent-visibility";
+import type { AutomationRunSourceMetadata } from "@pwragent/shared/contracts/automations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
@@ -21,6 +26,7 @@ import { CodexEnvironmentHydrationStore } from "../storage/codex-environment-hyd
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../storage/automation-store";
+import { AutomationScheduler } from "../automations/automation-scheduler";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
@@ -46,6 +52,14 @@ import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-sto
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
+import {
+  FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FederationRemoteBackendClient,
+  registerFederationBackendHandlers,
+  type FederationBackendOperations,
+} from "../federation/federation-backend-bridge";
+import { FederationRouter } from "../federation/federation-router";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 // Keep the real Git runner by default. Replay verified observations at its
 // boundary so fixture budgets do not depend on platform-specific launchers.
@@ -503,6 +517,80 @@ describe("sqlite write metrics", () => {
       expectSqliteWriteBudget({ scenario: "claude-subagent-cards",
         note: "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent, ~24.7 KB WAL each; ~1 MB/day at 20 sub-agents/day, ~10 MB/day at 200; zero idle", writes });
     } finally { await registry.close(); }
+  });
+
+  it("persists a federated bulk dismissal in one commit and retains the original cards", async () => {
+    const identity = { backend: "codex", threadId: "parent" } as const;
+    const otherIdentity = { ...identity, backend: "claude" } as const;
+    const failures: ThreadSubAgentSummary[] = Array.from({ length: 102 }, (_, index) => ({
+      monitorId: `monitor-${index}`, task: `Task ${index}`, createdAt: index + 1, updatedAt: index + 1,
+      status: index % 2 === 0 ? "failed" : "failure", completedAt: index + 1,
+    }));
+    const running: ThreadSubAgentSummary = { ...failures[0]!, monitorId: "running", status: "running", completedAt: undefined };
+    const newFailure = { ...failures[0]!, monitorId: "new-failure" };
+    await store.upsertThreadSubAgents({ ...identity, subAgents: failures });
+    await store.upsertThreadSubAgents({ ...otherIdentity, subAgents: [failures[0]!] });
+    // Simulate existing cards written before this schema change.
+    stateDb.raw.exec("DROP TABLE thread_sub_agent_failure_dismissals");
+    const dbPath = path.join(tempDir, "state.db");
+    StateDb.open(dbPath).close();
+    const request = { ...identity, attempts: [...failures, running].map(({ monitorId, createdAt }) => ({
+      monitorId, attemptId: String(createdAt),
+    })) };
+
+    const registry = createDesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const events = vi.fn();
+    const unsubscribe = registry.onEvent(events);
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    const backend = { dismissFailedSubAgents: registry.dismissFailedSubAgents.bind(registry) };
+    registerFederationBackendHandlers({ router, backend: backend as FederationBackendOperations });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const connect = (capabilities: Parameters<typeof router.registerConnection>[0]["capabilities"]) =>
+      router.registerConnection({ peerId: "viewer", capabilities, sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    try {
+      await registry["subAgentStartupReconciliation"];
+      await store.upsertThreadSubAgent({ ...identity, subAgent: running });
+      connect(["thread_detail"]);
+      await expect(client.dismissFailedSubAgents(request)).rejects.toThrow();
+      expect(projectActiveThreadSubAgents(await store.listActiveThreadSubAgents(identity))).toHaveLength(103);
+      await store.upsertThreadSubAgent({ ...identity, subAgent: newFailure });
+      connect(["thread_detail", "turn_control"]);
+
+      const { writes } = await measureSqliteWrites(async () => {
+        await expect(client.dismissFailedSubAgents(request)).resolves.toEqual({ dismissedCount: 102 });
+      });
+      expectSqliteWriteBudget({ scenario: "failed-subagent-bulk-dismissal",
+        note: "One operator dismissal of 102 failures: 4,120 bytes per click, ~0.04 MB/day at 10 such dismissals/day, zero idle writes.", writes });
+      expect(events.mock.calls.map(([event]) => event.notification)).toEqual([
+        { method: "thread/subAgentFailures/dismissed", params: { threadId: "parent" } },
+      ]);
+      const retry = await measureSqliteWrites(() => client.dismissFailedSubAgents(request));
+      expect(retry.result).toEqual({ dismissedCount: 0 });
+      // Metrics count the implicit transaction even when UPDATE changes no rows.
+      expect(retry.writes).toMatchObject({ rowsChanged: 0, walBytes: 0 });
+      expect(events).toHaveBeenCalledOnce();
+
+      // An update from the provider can replace the card body after dismissal.
+      const revised = { ...failures[0]!, updatedAt: 200, lastMessage: "Final result" };
+      await store.upsertThreadSubAgent({ ...identity, subAgent: revised });
+      const reopened = StateDb.open(dbPath);
+      try {
+        const reopenedStore = new SqliteOverlayStore(reopened);
+        const active = projectActiveThreadSubAgents(await reopenedStore.listActiveThreadSubAgents(identity));
+        expect(active.map((card) => card.monitorId).sort()).toEqual([newFailure.monitorId, running.monitorId].sort());
+        expect(await reopenedStore.listThreadSubAgents(identity)).toHaveLength(104);
+        expect(await reopenedStore.getThreadSubAgent({ ...identity, monitorId: revised.monitorId })).toEqual(revised);
+        expect(await reopenedStore.listActiveThreadSubAgents(otherIdentity)).toEqual([failures[0]]);
+      } finally { reopened.close(); }
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
   });
 
   it("budgets the origin a to-do card's Start thread records on its first prompt", async () => {
@@ -2948,6 +3036,120 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("bounds writes for triggers the daily run limit skips while it holds an automation paused", async () => {
+    const automationStore = new AutomationStore(stateDb);
+    automationStore.createAutomation({
+      id: "automation-daily-limit",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Busy channel",
+      taskPrompt: "Answer",
+      schedule: { kind: "interval", every: 1, unit: "hours", anchorAt: 0 },
+      dailyRunLimit: 1,
+      now: 0,
+    });
+    automationStore.createRun({ id: "admitted", automationId: "automation-daily-limit", trigger: "manual", now: 0 });
+    automationStore.markRunTerminal({ runId: "admitted", status: "completed", now: 1 });
+    let now = 10;
+    const timers: Array<() => void> = [];
+    const scheduler = new AutomationScheduler({
+      store: automationStore,
+      runner: { async submitRun() { throw new Error("no run may start"); } },
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        timers.push(callback);
+        return 0;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      // The refused trigger pauses the automation and writes its marker.
+      await scheduler.runNow("automation-daily-limit", now);
+      const paused = automationStore.getAutomation("automation-daily-limit")!;
+      // A flood inside one flush window only grows the count in memory.
+      for (let index = 0; index < 100; index += 1) {
+        now += 100;
+        scheduler.recordSkipWhilePaused(paused, { trigger: "inbound_message", now });
+      }
+      // The window's timer writes the count once.
+      for (const fire of timers.splice(0)) fire();
+      now += 60_000;
+      scheduler.recordSkipWhilePaused(paused, { trigger: "inbound_message", now });
+    });
+    expect(automationStore.getRun(
+      `automation-daily-limit:automation-daily-limit:10`,
+    )?.coalescedCount).toBe(102);
+    expectSqliteWriteBudget({
+      scenario: "automation-daily-limit-skips",
+      note: "One pause at the daily run limit, then 101 skipped triggers: the pause, the first skip and one count write per minute. A channel flooding a paused automation costs at most one commit a minute (~1,440 commits, ~47 MB/day at the measured ~33 KB a commit), and nothing while no trigger arrives.",
+      writes,
+    });
+  });
+
+  it("bounds writes for a burst of inbound messages the hourly run cap drops", async () => {
+    const automationStore = new AutomationStore(stateDb);
+    const automation = automationStore.createAutomation({
+      id: "automation-throttle",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Busy channel",
+      taskPrompt: "Answer",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 1,
+      triggers: [{
+        id: "trigger-inbound",
+        kind: "inbound_message",
+        conversation: { channel: "slack", conversationId: "C1" },
+      }],
+      now: 0,
+    });
+    // The hour's one allowed run has already started and finished.
+    automationStore.createRun({ id: "admitted", automationId: automation.id, trigger: "inbound_message", now: 0 });
+    automationStore.markRunTerminal({ runId: "admitted", status: "completed", now: 1 });
+    let now = 10;
+    const timers: Array<() => void> = [];
+    const scheduler = new AutomationScheduler({
+      store: automationStore,
+      runner: { async submitRun() { throw new Error("no run may start"); } },
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        timers.push(callback);
+        return 0;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+    const source = (key: number) => ({
+      kind: "messaging",
+      sourceEventKey: `event-${key}`,
+      receivedAt: now,
+      matchedTriggerId: "trigger-inbound",
+      actor: { platformUserId: "B1", isBot: true },
+      conversation: { channel: "slack", conversationId: "C1" },
+      message: { text: "ERROR" },
+    }) as unknown as AutomationRunSourceMetadata;
+
+    const { writes } = await measureSqliteWrites(async () => {
+      // 100 dropped messages inside one minute: the first creates the hour's
+      // marker, the rest only grow its count in memory.
+      for (let index = 0; index < 100; index += 1) {
+        now += 100;
+        await scheduler.runFromInboundEvent({ automation, source: source(index), now });
+      }
+      // The window's timer writes the count once.
+      for (const fire of timers.splice(0)) fire();
+      // A drop a minute later is written at once.
+      now += 60_000;
+      await scheduler.runFromInboundEvent({ automation, source: source(100), now });
+    });
+    expect(automationStore.getRun("automation-throttle:automation-throttle:0")?.coalescedCount).toBe(101);
+    expectSqliteWriteBudget({
+      scenario: "automation-throttle-marker-burst",
+      note: "100 inbound messages dropped by the hourly run cap within one minute, then one more a minute later: the marker's creation, one count write for the minute and one for the later drop. A channel flooding past the cap costs at most one commit a minute per automation (~1,440 commits, ~57 MB/day at the ~40 KB a commit measured here) instead of one per message (~86,400 commits, ~3.4 GB/day at one message a second).",
+      writes,
+    });
+  });
+
   it("bounds automation lifecycle writes and ignores duplicate terminal outcomes", async () => {
     const automationStore = new AutomationStore(stateDb);
     automationStore.createAutomation({
@@ -3059,6 +3261,7 @@ describe("sqlite write metrics", () => {
     const idle = await measureSqliteWrites(() => {
       expect(launching.reconcileStartup({ ...input, now: 2_000 })).toEqual({
         interruptedRuns: [],
+        resumedRuns: [],
         liveOwnerRunCount: 2,
         rescheduledAutomationCount: 0,
       });
@@ -3118,6 +3321,110 @@ describe("sqlite write metrics", () => {
     } finally {
       service.dispose();
     }
+  });
+
+  it("adopts multiple unstarted runs in a single startup commit", async () => {
+    const previous = new AutomationStore(stateDb, {
+      runOwner: { instanceId: "runtime-v2-previous", processId: 4_242, startedAt: 1 },
+    });
+    const owner = { instanceId: "runtime-v2-current", processId: 4_243, startedAt: 2 };
+    const launching = new AutomationStore(stateDb, { runOwner: owner });
+    previous.createAutomation({
+      id: "automation-resume",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      nextRunAt: 60_000,
+      now: 0,
+    });
+    for (let index = 0; index < 3; index += 1) {
+      previous.createRun({
+        id: `resume-${index}`,
+        automationId: "automation-resume",
+        trigger: "manual",
+        recoverOnRestart: true,
+        now: index,
+      });
+    }
+    const input = {
+      now: 1_000,
+      isOwnerAlive: (candidate: { instanceId: string }) => candidate.instanceId === owner.instanceId,
+      resumeUnstartedRuns: true,
+      nextRunAtByAutomationId: { "automation-resume": 301_000 },
+    };
+    const { writes } = await measureSqliteWrites(() => {
+      const { resumedRuns, interruptedRuns } = launching.reconcileStartup(input);
+      expect(resumedRuns).toHaveLength(3);
+      expect(interruptedRuns).toEqual([]);
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-resume-unstarted-runs",
+      note: "Three unstarted runs adopted and queued in one startup transaction.",
+      writes,
+    });
+    const idle = await measureSqliteWrites(() => {
+      expect(launching.reconcileStartup(input)).toMatchObject({ resumedRuns: [], liveOwnerRunCount: 3 });
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-resume-nothing-lost",
+      note: "No unstarted run eligible for startup recovery and no schedule to adjust. Zero recurring writes.",
+      writes: idle.writes,
+    });
+
+    const scheduler = new AutomationScheduler({
+      store: launching,
+      now: () => input.now,
+      runner: {
+        submitRun: async () => ({ status: "started", turnId: "turn-resumed", queueEntryId: "queue-resumed" }),
+      },
+    });
+    const dispatch = await measureSqliteWrites(() => scheduler.startNextQueuedRun("automation-resume"));
+    expect(launching.getRun("resume-0")).toMatchObject({ resumedAt: input.now, backendTurnId: "turn-resumed" });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-resume-dispatch",
+      note: "One adopted run claims its lane and stores the provider acknowledgement.",
+      writes: dispatch.writes,
+    });
+  });
+
+  it.each([false, true])("budgets dispatch of a scheduled run (gate enabled: %s)", async (gated) => {
+    let now = 0;
+    const automationStore = new AutomationStore(stateDb);
+    automationStore.createAutomation({
+      id: "automation-dispatch",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: gated ? { command: "echo ready" } : undefined,
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      nextRunAt: 300_000,
+      now,
+    });
+    const scheduler = new AutomationScheduler({
+      store: automationStore,
+      now: () => now,
+      runner: {
+        submitRun: async () => ({ status: "started", turnId: "turn-1", queueEntryId: "queue-1" }),
+      },
+      gateRunner: {
+        runGate: async ({ command }) => ({ status: "proceed", command, durationMs: 0, output: "ready" }),
+      },
+    });
+    now = 300_000;
+    const { writes } = await measureSqliteWrites(() => scheduler.evaluateDueAutomations());
+    expect(automationStore.listRunsForAutomation("automation-dispatch")).toMatchObject([
+      { status: "running", backendTurnId: "turn-1" },
+    ]);
+    expectSqliteWriteBudget({
+      scenario: gated ? "automation-scheduled-gated-dispatch" : "automation-scheduled-dispatch",
+      note: gated
+        ? "Schedule advance and run creation, one dispatch claim before the shell gate, and provider acknowledgement."
+        : "Schedule advance and run creation in one commit, followed by dispatch claim and provider acknowledgement.",
+      writes,
+    });
   });
 
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {

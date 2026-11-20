@@ -2,7 +2,7 @@ import type {
   DesktopAuthorizedContact,
   DesktopMessagingResponseMode,
   DesktopSettingsValue,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { AppMetadata } from "../../../../shared/app-metadata";
 
 /**

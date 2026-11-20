@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { resolveWorktreeRepositoryDirectory as probe } from "./private/directory-probe";
 import { GitReadCache } from "./read-cache";
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { AgentEvent, NavigationSelectedDetailRequest, PrSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationSelectedDetailRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { getDesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { readRendererFederationTarget } from "./federation-window";

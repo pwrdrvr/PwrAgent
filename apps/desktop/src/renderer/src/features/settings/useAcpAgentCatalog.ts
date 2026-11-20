@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import type {
-  AcpAgentSettingsEntry,
-  DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 

@@ -1,13 +1,11 @@
-import type {
-  ForgeApprovalRememberOptionId,
-  SubmitServerRequestRequest,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
+import type { SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import {
   buildPendingRequestActions,
   buildPendingRequestResponse,
-  THREAD_TODO_MERGE_METHOD_LABELS,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pending-request-response";
+import { THREAD_TODO_MERGE_METHOD_LABELS } from "@pwragent/shared/contracts/thread-todos";
 import {
   buildMcpElicitationResponse,
   readMcpApprovalPersistence,

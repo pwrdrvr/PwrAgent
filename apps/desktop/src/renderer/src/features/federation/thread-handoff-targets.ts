@@ -1,4 +1,4 @@
-import type { FederationCapability, FederationHealthStatus } from "@pwragent/shared";
+import type { FederationCapability, FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import {
   buildFederationPeerTargets,
   type FederationPeerTarget,

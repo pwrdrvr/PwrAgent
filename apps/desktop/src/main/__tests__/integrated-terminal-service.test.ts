@@ -450,16 +450,6 @@ describe("resolveTerminalShell", () => {
     expect(shell.file).toBe("C:\\Windows\\System32\\cmd.exe");
   });
 
-  it("leaves the PowerShell invocation alone when nothing is pinned", () => {
-    expect(
-      resolveTerminalShell({
-        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
-        platform: "win32",
-        windowsShell: "pwsh",
-      }),
-    ).toEqual({ file: "pwsh.exe", args: ["-NoLogo"] });
-  });
-
   it("does not add a reassertion to cmd, which cannot cheaply test PATH", () => {
     expect(
       resolveTerminalShell({

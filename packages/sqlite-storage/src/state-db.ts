@@ -5,14 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
+import { encodeLegacyThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
-  encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
-  normalizeThreadReview,
   resolveTokenUsagePriceUnavailableReason,
-  type ThreadReview,
   type ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/token-usage-pricing";
+import { normalizeThreadReview, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
 import {
   THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA,
@@ -2203,7 +2202,7 @@ export class StateDb {
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,
-      // then two table-info reads per open.
+      // then schema reads on each open.
       ensureThreadSubAgentPanelSchema(db);
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.

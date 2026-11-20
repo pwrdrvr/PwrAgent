@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { parseUsageLimitProvider } from "@pwragent/shared";
+import { parseUsageLimitProvider } from "@pwragent/shared/contracts/usage-activity";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { UsageActivity } from "./UsageActivity";

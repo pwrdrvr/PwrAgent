@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { RESEARCH_RUN_ATTENTION_ORDER, type ResearchProfileRun, type ResearchRunAttention, type ResearchThread } from "@pwragent/shared";
+import {
+  RESEARCH_RUN_ATTENTION_ORDER,
+  type ResearchProfileRun,
+  type ResearchRunAttention,
+  type ResearchThread,
+} from "@pwragent/shared/research";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { ResearchDiscoveryPanel } from "./ResearchDiscoveryPanel";

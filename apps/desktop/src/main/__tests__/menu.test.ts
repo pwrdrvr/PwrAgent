@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItemConstructorOptions } from "electron";
-import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
 import {
   buildApplicationMenuTemplate,
   type ApplicationMenuActions,

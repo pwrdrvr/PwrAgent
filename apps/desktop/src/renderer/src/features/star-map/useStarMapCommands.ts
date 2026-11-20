@@ -7,7 +7,7 @@ import type {
   StarMapFlightTarget,
   StarMapThreadOpenMode,
   StarMapThreadRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export type StarMapFlightResponse = StarMapCommandResponse<"fly_to">;

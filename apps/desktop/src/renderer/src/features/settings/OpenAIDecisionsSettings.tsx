@@ -3,7 +3,7 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { DraftTextField } from "./DecisionModelSettings";
 import { SecretField } from "./SecretField";
 import {

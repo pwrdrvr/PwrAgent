@@ -1,10 +1,5 @@
 import type {
   AgentEvent,
-  AppServerBackendKind,
-  AppServerListSkillsRequest,
-  AppServerListSkillsResponse,
-  AppServerThreadMessageOrigin,
-  AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CancelQueuedTurnRequest,
@@ -13,32 +8,13 @@ import type {
   ReadQueuedTurnResponse,
   CompactThreadRequest,
   CompactThreadResponse,
-  CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
-  HandoffThreadWorkspaceRequest,
-  HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
-  GetNavigationSnapshotRequest,
-  FederationTarget,
-  FederatedThreadRef,
-  FederationInstanceId,
-  ListBackendsRequest,
-  ListBackendsResponse,
-  ListScheduledThreadActionsRequest,
-  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
-  NavigationQueryRequest,
-  NavigationQueryPage,
-  NavigationSelectedDetailRequest,
-  NavigationSelectedDetailResponse,
-  NavigationLaunchpadConfigRequest,
-  NavigationLaunchpadConfigResponse,
-  NavigationSnapshot,
-  NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -51,21 +27,52 @@ import type {
   StartReviewResponse,
   StartTurnRequest,
   StartTurnResponse,
-  ScheduledThreadActionIdRequest,
-  ScheduledThreadActionMutationResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  AppServerListSkillsRequest,
+  AppServerListSkillsResponse,
+  AppServerThreadMessageOrigin,
+  AppServerThreadStatus,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CreateScheduledThreadActionRequest,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
+  UpdateScheduledThreadActionRequest,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
+  GetNavigationSnapshotRequest,
+  NavigationQueryRequest,
+  NavigationQueryPage,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
+  NavigationSnapshot,
+  NavigationThreadSummary,
   ThreadAgentMetadata,
   ThreadAdmissionState,
   ThreadMessagingBindingTransition,
-  UpdateScheduledThreadActionRequest,
-  UpdateDirectoryLaunchpadRequest,
-  UpdateDirectoryLaunchpadResponse,
   SetThreadLockRequest,
   SetThreadLockResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  FederationTarget,
+  FederatedThreadRef,
+  FederationInstanceId,
+} from "@pwragent/shared/contracts/federation";
+import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
 import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
@@ -230,6 +237,18 @@ export type MessagingBackendBridge = {
     threadId: string;
     countsAsActivity?: boolean;
   }): Promise<MessagingLastAssistantReply | undefined>;
+  /**
+   * The text of one assistant item, read through the thread protocol. A
+   * final reply owed to a conversation is read back with it, never from a
+   * copy PwrAgent kept.
+   */
+  readThreadAssistantReply?(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<string | undefined>;
   resolveAssistantMessageImages?(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;

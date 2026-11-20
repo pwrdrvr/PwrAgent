@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type Database from "better-sqlite3";
-import type { MessagingCausalSourceRef, PwrAgentMessagingResponse } from "@pwragent/shared";
+import type { MessagingCausalSourceRef } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentMessagingResponse } from "@pwragent/shared/contracts/messaging-tools";
 import type { MessagingRequestSource, MessagingRequestStorage } from "@pwragent/owner-core/messaging-request-storage";
 
 export { MESSAGING_REQUEST_SCHEMA } from "./state-schema";

@@ -1,12 +1,14 @@
 import type {
   AppServerBackendKind,
   MessagingCausalSourceRef,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   PwrAgentMessagingPdfAttachmentSummary,
   PwrAgentMessagingPdfTextSearchResult,
   PwrAgentMessagingRenderedPdfPagesResult,
   PwrAgentMessagingToolImage,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging-tools";
 import type { ImageUploadQualityProfile } from "../../shared/image-normalization";
 import {
   DEFAULT_PDF_RENDER_LIMITS,

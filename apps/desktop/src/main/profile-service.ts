@@ -1,4 +1,4 @@
-import type { DesktopBootInfo } from "@pwragent/shared";
+import type { DesktopBootInfo } from "@pwragent/shared/contracts/settings";
 import { assertUnreachableProfileBootDecision, resolveActiveProfileName } from "./profile";
 import { getAppStateMode, getBootDecision } from "./storage/desktop-runtime-storage";
 

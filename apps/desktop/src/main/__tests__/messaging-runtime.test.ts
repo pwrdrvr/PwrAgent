@@ -3,12 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentEvent,
-  FederationEventSubscription,
-  NavigationSnapshot,
-  StartTurnRequest,
-} from "@pwragent/shared";
+import type { AgentEvent, StartTurnRequest } from "@pwragent/shared/contracts/agent";
+import type { FederationEventSubscription } from "@pwragent/shared/contracts/federation";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
@@ -70,7 +67,7 @@ vi.mock("../log", () => ({
 // directory rather than the stub, so on a machine carrying pre-1.0 PwrAgent
 // state these tests re-migrated the operator's own messaging and overlay
 // JSON 74 times a run. #2171 fixed that for every desktop suite by seeding
-// the XDG variables in `vitest.workspace.ts`; redirecting migration at a
+// the XDG variables in `vitest.workspace.mts`; redirecting migration at a
 // `:memory:` path here would have written a file literally named
 // `:memory:.tmp`, which is why this mock does not try.
 vi.mock("../state/migration", () => ({
@@ -446,7 +443,7 @@ describe("DesktopMessagingRuntime", () => {
     // exercises the full adapter-start + inbound-routing path. On the slow
     // shared Windows CI runner that cold path can exceed 15s — not a hang, just
     // slow — so Windows gets the workspace default headroom (30_000; see
-    // vitest.workspace.ts). Other platforms keep the original tighter 15_000
+    // vitest.workspace.mts). Other platforms keep the original tighter 15_000
     // budget where the cold path is comfortably fast, so a genuine hang or
     // regression there still fails fast instead of idling for the full 30s.
   }, process.platform === "win32" ? 30_000 : 15_000);

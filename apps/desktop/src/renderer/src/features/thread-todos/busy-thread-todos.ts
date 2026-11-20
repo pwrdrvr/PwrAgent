@@ -1,4 +1,8 @@
-import { threadTodoThreadKey, type ThreadTodo, type TodoBusyThread } from "@pwragent/shared";
+import {
+  threadTodoThreadKey,
+  type ThreadTodo,
+  type TodoBusyThread,
+} from "@pwragent/shared/contracts/thread-todos";
 
 export function newestResolvedFirst(left: ThreadTodo, right: ThreadTodo): number {
   return (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt);

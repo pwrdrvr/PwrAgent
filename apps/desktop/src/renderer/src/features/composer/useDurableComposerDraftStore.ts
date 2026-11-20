@@ -1,6 +1,7 @@
 import { hydrateComposerDraft } from "./composer-draft-hydration";
 import { getLaunchpadScopeStorageKey } from "./launchpad-composer-scope";
-import { parseOwnedComposerScopeKey, parseThreadIdentityKey } from "@pwragent/shared";
+import { parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
+import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   useCallback,
   useEffect,
@@ -10,15 +11,15 @@ import {
   type MutableRefObject,
 } from "react";
 import type { JSONContent } from "@tiptap/react";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   ComposerDraftJsonValue,
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
   ComposerDraftScopeKind,
   ComposerDraftSnapshotRecord,
   ListComposerDraftRecoveryCandidatesRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/composer-drafts";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   ComposerDraftSnapshot,

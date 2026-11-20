@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerNotification } from "@pwragent/shared";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   buildMonitorJobHeuristicPrompt,
   isCiWaitCommand,

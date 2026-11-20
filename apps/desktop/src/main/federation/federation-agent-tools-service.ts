@@ -3,20 +3,15 @@ import path from "node:path";
 import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
-  BackendModelOption,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
+import type {
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
-  CreatedThreadEnvironmentReport,
-  FederationHealthStatus,
-  FederationHostInfo,
   FederationInstanceDescriptor,
   FederationAttentionThreadSummary,
-  FederationPeerRole,
   FederationInstanceBackendSummary,
-  FederationInstanceId,
-  FederationLoadStatus,
-  FederatedThreadRef,
-  FederationRemoteTarget,
   FederationThreadSearchResultSummary,
   ListAttentionThreadsResult,
   ListAttentionThreadsToolArgs,
@@ -24,6 +19,23 @@ import type {
   ListFederationInstancesToolArgs,
   ListInstanceProjectsResult,
   ListInstanceProjectsToolArgs,
+  PwrAgentFederationErrorCode,
+  PwrAgentFederationContext,
+  PwrAgentFederationResponse,
+  SearchFederationThreadsResult,
+  SearchFederationThreadsToolArgs,
+} from "@pwragent/shared/contracts/federation-tools";
+import type { CreatedThreadEnvironmentReport } from "@pwragent/shared/contracts/agent";
+import type {
+  FederationHealthStatus,
+  FederationHostInfo,
+  FederationPeerRole,
+  FederationInstanceId,
+  FederationLoadStatus,
+  FederatedThreadRef,
+  FederationRemoteTarget,
+} from "@pwragent/shared/contracts/federation";
+import type {
   NavigationLaunchpadDraft,
   NavigationDirectoryRow,
   NavigationLaunchpadConfigResponse,
@@ -31,26 +43,21 @@ import type {
   NavigationQueryPage,
   NavigationSelectedDetailResponse,
   NavigationThreadSummary,
-  PwrAgentFederationErrorCode,
-  PwrAgentFederationContext,
-  PwrAgentFederationResponse,
-  SearchFederationThreadsResult,
-  SearchFederationThreadsToolArgs,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   FEDERATION_CAPABILITIES,
-  applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
-  buildThreadMarkdownLink,
-  buildThreadUrl,
   federationAssignedRoleMismatch,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
-  resolveModelOptionReference,
-  THREAD_ENVIRONMENT_NONE,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
+import { resolveModelOptionReference } from "@pwragent/shared/codex-model-providers";
+import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import { normalizePwrAgentFederationRequest } from "../agent-tools/pwragent-federation-agent-tools";
@@ -451,6 +458,7 @@ async function listInstanceProjects(
         label: directory.label,
         kind: directory.kind,
         path: directory.path,
+        ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         ...(directory.repositoryKeys?.length ? { repositoryKeys: directory.repositoryKeys } : {}),
         ...(directory.localAvailability ? { localAvailability: directory.localAvailability } : {}),

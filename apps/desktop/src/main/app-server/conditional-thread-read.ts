@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AppServerReadThreadResponse } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Revalidate the whole page, including pending input and accounting. No owner

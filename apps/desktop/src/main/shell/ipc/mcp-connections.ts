@@ -14,15 +14,10 @@ import {
   type ProbeMcpConnectionResponse,
   type TestMcpStdioConnectionRequest,
   type TestMcpStdioConnectionResponse,
-  type InspectGithubMcpSetupRequest,
-  type InspectGithubMcpSetupResponse,
-  type TestGithubMcpConnectionRequest,
-  type TestGithubMcpConnectionResponse,
   type UpdateMcpConnectionRequest,
   type DisconnectMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
-  isRemoteFederationTarget,
   type ConnectPwrGitResponse,
   type ListMcpConnectionsRequest,
   type ListMcpConnectionsResponse,
@@ -49,7 +44,14 @@ import {
   type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
   type ReadPwrSnapConnectionStatusRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
+import {
+  type InspectGithubMcpSetupRequest,
+  type InspectGithubMcpSetupResponse,
+  type TestGithubMcpConnectionRequest,
+  type TestGithubMcpConnectionResponse,
+} from "@pwragent/shared/github-mcp";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,

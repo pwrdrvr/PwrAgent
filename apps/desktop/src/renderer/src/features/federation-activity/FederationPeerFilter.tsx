@@ -1,4 +1,4 @@
-import type { FederationActivitySeries, FederationHealthStatus } from "@pwragent/shared";
+import type { FederationActivitySeries, FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   FederationChipFace,

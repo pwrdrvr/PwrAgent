@@ -13,7 +13,7 @@ import type {
   MessagingPairingObservedChat,
   MessagingPairingScope,
   MessagingPairingStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type { StateDb } from "./state-db";
 
 const PAIRING_SECRET_META_KEY = "messaging_pairing_secret_v1";

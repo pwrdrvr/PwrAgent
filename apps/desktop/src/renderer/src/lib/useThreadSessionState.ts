@@ -11,6 +11,11 @@ import {
 } from "./thread-session-transitions";
 import { useCodexBackgroundTerminals, type BackgroundTerminalView } from "./useCodexBackgroundTerminals";
 import { activityDetailsMatch } from "./activity-detail-match";
+import {
+  safetyReviewStatusText,
+  transitionSafetyBuffering,
+  type SafetyBufferingState,
+} from "./safety-buffering-session";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
 import { useSessionIndicatorKeys } from "./session-indicator-keys";
 import {
@@ -18,10 +23,10 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   turnUsageEntryTurnId,
-  finalTurnOutputText,
   isTerminalTurnMetadata,
-  readUuidV7Timestamp,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-usage-display";
+import { finalTurnOutputText } from "@pwragent/shared/turn-output";
+import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerNotification,
@@ -42,16 +47,13 @@ import type {
   AppServerTransientThreadMessageEntry,
   AppServerThreadTurnMetadata,
   AppServerThreadImagePart,
-  MessagingChannelKind,
-  MessagingConversationKind,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  isAppServerBackendKind,
-  isCelestialIconId,
-  isProviderResponseBlockEntry,
-  threadTodoMessageOriginFromUnknown,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingChannelKind, MessagingConversationKind } from "@pwragent/shared/contracts/messaging";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isCelestialIconId } from "@pwragent/shared/contracts/celestial";
+import { isProviderResponseBlockEntry } from "@pwragent/shared/provider-response-block";
+import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { isPendingEntryId } from "./pending-entry-id";
@@ -212,6 +214,8 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   transientMessage?: AppServerTransientThreadMessageEntry;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
+  /** The running turn's output is held for a provider safety review. */
+  safetyBuffering?: SafetyBufferingState;
   // Compaction resets pages, but a matching row must keep its observed order.
   compactionOrderSources?: AppServerThreadEntry[];
   // Lightweight reading state belongs beside the bounded transcript cache.
@@ -6629,6 +6633,7 @@ export function useThreadSessionState(params: {
                 ),
                 pendingAssistantMessage: undefined,
                 pendingStatusText: undefined,
+                safetyBuffering: undefined,
                 staleThinkingRecheckAt: undefined,
               };
             });
@@ -6768,6 +6773,13 @@ export function useThreadSessionState(params: {
         !isRetainedRemoteThread &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
+        // The transcript text waits for focus, but streamed text still ends
+        // a safety hold, or the thread would show the hold once focused.
+        if (event.notification.method === "item/agentMessage/delta") {
+          const notification = event.notification;
+          updateSession(targetThreadKey, (session) =>
+            transitionSafetyBuffering(session, notification));
+        }
         return;
       }
 
@@ -6837,10 +6849,13 @@ export function useThreadSessionState(params: {
       }
 
       updateSession(targetThreadKey, (session) => {
-        const current = transitionTransientMessagesAtBoundary(
-          session,
-          event.notification
+        const current = transitionSafetyBuffering(
+          transitionTransientMessagesAtBoundary(session, event.notification),
+          event.notification,
         );
+        if (event.notification.method === "turn/safetyBuffering/updated") {
+          return current;
+        }
         const nextLastTouchedAt = Date.now();
 
         if (isApprovalRequestNotification(event.notification)) {
@@ -8983,10 +8998,16 @@ export function useThreadSessionState(params: {
   );
   const approvalRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingApprovalRequest);
   const inputRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingUserInput);
+  // A waiting request outranks the hold; the hold outranks plain Thinking.
+  const safetyReviewStatus = selectedSession
+    ? safetyReviewStatusText(selectedSession)
+    : undefined;
   const pendingStatusText =
     selectedSession?.pendingStatusText &&
     selectedSession.pendingStatusText !== "Thinking"
       ? selectedSession.pendingStatusText
+      : safetyReviewStatus
+        ? safetyReviewStatus
       : selectedSession?.transientMessage
         ? undefined
         : selectedSession?.pendingStatusText ??

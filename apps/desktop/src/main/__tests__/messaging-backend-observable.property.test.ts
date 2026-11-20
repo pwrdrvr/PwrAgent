@@ -1,7 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, AppServerBackendKind } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingChannelKind, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";

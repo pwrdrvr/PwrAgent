@@ -1,7 +1,18 @@
 import {
-  applyResearchChanges, emptyResearchRunStore, researchRunStoreCursor, researchRunStoreSynced, withResearchBounds,
-  type ResearchChange, type ResearchChanges, type ResearchPendingRequest, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchSnapshot, type ResearchThread,
-} from "@pwragent/shared";
+  applyResearchChanges,
+  emptyResearchRunStore,
+  researchRunStoreCursor,
+  researchRunStoreSynced,
+  withResearchBounds,
+  type ResearchChange,
+  type ResearchChanges,
+  type ResearchPendingRequest,
+  type ResearchRunState,
+  type ResearchRunStore,
+  type ResearchRunSummary,
+  type ResearchSnapshot,
+  type ResearchThread,
+} from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /** What the panel draws from: the thread's runs, its pending request, and the store of the run on screen. */

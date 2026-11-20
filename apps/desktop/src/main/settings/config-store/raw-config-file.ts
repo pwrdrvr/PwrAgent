@@ -5,7 +5,7 @@ import {
   parseDesktopSettingsToml,
   type DesktopSettingsConfig,
 } from "../desktop-config";
-import type { DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 
 export type RawConfigFileObservation =
   | Readonly<{

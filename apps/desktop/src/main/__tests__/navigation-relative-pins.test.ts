@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { relativePinRanks } from "../state/relative-pin-order";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

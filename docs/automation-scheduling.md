@@ -94,7 +94,8 @@ been closed overnight or over a weekend.
 
 If the app stays open but the event loop wakes late, the scheduler evaluates the
 missed windows up to the current time and applies the automation's backlog
-policy.
+policy. The run insert or coalesce and the schedule advance commit together.
+Dispatch can begin once that transaction commits.
 
 ## Backlog Policies
 
@@ -114,6 +115,40 @@ active run, the manual run waits in that automation's lane; otherwise it starts
 a headless turn at once (`runNow` in `automation-scheduler.ts`). It does not
 enter the assigned thread's FIFO, does not wait for that thread's active turn,
 and does not change the recurring schedule's next automatic run.
+
+## Run Timeout and Daily Run Limit
+
+Each automation can set a run timeout and a daily run limit in the editor's
+Limits group. Both are unset by default, which keeps the behavior above.
+
+- **Run timeout.** The scheduler arms a timer when a run starts. When it
+  fires on a run still `running`, the run becomes `failed` with
+  `failureReason: "timed_out"` first, and then its turn is interrupted. The
+  turn's own end, arriving later, finds the run settled: it cannot reopen it
+  or start a second successor in the lane. The run is reported as any failed
+  run is, so the Agent thread's strip shows it as "Timed out".
+- **Daily run limit.** Runs started in any rolling 24 hours, counted from the
+  run rows (every run but a `skipped` one), as the hourly inbound limit is.
+  `admitRun` in `packages/sqlite-storage/src/automation-store.ts` counts and
+  inserts in one `IMMEDIATE` transaction, so the limit holds at admission,
+  including for two instances on one profile. A run stamped later than now,
+  which a clock set back leaves behind, still counts. A refused trigger
+  pauses the automation with `pausedReason: "daily_run_limit"`, and the Agent
+  thread's strip shows the pause with a Resume action. Only the operator
+  resumes it.
+
+While the limit holds an automation paused, its schedule still fires and its
+inbound triggers still match. Each such trigger is recorded on one `skipped`
+run per pause, with `skipReason: "daily_limit"` and a growing count. The
+count is rewritten at most once a minute, so a flooding channel cannot flood
+the database. The hourly inbound limit's marker (one `skipped` run per
+automation per wall-clock hour, `skipReason: "rate_limited"`) uses the same
+once-a-minute write. Pruning keeps the runs the limit still counts ahead of skipped
+ones.
+
+The fields are additive in the automation payload. A build that predates them
+ignores them: it runs the automation with no timeout or limit, reads a limit
+pause as an ordinary pause, and shows a timed-out run as failed.
 
 ## Run History
 
@@ -136,24 +171,32 @@ A runtime marker expires 45 seconds after its last heartbeat, so a live owner
 can lack a fresh one: the machine has just woken, or its main thread was busy.
 An owner with no matching marker whose process ID is still alive is therefore
 left alone at startup and checked once more 30 seconds later
-(`readAutomationRunOwnerLiveness`). A live owner has rewritten its marker by
-then. One that still has none is a reused process ID, and its runs are
-interrupted.
+(`readAutomationRunOwnerLiveness`). Scheduled sweeps leave those startup
+runs alone until the check. A live owner has rewritten its marker by then.
+Startup reconciles the runs if the process is gone or the PID has been reused.
 
-A dead owner's run becomes `failed` with `failureReason: "interrupted"`, and
-run history shows it as interrupted. It is a reason on `failed` rather than a
-new status so that older builds still read the profile. The run then takes the
-path of any failed run: its artifact is recorded, the automation's output
+Startup can requeue a dead owner's pending or queued run once when the stored
+run proves execution never began. The same run ID keeps its trigger metadata,
+takes the new process as owner and records a resume timestamp for run history.
+The scheduler holds adopted runs in the queue until the provider ownership
+lease is available. It persists an exclusive `running` claim before invoking
+a shell gate or calling the provider. Unfinished runs from older builds lack
+this proof. A later interruption ends an already resumed run.
+
+Other dead-owner runs become `failed` with `failureReason: "interrupted"`, and
+run history shows them as interrupted. Older builds read the existing
+`failed` status and can ignore the extra run payload fields. Each interrupted
+run takes the path of any failed run: its artifact is recorded, the automation's output
 actions run, and `automation/run/updated` reaches the Agent thread, where the
 failed-automation row appears above the composer, and the thread's bound
-conversations. Nothing is resumed or replayed. All of a launch's runs change in
+conversations. All of a launch's runs change in
 one transaction, and a launch that lost nothing writes nothing. A launch that
 stops between interrupting a run and reporting it leaves the report to the
 next launch, which reports every interrupted run that has no failed artifact.
 
 This includes runs that a trigger queued while a quit was pending:
 `quiesceDispatch` holds them so that cancelling the quit can start them, and a
-completed quit leaves them to be reported as interrupted at the next start.
+completed quit leaves them for startup recovery.
 
 ## Output Actions
 

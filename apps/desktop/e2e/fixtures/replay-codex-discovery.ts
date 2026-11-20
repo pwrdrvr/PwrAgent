@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { CODEX_MINIMUM_RECOMMENDED_VERSION } from "@pwragent/shared";
+import { CODEX_MINIMUM_RECOMMENDED_VERSION } from "@pwragent/shared/codex-version";
 import { CODEX_COMMAND_ENV as DISCOVERY_COMMAND_ENV } from "@pwrdrvr/codex-discovery";
 import { CODEX_COMMAND_ENV } from "../../src/main/settings/desktop-settings-env";
 

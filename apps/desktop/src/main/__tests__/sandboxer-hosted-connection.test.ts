@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SANDBOXER_MCP_CONNECTION_ID, SANDBOXER_MCP_URL } from "@pwragent/shared";
+import { SANDBOXER_MCP_CONNECTION_ID, SANDBOXER_MCP_URL } from "@pwragent/shared/contracts/mcp-connections";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";

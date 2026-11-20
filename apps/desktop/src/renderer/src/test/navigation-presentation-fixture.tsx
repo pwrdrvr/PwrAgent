@@ -1,5 +1,11 @@
 import { useMemo, useRef, useState, type ComponentProps } from "react";
-import { classifyDirectory, resolveThreadParentKey, type NavigationDirectorySummary, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
+import {
+  type NavigationDirectorySummary,
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../features/navigation/Sidebar";
 import { DirectoriesList } from "../features/navigation/DirectoriesList";
 import { createAttentionOrderState, reconcileAttentionOrder } from "../features/navigation/attention-order";

@@ -11,7 +11,7 @@ import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { STAR_MAP_ESTIMATED_CARD_HEIGHT } from "../star-map-layout";
 import { StarMapScreen } from "../StarMapScreen";

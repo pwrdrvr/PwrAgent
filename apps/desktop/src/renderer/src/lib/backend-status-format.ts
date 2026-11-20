@@ -1,4 +1,4 @@
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 
 export type BackendRateLimitSummary = NonNullable<BackendSummary["rateLimits"]>[number];
 

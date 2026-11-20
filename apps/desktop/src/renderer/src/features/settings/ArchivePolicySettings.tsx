@@ -1,10 +1,10 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   normalizeThreadArchivePolicy,
-  type DesktopSettingsConfigPatch,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-archive-policy";
+import { type DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMaintenanceLauncherContext } from "../maintenance/thread-maintenance-launcher";
 import { SettingsCompOption, SettingsField, SettingsSection } from "./SettingsLayout";

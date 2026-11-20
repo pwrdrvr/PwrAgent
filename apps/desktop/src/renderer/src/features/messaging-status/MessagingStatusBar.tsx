@@ -2,12 +2,14 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   DesktopSettingsConfigPatch,
   DesktopMessagingSettingsProjection,
+} from "@pwragent/shared/contracts/settings";
+import type {
   MessagingChannelKind,
   MessagingDegradationReason,
   MessagingPlatformActivitySummary,
   MessagingPlatformHealth,
   MessagingPlatformStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,

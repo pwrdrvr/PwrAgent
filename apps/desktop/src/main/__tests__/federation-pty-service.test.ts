@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TerminalHistoryStore } from "../terminal/terminal-history-store";
-import type { FederationRequestEnvelope } from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import type { FederationRequestEnvelope } from "@pwragent/shared/contracts/federation";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_PTY_HIGH_WATER_BYTES,
   FEDERATION_PTY_LOW_WATER_BYTES,

@@ -1,8 +1,12 @@
+import type { MessagingReplyReceiptRequest } from "./messaging-outbound-delivery";
 import type { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingAccessControl } from "./messaging-access-control";
 import type { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingDeliveryGuard, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliveryResult, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
@@ -15,7 +19,7 @@ export interface MessagingPendingRequestHost {
   readonly reconcileIdleTurn: (binding: MessagingBindingRecord, reason: string) => Promise<void>;
   readonly storePendingIntent: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, options?: { expiresAt?: number; }) => Promise<MessagingPendingIntentRecord>;
   readonly flushPendingTurnProseBeforeElicitation: (binding: MessagingBindingRecord, turnId: string | null | undefined) => Promise<void>;
-  readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard) => Promise<MessagingDeliveryResult>;
+  readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard, receipt?: MessagingReplyReceiptRequest) => Promise<MessagingDeliveryResult>;
   readonly reconcileActiveTurnFromBackendStatus: (binding: MessagingBindingRecord, reason: string) => Promise<MessagingActiveTurnSummary | undefined>;
   readonly setActiveTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
   readonly signalTurnActivity: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary, options?: { force?: boolean; reason?: string; refreshMs?: number; }) => Promise<void>;

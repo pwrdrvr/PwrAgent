@@ -4,10 +4,9 @@ import { useMemo, useState, type ComponentProps } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
-  type BackendModelOption,
-  type BackendSummary,
   type NavigationLaunchpadDraft,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { composerDropdownOptionLabels } from "../../../test/model-catalog";

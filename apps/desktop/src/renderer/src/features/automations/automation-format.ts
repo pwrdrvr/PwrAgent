@@ -4,7 +4,7 @@ import type {
   AutomationRunStatus,
   AutomationScheduleDefinition,
   AutomationStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import { formatUsd } from "../thread-detail/context-panels/subagent-format";
 
 export function formatAutomationTimestamp(timestamp: number | undefined): string {
@@ -49,13 +49,16 @@ export function formatAutomationStatus(status: AutomationStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-/** A run a restart ended is a failed run that reads "interrupted" in history. */
+/** Show the outcome and any restart recovery in run history. */
 export function formatRunStatus(
   status: AutomationRunStatus,
   failureReason?: AutomationRunFailureReason,
+  resumedAt?: number,
 ): string {
-  if (status === "failed" && failureReason === "interrupted") return "interrupted";
-  return status.replace("_", " ");
+  let label = status.replace("_", " ");
+  if (status === "failed" && failureReason === "interrupted") label = "interrupted";
+  if (status === "failed" && failureReason === "timed_out") label = "timed out";
+  return resumedAt === undefined ? label : `${label} · resumed`;
 }
 
 export function formatScheduleKind(schedule: AutomationScheduleDefinition): string {

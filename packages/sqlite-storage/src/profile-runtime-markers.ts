@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { normalizeProfileName } from "@pwragent/shared";
+import { normalizeProfileName } from "@pwragent/shared/profile-names";
 
 const PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS = 10_000;
 export const PROFILE_RUNTIME_HEARTBEAT_TTL_MS = 45_000;

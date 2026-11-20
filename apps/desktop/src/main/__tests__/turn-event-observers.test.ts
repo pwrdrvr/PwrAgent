@@ -1,6 +1,10 @@
 import { setImmediate as settle } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerBackendKind, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  AppServerPendingRequestNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { ReviewSubAgentRecord } from "../app-server/backend-registry-types";
 import type { TurnEventDelivery, TurnEventObserver } from "../app-server/turn-event-observer";
 import { registryModules } from "../app-server/backend-registry-wiring";

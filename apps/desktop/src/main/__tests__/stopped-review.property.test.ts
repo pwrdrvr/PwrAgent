@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AppServerThreadReviewEntry, ThreadReview } from "@pwragent/shared";
+import type { AppServerThreadReviewEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
 import { ThreadReviewService } from "../thread-reviews/thread-review-service";
 import { claudeReviewOutput } from "../claude/claude-review-findings";

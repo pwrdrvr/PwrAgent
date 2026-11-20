@@ -1,6 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { codexProviderContextWindow, type CodexModelProviderSettings, type CodexProviderCatalogModel } from "@pwragent/shared";
+import {
+  codexProviderContextWindow,
+  type CodexModelProviderSettings,
+  type CodexProviderCatalogModel,
+} from "@pwragent/shared/codex-model-providers";
 import { resolveActiveProfilePath } from "../profile";
 
 /** A provider's capabilities must never replace the default provider's catalog. */

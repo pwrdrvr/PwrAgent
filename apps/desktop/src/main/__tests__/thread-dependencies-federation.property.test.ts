@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { FederationRemoteTarget, ThreadDependency } from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import {
   PEER_ACTIVE_CACHE_MS, appendPeerDependents, collectPeerActiveDependencies, createPeerActiveDependencyCollector,
   invalidatePeerActiveDependencies,

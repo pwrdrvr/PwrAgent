@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type {
-  NavigationSnapshot,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  applyNavigationSnapshotTransportResponse,
-  buildThreadIdentityKey,
-} from "@pwragent/shared";
+import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { applyNavigationSnapshotTransportResponse } from "@pwragent/shared/navigation-snapshot-transport";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 
 function buildThread(index: number): NavigationThreadSummary {

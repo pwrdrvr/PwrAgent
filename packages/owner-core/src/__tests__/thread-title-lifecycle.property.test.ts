@@ -1,13 +1,12 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
-  buildThreadIdentityKey,
-  isAcpBackendId,
-  type AgentEvent,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadNamingLifecycle } from "../thread-naming-lifecycle";
 import type { OwnerThreadIdentity } from "../thread-storage";
 import { ThreadTitleLifecycle, type ThreadTitleHelperUpdate, type ThreadTitleLifecycleHost } from "../thread-title-lifecycle";

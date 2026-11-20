@@ -2,7 +2,7 @@ import type {
   DesktopSettingsSnapshot,
   DesktopSpendAlertPolicy,
   DesktopToolOutputAlertPolicy,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   MAX_REPEATED_LARGE_OUTPUT_CALLS,
   MAX_REPEATED_LARGE_OUTPUT_PERCENT,
@@ -10,7 +10,7 @@ import {
   MIN_REPEATED_LARGE_OUTPUT_CALLS,
   MIN_REPEATED_LARGE_OUTPUT_PERCENT,
   MIN_SPEND_ALERT_THRESHOLD_USD,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { useEffect, useState } from "react";
 import {
   SettingsField,

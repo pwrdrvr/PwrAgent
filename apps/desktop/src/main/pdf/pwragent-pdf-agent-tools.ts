@@ -1,7 +1,7 @@
 import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging-tools";
 import {
   PdfAttachmentToolError,
   type PdfAttachmentStore,

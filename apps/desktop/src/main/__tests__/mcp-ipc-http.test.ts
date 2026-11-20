@@ -11,7 +11,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ErrorCode, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpIpcHttp, createMcpIpcTransport, MCP_IPC_NO_RECONNECT, validateMcpIpcPlatform } from "../mcp-connections/mcp-ipc-http";
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
-import { parseMcpIpcUrl } from "@pwragent/shared";
+import { parseMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
 import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
 
 const { relay: executable, identity: identityExecutable } = inject("nativeHelperFixtures").mcpIpc!;

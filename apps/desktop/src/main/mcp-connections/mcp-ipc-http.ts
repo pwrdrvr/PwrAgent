@@ -1,13 +1,11 @@
-import { runtimeResourcesPath, isDevelopmentRuntime } from "../runtime-resources";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Agent, request } from "node:http";
 import type { Socket } from "node:net";
-import { dirname, join, resolve } from "node:path";
 import { Duplex, Readable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared";
+import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared/mcp-ipc-url";
+import { nativeRelayPath } from "../native-relay-path";
 import { mcpClientStreamableHttp } from "./mcp-sdk";
 
 const IPC_ORIGIN = "http://pwragent-ipc.invalid";
@@ -58,16 +56,6 @@ export function validateMcpIpcPlatform(endpoint: McpIpcEndpoint, platform = proc
       ? "pipe:// MCP URLs require Windows on the instance running this connection."
       : "unix:// MCP URLs require macOS or Linux on the instance running this connection.");
   }
-}
-
-function helperPath(): string {
-  const filename = `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`;
-  // Bundled entries execute under out/main or out/headless. Development
-  // helpers live under build/; installed helpers live outside ASAR.
-  const resources = runtimeResourcesPath();
-  return !isDevelopmentRuntime() && resources
-    ? join(resources, "mcp-ipc-relay", filename)
-    : resolve(dirname(fileURLToPath(import.meta.url)), "../../build/mcp-ipc-relay", `${process.platform}-${process.arch}`, filename);
 }
 
 /** A subprocess-owned byte stream; it has no OS socket handle in JS. */
@@ -185,7 +173,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
     const agent = new Agent({ keepAlive: false });
     agents.add(agent);
     agent.createConnection = (_options, callback) => {
-      void openRelay(endpoint.path, options.executable ?? helperPath(), signal).then((socket) => {
+      void openRelay(endpoint.path, options.executable ?? nativeRelayPath(), signal).then((socket) => {
         pending.add(socket);
         socket.once("close", () => pending.delete(socket));
         if (signal.aborted) { socket.destroy(); callback?.(new Error("MCP IPC request closed."), socket); }

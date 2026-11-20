@@ -1,18 +1,24 @@
-import type { AgentEvent, AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { evictStaleStreamAnchors, type MessagingBindingRecord, type MessagingDeliveryResult, type MessagingImagePart, type MessagingInboundEvent, type MessagingStreamUpdateIntent, type MessagingSurfaceIntent, type MessagingSurfaceRef } from "@pwragent/messaging-interface";
-import { assistantStreamKey, messagingSurfaceKey, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
+import { assistantItemIdForBackendEvent, assistantStreamKey, messagingSurfaceKey, turnIdForBackendEvent, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import { isSameMessagingSurface } from "./messaging-callback-helpers";
 import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import { isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
 import { messagingStreamingResponsesEnabled, resolveMessagingStreamingResponseMode } from "./messaging-status-card.js";
+import type { MessagingReplyReceiptRequest } from "./messaging-outbound-delivery";
+import { replyReceiptSettlement } from "./messaging-reply-receipts";
 
 export interface MessagingAssistantStreamHost {
   readonly isTerminalPrivateResponseTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string | undefined) => boolean;
   readonly turnProseKey: (bindingId: string, turnId: string) => string;
-  readonly deliverAssistantMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord, images?: MessagingImagePart[], identity?: AssistantMessageDeliveryIdentity, deliveryClaimed?: boolean) => Promise<void>;
+  readonly deliverAssistantMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord, images?: MessagingImagePart[], identity?: AssistantMessageDeliveryIdentity, deliveryClaimed?: boolean, finalReply?: boolean) => Promise<void>;
   readonly responseAttributionForBinding: (binding: MessagingBindingRecord) => Promise<{ label: string }>;
   readonly newIntentId: (prefix: string) => string;
-  readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard) => Promise<MessagingDeliveryResult>;
+  readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard, receipt?: MessagingReplyReceiptRequest) => Promise<MessagingDeliveryResult>;
   readonly dismissTerminalPrivateResponseSurface: (binding: MessagingBindingRecord, turnId: string, surface: MessagingSurfaceRef) => Promise<boolean>;
 }
 
@@ -178,8 +184,15 @@ export class MessagingAssistantStreams {
         sequence: buffer.sequence + 1,
         text: finalText,
       });
-      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
-      deliveredFinalStream ||= isVisibleAssistantStreamDelivery(result);
+      // The receipt names the event's turn and item, as the caller's message
+      // fallback does, so an edit and its fallback settle one receipt.
+      const receipt = finalReplyReceipt(
+        binding,
+        turnIdForBackendEvent(event),
+        assistantItemIdForBackendEvent(event),
+      );
+      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true, receipt);
+      deliveredFinalStream ||= !finalStreamNeedsMessage(result, receipt);
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
@@ -235,8 +248,9 @@ export class MessagingAssistantStreams {
         sequence: buffer.sequence + 1,
         text,
       });
-      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
-      if (!isVisibleAssistantStreamDelivery(result)) {
+      const receipt = finalReplyReceipt(binding, buffer.turnId, buffer.itemId);
+      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true, receipt);
+      if (finalStreamNeedsMessage(result, receipt)) {
         fallbackMessages.push({
           identity: {
             itemId: buffer.itemId,
@@ -263,6 +277,8 @@ export class MessagingAssistantStreams {
         binding,
         [],
         fallback.identity,
+        false,
+        true,
       );
     }
   }
@@ -340,6 +356,7 @@ export class MessagingAssistantStreams {
     bufferKey: string,
     binding: MessagingBindingRecord,
     isFinal: boolean,
+    receipt?: MessagingReplyReceiptRequest,
   ): Promise<MessagingDeliveryResult> {
     const previous = this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
     const delivery = previous
@@ -353,7 +370,7 @@ export class MessagingAssistantStreams {
             outcome: "discarded",
           };
         }
-        return await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
+        return await this.deliverAssistantStreamBuffer(latest, binding, isFinal, receipt);
       });
     this.assistantStreamDeliveryQueues.set(bufferKey, delivery);
     try {
@@ -369,6 +386,7 @@ export class MessagingAssistantStreams {
     buffer: AssistantStreamBuffer,
     binding: MessagingBindingRecord,
     isFinal: boolean,
+    receipt: MessagingReplyReceiptRequest | undefined,
   ): Promise<MessagingDeliveryResult> {
     const cancellationKey = this.context.host.turnProseKey(binding.id, buffer.turnId);
     const cancellation = this.ensureAssistantStreamCancellationSignal(
@@ -426,7 +444,7 @@ export class MessagingAssistantStreams {
           }
         }
       },
-    });
+    }, receipt);
     if (cancellation.isCancelled()) {
       const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
       this.assistantStreamBuffers.delete(bufferKey);
@@ -566,6 +584,44 @@ export class MessagingAssistantStreams {
     this.assistantStreamCancellationSignals.delete(cancellationKey);
     return cancelledCleanly;
   }
+}
+
+/**
+ * The receipt a final stream edit keeps; partials keep none and write
+ * nothing. It names the turn and item the message fallback names, so the
+ * fallback and a resend after a restart settle the same receipt.
+ */
+function finalReplyReceipt(
+  binding: MessagingBindingRecord,
+  turnId: string | undefined,
+  itemId: string | undefined,
+): MessagingReplyReceiptRequest | undefined {
+  if (!turnId || !itemId) return undefined;
+  return {
+    identity: {
+      kind: "assistant-final",
+      backend: binding.backend,
+      bindingId: binding.id,
+      threadId: binding.threadId,
+      turnId,
+      itemId,
+    },
+  };
+}
+
+/**
+ * Whether a final stream edit leaves the reply to a new message. An edit
+ * with no receipt behind it falls back whenever the message does not show
+ * it. With one, only an edit proved not shown does: an ambiguous one was
+ * flagged, and posting the reply again could show it twice.
+ */
+function finalStreamNeedsMessage(
+  result: MessagingDeliveryResult,
+  receipt: MessagingReplyReceiptRequest | undefined,
+): boolean {
+  if (isVisibleAssistantStreamDelivery(result)) return false;
+  if (!receipt?.kept) return true;
+  return replyReceiptSettlement("stream_update", result).state === "owed";
 }
 
 function assistantStreamKeysForBackendEvent(event: AgentEvent): string[] {

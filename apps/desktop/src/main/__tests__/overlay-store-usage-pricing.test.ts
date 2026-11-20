@@ -1,5 +1,8 @@
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
-import { attributeCodexProviderUsageLine, buildLegacyEncodedThreadIdentityKey, summarizeThreadFamilyPricing, usageActivityCoverage } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { attributeCodexProviderUsageLine } from "@pwragent/shared/codex-model-providers";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { summarizeThreadFamilyPricing } from "@pwragent/shared/thread-family-pricing";
+import { usageActivityCoverage } from "@pwragent/shared/contracts/usage-activity";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

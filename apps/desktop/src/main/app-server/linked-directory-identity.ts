@@ -3,14 +3,16 @@ import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "./git-head-branch";
 import { realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import {
-  isToolManagedWorktreePath,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type DetachThreadDirectoryToolArgs,
   type HandoffTaskWorkspaceMode,
-  type ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import { type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 
 
 

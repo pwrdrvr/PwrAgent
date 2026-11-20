@@ -1,4 +1,4 @@
-import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BranchIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";

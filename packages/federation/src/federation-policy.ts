@@ -1,8 +1,8 @@
-import type {
-  FederationCapability,
-  FederationPeerSummary,
-} from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION, normalizeFederationPeerRole } from "@pwragent/shared";
+import type { FederationCapability, FederationPeerSummary } from "@pwragent/shared/contracts/federation";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  normalizeFederationPeerRole,
+} from "@pwragent/shared/contracts/federation";
 import {
   federationFailure,
   type FederationRedactedFailure,

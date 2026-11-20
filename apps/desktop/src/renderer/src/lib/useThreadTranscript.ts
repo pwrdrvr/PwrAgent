@@ -5,8 +5,8 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
-  NavigationThreadSummary
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 
 function mergeItems<T extends { id: string }>(

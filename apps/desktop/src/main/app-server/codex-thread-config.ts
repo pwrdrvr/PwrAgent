@@ -1,12 +1,12 @@
 import type { OwnerRuntimePolicy } from "../owner-runtime-policy";
-import { MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY } from "@pwragent/shared";
+import { MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY } from "@pwragent/shared/contracts/mcp-connections";
 import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import {
   buildCodexModelProviderConfigOverrides,
   buildCodexModelProviderShellEnvOverrides,
   codexModelProviderApiKeyEnv,
   type CodexModelProviderSettings,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import { buildOutpostCodexPermissionOverrides, isOutpostManagedConfigKey } from "../headless/outpost-codex-sandbox";
 import { createHash } from "node:crypto";
@@ -16,11 +16,11 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS, MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
 import { type McpConnectionBridgeRegistration } from "../mcp-connections/mcp-connection-gateway-service";
+import { type AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  type AppServerPendingRequestNotification,
   MCP_CONNECTION_DISPLAY_NAMES,
   isBuiltInMcpConnectionId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { type CodexServerCapabilities } from "../codex-app-server/desktop-client";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV } from "../token-miser/token-miser-hook-bridge";

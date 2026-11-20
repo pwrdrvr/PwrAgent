@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationOwnerApiFixture } from "../../test/navigation-owner-api-fixture";
 import { readNavigationUnlinkPlan } from "../navigation-unlink-plan";
 

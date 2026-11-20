@@ -1,19 +1,14 @@
 import { access, readFile, realpath, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
+import { filePreviewKind, isFilePreviewPath } from "@pwragent/shared/file-preview";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
-  filePreviewKind,
-  isFilePreviewPath,
-  isRemoteFederationTarget,
   type OpenDesktopApplicationRequest,
   type OpenDesktopApplicationResponse,
   type ReadDesktopApplicationsRequest,
   type ReadDesktopApplicationsResponse,
   type OpenMarkdownFileViewerRequest,
   type OpenMarkdownFileViewerResponse,
-  type OpenSubAgentTranscriptWindowRequest,
-  type OpenSubAgentTranscriptWindowResponse,
-  type OpenToolOutputIncidentExplorerWindowRequest,
-  type OpenToolOutputIncidentExplorerWindowResponse,
   type OpenPathRequest,
   type OpenPathResponse,
   type ReadMarkdownFileRequest,
@@ -24,7 +19,15 @@ import {
   type ResolveTranscriptFilesResponse,
   type ReadMarkdownFileViewerSnapshotRequest,
   type ReadMarkdownFileViewerSnapshotResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import {
+  type OpenSubAgentTranscriptWindowRequest,
+  type OpenSubAgentTranscriptWindowResponse,
+} from "@pwragent/shared/contracts/subagent-transcript";
+import {
+  type OpenToolOutputIncidentExplorerWindowRequest,
+  type OpenToolOutputIncidentExplorerWindowResponse,
+} from "@pwragent/shared/contracts/tool-output-incidents";
 import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,

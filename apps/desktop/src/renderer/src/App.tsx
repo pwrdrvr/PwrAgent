@@ -1,5 +1,6 @@
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
-import { threadTodoThreadKey, type AddRemoteThreadPinResponse, type ThreadTodo } from "@pwragent/shared";
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { type AddRemoteThreadPinResponse } from "@pwragent/shared/contracts/navigation";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
@@ -14,7 +15,9 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
-import { classifyDirectory, detectProviderResponseBlock, operatorTodoItemKey } from "@pwragent/shared";
+import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import { detectProviderResponseBlock } from "@pwragent/shared/provider-response-block";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -35,39 +38,46 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
-  DEFAULT_THREAD_TODO_MERGE_METHOD,
+  type MessagingThreadBindingSummary,
+  type NavigationThreadSummary,
+  type PrSummary,
+  SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
+} from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD } from "@pwragent/shared/contracts/thread-todos";
+import {
   federatedThreadIdentityKey,
+  isRemoteFederationTarget,
+  type FederationInstanceId,
+  type FederationTarget,
+} from "@pwragent/shared/contracts/federation";
+import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
-  isRemoteFederationTarget,
-  resolveNewThreadBackend,
-  type AppServerBackendKind,
-  type WorktreeSnapshotSummary,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
   type DesktopSettingsSnapshot,
-  type FederationInstanceId,
-  type FederationTarget,
-  type MessagingChannelKind,
-  type MessagingThreadBindingSummary,
-  type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
-  type PrSummary,
-  type ThreadToolAccounting,
-  type ThreadToolIncidentNoticeState,
-  type ThreadToolInvocationAlert,
-  type ThreadSpendAlert,
-  type ThreadUsageLineRecord,
-  type SetThreadToolIncidentNoticeRequest,
-  type SubmitServerRequestRequest,
   DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
+} from "@pwragent/shared/contracts/settings";
+import { resolveNewThreadBackend } from "@pwragent/shared/backend-selection";
+import {
+  type AppServerBackendKind,
+  type WorktreeSnapshotSummary,
+  type ThreadToolAccounting,
+  type ThreadToolInvocationAlert,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import {
+  type ThreadToolIncidentNoticeState,
+  type SetThreadToolIncidentNoticeRequest,
   resolveToolIncidentVisibility,
-  SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import { type ThreadSpendAlert, type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
 import { Sidebar } from "./features/navigation/Sidebar";
 import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList";
 import { isSubthreadLaunchpadDraft, pendingThreadTitleLine } from "./features/navigation/StartingThreadRow";
@@ -251,6 +261,7 @@ import {
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
+import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
   buildNoStartupBackendNotice,
   NO_STARTUP_BACKEND_NOTICE_ID,
@@ -586,6 +597,7 @@ function DesktopAppShell(props: {
     showAppNotice,
     dismissAppNotice,
     openCodexLogin,
+    openCodexReauthentication,
     handleThreadActionError,
   } = useAppNoticeProducers(props, dispatchAppNotice);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
@@ -1296,7 +1308,7 @@ function DesktopAppShell(props: {
             incidentNotice?: ThreadToolIncidentNoticeState;
             toolAccounting?: ThreadToolAccounting;
             displayInvalidated?: true;
-            incidentSummary?: import("@pwragent/shared").ThreadIncidentSummary;
+            incidentSummary?: import("@pwragent/shared/thread-incident-summary").ThreadIncidentSummary;
             triggeredAlerts?: ThreadToolInvocationAlert[];
           };
           /* One card per thread, folded from the whole accounting snapshot,
@@ -1429,10 +1441,10 @@ function DesktopAppShell(props: {
               backendErrorDirectoriesRef.current.find(
                 (directory) =>
                   directory.kind === "directory"
-                  && matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
+                  && matchingThread?.linkedDirectories.some((linked) => directoryIncludesCheckout(directory, classifyDirectory(linked).key)),
               )
               ?? backendErrorDirectoriesRef.current.find((directory) =>
-                matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)
+                matchingThread?.linkedDirectories.some((linked) => directoryIncludesCheckout(directory, classifyDirectory(linked).key))
               );
             const projectLabel =
               matchingDirectory?.label
@@ -1522,6 +1534,26 @@ function DesktopAppShell(props: {
           }
           return;
         }
+        if (event.notification.method === "turn/verificationRequested") {
+          const params = event.notification.params as {
+            threadId: string;
+            turnId: string;
+            verifications: string[];
+          };
+          const notice = buildModelVerificationNotice({
+            backend: event.backend,
+            threadId: params.threadId,
+            turnId: params.turnId,
+            verifications: params.verifications,
+            ...(instanceId ? { instanceId } : {}),
+            threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
+              event.errorNoticeContext?.backend ?? event.backend,
+              event.errorNoticeContext?.threadId ?? params.threadId,
+            ),
+          });
+          if (notice) dispatchAppNotice({ type: "show", notice });
+          return;
+        }
         // Params are cast explicitly: the AppServerNotification union is too
         // wide for the discriminant to narrow `params` reliably here.
         if (event.notification.method === "turn/failed") {
@@ -1559,9 +1591,12 @@ function DesktopAppShell(props: {
               errorNoticeContext: event.errorNoticeContext,
               originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
               onCodexLogin: openCodexLogin,
+              onCodexReauthenticate: openCodexReauthentication,
               onClaudeLogin,
               onOpenCodexSettings: openCodexSettings,
-              ...(recovery === "claudeSignIn" ? { recovery } : {}),
+              ...(recovery === "claudeSignIn" || recovery === "codexHardwareKeySignIn"
+                ? { recovery }
+                : {}),
               ...(recovery === "claudeSessionGone" && params.threadId ? {
                 recovery,
                 onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
@@ -1653,6 +1688,7 @@ function DesktopAppShell(props: {
       continueClaudeThreadInNewSession,
       onClaudeLogin,
       openCodexLogin,
+      openCodexReauthentication,
       openCodexSettings,
       props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
     ]);
@@ -2511,6 +2547,10 @@ function DesktopAppShell(props: {
   const localThreadProjects = useMemo(() => {
     const projects = new Map<string, { key: string; label: string }>();
     for (const thread of navigation.threads) {
+      if (thread.checkoutProject) {
+        projects.set(threadSummaryIdentityKey(thread), thread.checkoutProject);
+        continue;
+      }
       const linked = thread.linkedDirectories[0];
       if (!linked) continue;
       const descriptor = classifyDirectory(linked);
@@ -3429,7 +3469,7 @@ function DesktopAppShell(props: {
     const linked = live.linkedDirectories[0];
     const descriptor = linked ? classifyDirectory(linked) : undefined;
     const directoryRow = descriptor
-      ? navigation.directories.find((directory) => directory.key === descriptor.key)
+      ? navigation.directories.find((directory) => directoryIncludesCheckout(directory, descriptor.key))
       : undefined;
     const repositoryKey = directoryRow?.repositoryKey ?? live.primaryGitRepository;
     // Only a Git checkout needs a receiving repository. A directory with no
@@ -4547,6 +4587,7 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             profile={codexLoginProfile.name}
             displayName={codexLoginProfile.displayName}
+            {...(codexLoginProfile.reauthenticate ? { reauthenticate: true } : {})}
             onCancel={() => setCodexLoginProfile(undefined)}
             onAuthenticated={settings.refresh}
           />
@@ -4793,6 +4834,11 @@ function DesktopAppShell(props: {
             onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
             onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
             onSetDirectoryPin={navigation.setDirectoryPin}
+            onSetProjectCheckoutGroup={desktopApi?.setProjectCheckoutGroup}
+            onPickProjectCheckout={desktopApi?.pickDirectoryFromDisk ? async () => {
+              const picked = await desktopApi.pickDirectoryFromDisk!();
+              return picked.canceled ? undefined : picked.path;
+            } : undefined}
             onReorderDirectoryPins={navigation.reorderDirectoryPins}
             onSetDirectoryThreadsCollapsed={
               navigation.setDirectoryThreadsCollapsed
@@ -5708,7 +5754,12 @@ function useAppNoticeProducers(props: {
   settings: DesktopSettingsState;
   bootstrapConfig: DesktopConfigBootstrapState;
 }, dispatchAppNotice: Dispatch<Parameters<typeof appNoticeReducer>[1]>) {
-  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
+  const [codexLoginProfile, setCodexLoginProfile] = useState<{
+    name: string;
+    displayName: string;
+    /** The profile is signed in; Codex asked it to sign in again. */
+    reauthenticate?: boolean;
+  }>();
   const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
     dispatchAppNotice({ type: "show", notice });
   }, [dispatchAppNotice]);
@@ -5722,6 +5773,17 @@ function useAppNoticeProducers(props: {
     const discovery = activeCodexProfileRef.current;
     const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
     if (profile) setCodexLoginProfile(profile);
+  }, []);
+  const openCodexReauthentication = useCallback(() => {
+    const discovery = activeCodexProfileRef.current;
+    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
+    if (profile) {
+      setCodexLoginProfile({
+        name: profile.name,
+        displayName: profile.displayName,
+        reauthenticate: true,
+      });
+    }
   }, []);
   const rejectedCodexHomes = useRef(new Set<string>());
   useEffect(() => {
@@ -5806,6 +5868,7 @@ function useAppNoticeProducers(props: {
     showAppNotice,
     dismissAppNotice,
     openCodexLogin,
+    openCodexReauthentication,
     handleThreadActionError,
   };
 }

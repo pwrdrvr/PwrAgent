@@ -1,5 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import type { AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared";
+import type {
+  AppServerThreadEntry,
+  AppServerThreadMessageEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";

@@ -7,7 +7,14 @@
  * through IPC, avoiding an "Inbox first, then jump" startup path.
  */
 
-import { normalizeNavigationBrowseMode, normalizeNavigationResumeState, type NavigationBrowseMode, type NavigationResumeState } from "@pwragent/shared";
+import {
+  normalizeNavigationBrowseMode,
+  type NavigationBrowseMode,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  normalizeNavigationResumeState,
+  type NavigationResumeState,
+} from "@pwragent/shared/navigation-resume-state";
 import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { getDesktopNavigationPreferencesStorage } from "./storage/desktop-overlay-store";
 

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile } from "electron-vite";
+import { loadConfigFromFile as loadViteConfigFromFile } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const desktopRoot = resolve(
@@ -30,6 +31,30 @@ async function loadDesktopConfig(command) {
   );
   return result.config;
 }
+
+it("resolves the same desktop paths with Vite's native config loader", async () => {
+  vi.stubEnv("PWRAGENT_DEV_REACT_DEVTOOLS", "1");
+  const expected = await loadDesktopConfig("serve");
+  const { config } = await loadViteConfigFromFile(
+    { command: "serve", mode: "development" },
+    configPath,
+    desktopRoot,
+    undefined,
+    undefined,
+    "native",
+  );
+
+  for (const target of ["main", "preload", "renderer"]) {
+    expect(config[target].build.rolldownOptions.input)
+      .toEqual(expected[target].build.rolldownOptions.input);
+  }
+  expect(config.renderer.resolve.alias).toEqual(expected.renderer.resolve.alias);
+
+  const bridgeTags = (renderer) => renderer.plugins
+    .find((plugin) => plugin.name === "pwragent:react-devtools-bridge")
+    .transformIndexHtml.handler();
+  expect(bridgeTags(config.renderer)).toEqual(bridgeTags(expected.renderer));
+});
 
 describe("electron-vite dependency policy", () => {
   it.each(["build", "serve"])(

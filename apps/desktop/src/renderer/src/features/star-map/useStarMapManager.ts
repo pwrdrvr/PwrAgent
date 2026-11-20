@@ -3,7 +3,7 @@ import {
   buildThreadIdentityKey,
   type NavigationIdentity,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

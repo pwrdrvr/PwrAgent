@@ -1,27 +1,32 @@
 import { createHash } from "node:crypto";
+import { aggregateToolAccounting } from "@pwragent/shared/thread-tool-display";
 import {
-  aggregateToolAccounting,
   anchorTurnUsageEntries,
-  buildThreadPricingDisplay,
-  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
-  isThreadSubAgentVisibleInPanel,
-  subAgentLens,
-  type SubAgentLens,
-  buildThreadIncidentSummary,
   buildTurnUsageActivityEntryFromLine,
   preferTurnUsageLine,
   reconcileCompletedTurnUsageEntries,
+} from "@pwragent/shared/thread-usage-display";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import {
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
+  isThreadSubAgentVisibleInPanel,
+} from "@pwragent/shared/subagent-visibility";
+import { subAgentLens, type SubAgentLens } from "@pwragent/shared/subagent-kind";
+import { buildThreadIncidentSummary } from "@pwragent/shared/thread-incident-summary";
+import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadMessageEntry,
-  type NavigationThreadSummary,
   type ThreadDisplayRead,
-  type ThreadSubAgentSummary,
-  type ThreadUsageLineRecord,
-  type TokenMiserGateAccountingTotals,
   THREAD_DISPLAY_MAX_ACCOUNTING_TURNS,
   THREAD_DISPLAY_MAX_PAGE_ROWS,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type NavigationThreadSummary,
+  type ThreadSubAgentSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type TokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 
 /** One page of the sub-agents panel, read from the card table by `readThreadSubAgentPanel`. */
 export type ThreadSubAgentPanel = {

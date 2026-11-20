@@ -1,4 +1,4 @@
-import type { CodexEnvironmentSetupProgressEvent } from "@pwragent/shared";
+import type { CodexEnvironmentSetupProgressEvent } from "@pwragent/shared/contracts/agent";
 
 export type LaunchpadEnvironmentSetupProgress = {
   sequence?: number;

@@ -1,6 +1,6 @@
-import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import { useEffect } from "react";
-import type { ComposerThreadOwner } from "@pwragent/shared";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
 import type { ComposerDraftStore } from "./useComposerDraftStore";
 
 export type ComposerScopeOwnerResolution =

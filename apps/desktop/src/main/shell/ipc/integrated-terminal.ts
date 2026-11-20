@@ -24,7 +24,7 @@ import type {
   IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../../../shared/integrated-terminal";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   byQuitTerminal,
   IntegratedTerminalService,

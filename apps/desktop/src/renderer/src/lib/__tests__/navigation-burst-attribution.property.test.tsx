@@ -1,6 +1,11 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES, type AgentEvent, type NavigationQueryPage, type NavigationQueryRequest } from "@pwragent/shared";
+import {
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { NavigationWindowQueries } from "../navigation-window-queries";
 import { navigationListingDiagnostics as ring, setNavigationListingDiagnosticsEnabled } from "../navigation-listing-diagnostics";
 

@@ -1,4 +1,7 @@
-import type { ThreadMaintenanceKeptCheckout, ThreadMaintenanceScanStep } from "@pwragent/shared";
+import type {
+  ThreadMaintenanceKeptCheckout,
+  ThreadMaintenanceScanStep,
+} from "@pwragent/shared/thread-maintenance";
 import { allocationTotal, largestFirst, type AllocationTotal } from "./thread-maintenance-selection";
 
 /** Kept checkouts that share one reason: the largest first, unmeasured last. */

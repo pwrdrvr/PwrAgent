@@ -1,7 +1,5 @@
-import {
-  TOOL_DETAILS_UNAVAILABLE_LABEL,
-  type AppServerNotification,
-} from "@pwragent/shared";
+import { TOOL_DETAILS_UNAVAILABLE_LABEL } from "@pwragent/shared/tool-activity-burst";
+import { type AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   isAcpModelProgressUpdate,
   isAcpRetryStateUpdateKind,

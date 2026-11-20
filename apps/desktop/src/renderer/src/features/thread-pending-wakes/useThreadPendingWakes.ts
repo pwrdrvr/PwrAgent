@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isThreadPendingWakeInvalidation } from "@pwragent/shared";
+import { isThreadPendingWakeInvalidation } from "@pwragent/shared/contracts/thread-pending-wakes";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
-  AgentEvent,
-  FederationTarget,
-  NavigationThreadSummary,
   ThreadPendingWake,
   ThreadPendingWakeEnded,
   ThreadPendingWakesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-pending-wakes";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 

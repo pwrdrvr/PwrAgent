@@ -4,7 +4,7 @@ import type {
   MouseEvent,
   ReactNode,
 } from "react";
-import type { WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { WorktreeSnapshotSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { CopyIcon } from "../../../icons";
 import { copyText, elideMiddle, formatCopyTooltip } from "../../../lib/copy-text";
 

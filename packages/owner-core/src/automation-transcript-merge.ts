@@ -1,4 +1,4 @@
-import type { AutomationRunTranscriptEvent } from "@pwragent/shared";
+import type { AutomationRunTranscriptEvent } from "@pwragent/shared/contracts/automations";
 
 /**
  * Merge transcript events by id (last write wins), order by timestamp, then

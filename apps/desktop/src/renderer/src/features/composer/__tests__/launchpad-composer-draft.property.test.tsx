@@ -3,7 +3,11 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-li
 import fc from "fast-check";
 import { useMemo, type ComponentProps } from "react";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { NavigationDirectorySummary, NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { Composer as ProductionComposer } from "../Composer";

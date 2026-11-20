@@ -8,7 +8,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it, vi } from "vitest";
 import {
   AcpStdioJsonRpcTransport,

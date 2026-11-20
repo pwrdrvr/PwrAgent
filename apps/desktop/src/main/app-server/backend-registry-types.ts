@@ -6,16 +6,14 @@ import {
   type TokenMiserCachedReplayIndex,
   type TokenMiserPricingIndex,
 } from "./token-miser-ledger-index";
-import {
-  type ForgeAgentToolAccess,
-  type McpProjectToolApprovalOffer,
-} from "@pwragent/shared";
+import { type ForgeAgentToolAccess } from "@pwragent/shared/contracts/forge-agent-tools";
+import { type McpProjectToolApprovalOffer } from "@pwragent/shared/contracts/mcp-connections";
 import {
   type ForgeAgentRuleAgent,
   type ForgeAgentToolRuleApprovalNote,
   type ForgeAgentToolRuleGroup,
-} from "@pwragent/shared";
-import type { ListBackgroundTerminalsResponse } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import type { ListBackgroundTerminalsResponse } from "@pwragent/shared/contracts/background-terminals";
 import { type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import type { ProjectHeldWakeupStorage } from "../storage/desktop-runtime-storage";
 import type { RestartContinuationStorage } from "../storage/desktop-runtime-storage";
@@ -26,7 +24,7 @@ import {
   type ListProjectHeldWakeupsResponse,
   type SetProjectForgeAutomationRequest,
   type SetProjectForgeAutomationResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import { type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import type {
@@ -44,12 +42,6 @@ import {
   type ArchiveThreadRequest,
   type ArchiveThreadCleanupResult,
   type ArchiveThreadResponse,
-  type MarkThreadSeenRequest,
-  type MarkThreadSeenResponse,
-  type SetThreadPinRequest,
-  type SetThreadParentRequest,
-  type SetThreadParentResponse,
-  type SetThreadPinResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
@@ -63,22 +55,20 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
-  type AppServerCollaborationModeRequest,
-  type BackendAccountSummary,
-  type CausalMessagingContext,
-  type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
-  type BackendModelOption,
-  type BackendRateLimitSummary,
-  type CodexAppServerRestartStatus,
-  type ControlActiveTurnResponse,
-  type ForkThreadRequest,
-  type ListThreadMcpServersResponse,
+  type ThreadExecutionMode,
+  type WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type MarkThreadSeenRequest,
+  type MarkThreadSeenResponse,
+  type SetThreadPinRequest,
+  type SetThreadParentRequest,
+  type SetThreadParentResponse,
+  type SetThreadPinResponse,
   type NavigationDirectoryGitStatus,
   type NavigationDirectorySummary,
   type NavigationLaunchpadDefaults,
-  type CancelThreadPrAutoDispatchRequest,
-  type SendThreadPrAutoDispatchNowRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type RefreshOwnedThreadGitWorkingStateRequest,
@@ -86,6 +76,29 @@ import {
   type RefreshThreadGitWorkingStateResponse,
   type RefreshThreadPullRequestsResponse,
   type ThreadCodexInvalidIdRecovery,
+  type ThreadOverlayState,
+  type ThreadSubAgentSummary,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  type AppServerCollaborationModeRequest,
+  type CodexEnvironmentSetupProgressEvent,
+  type ControlActiveTurnResponse,
+  type ForkThreadRequest,
+  type ListThreadMcpServersResponse,
+  type CancelThreadPrAutoDispatchRequest,
+  type SendThreadPrAutoDispatchNowRequest,
+  type StartReviewRequest,
+  type SubmitServerRequestRequest,
+} from "@pwragent/shared/contracts/agent";
+import {
+  type BackendAccountSummary,
+  type BackendModelOption,
+  type BackendRateLimitSummary,
+  type CodexAppServerRestartStatus,
+} from "@pwragent/shared/contracts/backend";
+import { type CausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
+import {
   type MarkProjectReadToolArgs,
   type MarkProjectReadResult,
   type CheckThreadPullRequestStatusToolArgs,
@@ -93,26 +106,24 @@ import {
   type ThreadPullRequestAutomationStatus,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
+} from "@pwragent/shared/contracts/thread-tools";
+import {
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceCoverage,
   type ThreadMaintenanceKeptThread,
   type ThreadMaintenanceRules,
   type ThreadMaintenanceRun,
   type ThreadMaintenanceScan,
+} from "@pwragent/shared/thread-maintenance";
+import {
   type PwrAgentThreadOrchestrationResponse,
-  type StartReviewRequest,
-  type SubmitServerRequestRequest,
-  type ThreadExecutionMode,
-  type ThreadOverlayState,
-  type ThreadSubAgentSummary,
-  type ThreadUsageLineRecord,
-  type PrSummary,
-  type WorktreeSnapshotSummary,
-  type HelperModelId,
-  type HelperModelResolution,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type HelperModelId, type HelperModelResolution } from "@pwragent/shared/helper-models";
+import {
   type TaskMonitorResponse,
   type TaskMonitorUsageSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/task-monitor-tools";
 import {
   CodexAppServerClient,
   type CodexPwrdrvrTokenMiserActivation,
@@ -176,7 +187,7 @@ export type ForgeWriteApprovalNotes = {
 export type BackendClient = {
   listBackgroundTerminals?(threadId: string): Promise<ListBackgroundTerminalsResponse>;
   terminateBackgroundTerminal?(threadId: string, processId: string): Promise<boolean>;
-  exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
+  exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared/contracts/thread-instance-handoff").ThreadHandoffExport>;
   startRealtime?: CodexAppServerClient["startRealtime"];
   stopRealtime?: CodexAppServerClient["stopRealtime"];
   appendRealtimeText?: CodexAppServerClient["appendRealtimeText"];
@@ -349,6 +360,7 @@ export type BackendClient = {
   readTurnRoot?(params: { threadId: string; turnId: string }): Promise<string | undefined>;
   startTurn(params: {
     threadId: string;
+    agentMemoryContext?: string;
     parentTurnId?: string;
     rootTurnId?: string;
     input: AppServerTurnInputItem[];
@@ -564,8 +576,8 @@ export type ThreadPullRequestDetachHandler = (
 ) => Promise<DetachThreadPullRequestResponse>;
 
 export type ThreadPrWatchesPeerHandler = (
-  request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
-) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+  request: import("@pwragent/shared/contracts/thread-pr-watches").FederationThreadPrWatchesRequestV1,
+) => Promise<import("@pwragent/shared/contracts/thread-pr-watches").ThreadPrWatchesResponse>;
 
 /** The desktop app-server service's owner-side Forge Automation requests. */
 export type ProjectForgeAutomationHandler = {

@@ -7,14 +7,13 @@ import {
   type Mock,
   vi,
 } from "vitest";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { type AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  buildPullRequestStatusKey,
-  type AppServerTurnInputItem,
-  type PrSummary,
   type PullRequestTerminalDetails,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
 import {
   mapGraphqlPrNode,
   type GraphqlPrNode,

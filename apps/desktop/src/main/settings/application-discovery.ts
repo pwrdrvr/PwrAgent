@@ -14,7 +14,7 @@ import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 

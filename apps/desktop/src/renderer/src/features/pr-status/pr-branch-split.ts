@@ -1,4 +1,4 @@
-import { splitGraphemes } from "@pwragent/shared";
+import { splitGraphemes } from "@pwragent/shared/text-graphemes";
 
 /**
  * How many trailing characters the branch row keeps when the name is too long

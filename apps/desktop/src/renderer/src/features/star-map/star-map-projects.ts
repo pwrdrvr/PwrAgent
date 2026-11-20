@@ -1,9 +1,9 @@
 import {
   buildThreadIdentityKey,
-  classifyDirectory,
   type NavigationThreadSummary,
   type NavigationDirectoryRow,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 
 /** Presentation identity retained when a project pools multiple owners. */
 export type StarMapProjectThread = NavigationThreadSummary & {
@@ -97,12 +97,14 @@ const NO_PROJECT_LABEL = "No project";
  * instead gave each hash-named scratch dir its own one-thread body.
  */
 export function threadProjectKey(thread: NavigationThreadSummary): string {
+  if (thread.checkoutProject) return thread.checkoutProject.key;
   const primary = thread.linkedDirectories[0];
   return primary ? classifyDirectory(primary).key : STAR_MAP_NO_PROJECT_KEY;
 }
 
 /** Display label for a thread's project; shared with the cluster layout. */
 export function threadProjectLabel(thread: NavigationThreadSummary): string {
+  if (thread.checkoutProject) return thread.checkoutProject.label;
   const primary = thread.linkedDirectories[0];
   if (!primary) return NO_PROJECT_LABEL;
   const descriptor = classifyDirectory(primary);
@@ -127,16 +129,8 @@ function projectNameKey(label: string): string {
  *
  * A directory is identified everywhere else in the app by its absolute
  * path, and a path names a checkout on ONE machine. This lens pools a
- * whole federation, so keying its bodies on the path drew the same
- * repository once per machine — three PwrSnaps, four PwrAgents — and
- * twice on a machine holding two clones of it.
- *
- * The thread list already answers this question and answers it by NAME:
- * `buildDirectorySummaries` groups a thread under its folder name, not
- * its path, and nobody looking at that list cares which root on which
- * drive a checkout sits under. This lens groups the same threads, so it
- * has to reach the same answer, and the rules below are what it takes to
- * get there across machines rather than within one:
+ * whole federation, so keying its bodies on the path drew a separate
+ * project for every checkout.
  *
  * - A row whose owner could read a Git origin pools under that origin.
  *   It is the only part of a checkout that means the same thing
@@ -178,6 +172,14 @@ function identityForRow(
  * Built over the WHOLE fleet rather than one row at a time, because
  * whether a folder name can stand in for an origin is a question about
  * every other row that shares that name.
+ *
+ * On each owner, rows with matching reported origins share the fleet
+ * project by default. A folder name can stand in for an origin when the
+ * resolved identity has only one row on that owner. A single explicit
+ * checkout group claims that identity for the owner even when it is
+ * empty, and its excluded clones get separate bodies. When multiple
+ * explicit groups share an identity on one owner, each row there gets
+ * a separate body to preserve the owner's grouping.
  */
 export function starMapProjectIdentities(
   descriptorsByInstance?: ReadonlyMap<string, readonly NavigationDirectoryRow[]>,
@@ -187,6 +189,8 @@ export function starMapProjectIdentities(
     key: string;
     name: string;
     origin?: string;
+    grouped: boolean;
+    emptyGroupCount: number;
   }[] = [];
   for (const [instanceId, descriptors] of descriptorsByInstance ?? []) {
     for (const descriptor of descriptors) {
@@ -195,6 +199,8 @@ export function starMapProjectIdentities(
         key: descriptor.key,
         name: projectNameKey(descriptor.label),
         origin: descriptor.repositoryKey,
+        grouped: Boolean(descriptor.checkoutPaths?.length),
+        emptyGroupCount: descriptor.emptyCheckoutGroupCount ?? 0,
       });
     }
   }
@@ -205,12 +211,28 @@ export function starMapProjectIdentities(
     if (origins) origins.add(row.origin);
     else originsByName.set(row.name, new Set([row.origin]));
   }
-  const identities = new Map<string, string>();
+  const ownerProjects = new Map<string, Map<string, typeof rows>>();
   for (const row of rows) {
-    identities.set(
-      `${row.instanceId}\u0000${row.key}`,
-      identityForRow(row, originsByName),
-    );
+    const projects = ownerProjects.get(row.instanceId) ?? new Map();
+    const project = identityForRow(row, originsByName);
+    const members = projects.get(project) ?? [];
+    members.push(row);
+    projects.set(project, members);
+    ownerProjects.set(row.instanceId, projects);
+  }
+  const identities = new Map<string, string>();
+  for (const [instanceId, projects] of ownerProjects) {
+    for (const [project, members] of projects) {
+      const grouped = members.filter((member) => member.grouped);
+      const emptyGroupCount = members.reduce((count, member) => Math.max(count, member.emptyGroupCount), 0);
+      const groupCount = grouped.length + emptyGroupCount;
+      for (const row of members) {
+        const sharesProject = (groupCount === 0 && (members.length === 1 || Boolean(row.origin)))
+          || (groupCount === 1 && row === grouped[0]);
+        identities.set(`${instanceId}\u0000${row.key}`, sharesProject
+          ? project : `checkout:${JSON.stringify([instanceId, row.key])}`);
+      }
+    }
   }
   return (instanceId, directoryKey) =>
     identities.get(`${instanceId}\u0000${directoryKey}`) ?? directoryKey;
@@ -242,14 +264,15 @@ export function groupThreadsByProject(
   const projects = new Map<string, StarMapProject>();
   const identityFor = starMapProjectIdentities(params?.descriptorsByInstance);
   /**
-   * Folder names in the running, by member thread count.
+   * Prefer an explicitly grouped project's name. Otherwise count the
+   * threads under each owner's name, with alphabetical ties.
    *
    * Merged members disagree about what the project is called — that is
    * the point when a `PwrAgnt` clone and a `PwrAgent` clone pool — so the
-   * body wears the name the most work sits under, ties to the first
-   * alphabetically so the map does not rename itself between renders.
+   * order of incoming pages should never change the label.
    */
   const labels = new Map<string, Map<string, number>>();
+  const checkoutGroupLabels = new Map<string, Map<string, number>>();
   const nameProject = (identity: string, label: string, weight: number) => {
     const counts = labels.get(identity) ?? new Map<string, number>();
     counts.set(label, (counts.get(label) ?? 0) + weight);
@@ -264,6 +287,11 @@ export function groupThreadsByProject(
     for (const descriptor of descriptors) {
       const identity = identityFor(instanceId, descriptor.key);
       nameProject(identity, descriptor.label, descriptor.counts.total);
+      if (descriptor.checkoutPaths) {
+        const names = checkoutGroupLabels.get(identity) ?? new Map<string, number>();
+        names.set(descriptor.label, (names.get(descriptor.label) ?? 0) + descriptor.counts.total);
+        checkoutGroupLabels.set(identity, names);
+      }
       const existing = projects.get(identity);
       if (existing) {
         existing.members.push({ instanceId, directoryKey: descriptor.key });
@@ -313,7 +341,7 @@ export function groupThreadsByProject(
     summonedKeys !== undefined
     && summonedKeys.has(buildThreadIdentityKey(thread.source, thread.id));
   for (const project of projects.values()) {
-    const counts = labels.get(project.key);
+    const counts = checkoutGroupLabels.get(project.key) ?? labels.get(project.key);
     if (counts) {
       project.label = [...counts].sort(
         ([leftLabel, left], [rightLabel, right]) =>

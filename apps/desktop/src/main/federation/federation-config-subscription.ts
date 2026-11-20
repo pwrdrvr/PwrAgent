@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 
 type Runtime = {

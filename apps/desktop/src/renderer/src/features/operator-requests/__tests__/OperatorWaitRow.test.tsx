@@ -1,6 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { codexAsyncQuestionItemId, parseCodexAsyncQuestionReply } from "@pwragent/shared";
+import {
+  codexAsyncQuestionItemId,
+  parseCodexAsyncQuestionReply,
+} from "@pwragent/shared/codex-async-questions";
 import { OperatorWaitRow } from "../OperatorWaitRow";
 import { APPROVAL_STILL_OPEN_MESSAGE } from "../approval-choices";
 import { buildOperatorWaits } from "../operator-waits";

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPendingRequestActions,
   buildPendingRequestResponse,
-  deriveInboxState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pending-request-response";
+import { deriveInboxState } from "@pwragent/shared/inbox";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
@@ -3341,6 +3341,26 @@ describe("AcpAgentClient", () => {
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
     ]);
+  });
+
+  it("cancels a pending memory read before sending an ACP prompt", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({ backendId: "acp:codex-acp", store, transport });
+    try {
+      const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+      const memory = Promise.withResolvers<string>();
+      const readAgentMemory = vi.fn(() => memory.promise);
+      client.startPrompt({ sessionId: session.sessionId, prompt: "stop this", readAgentMemory });
+      await vi.waitFor(() => expect(readAgentMemory).toHaveBeenCalledOnce());
+      await client.cancelSession(session.sessionId);
+      await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
+      memory.resolve("private context");
+      await memory.promise;
+      expect(transport.requests.some(({ method }) => method === "session/prompt")).toBe(false);
+      expect(transport.notifications).toEqual([]);
+    } finally {
+      await client.dispose();
+    }
   });
 
   it("can start prompts without waiting for completion and cancel sessions", async () => {

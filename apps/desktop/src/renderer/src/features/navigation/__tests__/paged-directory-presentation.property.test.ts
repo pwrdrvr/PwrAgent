@@ -1,7 +1,12 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryEntry,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation } from "../paged-directory-presentation";

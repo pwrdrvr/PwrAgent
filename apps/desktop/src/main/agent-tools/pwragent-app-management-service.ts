@@ -8,8 +8,8 @@ import type {
   PwrAgentAppResponse,
   PwrAgentCodexAppServerStatus,
   PwrAgentUpdateToolStatus,
-} from "@pwragent/shared";
-import { isPwrAgentUpdateVersion } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/app-tools";
+import { isPwrAgentUpdateVersion } from "@pwragent/shared/contracts/app-tools";
 import type {
   AppUpdateCheckResult,
   AppUpdateStatus,

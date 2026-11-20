@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { SubmitServerRequestRequest } from "@pwragent/shared";
+import type { SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";

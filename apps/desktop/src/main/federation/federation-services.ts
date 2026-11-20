@@ -1,13 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { Socket } from "node:net";
 import type {
-  AdvertiseServiceArgs, FederationCapability, ServiceThread, ThreadService,
-  ServiceExchange, ServiceExchangeResult, ServiceStreamData, ServiceStreamOpen, ServiceStreamOpened, ServiceStreamRenew,
-} from "@pwragent/shared";
+  AdvertiseServiceArgs,
+  ServiceThread,
+  ThreadService,
+  ServiceExchange,
+  ServiceExchangeResult,
+  ServiceStreamData,
+  ServiceStreamOpen,
+  ServiceStreamOpened,
+  ServiceStreamRenew,
+} from "@pwragent/shared/contracts/federation-services";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import {
-  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY,
-  FEDERATION_SERVICE_V2_METHODS, FEDERATION_SERVICE_V2_NOTIFICATIONS, isAppServerBackendKind,
-} from "@pwragent/shared";
+  FEDERATION_SERVICE_METHODS,
+  FEDERATION_SERVICE_CAPABILITY,
+  FEDERATION_SERVICE_V2_CAPABILITY,
+  FEDERATION_SERVICE_V2_METHODS,
+  FEDERATION_SERVICE_V2_NOTIFICATIONS,
+} from "@pwragent/shared/contracts/federation-services";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { FederationRouter } from "./federation-router";
 import {
   decodeServiceData, readServiceData, waitServiceFlushed, waitServiceReadable, writeServiceData,

@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { buildModelMenu } from "@pwragent/shared";
+import { buildModelMenu } from "@pwragent/shared/model-menu";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import type { CodexClientHost, CodexClientTransport } from "../codex-app-server/host";

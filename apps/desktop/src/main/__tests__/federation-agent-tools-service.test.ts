@@ -5,26 +5,30 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
-  FederationHealthStatus,
-  FederationHostInfo,
-  FederationLoadStatus,
   ListAttentionThreadsResult,
   ListFederationInstancesResult,
   ListInstanceProjectsResult,
-  ListBackendsRequest,
-  MaterializeDirectoryLaunchpadRequest,
+  SearchFederationThreadsResult,
+} from "@pwragent/shared/contracts/federation-tools";
+import type {
+  FederationHealthStatus,
+  FederationHostInfo,
+  FederationLoadStatus,
+} from "@pwragent/shared/contracts/federation";
+import type { ListBackendsRequest } from "@pwragent/shared/contracts/backend";
+import type { MaterializeDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
+import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   NavigationLaunchpadDefaults,
   NavigationQueryRequest,
   NavigationQueryPage,
-  SearchFederationThreadsResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import {
-  NAVIGATION_QUERY_MAX_PAGE_ROWS,
   THREAD_EXECUTION_MODES_BY_ACCESS,
   threadExecutionModeRank,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-execution-mode";
 import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { claudeModelOptions } from "../claude/claude-models";
 import {
@@ -531,6 +535,7 @@ describe("federation agent tools service", () => {
             kind: "directory",
             label: "PwrSnap",
             path: "/Users/op/pwrsnap",
+            checkoutPaths: ["/Users/op/PwrSnapOld", "/Users/op/pwrsnap"],
             threadKeys: [],
             needsAttentionCount: 0,
             launchpad: {
@@ -609,6 +614,7 @@ describe("federation agent tools service", () => {
         label: "PwrSnap",
         kind: "directory",
         path: "/Users/op/pwrsnap",
+        checkoutPaths: ["/Users/op/PwrSnapOld", "/Users/op/pwrsnap"],
         hasLaunchpad: true,
         backend: "codex",
       },
@@ -1107,7 +1113,7 @@ describe("federation agent tools service", () => {
     );
   });
 
-  it("remembers a remotely created thread and returns an addressed link", async () => {
+  it("launches on the peer's preferred checkout and returns an addressed link", async () => {
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "remote-thread-9",
@@ -1122,6 +1128,7 @@ describe("federation agent tools service", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
+          checkoutPaths: ["/repo-old", "/repo"],
           threadKeys: [],
           needsAttentionCount: 0,
         }] as NavigationSnapshot["directories"],
@@ -1169,6 +1176,8 @@ describe("federation agent tools service", () => {
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
+        directoryKey: "dir:/repo",
+        launchpad: expect.objectContaining({ directoryPath: "/repo" }),
         input: [{ type: "text", text: "Deploy the recoverable runner" }],
       }),
       {

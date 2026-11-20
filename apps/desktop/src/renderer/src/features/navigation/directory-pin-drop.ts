@@ -1,4 +1,5 @@
-import { moveDirectoryKey, type NavigationRelativePinMove } from "@pwragent/shared";
+import { moveDirectoryKey } from "@pwragent/shared/directory-pins";
+import { type NavigationRelativePinMove } from "@pwragent/shared/contracts/navigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 
 /**

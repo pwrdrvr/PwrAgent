@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { DesktopAppearanceDensity } from "@pwragent/shared";
+import type { DesktopAppearanceDensity } from "@pwragent/shared/contracts/settings";
 import { PinIcon } from "../../icons";
 import {
   setXrayPinned,

@@ -3,6 +3,7 @@
  * readiness marker followed by opaque HTTP bytes. No input is read until
  * identity verification succeeds. Process termination owns all pending I/O.
  * --maintenance-lock instead holds an existing advisory lock until stdin EOF.
+ * --local-file-marker reports only the modification time of a regular file.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <wchar.h>
+#include "local-file-marker.h"
 #include "maintenance-lock.h"
 #include "maintenance-allocation.h"
 
@@ -125,6 +127,7 @@ static DWORD WINAPI copy_bytes(void *arg) {
 }
 
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 4 && !wcscmp(argv[1], L"--local-file-marker")) return local_file_marker(argv[2], argv[3]);
   if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return maintenance_lock(argv[2]);
   if (argc >= 3 && !wcscmp(argv[1], L"--maintenance-allocation")) return maintenance_allocation(argc - 2, argv + 2);
   if (argc != 2) fail("expected one endpoint");
@@ -148,6 +151,7 @@ int wmain(int argc, wchar_t **argv) {
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include "local-file-marker.h"
 #include "maintenance-lock.h"
 #ifdef __APPLE__
 #include <sys/acl.h>
@@ -313,6 +317,7 @@ static void transfer_write(int fd, Buffer *buffer) {
   buffer->start += (size_t)n;
 }
 int main(int argc, char **argv) {
+  if (argc == 4 && !strcmp(argv[1], "--local-file-marker")) return local_file_marker(argv[2], argv[3]);
   if (argc == 3 && !strcmp(argv[1], "--maintenance-lock")) return maintenance_lock(argv[2]);
   if (argc != 2) { errno = EINVAL; fail("expected one endpoint"); }
   signal(SIGPIPE, SIG_IGN);

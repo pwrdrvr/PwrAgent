@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FEDERATION_INVITE_VERSION } from "@pwragent/shared";
+import { FEDERATION_INVITE_VERSION } from "@pwragent/shared/contracts/federation";
 import {
   buildFederationProofMessage,
   completeFederationEnrollment,

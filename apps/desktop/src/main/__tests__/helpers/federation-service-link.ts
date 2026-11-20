@@ -1,8 +1,11 @@
 import type {
-  FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope, FederationServiceDataEnvelope,
-  ServiceStreamData,
-} from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+  FederationCapability,
+  FederationNotificationEnvelope,
+  FederationProtocolEnvelope,
+  FederationServiceDataEnvelope,
+} from "@pwragent/shared/contracts/federation";
+import type { ServiceStreamData } from "@pwragent/shared/contracts/federation-services";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import { registerFederationServices, SERVICE_METHOD_CAPABILITIES, type FederationServices } from "../../federation/federation-services";
 import type { FederationServiceForwarder } from "../../federation/federation-service-forwarder";
 import { FederationRouter } from "../../federation/federation-router";

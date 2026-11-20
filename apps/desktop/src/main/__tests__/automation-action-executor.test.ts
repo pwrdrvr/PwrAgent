@@ -6,7 +6,7 @@ import {
   setAutomationSourceMessageDeliveryHandler,
   setAutomationTargetMessageDeliveryHandler,
 } from "../automations/automation-action-executor";
-import type { AutomationRunArtifact } from "@pwragent/shared";
+import type { AutomationRunArtifact } from "@pwragent/shared/contracts/automations";
 
 afterEach(() => {
   setAutomationSourceMessageDeliveryHandler(undefined);

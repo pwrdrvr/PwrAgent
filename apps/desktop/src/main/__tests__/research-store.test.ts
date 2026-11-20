@@ -3,7 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchService, type ResearchPorts } from "@pwragent/owner-core/research-service";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import { projectResearchRun, researchEventPage, searchResearchItems, summarizeResearchRun, type ResearchActor, type ResearchApproach, type ResearchEvent, type ResearchEventData, type ResearchSearchQuery } from "@pwragent/shared";
+import {
+  projectResearchRun,
+  researchEventPage,
+  searchResearchItems,
+  summarizeResearchRun,
+  type ResearchActor,
+  type ResearchApproach,
+  type ResearchEvent,
+  type ResearchEventData,
+  type ResearchSearchQuery,
+} from "@pwragent/shared/research";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";

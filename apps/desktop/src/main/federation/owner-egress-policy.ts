@@ -1,4 +1,4 @@
-import type { FederationPeerRole, FederationProtocolEnvelope } from "@pwragent/shared";
+import type { FederationPeerRole, FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import { assertFederationEgress } from "@pwragent/federation/federation-egress";
 import type { FederationRefusalAudit } from "@pwragent/federation/federation-router";
 

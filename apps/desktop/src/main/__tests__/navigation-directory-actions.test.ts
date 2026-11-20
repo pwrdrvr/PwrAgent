@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
-import { deriveInboxState } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { deriveInboxState } from "@pwragent/shared/inbox";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { markAgentProjectRead } from "../app-server/agent-project-read";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";

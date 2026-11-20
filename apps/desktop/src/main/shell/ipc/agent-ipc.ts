@@ -3,7 +3,7 @@ import type {
   ListBackgroundTerminalsResponse,
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
 import { registerResearchIpcHandlers, disposeResearchIpcHandlers } from "./research-ipc";
 import { registerDecisionsRailIpcHandlers, disposeDecisionsRailIpcHandlers } from "./decisions-rail-ipc";
 import {
@@ -14,7 +14,7 @@ import { projectThreadDisplayEvent } from "../../app-server/thread-display-event
 import { getDesktopNavigationQueryPool } from "../../app-server/navigation-query-pool";
 import { stageQueuedFileInputs } from "../../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
-import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
+import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../../settings/provider-discovery-permit";
 import {
@@ -48,11 +48,11 @@ import {
   type MaterializeDirectoryLaunchpadResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
+  type DismissFailedSubAgentsRequest,
+  type DismissFailedSubAgentsResponse,
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type LatestCodexConfigWarningResponse,
-  type ListBackendsRequest,
-  type ListBackendsResponse,
   type ListCodexMcpServersRequest,
   type ListCodexMcpServersResponse,
   type ListThreadMcpServersRequest,
@@ -110,8 +110,9 @@ import {
   type TrustCodexProjectResponse,
   type UpdateThreadExpectedBranchRequest,
   type UpdateThreadExpectedBranchResponse,
-} from "@pwragent/shared";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import { type ListBackendsRequest, type ListBackendsResponse } from "@pwragent/shared/contracts/backend";
+import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
@@ -144,6 +145,7 @@ import {
   CODEX_MCP_SERVER_LOGIN_CHANNEL,
   CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_LAUNCHPAD_CREATION_CHANNEL,
@@ -1030,6 +1032,20 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL);
+  ipcMain.handle(
+    AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
+    async (_event, request: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse> => {
+      const target = request?.federationTarget;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .dismissFailedSubAgents(stripFederationTarget(request));
+      }
+      return await registry.dismissFailedSubAgents(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.handle(
     AGENT_STOP_SUB_AGENT_CHANNEL,
@@ -1439,7 +1455,7 @@ export function registerAgentIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(AGENT_LAUNCHPAD_CREATION_CHANNEL);
-  ipcMain.handle(AGENT_LAUNCHPAD_CREATION_CHANNEL, async (_event, request: import("@pwragent/shared").LaunchpadCreationRequest) => {
+  ipcMain.handle(AGENT_LAUNCHPAD_CREATION_CHANNEL, async (_event, request: import("@pwragent/shared/contracts/agent").LaunchpadCreationRequest) => {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       return await getDesktopFederationRuntime().remoteBackend(request.federationTarget)
         .manageLaunchpadCreation(stripFederationTarget(request));
@@ -1611,6 +1627,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);

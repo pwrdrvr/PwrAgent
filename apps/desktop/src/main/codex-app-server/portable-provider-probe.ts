@@ -2,7 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { buildCodexModelProviderConfigOverrides, buildCodexModelProviderShellEnvOverrides, codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
+import {
+  buildCodexModelProviderConfigOverrides,
+  buildCodexModelProviderShellEnvOverrides,
+  codexModelProviderApiKeyEnv,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
 import { CodexAppServerClient } from "./desktop-client";
 import { preparePortableProviderRuntime } from "./portable-provider-runtime";
 

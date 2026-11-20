@@ -7,8 +7,9 @@ import {
   useRef,
   useState,
 } from "react";
-import type { DismissOperatorQuestionRequest, TodoUnavailableInstance } from "@pwragent/shared";
-import { operatorQuestionItemKey } from "@pwragent/shared";
+import type { DismissOperatorQuestionRequest } from "@pwragent/shared/contracts/operator-requests";
+import type { TodoUnavailableInstance } from "@pwragent/shared/contracts/thread-todos";
+import { operatorQuestionItemKey } from "@pwragent/shared/contracts/operator-requests";
 import { useThreadItemGroups } from "../../lib/thread-item-groups";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { buildOperatorWaits, type OperatorWait } from "./operator-waits";

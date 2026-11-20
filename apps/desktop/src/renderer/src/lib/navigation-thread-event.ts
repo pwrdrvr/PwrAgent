@@ -1,5 +1,7 @@
-import { buildPullRequestStatusKey, normalizeRenamedTitleSource } from "@pwragent/shared";
-import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import { agentEventMatchesThread, federationTargetsEqual } from "./federated-thread-events";
 

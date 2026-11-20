@@ -11,13 +11,10 @@ import {
   type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  isSubthreadLaunchpadKey,
-  isWindowsFilesystemPath,
-  parseThreadJumpQuery,
-  textMatchesJumpQuery,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { isSubthreadLaunchpadKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
+import { parseThreadJumpQuery } from "@pwragent/shared/thread-jump-match";
+import { textMatchesJumpQuery } from "@pwragent/shared/jump-search-text";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";

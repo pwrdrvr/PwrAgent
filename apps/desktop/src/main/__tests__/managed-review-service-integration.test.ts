@@ -35,21 +35,21 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerReviewContext,
   AppServerThreadEntry,
   AppServerTurnInputItem,
-  BackendAcpSessionRuntimeState,
   CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
-  ThreadOverlayState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { reviewStartFailureFingerprint } from "../app-server/thread-orchestration-prompts";
 import { buildTurnUserMessageOriginId } from "../app-server/thread-transcript-helpers";

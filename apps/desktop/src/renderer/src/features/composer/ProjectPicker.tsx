@@ -1,6 +1,5 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
-import type { } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";

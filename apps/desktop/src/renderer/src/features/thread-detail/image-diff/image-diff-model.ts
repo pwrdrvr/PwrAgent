@@ -5,7 +5,7 @@ import {
   type WorktreeOtherChangeStatus,
   type WorktreeUnpublishedCommit,
   type WorktreeUnpublishedCommitFile,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 
 /**
  * The image half of the Edits rail: which rows are pictures, which revisions

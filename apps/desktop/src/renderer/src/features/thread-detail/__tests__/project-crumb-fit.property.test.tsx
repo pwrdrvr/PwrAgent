@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { cssRuleBody } from "../../../styles/__tests__/css-rule-body";
 import { ThreadHeader } from "../ThreadHeader";
 import { ThreadPlaceholderHeader } from "../ThreadPlaceholderHeader";

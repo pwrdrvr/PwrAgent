@@ -3,7 +3,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadPlanStep,
   AppServerThreadReviewEntry,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   MessagingCapabilityProfile,
   MessagingMessageIntent,

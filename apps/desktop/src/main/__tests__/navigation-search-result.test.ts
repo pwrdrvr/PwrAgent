@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { rankThreadJumpMatches, type NavigationThreadSummary } from "@pwragent/shared";
+import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { compactNavigationSearchResult } from "../federation/navigation-search-result";
 import { federationTransportCodecForTest } from "../federation/federation-transport";
 

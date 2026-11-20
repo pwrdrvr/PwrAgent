@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadActivityEntry } from "@pwragent/shared";
+import type { AppServerThreadActivityEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { TranscriptActivity } from "../TranscriptActivity";
 import { TranscriptWorkPhaseGroup } from "../TranscriptWorkPhaseGroup";
 

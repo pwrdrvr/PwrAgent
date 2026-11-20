@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OwnerThreadMetadataPatch, OwnerThreadRecord } from "@pwragent/owner-core/thread-storage";
-import type { ThreadDependency } from "@pwragent/shared";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore as PortableOverlay } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { ThreadDependencyStore as PortableDependencies } from "@pwragent/sqlite-storage/thread-dependency-store";

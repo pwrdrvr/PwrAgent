@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { deflateSync, inflateSync } from "node:zlib";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { ConnectionRpcClient } from "../mcp-connections/mcp-connection-rpc-client";
 import { readPwrSnapImageContents, readPwrSnapImageLinks } from "../mcp-connections/pwrsnap-media-links";
 import { materializeTranscriptImageEventForRenderer, materializeTranscriptMessageImagesForMessaging } from "../transcript-images";

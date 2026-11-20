@@ -1,6 +1,6 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
@@ -34,7 +34,7 @@ function createOverlayStoreMock() {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      agent: import("@pwragent/shared").ThreadOverlayState["agent"] | null;
+      agent: import("@pwragent/shared/contracts/navigation").ThreadOverlayState["agent"] | null;
     }) => ({
       backend,
       threadId,

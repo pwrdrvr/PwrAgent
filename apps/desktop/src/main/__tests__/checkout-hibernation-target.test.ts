@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { HIBERNATION_KEEP_REASONS, hibernationTarget } from "../app-server/checkout-hibernation";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 

@@ -7,7 +7,8 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
-import { describeMergeQueueRemoval, describeMergeQueueState, type PrMergeQueueStatus } from "@pwragent/shared";
+import { describeMergeQueueRemoval, describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
+import { type PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,

@@ -1,30 +1,36 @@
-import { matchesAutomationConversation } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   AutomationBacklogPolicy,
   AutomationDetail,
   AutomationInboundConditionGroup,
   AutomationInboundMessageTriggerDefinition,
   AutomationMessagingConversationSnapshot,
   AutomationScheduleDefinition,
-  BackendSummary,
   AutomationSourceMessageDestination,
   AutomationWeekday,
   CreateAutomationRequest,
+  UpdateAutomationRequest,
+} from "@pwragent/shared/contracts/automations";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
   DesktopMessagingSettingsProjection,
+  ListDiscordThreadPermissionChannelsResponse,
+} from "@pwragent/shared/contracts/settings";
+import type {
   InboundPreviewMessage,
   InboundTopicOption,
-  ListDiscordThreadPermissionChannelsResponse,
   MessagingChannelKind,
   MessagingConversationKind,
   MessagingSenderSuggestion,
-  NavigationThreadSummary,
-  ThreadExecutionMode,
-  ThreadIdentifier,
-  UpdateAutomationRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS,
   AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS,
@@ -32,7 +38,6 @@ import {
   DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
   automationConversationKey,
   buildAutomationInboundTriggerId,
-  buildThreadIdentityKey,
   evaluateAutomationInboundConditions,
   findAutomationConversationIndexForMessage,
   formatAutomationConversationLabel,
@@ -40,9 +45,9 @@ import {
   formatAutomationInboundConditionGroup,
   formatAutomationScheduleSummary,
   normalizeInboundTriggerConditions,
-  parseThreadIdentityKey,
   validateAutomationScheduleDefinition,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
+import { buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
@@ -53,6 +58,11 @@ import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
 import { formatAutomationRelative } from "./automation-format";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
+import {
+  AutomationRunLimitsFields,
+  limitSelectValue,
+  parseLimitSelectValue,
+} from "./AutomationRunLimitsFields";
 import { ProjectPicker } from "../composer/ProjectPicker";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
 import { ModelDropdown } from "../composer/ModelDropdown";
@@ -254,6 +264,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [enabled, setEnabled] = useState(initialAutomation?.status !== "paused");
   const [backlogPolicy, setBacklogPolicy] = useState<AutomationBacklogPolicy>(
     initialAutomation?.backlogPolicy ?? "coalesce",
+  );
+  const [runTimeoutMs, setRunTimeoutMs] = useState(
+    limitSelectValue(initialAutomation?.runTimeoutMs),
+  );
+  const [dailyRunLimit, setDailyRunLimit] = useState(
+    limitSelectValue(initialAutomation?.dailyRunLimit),
   );
   const [threadKey, setThreadKey] = useState(initialThreadKey);
   const [chosenAgentOption, setChosenAgentOption] = useState<AgentThreadOption>();
@@ -1659,10 +1675,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
           automationId: props.mode.automation.id,
           ...assignment,
           backlogPolicy,
+          dailyRunLimit: parseLimitSelectValue(dailyRunLimit),
           enabled,
           executionProfile,
           gate: gate.gate,
           priorRunLookback: priorRunLookback ?? null,
+          runTimeoutMs: parseLimitSelectValue(runTimeoutMs),
           ...(triggerKind === "inbound_message"
             ? {
                 inboundCoalesceWindowMs: parseCoalesceWindowMs(
@@ -1690,15 +1708,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
       return;
     }
 
+    const createDailyRunLimit = parseLimitSelectValue(dailyRunLimit);
+    const createRunTimeoutMs = parseLimitSelectValue(runTimeoutMs);
     await props.onSubmit({
       kind: "create",
       request: {
         ...assignment,
         backlogPolicy,
+        ...(createDailyRunLimit !== null ? { dailyRunLimit: createDailyRunLimit } : {}),
         enabled,
         executionProfile,
         gate: gate.gate,
         ...(priorRunLookback ? { priorRunLookback } : {}),
+        ...(createRunTimeoutMs !== null ? { runTimeoutMs: createRunTimeoutMs } : {}),
         ...(triggerKind === "inbound_message"
           ? {
               inboundCoalesceWindowMs: parseCoalesceWindowMs(
@@ -2570,6 +2592,21 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 often and raise the urgency.&rdquo;
               </p>
             ) : null}
+
+            <AutomationRunLimitsFields
+              dailyRunLimit={dailyRunLimit}
+              pausedAtDailyLimit={initialAutomation?.pausedReason === "daily_run_limit"}
+              runTimeoutMs={runTimeoutMs}
+              runsInLast24Hours={initialAutomation?.runsInLast24Hours}
+              onDailyRunLimitChange={(value) => {
+                setDailyRunLimit(value);
+                setValidationError(undefined);
+              }}
+              onRunTimeoutChange={(value) => {
+                setRunTimeoutMs(value);
+                setValidationError(undefined);
+              }}
+            />
 
             <details className="automation-advanced">
               <summary className="automation-advanced__summary">

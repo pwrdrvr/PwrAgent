@@ -5,7 +5,7 @@ import type {
   DesktopOpenAIDecisionsSettings,
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { OpenAIDecisionsScreen } from "../OpenAIDecisionsSettings";
 import { modelServiceEntries } from "../provider-kinds";
 

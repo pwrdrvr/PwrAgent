@@ -3,12 +3,14 @@ import {
   BONSAI_2_27B_MODEL_ID,
   formatCodexProviderModelId,
   parseCodexProviderCatalogModel,
-  type BackendModelOption,
-  type CodexModelProviderCatalogState,
   type CodexModelProviderSettings,
   type CodexModelProviderTestResult,
   type CodexProviderCatalogModel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
+import {
+  type BackendModelOption,
+  type CodexModelProviderCatalogState,
+} from "@pwragent/shared/contracts/backend";
 import { prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { verifyProviderToolDiscovery } from "./provider-tool-discovery-probe";
 

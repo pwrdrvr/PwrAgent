@@ -1,7 +1,12 @@
 import { StrictMode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { FederationPeerSummary, NavigationDirectoryRow, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { FederationPeerSummary } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { useStarMapInstanceLoad } from "../useStarMapInstanceLoad";

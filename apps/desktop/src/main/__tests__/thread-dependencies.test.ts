@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ManageThreadDependenciesRequest, PrSummary, ThreadDependency, ThreadDependencyCondition, ThreadTodosChangedEvent } from "@pwragent/shared";
-import { summarizeThreadDependencyPrompt } from "@pwragent/shared";
+import type {
+  ManageThreadDependenciesRequest,
+  ThreadDependency,
+  ThreadDependencyCondition,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodosChangedEvent } from "@pwragent/shared/contracts/thread-todos";
+import { summarizeThreadDependencyPrompt } from "@pwragent/shared/contracts/thread-system-messages";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import {

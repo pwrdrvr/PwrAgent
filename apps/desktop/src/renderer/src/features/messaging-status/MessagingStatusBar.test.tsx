@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopMessagingSettingsProjection,
   DesktopSettingsSnapshot,
+} from "@pwragent/shared/contracts/settings";
+import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { HOVER_TRANSITION_GRACE_MS } from "../../lib/useHoverTransitionGrace";
 import discordBlurpleUrl from "../../assets/discord/symbol-blurple.svg";

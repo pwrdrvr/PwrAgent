@@ -1,17 +1,16 @@
-import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared";
+import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
   AppServerBackendKind,
-  BackendModelOption,
-  BackendSummary,
-  CodexEnvironmentOption,
   HandoffThreadWorkspaceRequest,
-  MessagingToolUpdateMode,
   ThreadExecutionMode,
   ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CodexEnvironmentOption } from "@pwragent/shared/contracts/navigation";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingBindingRecord,
   MessagingProjectPickerIntent,
@@ -23,11 +22,8 @@ import type {
   MessagingSurfaceAction,
   MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
-import {
-  isAcpBackendId,
-  isAppServerBackendKind,
-  shortenDerivedThreadTitle,
-} from "@pwragent/shared";
+import { isAcpBackendId, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,

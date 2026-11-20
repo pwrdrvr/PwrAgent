@@ -20,11 +20,8 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
-import {
-  federatedThreadIdentityKey,
-  type FederatedThreadRef,
-} from "@pwragent/shared";
+import { normalizeMessagingBindingTargetKind } from "@pwragent/shared/contracts/messaging";
+import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
   CURRENT_MESSAGING_STORE_VERSION,
   migrateMessagingStoreData,
@@ -853,6 +850,29 @@ export class MessagingStore {
 
   async getDelivery(id: string): Promise<MessagingDeliveryRecord | undefined> {
     return await this.withReadData((data) => cloneOptional(data.deliveries[id]));
+  }
+
+  async listDeliveriesWithIdPrefix(
+    prefix: string,
+  ): Promise<MessagingDeliveryRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.deliveries)
+        .filter((delivery) => delivery.id.startsWith(prefix))
+        .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+        .map((delivery) => structuredClone(delivery))
+    );
+  }
+
+  async settleDelivery(params: {
+    openId: string;
+    delivery: MessagingDeliveryRecord;
+  }): Promise<MessagingDeliveryRecord> {
+    const sanitized = sanitizeDelivery(params.delivery);
+    return await this.withData((data) => {
+      delete data.deliveries[params.openId];
+      data.deliveries[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
   }
 
   async readSnapshot(): Promise<MessagingStoreData> {

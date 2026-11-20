@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadTurnMetadata, ThreadDependency } from "@pwragent/shared";
+import type { AppServerThreadTurnMetadata } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { CodexThreadBusyBeforeStartError, classifyCodexResumeError } from "../codex-app-server/desktop-client";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
