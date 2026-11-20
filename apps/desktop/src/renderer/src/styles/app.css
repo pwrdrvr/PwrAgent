@@ -29418,8 +29418,20 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   margin-top: 0;
 }
 
+/* A real box, so the open group's toggle has something to pin within: under
+   `display: contents` its containing block was the whole transcript and it
+   could never unpin. Its children were already flex items of a column with
+   this gap, and the box spans the column, so they dock as they did. */
 .transcript-work-phase-group {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcript-work-phase-group__header {
+  display: flex;
+  min-width: 0;
 }
 
 .transcript-work-phase-group__toggle,
@@ -36757,10 +36769,31 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
 }
 
+/* A command card never needs two scrolls. Its height is cut to what is left
+   of the transcript scrollport under the headers pinned above it, less a
+   strip that shows the next row, so the whole card is in view whenever its
+   pinned header is. The command and the output scroll inside it and share
+   the height by their length; `--transcript-pane-lines` (a pane's own line
+   count, at most six) is the floor that keeps a one-line command from being
+   squeezed out by ten thousand lines of output. The scrollport height is
+   published on the card by `useTranscriptScrollportHeight`; outside a
+   transcript the viewport-unit fallback applies. */
 .transcript-command {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  max-height: max(
+    220px,
+    min(
+      calc(
+        var(--transcript-scrollport-height, 80vh)
+        - var(--transcript-pin-group, 0px)
+        - var(--transcript-pin-activity, 0px)
+        - var(--transcript-pin-detail, 0px)
+        - 48px
+      ),
+      720px
+    )
+  );
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -36769,11 +36802,12 @@ div.composer-error-row__toggle {
 
 .transcript-command__meta {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  padding: 10px 12px 0;
+  padding: 8px 12px;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -36781,72 +36815,278 @@ div.composer-error-row__toggle {
 .transcript-command__source,
 .transcript-command__status,
 .transcript-command__cwd,
+.transcript-command__pane-count,
 .transcript-command__block code,
 .transcript-command__output code {
   font-family: var(--font-mono);
 }
 
 .transcript-command__cwd {
+  flex: 0 0 auto;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 12px 8px;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.transcript-command__actions {
+/* One row above each pane: what the pane holds, how long it is, and the
+   controls that act on it. The row never scrolls, so Copy and Show less
+   stay reachable however far the pane is scrolled. */
+.transcript-command__pane-head {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  min-height: 32px;
+  padding: 0 6px 0 12px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.transcript-command__copy {
-  min-height: 28px;
-  padding: 0 10px;
+.transcript-command__pane-head--output {
+  background: var(--bg-panel);
+}
+
+.transcript-command__pane-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-command__pane-count {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.transcript-command__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.transcript-command__copy,
+.transcript-command__toggle {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.transcript-command__block,
+.transcript-command__output {
+  flex: 0 1 auto;
+  min-height: calc(var(--transcript-pane-lines, 1) * 12px * 1.55 + 20px);
+  margin: 0;
+  padding: 0 12px 10px;
+  overflow-y: auto;
+  color: var(--text-primary);
   font-size: 12px;
+  line-height: 1.55;
+  container-type: scroll-state;
+  --transcript-pane-surface: var(--bg-panel-elevated);
+}
+
+.transcript-command__output {
+  background: var(--bg-panel);
+  --transcript-pane-surface: var(--bg-panel);
 }
 
 .transcript-command__block,
 .transcript-command__output pre {
-  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.transcript-command__block {
-  padding: 0 12px 10px;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.transcript-command__output {
-  overflow-x: auto;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
 }
 
 .transcript-command__output pre,
 .transcript-command__output p {
   margin: 0;
-  padding: 10px 12px;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.55;
 }
 
 .transcript-command__output p {
   color: var(--text-muted);
 }
 
-.transcript-command__toggle {
-  align-self: flex-start;
-  min-height: 28px;
-  margin: 0 12px 12px;
-  padding: 0 10px;
-  font-size: 12px;
+.transcript-command__block:focus-visible,
+.transcript-command__output:focus-visible,
+.transcript-activity .transcript-diff__rows:focus-visible,
+.transcript-subagent__output:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Overflow cue, as on the composer's bands: macOS draws no scrollbar until
+   the pane is scrolled, so a pane cut mid-line looked complete. Each edge
+   fades into the pane's surface while text lies past it. The fades are
+   sticky to the scrollport edges and take no height. */
+.transcript-command__block::before,
+.transcript-command__block::after,
+.transcript-command__output::before,
+.transcript-command__output::after {
+  content: "";
+  display: block;
+  position: sticky;
+  z-index: 1;
+  height: 20px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.transcript-command__block::before,
+.transcript-command__output::before {
+  top: 0;
+  margin-bottom: -20px;
+  background: linear-gradient(
+    to bottom,
+    var(--transcript-pane-surface) 0%,
+    transparent 100%
+  );
+}
+
+/* Chromium pins inside the pane's padding, so the bottom fade steps back out
+   over the 10px the pane carries there. */
+.transcript-command__block::after,
+.transcript-command__output::after {
+  bottom: -10px;
+  margin-top: -20px;
+  background: linear-gradient(
+    to top,
+    var(--transcript-pane-surface) 0%,
+    transparent 100%
+  );
+}
+
+@container scroll-state(scrollable: top) {
+  .transcript-command__block::before,
+  .transcript-command__output::before {
+    opacity: 1;
+  }
+}
+
+@container scroll-state(scrollable: bottom) {
+  .transcript-command__block::after,
+  .transcript-command__output::after {
+    opacity: 1;
+  }
+}
+
+/* Pinned disclosure headers. While an open work group, activity or detail
+   row is being scrolled through, the control that opened it stays at the top
+   of the transcript, so closing it is one click from anywhere inside it.
+   The three levels stack in the order they nest: each open level adds one
+   `--transcript-pin-step` to the `top` of the levels inside it, and the
+   fitted bodies subtract the same sum from their height.
+
+   A header pins at the scroller's content edge, 12px under the scrollport's
+   top, where the top fade has already thinned out. Its ::before is the
+   surface behind it: nothing at rest, and while stuck the transcript's own
+   background from the scrollport's top edge down to a closing rule, so the
+   body scrolls under the header instead of through it. */
+.transcript-list__items {
+  --transcript-pin-step: 28px;
+}
+
+.transcript-work-phase-group[data-expanded="true"] {
+  --transcript-pin-group: var(--transcript-pin-step);
+}
+
+.transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) {
+  --transcript-pin-activity: var(--transcript-pin-step);
+}
+
+.transcript-activity__detail[data-expanded="true"] {
+  --transcript-pin-detail: var(--transcript-pin-step);
+}
+
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header,
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header),
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row {
+  position: sticky;
+  container-type: scroll-state;
+}
+
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header {
+  top: 0;
+  z-index: 6;
+}
+
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header) {
+  top: var(--transcript-pin-group, 0px);
+  z-index: 5;
+}
+
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row {
+  top: calc(var(--transcript-pin-group, 0px) + var(--transcript-pin-activity, 0px));
+  z-index: 4;
+}
+
+/* An open row's label is one line. A command label wraps to three or four
+   lines, and pinned at that height it would cover the top of the body it
+   heads and overrun the step the levels below are offset by. The body shows
+   the whole command directly underneath. */
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > .transcript-activity__header .transcript-activity__label,
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row .transcript-activity__detail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header::before,
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header)::before,
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+  z-index: -1;
+  pointer-events: none;
+}
+
+@container scroll-state(stuck: top) {
+  .transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header::before,
+  .transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header)::before,
+  .transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
+    top: -12px;
+    bottom: -3px;
+    background: var(--bg-app);
+    box-shadow: 0 1px 0 var(--border-subtle);
+  }
+}
+
+/* Tab scrolls a control to the scrollport's top edge, where the pinned
+   headers are. It stops below them and the ring's reach. */
+.transcript-list__items :is(
+  .transcript-work-phase-group[data-expanded="true"],
+  .transcript-activity[data-expanded="true"]
+) :where(:focus-visible) {
+  scroll-margin-top: calc(
+    var(--transcript-pin-group, 0px)
+    + var(--transcript-pin-activity, 0px)
+    + var(--transcript-pin-detail, 0px)
+    + 22px
+  );
+}
+
+/* A diff inside the transcript is cut to the scrollport the same way as a
+   command card, less the path and toolbar rows above its lines. The Edits
+   rail scrolls its own body and keeps the diff whole. */
+.transcript-activity .transcript-diff__rows {
+  max-height: max(
+    220px,
+    min(
+      calc(
+        var(--transcript-scrollport-height, 80vh)
+        - var(--transcript-pin-group, 0px)
+        - var(--transcript-pin-activity, 0px)
+        - var(--transcript-pin-detail, 0px)
+        - 140px
+      ),
+      720px
+    )
+  );
+  overflow-y: auto;
 }
 
 /* Delegated-agent lifecycle activity: distinct from a shell transcript so a
@@ -36964,6 +37204,8 @@ div.composer-error-row__toggle {
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
 }
 
 .transcript-diff {

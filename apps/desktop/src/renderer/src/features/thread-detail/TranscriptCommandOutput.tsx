@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   type AppServerSkillSummary,
@@ -20,6 +20,7 @@ import {
 import { ThreadChip } from "./ThreadChip";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptSubAgentCall } from "./TranscriptSubAgentCall";
+import { useTranscriptScrollportHeight } from "./transcript-scroll-fit";
 
 type TranscriptCommandOutputProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -36,6 +37,7 @@ type TranscriptCommandOutputProps = {
 
 const PREVIEW_LINE_LIMIT = 12;
 const PREVIEW_CHARACTER_LIMIT = 3_000;
+const PANE_MIN_LINES = 6;
 
 export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
   if (props.detail.command?.subAgent) {
@@ -103,7 +105,10 @@ export function TranscriptThreadToolActivity(props: {
     : "Read thread";
   const statusText = formatCommandStatus(props.detail);
   return (
-    <aside className="transcript-activity transcript-thread-tool">
+    <aside
+      className="transcript-activity transcript-thread-tool"
+      data-expanded={props.expanded ? "true" : undefined}
+    >
       <header className="transcript-thread-tool__header">
         <button
           type="button"
@@ -347,7 +352,10 @@ export function TranscriptPullRequestWatchActivity(props: {
     );
   }
   return (
-    <aside className="transcript-activity transcript-thread-tool">
+    <aside
+      className="transcript-activity transcript-thread-tool"
+      data-expanded={props.expanded ? "true" : undefined}
+    >
       <header className="transcript-thread-tool__header">
         <button
           type="button"
@@ -503,13 +511,20 @@ function formatThreadToolMessageRole(role: string | undefined): string {
 
 function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useTranscriptScrollportHeight(cardRef);
   const command = props.detail.command;
   const output = useMemo(() => sanitizeCommandOutput(command?.output), [command?.output]);
   if (!command) {
     return null;
   }
 
-  const preview = buildOutputPreview(output, isExpanded);
+  // The collapsed preview decides whether there is anything to toggle. Asking
+  // the expanded one hid "Show less" as soon as the output was opened.
+  const collapsedPreview = buildOutputPreview(output, false);
+  const preview = isExpanded
+    ? buildOutputPreview(output, true)
+    : collapsedPreview;
   const statusText = formatCommandStatus(props.detail);
   const source =
     command.source ??
@@ -524,34 +539,16 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
     ? formatPathRelativeToDirectories(command.cwd, props.directoryPaths)
     : undefined;
 
+  const commandLineCount = countLines(fullCommand);
+  const outputLineCount = output ? countLines(output) : 0;
+  const shownOutputLineCount = preview.text ? countLines(preview.text) : 0;
+
   return (
-    <div className="transcript-command">
+    <div className="transcript-command" ref={cardRef}>
       <div className="transcript-command__meta">
         <span className="transcript-command__source">{sourceLabel}</span>
         {statusText ? (
           <span className="transcript-command__status">{statusText}</span>
-        ) : null}
-      </div>
-      <div className="transcript-command__actions">
-        <button
-          type="button"
-          className="button button--ghost transcript-command__copy"
-          onClick={() => {
-            void copyText(fullCommand);
-          }}
-        >
-          {source === "tool" ? "Copy invocation" : "Copy command"}
-        </button>
-        {output ? (
-          <button
-            type="button"
-            className="button button--ghost transcript-command__copy"
-            onClick={() => {
-              void copyText(output);
-            }}
-          >
-            Copy output
-          </button>
         ) : null}
       </div>
       {command.cwd ? (
@@ -559,28 +556,104 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
           {displayCwd}
         </p>
       ) : null}
-      <pre className="transcript-command__block">
+      <div className="transcript-command__pane-head">
+        <span className="transcript-command__pane-label">
+          {source === "tool" ? "Invocation" : "Command"}
+        </span>
+        {commandLineCount > 1 ? (
+          <span className="transcript-command__pane-count">
+            {formatLineCount(commandLineCount)}
+          </span>
+        ) : null}
+        <span className="transcript-command__actions">
+          <button
+            type="button"
+            className="button button--ghost transcript-command__copy"
+            onClick={() => {
+              void copyText(fullCommand);
+            }}
+          >
+            {source === "tool" ? "Copy invocation" : "Copy command"}
+          </button>
+        </span>
+      </div>
+      <pre
+        className="transcript-command__block"
+        aria-label={source === "tool" ? "Invocation" : "Command"}
+        style={paneLineStyle(commandLineCount)}
+        tabIndex={0}
+      >
         <code>
           {source === "tool" ? fullCommand : `$ ${fullCommand}`}
         </code>
       </pre>
-      <div className="transcript-command__output" aria-label={`${props.detail.label} output`}>
+      <div className="transcript-command__pane-head transcript-command__pane-head--output">
+        <span className="transcript-command__pane-label">Output</span>
+        {outputLineCount > 1 ? (
+          <span className="transcript-command__pane-count">
+            {formatLineCount(outputLineCount)}
+          </span>
+        ) : null}
+        <span className="transcript-command__actions">
+          {collapsedPreview.isTruncated ? (
+            <button
+              type="button"
+              className="button button--ghost transcript-command__toggle"
+              aria-expanded={isExpanded}
+              onClick={() => {
+                setIsExpanded((current) => !current);
+              }}
+            >
+              {isExpanded ? "Show less" : collapsedPreview.summary}
+            </button>
+          ) : null}
+          {output ? (
+            <button
+              type="button"
+              className="button button--ghost transcript-command__copy"
+              onClick={() => {
+                void copyText(output);
+              }}
+            >
+              Copy output
+            </button>
+          ) : null}
+        </span>
+      </div>
+      <div
+        className="transcript-command__output"
+        aria-label={`${props.detail.label} output`}
+        role="group"
+        style={paneLineStyle(shownOutputLineCount)}
+        tabIndex={0}
+      >
         {preview.text ? <pre><code>{preview.text}</code></pre> : <p>No output captured.</p>}
       </div>
-      {preview.isTruncated ? (
-        <button
-          type="button"
-          className="button button--ghost transcript-command__toggle"
-          aria-expanded={isExpanded}
-          onClick={() => {
-            setIsExpanded((current) => !current);
-          }}
-        >
-          {isExpanded ? "Show less" : preview.summary}
-        </button>
-      ) : null}
     </div>
   );
+}
+
+function countLines(text: string): number {
+  let count = 1;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    count += 1;
+  }
+  return count;
+}
+
+function formatLineCount(count: number): string {
+  return `${count.toLocaleString()} lines`;
+}
+
+/**
+ * The fewest lines a pane keeps when the card is cut to the viewport: its own
+ * line count up to `PANE_MIN_LINES`. A one-line command beside ten thousand
+ * lines of output keeps its line; the output gives up the height.
+ */
+function paneLineStyle(lineCount: number): CSSProperties {
+  return {
+    "--transcript-pane-lines": Math.max(1, Math.min(lineCount, PANE_MIN_LINES)),
+  } as CSSProperties;
 }
 
 function isAgentCommand(rawCommand: string | undefined): boolean {

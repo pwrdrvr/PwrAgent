@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   buildDiffView,
@@ -8,6 +8,7 @@ import {
   type DiffView
 } from "../../../../shared/diff-focus";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { useTranscriptScrollportHeight } from "./transcript-scroll-fit";
 
 type TranscriptDiffProps = {
   detail: AppServerThreadActivityDetail;
@@ -31,6 +32,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   }>({ loading: false });
   const diff = props.detail.fileDiff;
   const desktopApi = useDesktopApi();
+  const rowsRef = useRef<HTMLDivElement>(null);
   const diffRefs = useMemo(
     () => diff?.diffRefs ?? (diff?.diffRef ? [diff.diffRef] : []),
     [diff?.diffRef, diff?.diffRefs],
@@ -149,6 +151,16 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     return focusedView ?? buildDiffView(parsed, { mode: "condensed" });
   }, [eligibility.eligible, focusedView, fullView, parsed]);
   const visibleView = isZoomedIn ? fullView : defaultView;
+  // The rows mount only once the diff has loaded.
+  useTranscriptScrollportHeight(
+    rowsRef,
+    Boolean(
+      diff
+        && !omittedReason
+        && !(shouldFetchDiff && fetchedDiff.loading)
+        && fullView.rows.length > 0,
+    ),
+  );
 
   if (!diff) {
     return null;
@@ -223,7 +235,13 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
         ) : null}
       </div>
 
-      <div className="transcript-diff__rows" role="table" aria-label={`${props.detail.label} diff`}>
+      <div
+        ref={rowsRef}
+        className="transcript-diff__rows"
+        role="table"
+        aria-label={`${props.detail.label} diff`}
+        tabIndex={0}
+      >
         {visibleView.rows.map((row, index) => {
           if (row.kind === "separator") {
             return (
