@@ -199,7 +199,18 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let threadTitleGenerationService: RegistryDependencies["threadTitleGenerationService"];
   ownerAdmission = options?.ownerAdmission;
   const managedMaintenanceRoots = options?.managedWorktreeRoots
-    ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
+    ?? (async () => {
+      // A worktree folder adds its root; the home root stays managed so
+      // worktrees created before the folder was chosen still age out.
+      let folder: ReturnType<ReturnType<typeof getDesktopSettingsService>["resolveWorktreeFolder"]>;
+      try { folder = getDesktopSettingsService().resolveWorktreeFolder(); }
+      catch { folder = undefined; }
+      return [
+        userHomeWorktreesRoot(),
+        ...(folder ? [userHomeWorktreesRoot(folder.directory)] : []),
+        resolveActiveProfilePath("worktrees"),
+      ];
+    });
   const readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
     try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
     catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
@@ -916,6 +927,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       gitEnv: codexEnv,
       resolveWorktreeStorage: () =>
         getDesktopSettingsService().resolveWorktreeStorage(),
+      resolveWorktreeFolder: () =>
+        getDesktopSettingsService().resolveWorktreeFolder(),
     });
   const gitWorkingStateService =
     options?.gitWorkingStateService ??
@@ -1150,6 +1163,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       worktreeArchiveService: worktreeArchiveService,
       resolveWorktreeStorage: () =>
         getDesktopSettingsService().resolveWorktreeStorage(),
+      resolveWorktreeFolder: () =>
+        getDesktopSettingsService().resolveWorktreeFolder(),
     });
   const resolveAcpHelperWorkspace =
     options?.resolveAcpHelperWorkspace ?? ensureAcpHelperWorkspace;

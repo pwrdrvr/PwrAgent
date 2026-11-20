@@ -453,6 +453,10 @@ export type DesktopSettingsConfig = {
     archive?: DesktopThreadArchiveConfig;
     hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
+    /** `base_directory`: replaces the home folder for `user-home` worktrees. */
+    baseDirectory?: string;
+    /** `base_directory_includes_codex`: Codex threads use the folder too. */
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 
@@ -2407,7 +2411,36 @@ export function desktopSettingsPatchToEdits(
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
   }
+  if (patch.worktrees) edits.push(...worktreeFolderEdits(patch.worktrees, currentTables));
 
+  return edits;
+}
+
+/** `[worktrees]` folder keys, kept out of the patch function's bytecode budget. */
+function worktreeFolderEdits(
+  worktrees: NonNullable<DesktopSettingsConfigPatch["worktrees"]>,
+  currentTables: TomlTables,
+): TomlEdit[] {
+  const edits: TomlEdit[] = [];
+  if (worktrees.baseDirectory !== undefined) {
+    const baseDirectory = worktrees.baseDirectory?.trim();
+    if (baseDirectory) {
+      edits.push({ op: "set", path: ["worktrees", "base_directory"], value: baseDirectory });
+    } else {
+      // Use home folder clears the Codex opt-in too, so a later folder
+      // never moves Codex worktrees without being asked again.
+      for (const key of ["base_directory", "base_directory_includes_codex"]) {
+        if (currentTables["worktrees"]?.[key] !== undefined) edits.push({ op: "delete", path: ["worktrees", key] });
+      }
+    }
+  }
+  if (worktrees.baseDirectoryIncludesCodex !== undefined && worktrees.baseDirectory !== null) {
+    edits.push({
+      op: "set",
+      path: ["worktrees", "base_directory_includes_codex"],
+      value: worktrees.baseDirectoryIncludesCodex,
+    });
+  }
   return edits;
 }
 
@@ -2978,6 +3011,8 @@ function normalizeDesktopConfig(
         restoreOn: hibernate.restore_on === "send" || hibernate.restore_on === "open" ? hibernate.restore_on : undefined,
       } : undefined,
       storage: readWorktreeStorage(worktrees?.storage),
+      baseDirectory: readWorktreeBaseDirectory(worktrees?.base_directory),
+      baseDirectoryIncludesCodex: readBoolean(worktrees?.base_directory_includes_codex),
     },
   });
 }
@@ -4473,6 +4508,12 @@ function isDesktopMessagingImageProfile(
   value: string,
 ): value is DesktopMessagingImageProfile {
   return value === "low" || value === "medium" || value === "high" || value === "actual";
+}
+
+/** Only an absolute folder; a relative one would follow the process cwd. */
+function readWorktreeBaseDirectory(value: TomlScalar | undefined): string | undefined {
+  const directory = typeof value === "string" ? value.trim() : "";
+  return directory && path.isAbsolute(directory) ? directory : undefined;
 }
 
 function readWorktreeStorage(

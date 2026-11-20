@@ -892,6 +892,7 @@ export const SETTINGS_PICK_GLAB_COMMAND_CHANNEL =
 export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
   "settings:pick-git-command";
 export const SETTINGS_RECEIVING_FOLDER_CHANNEL = "settings:receiving-folder";
+export const SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL = "settings:worktree-folder-check";
 export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =
   "settings:refresh-git-discovery";
 export const SETTINGS_MANAGED_GIT_ACTION_CHANNEL =
