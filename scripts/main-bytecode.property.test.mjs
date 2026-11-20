@@ -92,6 +92,23 @@ it("uses V8 as the oracle when a nested anonymous helper crosses the operational
   }
 });
 
+it("returns one process's records in the caller's module order however the modules are split and the listing is read", async () => {
+  // The sizes differ, so the split by source size reorders the modules.
+  const modules = Array.from({ length: 7 }, (_, index) => {
+    const code = `export function f${index}(value) { ${"value.x++; ".repeat((index * 5) % 7 + 1)}return () => value; }`;
+    return index % 2
+      ? { file: `module-${index}.js`, variant: "production", code, esm: true }
+      : { file: `module-${index}.js`, variant: "Vitest", code: wrapVitestModule(code.replace("export ", "")) };
+  });
+  const oracle = await compileBytecode(modules, { processes: 1, listing: "pipe" });
+  expect([...new Set(oracle.records.map(({ file }) => file))]).toEqual(modules.map(({ file }) => file));
+  for (const options of [{ processes: 3, listing: "pipe" }, { processes: 1, listing: "file" }, { processes: 7, listing: "file" }, { processes: 20 }]) {
+    const { runtime, records } = await compileBytecode(modules, options);
+    expect(runtime, JSON.stringify(options)).toEqual(oracle.runtime);
+    expect(records, JSON.stringify(options)).toEqual(oracle.records);
+  }
+}, 60_000);
+
 // Compiler integrations launch isolated Vite/Node/Electron processes. Their
 // harness timeout allows compilation work; no assertion measures elapsed time.
 it("rejects an extracted anonymous helper in real SSR and Oxc output, then accepts separated frames", async () => {

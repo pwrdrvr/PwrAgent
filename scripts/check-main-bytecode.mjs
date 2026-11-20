@@ -51,10 +51,12 @@ async function check() {
       });
     }
     console.log(`Transform complete: ${modules.length} test modules, ${production.length} production chunks`);
-    const node = await compileBytecode([...modules, ...production]);
-    console.log(`Node compilation complete: ${node.records.length} records`);
     const executable = createRequire(resolve(root, "apps/desktop/package.json"))("electron");
-    const electron = production.length ? await compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined;
+    const [node, electron] = await Promise.all([
+      compileBytecode([...modules, ...production]),
+      production.length ? compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined,
+    ]);
+    console.log(`Node compilation complete: ${node.records.length} records`);
     console.log(`Electron compilation complete: ${electron?.records.length ?? 0} records`);
     const runtimeFiles = production.filter((module) => !module.map && /\/rolldown-runtime-[^/]+\.js$/.test(module.file)).map(({ file }) => file);
     const records = [];

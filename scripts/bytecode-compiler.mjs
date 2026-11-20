@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { resolve } from "node:path";
-import { writeSync } from "node:fs";
+import { availableParallelism, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { closeSync, createReadStream, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { setFlagsFromString } from "node:v8";
 import vm from "node:vm";
@@ -40,13 +41,44 @@ async function compilerChild() {
   await ended;
 }
 
+// One process compiles and prints every function on one core. Each module
+// compiles alone, so its records do not depend on the modules beside it, and
+// the modules are split across processes by source size.
 export async function compileBytecode(modules, options = {}) {
+  const count = Math.max(1, Math.min(options.processes ?? availableParallelism(), modules.length));
+  const shards = Array.from({ length: count }, () => ({ size: 0, modules: [] }));
+  for (const module of [...modules].sort((a, b) => b.code.length - a.code.length)) {
+    const shard = shards.reduce((least, candidate) => candidate.size < least.size ? candidate : least);
+    shard.size += module.code.length;
+    shard.modules.push(module);
+  }
+  const results = await Promise.all(shards.map((shard) => compileShard(shard.modules, options)));
+  const key = ({ file, variant }) => JSON.stringify([file, variant]);
+  const byModule = new Map();
+  for (const record of results.flatMap((result) => result.records)) {
+    if (!byModule.has(key(record))) byModule.set(key(record), []);
+    byModule.get(key(record)).push(record);
+  }
+  // The caller's module order, whichever process compiled each module.
+  return { runtime: results[0].runtime, records: [...new Set(modules.map(key))].flatMap((module) => byModule.get(module)) };
+}
+
+async function compileShard(modules, options) {
+  // V8 flushes the listing after every line. Into a pipe, each flush wakes
+  // this process to read a few bytes. Linux takes the same writes into a
+  // file more cheaply, so the listing goes there and is read once the
+  // compiler exits. macOS writes a file this way far more slowly than a pipe.
+  const directory = (options.listing ?? (process.platform === "linux" ? "file" : "pipe")) === "file"
+    ? mkdtempSync(join(tmpdir(), "bytecode-listing-")) : undefined;
+  const listing = directory && join(directory, "listing.txt");
+  const sink = listing ? openSync(listing, "w") : "pipe";
   const child = spawn(options.executable ?? process.execPath, [
     "--no-lazy", "--experimental-vm-modules", fileURLToPath(import.meta.url), "--compile",
   ], {
     env: { ...process.env, ...options.env },
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["pipe", sink, "pipe"],
   });
+  if (listing) closeSync(sink);
   const finished = once(child, "close");
   let diagnostics = "";
   child.stderr.on("data", (chunk) => { diagnostics = (diagnostics + chunk).slice(-4000); });
@@ -54,7 +86,7 @@ export async function compileBytecode(modules, options = {}) {
   let runtime;
   let module;
   let record;
-  readJsonRpcLines(child.stdout, (line) => {
+  const read = (line) => {
     if (line.startsWith("@@RUNTIME ")) runtime = JSON.parse(line.slice(10));
     else if (line.startsWith("@@FILE ")) {
       module = JSON.parse(line.slice(7));
@@ -68,7 +100,8 @@ export async function compileBytecode(modules, options = {}) {
       const position = /^\s*(\d+) [SE]>/.exec(line);
       if (position) record.positions.push(Number(position[1]));
     }
-  });
+  };
+  if (!listing) readJsonRpcLines(child.stdout, read);
   try {
     const sending = (async () => {
       for (const module of modules) {
@@ -78,6 +111,11 @@ export async function compileBytecode(modules, options = {}) {
     })();
     const [, [exitCode]] = await Promise.all([sending, finished]);
     if (exitCode !== 0) throw new Error(`Bytecode compiler exited ${exitCode}: ${diagnostics}`);
+    if (listing) {
+      const stream = createReadStream(listing, { highWaterMark: 1 << 20 });
+      readJsonRpcLines(stream, read);
+      await once(stream, "close");
+    }
     if (!runtime || records.length === 0) throw new Error("V8 returned no bytecode/runtime records");
     for (const module of modules) {
       if (!records.some((record) => record.file === module.file && record.variant === module.variant)) {
@@ -87,6 +125,7 @@ export async function compileBytecode(modules, options = {}) {
     return { runtime, records };
   } finally {
     if (child.exitCode === null) child.kill();
+    if (directory) rmSync(directory, { recursive: true, force: true });
   }
 }
 
