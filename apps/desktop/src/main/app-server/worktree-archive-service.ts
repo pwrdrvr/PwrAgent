@@ -13,6 +13,7 @@ import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { sameRegisteredWorktree, worktreeDirectoryIdentity, type CheckoutIdentity } from "./worktree-maintenance-registration";
 import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
+import { readWorktreeLockHolder } from "./worktree-volume-lock";
 
 type GitResult = {
   stdout: string;
@@ -299,13 +300,10 @@ async function checkArchiveRegistration(params: {
       || (error as NodeJS.ErrnoException).code === "ENOTDIR") throw unregistered();
     throw error;
   }
-  try {
-    await lstat(path.join(gitDirectory, "locked"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
+  // PwrAgent's own drive lock is cleared by the removal; any other lock is a hold.
+  if (await readWorktreeLockHolder(gitDirectory) === "other") {
+    throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
   }
-  throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
 }
 
 async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: () => void): Promise<void> {
