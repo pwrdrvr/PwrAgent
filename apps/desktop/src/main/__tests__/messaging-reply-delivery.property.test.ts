@@ -463,10 +463,12 @@ describe("final reply delivery model", () => {
     // The same sends, partials included, cost one commit more per reply: the
     // final edit's marker. Its settle replaces the row every send records.
     expect(partials).toBe(baseline.partials);
+    // Two partial edits per reply, which write nothing: 25 commits, not 35.
+    expect(partials).toBe(2 * replies.length);
     expect(writes.commits - baseline.writes.commits).toBe(replies.length);
     expectSqliteWriteBudget({
       scenario: "messaging-streamed-final-reply-receipt",
-      note: "Five streamed final replies to one binding, each with several partial edits. Every send already records a delivery row; the receipt adds one marker commit per final edit and none per partial.",
+      note: "Five streamed final replies to one binding, each with several partial edits. Partials write nothing; the final edit costs a pending marker and one settle commit.",
       writes,
     });
   });

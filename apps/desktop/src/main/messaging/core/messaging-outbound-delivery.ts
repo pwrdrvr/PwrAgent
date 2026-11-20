@@ -694,7 +694,9 @@ export class MessagingOutboundDelivery {
         } else {
           await this.settleReceipt(receipt, "unknown", settlement.reason, result);
         }
-      } else {
+      } else if (routedIntent.kind !== "stream_update" || routedIntent.stream.isFinal) {
+        // A streamed partial is a best-effort preview: nothing reads its row
+        // back, and a long reply streams many of them, so it writes none.
         await this.options.store.recordDelivery({
           ...result,
           id: `delivery:${routedIntent.id}:${randomUUID()}`,

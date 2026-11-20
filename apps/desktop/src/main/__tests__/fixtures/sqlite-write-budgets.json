@@ -1,5 +1,5 @@
 {
-  "messaging-streamed-final-reply-receipt": {"commits": 35, "note": "Five streamed final replies to one binding, each with several partial edits. Every send already records a delivery row; the receipt adds one marker commit per final edit and none per partial.", "observedWalBytes": 502640, "rowsChanged": 40, "statements": 40},
+  "messaging-streamed-final-reply-receipt": {"commits": 25, "note": "Five streamed final replies to one binding, each with several partial edits. Partials write nothing; the final edit costs a pending marker and one settle commit.", "observedWalBytes": 391400, "rowsChanged": 30, "statements": 30},
   "automation-startup-resume-dispatch": {"commits": 2, "note": "One adopted run claims its lane and stores the provider acknowledgement.", "observedWalBytes": 49440, "rowsChanged": 2, "statements": 2},
   "automation-scheduled-gated-dispatch": {"commits": 3, "note": "Schedule advance and run creation, one dispatch claim before the shell gate, and provider acknowledgement.", "observedWalBytes": 103000, "rowsChanged": 4, "statements": 4},
   "automation-scheduled-dispatch": {"commits": 3, "note": "Schedule advance and run creation in one commit, followed by dispatch claim and provider acknowledgement.", "observedWalBytes": 103000, "rowsChanged": 4, "statements": 4},
