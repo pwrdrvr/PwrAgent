@@ -18,6 +18,8 @@ const REGION = ".sidebar__scroll-region";
 // Directory and Pinned group headers stick to the top of the list and
 // cover the rows that scroll under them.
 const STICKY_HEADER = ".directory-row__header";
+// A project's Directory threads divider sticks just under its header.
+const STICKY_DIVIDER = ".directory-row__thread-divider";
 // Chromium snaps scroll offsets to device pixels, so a row flush with an
 // edge can measure a fraction past it.
 const EDGE_TOLERANCE_PX = 1;
@@ -98,7 +100,26 @@ function measure(row: HTMLElement): Placement | undefined {
     visibleTop = Math.max(visibleTop, headerBox.bottom);
     stuckTop = view.top + headerBox.height;
   }
+  const divider = stickyDividerAbove(row);
+  if (divider) {
+    const dividerBox = divider.getBoundingClientRect();
+    visibleTop = Math.max(visibleTop, dividerBox.bottom);
+    stuckTop += dividerBox.height;
+  }
   return { scroller, view, rowBox, visibleTop, stuckTop };
+}
+
+// A project's unpinned rows follow its Directory threads divider, which
+// sticks under the header and covers them too. Pinned rows sit above it.
+function stickyDividerAbove(row: HTMLElement): HTMLElement | undefined {
+  const divider = row.closest(".directory-row__threads")
+    ?.querySelector<HTMLElement>(STICKY_DIVIDER);
+  if (!divider) {
+    return undefined;
+  }
+  return divider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING
+    ? divider
+    : undefined;
 }
 
 // The region clips the lens; the lane inside it (`.sidebar-list--dense`,

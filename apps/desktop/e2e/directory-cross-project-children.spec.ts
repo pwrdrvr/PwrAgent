@@ -84,7 +84,10 @@ test("keeps a peer parent's cross-project audit in its own directory", async ({ 
     if (!browserBounds) throw new Error("The directory browser has no layout.");
     await app.window.screenshot({ path: testInfo.outputPath("directory-project-grouping.png"),
       clip: { ...browserBounds, height: Math.min(browserBounds.height, 500) } });
-    await expect(showDirectoryThreads).toContainText("3");
+    // The count is generated content from `data-count`, so it stays out of
+    // the button's label-in-name check; it is not part of its text.
+    await expect(showDirectoryThreads.locator(".directory-row__thread-divider-count"))
+      .toHaveAttribute("data-count", "3");
     const audit = app.window.getByRole("button", { name: /^Storage property tests/ });
     await expect(audit).toHaveCount(1);
     await expect(app.window.getByRole("button", { name: /^Preserve scanned bytes/ })).toHaveCount(1);

@@ -12,6 +12,7 @@ import {
   useCallback,
   useEffect,
   Fragment,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -302,6 +303,13 @@ export function buildLaunchpadSelectionKey(directoryKey: string): string {
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 
+/**
+ * How long a Directory threads collapse click waits for the owner to render
+ * the collapse before its scroll anchor is dropped. A failed or rejected
+ * collapse must not move the list on some unrelated later render.
+ */
+const DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS = 2000;
+
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
   selectedUnpinnedThreads: [],
@@ -465,6 +473,28 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
+  // The Directory threads disclosure sticks just under its project's sticky
+  // header, so a long project's divider stays one click away. CSS cannot read
+  // a sibling's height, so each header publishes its own on its section as
+  // `--directory-row-header-height`; it follows the title size and density
+  // settings. Stable, so React attaches it once per header.
+  const directoryHeaderObserverRef = useRef<ResizeObserver | undefined>(undefined);
+  const observeDirectoryHeaderHeight = useCallback((element: HTMLDivElement | null) => {
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    directoryHeaderObserverRef.current ??= new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const height = entry.borderBoxSize[0]?.blockSize;
+        if (height === undefined) continue;
+        (entry.target.parentElement as HTMLElement | null)?.style.setProperty(
+          "--directory-row-header-height",
+          `${height}px`,
+        );
+      }
+    });
+    const observer = directoryHeaderObserverRef.current;
+    observer.observe(element);
+    return () => observer.unobserve(element);
+  }, []);
 
   // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
   // Updated and Created so all of them edit the one global pin order the same way.
@@ -562,6 +592,50 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
+  // Collapsing Directory threads from its stuck position removes every row
+  // below it. Left alone, the list would land on later projects with this
+  // one scrolled out of view, so the divider is held where it was on screen,
+  // right under its header. Collapse is applied by the owner, so this waits
+  // for the render that shows it.
+  const directoryThreadsCollapseAnchorRef = useRef<
+    { directoryKey: string; top: number; at: number } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    const anchor = directoryThreadsCollapseAnchorRef.current;
+    const list = directoryListRef.current;
+    if (!anchor || !list) return;
+    if (Date.now() - anchor.at > DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS) {
+      directoryThreadsCollapseAnchorRef.current = undefined;
+      return;
+    }
+    const divider = projectHeaders.current.get(anchor.directoryKey)
+      ?.closest(".directory-row")
+      ?.querySelector<HTMLElement>(".directory-row__thread-divider");
+    if (!divider || divider.getAttribute("aria-expanded") !== "false") return;
+    directoryThreadsCollapseAnchorRef.current = undefined;
+    list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
+  });
+  // Scrolls a project back to the start of its Directory threads: the divider
+  // resting right under the stuck project header, the first unpinned row
+  // below it. While the divider is stuck its box says where it sticks, not
+  // where it sits in the list, so it is measured unstuck for one synchronous
+  // layout read (nothing paints in between).
+  const scrollToDirectoryThreads = (divider: HTMLElement): void => {
+    const list = directoryListRef.current;
+    const header = divider.closest(".directory-row")
+      ?.querySelector<HTMLElement>(":scope > .directory-row__header");
+    if (!list || !header) return;
+    const position = divider.style.position;
+    divider.style.position = "static";
+    const restingTop = divider.getBoundingClientRect().top;
+    divider.style.position = position;
+    const stuckTop = list.getBoundingClientRect().top + header.getBoundingClientRect().height;
+    list.scrollTo({ top: list.scrollTop + restingTop - stuckTop, behavior: "smooth" });
+  };
+  // A pointer press on the Directory threads bar beside its label. Only a
+  // real press sets it, so keyboard, assistive-technology, and scripted
+  // clicks (whatever their `detail` or target) always toggle.
+  const directoryDividerBarPressRef = useRef<EventTarget | undefined>(undefined);
   const handledProjectReveal = useRef<ProjectRevealRequest | undefined>(undefined);
   const [flashedProjectKey, setFlashedProjectKey] = useState<string>();
   useEffect(() => {
@@ -1542,6 +1616,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
           // and `--with-launchpad` scopes the hover fade so a row that
           // renders no cluster never blanks its counts with nothing in
           // their place. A remote-only row's lone "+" is not a split pair.
+          ref={observeDirectoryHeaderHeight}
           className={`directory-row__header${
             hasLaunchCluster ? " directory-row__header--with-launchpad" : ""
           }${
@@ -1920,7 +1995,21 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             directoryUnconfigured
                             || !props.onSetDirectoryThreadsCollapsed
                           }
-                          onClick={() => {
+                          onPointerDown={(event) => {
+                            directoryDividerBarPressRef.current =
+                              event.button === 0
+                              && (event.target as Element).closest(
+                                ".directory-row__thread-divider-label",
+                              ) === null
+                                ? event.currentTarget
+                                : undefined;
+                          }}
+                          onClick={(event) => {
+                            // `detail` 0 is the keyboard, even after a stray
+                            // press that never became a click.
+                            const pressedBar = event.detail > 0
+                              && directoryDividerBarPressRef.current === event.currentTarget;
+                            directoryDividerBarPressRef.current = undefined;
                             if (
                               directoryUnconfigured
                               || Date.now() - lastDirectoryThreadDropAtRef.current <
@@ -1928,6 +2017,22 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             ) {
                               return;
                             }
+                            // The label (chevron, name, count) toggles the
+                            // list. A pointer press on the rest of the bar,
+                            // the rules either side, scrolls back to the
+                            // start of the Directory threads: from deep in a
+                            // long list that is the other way out.
+                            if (pressedBar) {
+                              scrollToDirectoryThreads(event.currentTarget);
+                              return;
+                            }
+                            directoryThreadsCollapseAnchorRef.current = directoryThreadsCollapsed
+                              ? undefined
+                              : {
+                                  directoryKey: directory.key,
+                                  top: event.currentTarget.getBoundingClientRect().top,
+                                  at: Date.now(),
+                                };
                             void props.onSetDirectoryThreadsCollapsed?.(
                               directory,
                               !directoryThreadsCollapsed,
@@ -1942,11 +2047,18 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                               }`}
                             />
                             <span>Directory threads</span>
-                            {directoryThreadsCollapsed ? (
-                              <span className="directory-row__thread-divider-count">
-                                {directoryUnpinnedThreadCount}
-                              </span>
-                            ) : null}
+                            {/* Open or closed: hiding it while open made
+                                the label, and the rules beside it, change
+                                width on every toggle. Drawn by CSS from
+                                `data-count`: the aria-label names the action,
+                                and WCAG 2.5.3 wants every visible text word
+                                in it, so a text-node count would have to
+                                rename the button. It was never in the name. */}
+                            <span
+                              aria-hidden="true"
+                              className="directory-row__thread-divider-count"
+                              data-count={directoryUnpinnedThreadCount}
+                            />
                           </span>
                         </button>
                       </div>
