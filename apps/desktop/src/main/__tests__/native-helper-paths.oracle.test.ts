@@ -5,23 +5,15 @@ import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { expect, it, onTestFinished } from "vitest";
 
-it("both native consumers select the build output in development and resource output when packaged", async () => {
+it("selects the native helper from the build output in development and resources when packaged", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "native-helper-layout-")));
   onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
   const main = path.resolve(import.meta.dirname, "..");
   const bundle = await build({
-    stdin: { contents: `import { maintenanceLockHelperPath } from "./app-server/maintenance-native-lock";
-      import { oracleHelperPath } from "./mcp-connections/mcp-ipc-http";
-      console.log(JSON.stringify([maintenanceLockHelperPath(), oracleHelperPath()]));`, resolveDir: main, loader: "ts" },
+    stdin: { contents: 'import { nativeRelayPath } from "./native-relay-path"; console.log(JSON.stringify(nativeRelayPath()));', resolveDir: main, loader: "ts" },
     bundle: true, write: false, platform: "node", format: "cjs", logLevel: "silent",
     define: { "import.meta.url": "__pwragentModuleUrl" },
     banner: { js: 'const __pwragentModuleUrl = require("node:url").pathToFileURL(__filename).href;' },
-    plugins: [{ name: "observe-private-helper-selection", setup(builder) {
-      // Expose the actual local-MCP selector without changing its public API.
-      builder.onLoad({ filter: /mcp-ipc-http\.ts$/ }, (args) => ({
-        contents: fs.readFileSync(args.path, "utf8") + "\nexport { helperPath as oracleHelperPath };", loader: "ts",
-      }));
-    } }],
   });
   for (const host of ["node", "electron"] as const) {
     for (const packaged of [false, true]) {
@@ -44,7 +36,7 @@ it("both native consumers select the build output in development and resource ou
         ? `process.resourcesPath = ${JSON.stringify(resources)}; process.defaultApp = ${!packaged};`
         : "";
       const output = execFileSync(process.execPath, ["-e", `${bootstrap} require(${JSON.stringify(program)});`], { encoding: "utf8" });
-      expect(JSON.parse(output), `${host}, packaged=${packaged}`).toEqual([expected, expected]);
+      expect(JSON.parse(output), `${host}, packaged=${packaged}`).toBe(expected);
     }
   }
 });

@@ -5,11 +5,26 @@
 #define main relay_main
 #endif
 #include "main.c"
+
+/* Pause after anchoring the walk so the parent can rename a fixture directory. */
+static int marker_after_open_test(marker_char *root, marker_char *prefix, marker_char *rest) {
+  marker_directory directory;
+  enum marker_status status = marker_open_root(root, &directory);
+  if (status != MARKER_OK) return status;
+  status = marker_walk_directories(&directory, prefix);
+  if (status == MARKER_OK && (puts("opened") == EOF || fflush(stdout) || getchar() != 'x')) status = MARKER_ERROR;
+  double mtime = 0;
+  if (status == MARKER_OK) status = marker_lookup(&directory, rest, &mtime);
+  marker_close(directory);
+  return marker_report(status, mtime);
+}
+
 #ifdef _WIN32
 #undef wmain
 #include <sddl.h>
 #include <accctrl.h>
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 5 && !wcscmp(argv[1], L"--marker-after-open")) return marker_after_open_test(argv[2], argv[3], argv[4]);
   if (argc == 4 && !wcscmp(argv[1], L"secure-fixture")) {
     /* Node/libuv uses the token's default owner, which can be the shared
      * Administrators SID on elevated runners. The server fixture must set
@@ -93,6 +108,7 @@ int wmain(int argc, wchar_t **argv) {
 #undef main
 #include <sys/wait.h>
 int main(int argc, char **argv) {
+  if (argc == 5 && !strcmp(argv[1], "--marker-after-open")) return marker_after_open_test(argv[2], argv[3], argv[4]);
   if (argc != 2) return 2;
   if (!strcmp(argv[1], "unreadable")) { check_peer(-1); return 2; }
   if (!strcmp(argv[1], "wrong-user")) {

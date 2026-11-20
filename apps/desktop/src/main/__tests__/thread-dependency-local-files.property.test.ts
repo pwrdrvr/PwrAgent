@@ -1,9 +1,7 @@
-import { mkdir, symlink, utimes, writeFile } from "node:fs/promises";
-import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDependencyTodo, ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";
-import { authorizeLocalFile, LOCAL_FILE_CHECK_INTERVAL_MS, LocalFilePoller, readLocalFile } from "../app-server/thread-dependency-local-files";
+import { LOCAL_FILE_CHECK_INTERVAL_MS, LocalFilePoller } from "../app-server/thread-dependency-local-files";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
@@ -173,35 +171,6 @@ describe("observing an existing local watcher", () => {
       note: "One local file wait writes only on registration, terminal observation, claim, and delivery.",
       writes,
     });
-  });
-
-  it("ignores stale or nonregular files and prefers a fresh result over an exit marker", async () => {
-    const workspace = path.join(tempDir, "work");
-    await mkdir(workspace);
-    const marker = path.join(workspace, "terminal.marker");
-    const exit = path.join(workspace, "exit");
-    const since = 60_000;
-    const file = await authorizeLocalFile(workspace, { path: marker, since, exitPath: exit });
-    expect(await readLocalFile(file)).toBeUndefined();
-    await writeFile(marker, "");
-    await utimes(marker, new Date(0), new Date(0));
-    expect(await readLocalFile(file)).toBeUndefined();
-    await writeFile(exit, "");
-    expect(await readLocalFile(file)).toBe("exited");
-    await utimes(marker, new Date(since), new Date(since));
-    expect(await readLocalFile(file)).toBe("result");
-    const directory = path.join(workspace, "directory");
-    await mkdir(directory);
-    expect(await readLocalFile(await authorizeLocalFile(workspace, { path: directory, since }))).toBeUndefined();
-    await expect(authorizeLocalFile(workspace, { path: path.join(tempDir, "outside"), since })).rejects.toThrow("inside");
-  });
-
-  it.skipIf(process.platform === "win32")("rejects a marker directory symlink outside the workspace", async () => {
-    const workspace = path.join(tempDir, "work");
-    await mkdir(workspace);
-    const link = path.join(workspace, "link");
-    await symlink(tempDir, link);
-    await expect(authorizeLocalFile(workspace, { path: path.join(link, "terminal.marker"), since: 1 })).rejects.toThrow("inside");
   });
 
   it("matches a one-shot oracle across re-registration, independent consumers, and restart", async () => {
