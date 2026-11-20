@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 import { ThreadTurnQueue, type ThreadTurnQueueLifecycleEvent } from "@pwragent/owner-core/thread-turn-queue";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent, SteerTurnResponse } from "@pwragent/shared";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { messagingInboundHarness } from "./messaging-inbound-harness";
 
@@ -28,6 +28,7 @@ export async function messagingCanonicalQueueHarness(options: {
     admit?: () => Promise<void>;
     lifecycle?: (event: ThreadTurnQueueLifecycleEvent) => Promise<void>;
     steer?: () => Promise<void>;
+    disposition?: SteerTurnResponse["disposition"];
   } = {};
   const emit = (event: ThreadTurnQueueLifecycleEvent): Promise<void> => {
     const handling = (async () => {
@@ -77,7 +78,7 @@ export async function messagingCanonicalQueueHarness(options: {
     steerTurn: async request => {
       steers.push(request);
       await hooks.steer?.();
-      return { backend: request.backend, threadId: request.threadId, turnId: request.expectedTurnId };
+      return { backend: request.backend, threadId: request.threadId, turnId: request.expectedTurnId, disposition: hooks.disposition };
     },
   };
   real.controllerOptions.backend = backend;

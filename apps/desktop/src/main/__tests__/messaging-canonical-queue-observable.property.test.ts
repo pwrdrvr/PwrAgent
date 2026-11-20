@@ -56,6 +56,106 @@ describe("observable canonical messaging queue protocol", () => {
       }), { numRuns: 25 });
   });
 
+  // Acceptance is the oracle: a pending/rejected steer must never look successful,
+  // and an accepted one must remain retired across duplicate clicks and refreshes.
+  it("labels only confirmed steering as steered and retires its queue controls", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("telegram", "discord"), fc.boolean(), fc.boolean(), fc.constantFrom(undefined, "steered" as const),
+      async (channel, recovery, remote, disposition) => {
+        const real = await messagingCanonicalQueueHarness({ channel, remote });
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        try {
+          await real.controller.handleInboundEvent(real.event("first"));
+          await real.controller.handleInboundEvent(real.event("follow-up"));
+          let id = real.queued()[0]!.id;
+          if (recovery) {
+            real.queueHooks.steer = async () => { throw new Error("Fixture rejection"); };
+            real.queueHooks.admit = async () => { throw new Error("Fixture unavailable"); };
+            await real.controller.handleInboundEvent(real.callback(`queued-turn:steer:${id}`));
+            await real.controller.whenQueuedTurnActionsSettled();
+            const notice = real.deliveries.filter(intent => intent.kind === "confirmation" && intent.title === "Message queued").at(-1)!;
+            const retry = "actions" in notice ? notice.actions?.find(action => action.id.startsWith("queued-turn:retry:")) : undefined;
+            id = retry!.id.slice("queued-turn:retry:".length);
+          }
+          real.queueHooks.disposition = disposition;
+          const before = real.steers.length;
+          real.queueHooks.steer = async () => { entered.resolve(); await release.promise; };
+          await real.controller.handleInboundEvent(real.callback(`queued-turn:steer:${id}`));
+          await entered.promise;
+          expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.title === "Message steered")).toBe(false);
+          await real.controller.handleInboundEvent(real.callback(`queued-turn:steer:${id}`));
+          expect(real.steers).toHaveLength(before + 1);
+          release.resolve();
+          await real.controller.whenQueuedTurnActionsSettled();
+          await real.settleBus();
+          expect(real.deliveries.at(-1)).toMatchObject({
+            kind: "confirmation", title: "Message steered", body: "Sent to the current turn.", actions: [],
+            delivery: { mode: "update", replaceMarkup: true },
+          });
+          await real.controller.handleInboundEvent(real.callback(`queued-turn:steer:${id}`));
+          await real.finishOwner("completed");
+          expect(real.steers).toHaveLength(before + 1);
+          expect(real.queued()).toEqual([]);
+          const updates = real.deliveries.filter(intent => intent.kind === "confirmation" && intent.delivery?.mode === "update");
+          expect(updates.at(-1)).toMatchObject({ title: "Message steered", body: "Sent to the current turn." });
+        } finally { release.resolve(); await real.close(); }
+      }), { numRuns: 16 });
+  });
+
+  it.each(["held", "queued", "scheduled", "started"] as const)(
+    "keeps an accepted %s disposition distinct from steering", async disposition => {
+      const real = await messagingCanonicalQueueHarness();
+      try {
+        await real.controller.handleInboundEvent(real.event("first"));
+        await real.controller.handleInboundEvent(real.event("follow-up"));
+        real.queueHooks.disposition = disposition;
+        await real.controller.handleInboundEvent(real.callback(`queued-turn:steer:${real.queued()[0]!.id}`));
+        await real.controller.whenQueuedTurnActionsSettled();
+        expect(real.deliveries.at(-1)).toMatchObject({ kind: "confirmation", actions: [] });
+        expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.title === "Message steered")).toBe(false);
+        expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.body === "Sent to the current turn.")).toBe(false);
+        expect(real.steers).toHaveLength(1);
+      } finally { await real.close(); }
+    },
+  );
+
+  it.each(["unavailable", "cancelled", "queued fallback", "new turn fallback"] as const)(
+    "does not label %s as confirmed steering", async outcome => {
+      const real = await messagingCanonicalQueueHarness();
+      try {
+        await real.controller.handleInboundEvent(real.event("first"));
+        await real.controller.handleInboundEvent(real.event("follow-up"));
+        const entry = real.queued()[0]!;
+        const notice = real.deliveries.filter(intent => intent.kind === "confirmation" && intent.title === "Message queued").at(-1)!;
+        expect(notice).toMatchObject({ title: "Message queued", actions: expect.arrayContaining([
+          expect.objectContaining({ label: "Steer" }), expect.objectContaining({ label: "Cancel" }),
+        ]) });
+        if (outcome === "unavailable") real.setThreadStatus("idle");
+        real.queueHooks.steer = async () => {
+          if (outcome === "new turn fallback") await real.finishOwner("completed");
+          throw new Error("Fixture active turn ended");
+        };
+        await real.controller.handleInboundEvent(real.callback(`queued-turn:${outcome === "cancelled" ? "cancel" : "steer"}:${entry.id}`));
+        await real.controller.whenQueuedTurnActionsSettled();
+        await real.settleBus();
+        expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.title === "Message steered")).toBe(false);
+        expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.body === "Sent to the current turn.")).toBe(false);
+        if (outcome === "unavailable") {
+          expect(real.steers).toHaveLength(0);
+          expect(real.queued().map(item => item.id)).toEqual([entry.id]);
+        } else if (outcome === "cancelled") {
+          expect(real.steers).toHaveLength(0);
+          expect(real.queued()).toEqual([]);
+        } else {
+          expect(real.steers).toHaveLength(1);
+          expect(real.requests).toHaveLength(3);
+          expect(real.queued()).toHaveLength(outcome === "queued fallback" ? 1 : 0);
+          expect(real.starts).toHaveLength(outcome === "queued fallback" ? 1 : 2);
+        }
+      } finally { await real.close(); }
+    },
+  );
+
   it("retires one notice when owner dispatch overtakes the queued acknowledgement", async () => {
     await fc.assert(fc.asyncProperty(fc.scheduler(), fc.constantFrom("telegram", "discord"), async (scheduler, channel) => {
       const real = await messagingCanonicalQueueHarness({ channel });
@@ -97,6 +197,7 @@ describe("observable canonical messaging queue protocol", () => {
         const notice = real.deliveries.filter(intent => intent.kind === "confirmation" && intent.title === "Message queued").at(-1)!;
         const retry = "actions" in notice ? notice.actions?.find(action => action.id.startsWith("queued-turn:retry:")) : undefined;
         expect(retry).toBeDefined();
+        expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.title === "Message steered")).toBe(false);
         await real.finishOwner("completed");
         const before = real.requests.length;
         real.queueHooks.admit = async () => { entered.resolve(); await scheduler.schedule(release.promise, "recovery admission"); };
@@ -130,6 +231,7 @@ describe("observable canonical messaging queue protocol", () => {
         const notice = real.deliveries.filter(intent => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
         const retry = notice && "actions" in notice ? notice.actions?.find(action => action.id.startsWith("queued-turn:retry:")) : undefined;
         expect(retry).toBeDefined();
+        expect(real.deliveries.some(intent => intent.kind === "confirmation" && intent.title === "Message steered")).toBe(false);
         expect(notice).toMatchObject({ body: expect.stringContaining("edited at the owner") });
         const beforeIdle = real.requests.length;
         await real.finishOwner("completed");

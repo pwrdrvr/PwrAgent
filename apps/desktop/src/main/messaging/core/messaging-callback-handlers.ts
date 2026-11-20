@@ -1,5 +1,6 @@
 import { messageOriginForInboundEvent, readStringValue } from "./messaging-command-helpers";
 import { federationTargetForBinding } from "./messaging-backend-event-helpers";
+import type { SteerTurnResponse } from "@pwragent/shared";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
 import { readMessagingLaunchpadContext } from "./messaging-launchpad-context";
 import { applyNavigationLaunchpadProviderSettingsPatch, buildFederatedThreadRef, isAcpBackendId, permissionForActionId } from "@pwragent/shared";
@@ -105,11 +106,13 @@ export class MessagingCallbackHandlers {
         }), entry.binding, event);
         return;
       }
+      let notice: { title: string; body: string };
       try {
-        await this.context.backend.steerTurn({ backend: entry.binding.backend, federationTarget: federationTargetForBinding(entry.binding),
+        const result = await this.context.backend.steerTurn({ backend: entry.binding.backend, federationTarget: federationTargetForBinding(entry.binding),
           threadId: entry.binding.threadId, expectedTurnId: active.turnId, input: entry.input, requestId: entry.id,
           messageOrigin: messageOriginForInboundEvent(entry.event, entry.event ? this.context.host().rememberHumanMessagingSource(entry.binding, entry.event)?.ref : undefined),
         });
+        notice = acceptedSteerNotice(result);
       } catch (error) {
         if (this.context.host().isDisposed()) return;
         await this.context.host().deliver(buildErrorIntent({ id: this.context.host().newIntentId("queued-turn-steer-failed"),
@@ -121,7 +124,7 @@ export class MessagingCallbackHandlers {
       accepted = true;
       const retiredEntry = this.context.host().queueRecoveries.settle(entry.id, receipt, true) ?? entry;
       if (this.context.host().isDisposed()) return;
-      await this.context.host().retireQueuedTurnNotice(retiredEntry, "Queued message was sent as a steering message.", event);
+      await this.context.host().retireQueuedTurnNotice(retiredEntry, notice.body, event, notice.title);
     } finally {
       this.context.host().queueRecoveries.settle(entry.id, receipt, accepted);
     }
@@ -147,11 +150,13 @@ export class MessagingCallbackHandlers {
       const cancelled = await backend.cancelQueuedTurn({ federationTarget: target,
         queueEntryId: entry.id, expectedContentHash: content.contentHash });
       if (!cancelled.cancelled) throw new Error("The queued message changed or has already been admitted. Refresh the thread queue.");
+      let notice = { title: "Message queued", body: "Queued message cancelled." };
       if (kind === "steer" && active && backend.steerTurn) {
         try {
-          await backend.steerTurn({ backend: entry.binding.backend, federationTarget: target,
+          const result = await backend.steerTurn({ backend: entry.binding.backend, federationTarget: target,
             threadId: entry.binding.threadId, expectedTurnId: active.turnId, requestId: entry.id,
             input: content.input, messageOrigin: content.messageOrigin });
+          notice = acceptedSteerNotice(result);
         } catch (error) {
           // Cancellation succeeded, so restore the owner's current content
           // through normal admission if the turn ended before steering.
@@ -179,8 +184,7 @@ export class MessagingCallbackHandlers {
       await this.context.host().applySharedQueueNoticeEvent(`${entry.threadKey}:${entry.id}`, {
         type: "ownerOutcome", outcome: { status: "cancelled" },
       });
-      await this.context.host().retireQueuedTurnNotice(entry, kind === "steer"
-        ? "Queued message was sent as a steering message." : "Queued message cancelled.", event);
+      await this.context.host().retireQueuedTurnNotice(entry, notice.body, event, notice.title);
     } catch (error) {
       await this.context.host().deliver(buildErrorIntent({ id: this.context.host().newIntentId("queued-turn-action-failed"),
         createdAt: this.context.now(), title: "Queued message could not be updated",
@@ -2395,5 +2399,22 @@ export class MessagingCallbackHandlers {
       event,
       "Response received. The Agent will continue in the original conversation.",
     );
+  }
+}
+
+// A resolved legacy response confirms steering; newer owners can explicitly
+// report acceptance for a later turn instead. Never label those as steered.
+function acceptedSteerNotice(result: SteerTurnResponse): { title: string; body: string } {
+  switch (result.disposition) {
+    case "held":
+      return { title: "Message held", body: result.holdReason ?? "Held for review before sending." };
+    case "queued":
+      return { title: "Message queued", body: "Queued for the next turn." };
+    case "scheduled":
+      return { title: "Message scheduled", body: "Scheduled as a follow-up." };
+    case "started":
+      return { title: "Message sent", body: "Sent as a new turn." };
+    default:
+      return { title: "Message steered", body: "Sent to the current turn." };
   }
 }
