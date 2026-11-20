@@ -11594,6 +11594,12 @@ a.button {
   font-size: 13px;
 }
 
+.thread-search__status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .thread-search__scopes {
   display: flex;
   flex-wrap: wrap;
@@ -11608,14 +11614,78 @@ a.button {
   font-size: 12px;
 }
 
+/* The count keeps its width; the remote summary takes the room between it
+   and the sort control and ends in an ellipsis. Its tooltip lists every
+   instance. */
 .thread-search-results-meta {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 12px;
-  margin: 0;
+  min-height: 24px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.thread-search-results-meta__count {
+  flex: none;
+}
+
+.thread-search-results-meta__remote {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Logs window's segmented control, at this row's height. */
+.thread-search-sort {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  height: 24px;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.thread-search-results-meta__remote + .thread-search-sort {
+  margin-left: 0;
+}
+
+.thread-search-sort__option {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.thread-search-sort__option:last-child {
+  border-right: 0;
+}
+
+.thread-search-sort__option:hover {
+  color: var(--text-primary);
+}
+
+.thread-search-sort__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.thread-search-sort__option[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .thread-search-results-meta strong {
@@ -11630,7 +11700,11 @@ a.button {
   min-height: 0;
   gap: 8px;
   overflow: auto;
-  padding-right: 4px;
+  /* Room for a card's focus ring (2px at a 2px offset), which the scroll
+     container would otherwise clip on the first card and the left edge. The
+     negative margins keep the cards where they were. */
+  margin: -4px 0 -4px -4px;
+  padding: 4px;
 }
 
 .thread-search-result {
@@ -11741,40 +11815,45 @@ a.button {
   text-align: right;
 }
 
-.thread-search-result__confidence {
+/* The sidebar row's time column, in its type: the thread's last activity. */
+.thread-search-result__time {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+/* Why the thread matched. The dot carries the confidence band, which the
+   tooltip names: filled accent for high, filled muted for medium, a hollow
+   ring for low, so the bands differ in shape and lightness, not hue alone. */
+.thread-search-result__reason {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .thread-search-result__confidence-dot {
+  flex: none;
+  box-sizing: border-box;
   width: 7px;
   height: 7px;
+  border: 1.5px solid currentColor;
   border-radius: 999px;
   background: currentColor;
 }
 
-.thread-search-result__confidence--high {
+.thread-search-result__reason--high .thread-search-result__confidence-dot {
   color: var(--accent-bright);
 }
 
-.thread-search-result__confidence--medium {
-  color: var(--text-secondary);
-}
-
-.thread-search-result__confidence--low {
-  color: var(--text-muted);
-}
-
-.thread-search-result__reason {
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.3;
+.thread-search-result__reason--low .thread-search-result__confidence-dot {
+  background: transparent;
 }
 
 /* A remote result's Remote viewer button. Buttons cannot nest, so it is the
