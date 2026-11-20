@@ -59,6 +59,11 @@ export class BoatConnection {
   private pending?: Promise<BoatStatus>;
   /** Set when Boat refuses the stored key, until a new key is saved. */
   private rejected = false;
+  /**
+   * Set when Boat refuses a create for the stored key's actions, until a new
+   * key is saved. Only a create can show it, so a refresh does not clear it.
+   */
+  private cannotCreate = false;
   private readonly statusListeners = new Set<() => void>();
 
   constructor(private readonly options: BoatConnectionOptions) {
@@ -68,6 +73,12 @@ export class BoatConnection {
       onRejected: () => {
         if (this.rejected) return;
         this.rejected = true;
+        this.cached = undefined;
+        for (const listener of this.statusListeners) listener();
+      },
+      onCannotCreate: () => {
+        if (this.cannotCreate) return;
+        this.cannotCreate = true;
         this.cached = undefined;
         for (const listener of this.statusListeners) listener();
       },
@@ -139,6 +150,7 @@ export class BoatConnection {
     }
     await this.options.secrets.write(BOAT_MCP_CONNECTION_ID, { [BOAT_API_KEY_SECRET]: key });
     this.rejected = false;
+    this.cannotCreate = false;
     this.cached = undefined;
     return await this.readStatus(true);
   }
@@ -147,6 +159,7 @@ export class BoatConnection {
   async disconnect(): Promise<void> {
     await this.options.secrets.write(BOAT_MCP_CONNECTION_ID, {});
     this.rejected = false;
+    this.cannotCreate = false;
     this.cached = undefined;
     for (const listener of this.statusListeners) listener();
   }
@@ -205,6 +218,7 @@ export class BoatConnection {
       };
     }
     if (this.rejected) return REJECTED;
+    if (this.cannotCreate) return CANNOT_CREATE;
     try {
       const limits = await this.api.requestWithKey(key, { method: "GET", path: ["limits"] });
       const boatAccount = accountSummary(limits);
@@ -245,6 +259,12 @@ export class BoatConnection {
 const REJECTED: BoatStatus = {
   configured: false, state: "reauthorization_required",
   detail: "Boat rejected the stored API key. It may have expired or been revoked. Paste a new one.",
+};
+
+/** The key is kept: it may still list and stop what is running. */
+const CANNOT_CREATE: BoatStatus = {
+  configured: true, state: "reauthorization_required",
+  detail: "The stored Boat API key is not allowed to create sandboxes. Sign in again to replace it.",
 };
 
 function accountSummary(limits: Record<string, unknown>): BoatAccountSummary {

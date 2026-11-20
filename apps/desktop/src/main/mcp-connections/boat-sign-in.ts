@@ -33,8 +33,35 @@ import {
  */
 
 export const BOAT_CLI_INSTALL_PATH = join(".ascii", "bin", process.platform === "win32" ? "boat.exe" : "boat");
-/** The key PwrAgent mints: sandbox actions only, and it expires. */
-export const BOAT_KEY_ARGS = ["api-key", "create", "PwrAgent", "--preset", "full-sandbox", "--ttl", "90d", "--json"] as const;
+/**
+ * What the minted key may do: one action per kind of request the Boat tools
+ * make, and nothing else. Boat's `full-sandbox` preset is not enough: it
+ * leaves out create, resume, fork and delete. No SSH, desktop stream, agent
+ * prompt, environment or account write is granted.
+ *
+ * `sandbox.delete` rather than `sandbox.delete-own`: a key from a later
+ * sign-in must still delete what an earlier key created, or cleanup after a
+ * pull request closes would leave those sandboxes billing. PwrAgent, the
+ * key's only holder, limits each thread to the sandboxes it created.
+ */
+export const BOAT_KEY_ACTIONS = [
+  "sandbox.create",
+  "sandbox.read",
+  "sandbox.update",
+  "sandbox.stop",
+  "sandbox.resume",
+  "sandbox.fork",
+  "sandbox.delete",
+  "exec",
+  "file.read",
+  "file.write",
+  "host",
+  "account.read",
+] as const;
+/** The key PwrAgent mints: those actions only, and it expires. */
+export const BOAT_KEY_ARGS = [
+  "api-key", "create", "PwrAgent", "--actions", BOAT_KEY_ACTIONS.join(","), "--ttl", "90d", "--json",
+] as const;
 
 const START_TIMEOUT_MS = 30_000;
 const STEP_TIMEOUT_MS = 30_000;

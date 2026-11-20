@@ -246,8 +246,9 @@ export function BoatSetupDetail(props: {
       </div>
       {rejected ? (
         <p className="settings-mcp-row__error">
-          Boat stopped accepting the stored key. Keys from sign-in last 90 days.
-          Sign in again to reconnect.
+          {props.connection.configured
+            ? "The stored Boat key is not allowed to create sandboxes. Sign in again to replace it."
+            : "Boat stopped accepting the stored key. Keys from sign-in last 90 days. Sign in again to reconnect."}
         </p>
       ) : null}
       {signIn?.state === "waiting" ? (

@@ -55,6 +55,8 @@ export type BoatApiOptions = {
   fetchFn: FetchLike;
   /** Boat answered 401 or an expired-key 403 for the key just used. */
   onRejected?: () => void;
+  /** Boat refused to create a sandbox because the stored key may not. */
+  onCannotCreate?: () => void;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -95,6 +97,15 @@ export class BoatApi {
       if (answer.ok) return answer.body;
       const error = answer.error;
       if (error.kind === "rejected" && stored) this.options.onRejected?.();
+      if (
+        stored
+        && error.code === "api_key_action_forbidden"
+        && request.method === "POST"
+        && request.path.length === 1
+        && request.path[0] === "sandboxes"
+      ) {
+        this.options.onCannotCreate?.();
+      }
       const waitMs = retryWaitMs(error);
       if (attempt > 0 || waitMs === undefined) throw error;
       await (this.options.sleep ?? sleep)(waitMs, request.signal);
@@ -168,7 +179,7 @@ function describeFailure(response: Response, body: Record<string, unknown>): Boa
   }
   if (code === "api_key_action_forbidden" || code === "api_key_sandbox_forbidden") {
     return new BoatApiError(
-      `The stored Boat API key is not allowed to do this (${code}). The operator can connect a key with the actions PwrAgent lists in Settings → Plugins.`,
+      `The stored Boat API key is not allowed to do this (${code}). The operator replaces it by signing in to Boat again in Settings → Plugins.`,
       "failed", status, code,
     );
   }

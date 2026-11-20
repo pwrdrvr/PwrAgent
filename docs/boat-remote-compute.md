@@ -33,8 +33,11 @@ create scoped, expiring API keys, so `BoatSignIn`
 1. `boat login --json` answers a `login_url` event: a URL on boat.dev, a short
    code, and an expiry. PwrAgent opens the URL and shows the code in Settings.
 2. `boat login --wait --json` returns once the operator has approved it.
-3. `boat api-key create PwrAgent --preset full-sandbox --ttl 90d --json` mints
-   the key. It is read from the CLI's output into the encrypted store.
+3. `boat api-key create PwrAgent --actions <list> --ttl 90d --json` mints the
+   key. It is read from the CLI's output into the encrypted store. The list is
+   `BOAT_KEY_ACTIONS`: one action per kind of request the tools make. Boat's
+   `full-sandbox` preset is not enough, because it leaves out create, resume,
+   fork and delete. A pasted key needs the same actions.
 4. `boat logout` revokes the session the CLI opened.
 
 Every step runs with a throwaway directory as the CLI's home (`HOME`,

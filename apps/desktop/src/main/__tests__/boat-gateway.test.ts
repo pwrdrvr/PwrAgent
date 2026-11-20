@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BOAT_KEY_ARGS } from "../mcp-connections/boat-sign-in";
+import { BOAT_TOOLS } from "../mcp-connections/boat-tools";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import type { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
@@ -75,7 +77,71 @@ function fakeBoat(acceptedKey = KEY) {
   return { fetchFn, sent };
 }
 
-function harness(boat = fakeBoat()) {
+/**
+ * The action Boat requires for each request the tools make, from Boat's
+ * scopes reference (docs.boat.dev/api-keys/scopes). Boat denies by default.
+ */
+function requiredAction(method: string, segments: readonly string[]): string {
+  if (segments[0] === "limits") return "account.read";
+  if (segments.length === 1) return method === "POST" ? "sandbox.create" : "sandbox.read";
+  if (segments.length === 2) {
+    return method === "DELETE" ? "sandbox.delete" : method === "PATCH" ? "sandbox.update" : "sandbox.read";
+  }
+  switch (segments[2]) {
+    case "commands": return "exec";
+    case "files": return method === "PUT" ? "file.write" : "file.read";
+    case "host": return "host";
+    case "stop": return "sandbox.stop";
+    case "resume": return "sandbox.resume";
+    case "fork": return "sandbox.fork";
+    default: return "unknown";
+  }
+}
+
+/** What Boat granted a `--preset full-sandbox` key on 2026-11-20. */
+const FULL_SANDBOX_PRESET = [
+  "sandbox.read", "sandbox.update", "sandbox.stop", "agent.prompt", "exec", "file.read", "file.write",
+  "ssh", "desktop", "host", "snapshot.read", "snapshot.write", "account.read",
+];
+
+/** A Boat that checks the key's actions before anything else. */
+function scopedBoat(actions: readonly string[]) {
+  const boat = fakeBoat();
+  const refused: string[] = [];
+  const fetchFn = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+    const method = init?.method ?? "GET";
+    const action = requiredAction(method, new URL(String(input)).pathname.replace("/api/v1/", "").split("/"));
+    if (!actions.includes(action)) {
+      refused.push(action);
+      return new Response(
+        JSON.stringify({ ok: false, code: "api_key_action_forbidden", error: "action not on key" }),
+        { status: 403, headers: { "content-type": "application/json" } },
+      );
+    }
+    return await boat.fetchFn(input, init);
+  };
+  return { fetchFn, sent: boat.sent, refused };
+}
+
+/** Arguments that pass each tool's own checks, for a sandbox the thread owns. */
+function toolArguments(name: string, sandboxId: string): Record<string, unknown> {
+  switch (name) {
+    case "create_sandbox":
+    case "list_sandboxes":
+    case "account_status": return {};
+    case "exec": return { sandboxId, command: "true" };
+    case "command_status":
+    case "kill_command": return { sandboxId, processId: 1 };
+    case "read_file": return { sandboxId, path: "/app/theme.css" };
+    case "write_file": return { sandboxId, path: "/app/theme.css", content: "a" };
+    case "list_files": return { sandboxId, path: "/app" };
+    case "host_port": return { sandboxId, port: 3000 };
+    case "extend_sandbox": return { sandboxId, ttlMinutes: 30 };
+    default: return { sandboxId };
+  }
+}
+
+function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: Sent[] } = fakeBoat()) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-boat-gateway-"));
   directories.push(directory);
   const registry = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
@@ -204,5 +270,49 @@ describe("Boat through the MCP gateway", () => {
     registry.setBoatSandboxPolicy({ maxType: "small" });
     await expect(call("thread-a", "create_sandbox", { type: "large" })).resolves.toMatchObject({ isError: true });
     expect(boat.sent).toHaveLength(before);
+  });
+
+  it("signs in for a key that Boat lets every tool use", async () => {
+    const granted = BOAT_KEY_ARGS[BOAT_KEY_ARGS.indexOf("--actions") + 1]?.split(",")
+      ?? (BOAT_KEY_ARGS.includes("full-sandbox" as never) ? FULL_SANDBOX_PRESET : []);
+    const boat = scopedBoat(granted);
+    const { call, registry, service } = harness(boat);
+    registry.setEnabled(BOAT, true);
+    await service.connectBoat(KEY);
+
+    await call("thread-a", "create_sandbox", {});
+    // Delete goes last: every other tool needs the sandbox.
+    const names = BOAT_TOOLS.map((tool) => tool.name).filter((name) => name !== "create_sandbox")
+      .toSorted((left, right) => Number(left === "delete_sandbox") - Number(right === "delete_sandbox"));
+    const failed: string[] = [];
+    for (const name of names) {
+      const before = boat.sent.length;
+      const answer = await call("thread-a", name, toolArguments(name, "bx_0"));
+      // A tool that never reached Boat was not checked at all.
+      if (answer.isError || boat.sent.length === before) failed.push(name);
+    }
+
+    expect(boat.refused).toEqual([]);
+    expect(failed).toEqual([]);
+  });
+
+  it("asks for a new sign-in once Boat refuses the stored key a sandbox", async () => {
+    const { call, registry, service, stored } = harness(scopedBoat(FULL_SANDBOX_PRESET));
+    registry.setEnabled(BOAT, true);
+    await expect(service.connectBoat(KEY)).resolves.toMatchObject({ state: "ready" });
+    const changes: string[][] = [];
+    service.onConnectionsChanged((change) => changes.push([...change.connectionIds]));
+
+    const created = await call("thread-a", "create_sandbox", {});
+    expect(created.isError).toBe(true);
+    expect(created.content[0]?.text).toContain("signing in to Boat again");
+
+    const status = (await service.listConnections()).find((entry) => entry.id === BOAT);
+    expect(status).toMatchObject({ configured: true, state: "reauthorization_required" });
+    expect(status?.detail).toContain("not allowed to create sandboxes");
+    expect(changes.flat()).toContain(BOAT);
+    // The key is kept: it can still stop what is running. A new one clears it.
+    expect(stored.get(BOAT)).toEqual({ BOAT_API_KEY: KEY });
+    await expect(service.connectBoat(KEY)).resolves.toMatchObject({ state: "ready" });
   });
 });

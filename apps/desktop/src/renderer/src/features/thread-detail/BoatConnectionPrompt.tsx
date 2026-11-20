@@ -96,7 +96,12 @@ export function BoatConnectionPrompt(props: {
   } else if (connection.boatSignIn?.state === "waiting") {
     [line, tone] = [`Enter ${connection.boatSignIn.userCode} on Boat’s page in your browser`, "state"];
   } else if (rejected) {
-    [line, tone] = ["Boat stopped accepting the stored key · sign in again", "state"];
+    [line, tone] = [
+      connection.configured
+        ? "The stored key can’t create sandboxes · sign in again"
+        : "Boat stopped accepting the stored key · sign in again",
+      "state",
+    ];
   } else if (needsKey) {
     // An ad: the pitch, and Connect Boat.
   } else if (!connection.enabled) {
