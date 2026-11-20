@@ -35,14 +35,20 @@ function expected(kind: McpConnectionKind, delegated: boolean, listening: boolea
 }
 
 describe("reopening an ended local session", () => {
+  // Delegated requests can only reach this decision through the gateway.
   const kindCases = KINDS.flatMap((kind) => [false, true].flatMap((delegated) =>
-    [false, true].map((listening) => ({ kind, operation: REFERENCE_OPERATION, delegated, listening }))));
+    [false, true].map((listening) => ({
+      kind, operation: delegated ? "gateway/tools/call" : REFERENCE_OPERATION, delegated, listening,
+    }))));
+  // Discovery must also leave an ended relay alone even when the app is up.
+  const delegatedListCases = RELAY_KINDS.map((kind) =>
+    ({ kind, operation: "gateway/tools/list", delegated: true, listening: true }));
   // An eligible relay reopens for any operation. Check the other request
   // shapes here, where an operation filter would incorrectly block a restart.
   const operationCases = RELAY_KINDS.flatMap((kind) => OTHER_OPERATIONS.map((operation) =>
     ({ kind, operation, delegated: false, listening: true })));
 
-  it.each([...kindCases, ...operationCases])(
+  it.each([...kindCases, ...delegatedListCases, ...operationCases])(
     "$kind $operation (delegated $delegated, app listening $listening)",
     async ({ kind, operation, delegated, listening }) => {
       const isAppListening = vi.fn(async () => listening);
