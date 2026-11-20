@@ -90,9 +90,11 @@ async function checkHandoffRemoval(
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore, gitWorkspaceHandoffService: handoffService });
     try {
       if (refuseDetachment) {
+        // The response uses forward slashes. The Git runner uses the native real path.
+        const nativeSourcePath = await realpath(sourcePath);
         const runGit = gitExecutable.runGitCommand;
         const switchSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((cwd, args, options) => {
-          if (cwd === sourcePath && args[0] === "switch" && args[1] === "--detach") {
+          if (cwd === nativeSourcePath && args[0] === "switch" && args[1] === "--detach") {
             return runGit(cwd, args, { ...options, beforeSpawn: () => { throw new Error("Ownership changed before detachment"); } });
           }
           return runGit(cwd, args, options);
