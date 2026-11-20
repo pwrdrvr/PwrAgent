@@ -6299,8 +6299,8 @@ class DesktopAppServerService {
             ]),
             signal: params.signal,
           }),
-        isEnabled: () =>
-          getMcpConnectionGatewayService().isSandboxerCleanupOnPrCloseEnabled(),
+        isEnabled: (connectionId) =>
+          getMcpConnectionGatewayService().isSandboxCleanupOnPrCloseEnabled(connectionId),
         onReport: (report) => this.recordSandboxCleanup(report),
       });
     }

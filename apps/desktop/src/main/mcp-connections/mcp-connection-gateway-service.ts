@@ -32,6 +32,7 @@ import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContex
 import { listedMcpSkills, offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
 import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
+import { BoatConnection, type BoatSessionScope } from "./boat-connection";
 import {
   McpStdioLaunchError,
   OwnedStdioClientTransport,
@@ -70,6 +71,10 @@ import {
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
+  BOAT_MCP_CONNECTION_ID,
+  type BoatLinkTarget,
+  type BoatSandboxPolicy,
+  type OpenBoatLinkResponse,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   type CreateMcpConnectionRequest,
@@ -128,7 +133,8 @@ import {
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateMode } from "../storage/desktop-runtime-storage";
-import { desktopMcpConnectionSelectionStorage, recordCreatedSandbox } from "../storage/desktop-mcp-connection-storage";
+import { desktopMcpConnectionSelectionStorage, desktopThreadSandboxes, recordCreatedSandbox } from "../storage/desktop-mcp-connection-storage";
+import type { ThreadSandboxStorage } from "@pwragent/owner-core/mcp-connection-storage";
 import { readCreatedSandbox, type SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 import {
   McpConnectionRegistry,
@@ -349,6 +355,8 @@ type FetchLike = (
 
 export type McpConnectionGatewayServiceOptions = {
   sandboxer?: SandboxerConnection;
+  /** Test seam: the sandbox rows PwrAgent's Boat server reads and writes. */
+  threadSandboxes?: Pick<ThreadSandboxStorage, "recordCreated" | "pendingForThread" | "markOutcome">;
   /**
    * A thread's directories, read in the instance that runs the thread. The
    * backend registry sets it with `setThreadRootsResolver` when it is not
@@ -788,6 +796,8 @@ export class McpConnectionGatewayService {
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
   private readonly sandboxer: SandboxerConnection;
+  private readonly boat: BoatConnection;
+  private readonly threadSandboxes: NonNullable<McpConnectionGatewayServiceOptions["threadSandboxes"]>;
   private readonly changeListeners = new Set<(event: McpConnectionsChangedEvent) => void>();
   private readonly stdioSecrets: McpStdioSecretVault;
   private readonly stdioSpawn?: StdioSpawn;
@@ -877,6 +887,18 @@ export class McpConnectionGatewayService {
     this.stdioSecrets = options.stdioSecrets ?? new McpStdioSecretVault(
       hasStdioSecretStore(this.settings) ? { settings: this.settings } : {},
     );
+    this.threadSandboxes = options.threadSandboxes ?? desktopThreadSandboxes;
+    this.boat = new BoatConnection({
+      secrets: this.stdioSecrets,
+      fetchFn: createMcpSafeFetch({ fetchFn: this.fetchFn, connectionId: BOAT_MCP_CONNECTION_ID }),
+      policy: () => this.requireConnection(BOAT_MCP_CONNECTION_ID).boatPolicy!,
+      openExternal: this.openExternal,
+    });
+    this.boat.onStatusChanged(() => {
+      // A rejected or removed key ends what every open session could do.
+      this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
+      this.announceChanged([BOAT_MCP_CONNECTION_ID]);
+    });
     this.stdioSpawn = options.stdioSpawn;
     this.resolveStdioSearchEnv = options.resolveStdioSearchEnv
       ?? (async () => await getDesktopSettingsService().resolveCodexSpawnEnvAsync());
@@ -1477,6 +1499,102 @@ export class McpConnectionGatewayService {
     });
   }
 
+  /** Opens one of Boat's fixed pages from this machine. */
+  async openBoatLink(target: BoatLinkTarget): Promise<OpenBoatLinkResponse> {
+    return await this.boat.openLink(target);
+  }
+
+  /**
+   * Checks a pasted Boat API key with Boat and stores it encrypted. The key
+   * goes to the profile's owner and nowhere else; no status carries it back.
+   */
+  async connectBoat(apiKey: string): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/connect-boat", { apiKey },
+      ));
+    }
+    await this.closeConnectionSessions(BOAT_MCP_CONNECTION_ID);
+    await this.boat.connect(apiKey);
+    this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
+    return this.announced(await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID)));
+  }
+
+  /** Changes what Boat's tools may do. The next tool call reads it. */
+  async setBoatSandboxPolicy(policy: Partial<BoatSandboxPolicy>): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/set-boat-sandbox-policy", { policy },
+      ));
+    }
+    return this.announced(await this.connectionStatus(this.registry.setBoatSandboxPolicy(policy)));
+  }
+
+  async setBoatCleanupOnPrClose(enabled: boolean): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/set-boat-cleanup-on-pr-close", { enabled },
+      ));
+    }
+    return this.announced(await this.connectionStatus(this.registry.setBoatCleanupOnPrClose(enabled)));
+  }
+
+  /**
+   * Whether PR-close cleanup is on for one connection's sandboxes. Each
+   * compute connection has its own switch; both default to on.
+   */
+  isSandboxCleanupOnPrCloseEnabled(connectionId: string): boolean {
+    const connection = this.registry.get(connectionId);
+    return connectionId === BOAT_MCP_CONNECTION_ID
+      ? connection?.boatCleanupOnPrClose !== false
+      : this.isSandboxerCleanupOnPrCloseEnabled();
+  }
+
+  /**
+   * What one Boat session may reach: the sandboxes its thread created. A
+   * session that names no thread (a Settings tool listing) may call nothing.
+   */
+  private boatSessionScope(grant: BridgeGrant | undefined): BoatSessionScope {
+    const thread = readGrantThread(grant?.threadId);
+    const cleanup = thread ? undefined : readCleanupThread(grant?.threadId);
+    const owner = thread
+      ? { threadId: thread.threadId, backend: thread.backend ?? grant?.backend }
+      : cleanup;
+    if (!owner) {
+      return {
+        role: "none",
+        ownedSandboxIds: () => new Set(),
+        recordOwned: () => undefined,
+        forgetOwned: () => undefined,
+      };
+    }
+    return {
+      role: thread ? "thread" : "cleanup",
+      ownedSandboxIds: () => new Set(
+        this.threadSandboxes.pendingForThread({ backend: owner.backend ?? "", threadId: owner.threadId })
+          .filter((record) => record.connectionId === BOAT_MCP_CONNECTION_ID)
+          .map((record) => record.sandboxId),
+      ),
+      recordOwned: (sandbox) => {
+        this.threadSandboxes.recordCreated({
+          connectionId: BOAT_MCP_CONNECTION_ID,
+          ...sandbox,
+          ...(owner.backend ? { backend: owner.backend } : {}),
+          threadId: owner.threadId,
+          now: Date.now(),
+        });
+      },
+      forgetOwned: (sandboxId) => {
+        this.threadSandboxes.markOutcome({
+          connectionId: BOAT_MCP_CONNECTION_ID, sandboxId, status: "deleted", now: Date.now(),
+        });
+      },
+    };
+  }
+
   /**
    * Opens a Sandboxer page from this machine. Local mode uses the CLI
    * dashboard handoff; hosted mode leaves sign-in to the browser.
@@ -1519,6 +1637,12 @@ export class McpConnectionGatewayService {
       await this.credentialVault.delete(connection.id);
       if (connection.kind === "pwrsnap") await this.settings.clearPwrSnapMcpCredential();
       this.invalidateConnectionTools(connectionId);
+      return this.announced(await this.connectionStatus(connection));
+    }
+    if (connection.kind === "boat") {
+      // Nothing to sign in to here: connecting is pasting a key. This is
+      // Refresh status.
+      await this.boat.readStatus(true);
       return this.announced(await this.connectionStatus(connection));
     }
     if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
@@ -1600,7 +1724,7 @@ export class McpConnectionGatewayService {
       ));
     }
     const connection = this.requireConnection(connectionId);
-    if (connection.authMode === "local_cli" || connection.authMode === "none") return this.announced(await this.connectionStatus(connection));
+    if (connection.authMode === "local_cli" || connection.authMode === "none" || connection.authMode === "api_key") return this.announced(await this.connectionStatus(connection));
     // Retire the attempt in the coordinator *before* ending its wait, so the
     // rejection that follows lands on a stale attempt and cannot report a
     // called-off authorization as `reauthorization_required`. Doing it the
@@ -1849,6 +1973,13 @@ export class McpConnectionGatewayService {
     }
     if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
       return this.announced(await this.connectionStatus(this.registry.setEnabled(connectionId, false)));
+    }
+    if (connection.kind === "boat") {
+      // Removes PwrAgent's copy of the key. It stays valid at Boat until the
+      // operator revokes it there, and running sandboxes keep running.
+      await this.boat.disconnect();
+      this.invalidateConnectionTools(connectionId);
+      return this.announced(await this.connectionStatus(connection));
     }
     // A local command holds no credentials to discard; stopping its running
     // copies is all a disconnect can mean. PwrSnap revokes the session its
@@ -2251,7 +2382,7 @@ export class McpConnectionGatewayService {
     signal?.throwIfAborted();
     if (!configured) {
       throw new Error(
-        connection.authMode === "local_cli" || runsLocalProcess(connection) ? status.detail
+        connection.authMode === "local_cli" || connection.kind === "boat" || runsLocalProcess(connection) ? status.detail
           : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
     }
@@ -2999,6 +3130,16 @@ export class McpConnectionGatewayService {
         discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
       };
     }
+    if (connection.kind === "boat") {
+      // As for Sandboxer: a defaults read never waits on Boat's API.
+      if (cachedLocalStatus && connection.enabled) void this.boat.readStatus().catch(() => undefined);
+      const status = cachedLocalStatus ? this.boat.cachedStatus() : await this.boat.readStatus();
+      return {
+        ...connection,
+        ...status,
+        discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
+      };
+    }
     if (connection.kind === "stdio") return await this.stdioConnectionStatus(connection);
     if (connection.kind === "github") return await this.githubConnectionStatus(connection, cachedLocalStatus);
     if (isPwrSuiteRelayKind(connection.kind)) {
@@ -3386,6 +3527,7 @@ export class McpConnectionGatewayService {
       clientName: `pwragent-${connection.id}-proxy`,
       discovery,
       threadSession: true,
+      ...(connection.kind === "boat" ? { boatScope: this.boatSessionScope(this.grants.get(token)) } : {}),
       handlers: {
         onElicit: async (client, request, signal) =>
           await this.routeUpstreamElicitation(token, client, request, signal),
@@ -3446,6 +3588,8 @@ export class McpConnectionGatewayService {
       githubToken?: string;
       /** False for a Settings test, which must not mark the row failed. */
       recordFailure?: boolean;
+      /** What a Boat session may reach. Absent means nothing. */
+      boatScope?: BoatSessionScope;
     },
   ): Promise<UpstreamSession> {
     let transport: Transport;
@@ -3478,6 +3622,10 @@ export class McpConnectionGatewayService {
       const status = await this.sandboxer.readStatus();
       if (!status.configured) throw new Error(status.detail);
       transport = await this.sandboxer.createTransport();
+    } else if (connection.kind === "boat") {
+      const status = await this.boat.readStatus();
+      if (!status.configured) throw new Error(status.detail);
+      transport = await this.boat.createTransport(options.boatScope ?? this.boatSessionScope(undefined));
     } else if (connection.kind === "github") {
       const { StreamableHTTPClientTransport } = await mcpClientStreamableHttp.load();
       transport = new StreamableHTTPClientTransport(new URL(GITHUB_MCP_HOSTED_URL), {
@@ -4505,6 +4653,20 @@ export class McpConnectionGatewayService {
       }
       return await this.setSandboxerCleanupOnPrClose(values.enabled);
     }
+    if (operation === "broker/connect-boat") {
+      if (typeof values.apiKey !== "string") throw new Error("Invalid Boat connect request.");
+      return await this.connectBoat(values.apiKey);
+    }
+    if (operation === "broker/set-boat-sandbox-policy") {
+      if (!values.policy || typeof values.policy !== "object" || Array.isArray(values.policy)) {
+        throw new Error("Invalid Boat sandbox policy request.");
+      }
+      return await this.setBoatSandboxPolicy(values.policy as Partial<BoatSandboxPolicy>);
+    }
+    if (operation === "broker/set-boat-cleanup-on-pr-close") {
+      if (typeof values.enabled !== "boolean") throw new Error("Invalid Boat cleanup on PR close request.");
+      return await this.setBoatCleanupOnPrClose(values.enabled);
+    }
     if (operation === "broker/set-linear-paste-images") {
       if (typeof values.enabled !== "boolean") {
         throw new Error("Invalid Linear paste images request.");
@@ -4590,7 +4752,7 @@ export class McpConnectionGatewayService {
       const status = await this.connectionStatus(connection);
       if (!status.configured) {
         throw new Error(
-          connection.authMode === "local_cli" || connection.kind === "stdio" || connection.kind === "github"
+          connection.authMode === "local_cli" || connection.kind === "stdio" || connection.kind === "github" || connection.kind === "boat"
             ? status.detail
             : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
@@ -4793,7 +4955,7 @@ export class McpConnectionGatewayService {
     // agent nothing telling it a forgotten machine keeps billing. Only the
     // built-in Sandboxer connection's: a third-party server's instructions would be
     // untrusted text the agent is told to follow.
-    const instructions = connection.kind === "sandboxer"
+    const instructions = connection.kind === "sandboxer" || connection.kind === "boat"
       ? client.getInstructions?.()?.trim()
       : undefined;
     if (instructions && tools[0]) {
@@ -5318,6 +5480,29 @@ function readGrantThread(
     }
   } catch {
     // Not a thread scope.
+  }
+  return undefined;
+}
+
+/** PwrAgent's own cleanup session: `["pwragent-cleanup", backend, threadId]`. */
+function readCleanupThread(
+  scope: string | undefined,
+): { backend?: string; threadId: string } | undefined {
+  if (!scope?.startsWith("[")) return undefined;
+  try {
+    const parsed = JSON.parse(scope) as unknown;
+    if (
+      Array.isArray(parsed)
+      && parsed.length === 3
+      && parsed[0] === "pwragent-cleanup"
+      && typeof parsed[1] === "string"
+      && typeof parsed[2] === "string"
+      && parsed[2]
+    ) {
+      return { backend: parsed[1], threadId: parsed[2] };
+    }
+  } catch {
+    // Not a cleanup scope.
   }
   return undefined;
 }

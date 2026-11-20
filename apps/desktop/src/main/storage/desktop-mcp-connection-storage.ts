@@ -10,6 +10,25 @@ export function recordCreatedSandbox(params: Parameters<ThreadSandboxStorage["re
   new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
 }
 
+/**
+ * The sandbox rows PwrAgent's Boat server reads and writes for one thread.
+ * Each write is one commit, on a create, fork or delete, never per call.
+ */
+export const desktopThreadSandboxes: Pick<ThreadSandboxStorage, "recordCreated" | "pendingForThread" | "markOutcome"> = {
+  recordCreated(params) {
+    if (!getAppStateMode()) return false;
+    return new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
+  },
+  pendingForThread(params) {
+    if (!getAppStateMode()) return [];
+    return new ThreadSandboxStore(getAppStateDb().raw).pendingForThread(params);
+  },
+  markOutcome(params) {
+    if (!getAppStateMode()) return;
+    new ThreadSandboxStore(getAppStateDb().raw).markOutcome(params);
+  },
+};
+
 export const desktopMcpConnectionSelectionStorage: ThreadMcpConnectionSelectionStorage = {
   async readSelection(context) {
     return (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? [];

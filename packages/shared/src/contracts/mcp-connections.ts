@@ -111,10 +111,143 @@ export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dash
 export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
 export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
 
+/**
+ * Boat (boat.dev) rents Ubuntu VMs by the second. It has no MCP server for
+ * sandbox control, so PwrAgent hosts one in the main process and is the only
+ * holder of the Boat API key. See docs/boat-remote-compute.md.
+ */
+export const BOAT_MCP_CONNECTION_ID = "builtin:boat" as const;
+export const BOAT_ORIGIN = "https://boat.dev";
+export const BOAT_API_URL = `${BOAT_ORIGIN}/api/v1`;
+
+export const BOAT_LINK_TARGETS = ["home", "dashboard", "docs", "pricing", "api_keys"] as const;
+export type BoatLinkTarget = (typeof BOAT_LINK_TARGETS)[number];
+
+export function isBoatLinkTarget(value: unknown): value is BoatLinkTarget {
+  return BOAT_LINK_TARGETS.some((target) => target === value);
+}
+
+/** Every Boat page PwrAgent opens. Main opens only these fixed URLs. */
+export const BOAT_LINKS: Readonly<Record<BoatLinkTarget, string>> = {
+  home: `${BOAT_ORIGIN}/`,
+  dashboard: `${BOAT_ORIGIN}/dashboard`,
+  docs: "https://docs.boat.dev/quickstart",
+  pricing: "https://docs.boat.dev/pricing",
+  api_keys: "https://docs.boat.dev/api-keys/scopes",
+};
+
+/** Boat's machine sizes, smallest first. The order is what a cap compares. */
+export const BOAT_SANDBOX_TYPES = ["small", "default", "large", "xlarge"] as const;
+export type BoatSandboxType = (typeof BOAT_SANDBOX_TYPES)[number];
+
+export function isBoatSandboxType(value: unknown): value is BoatSandboxType {
+  return BOAT_SANDBOX_TYPES.some((type) => type === value);
+}
+
+/** What each size is, for Settings. Rates are Boat's published per-hour price. */
+export const BOAT_SANDBOX_TYPE_LABELS: Readonly<Record<BoatSandboxType, string>> = {
+  small: "small · 2 vCPU · 4 GB",
+  default: "default · 4 vCPU · 8 GB",
+  large: "large · 8 vCPU · 16 GB",
+  xlarge: "xlarge · 16 vCPU · 32 GB",
+};
+
+/** Boat's own ceiling on auto-stop: 30 days. */
+export const BOAT_TTL_LIMIT_MINUTES = 30 * 24 * 60;
+
+/**
+ * What PwrAgent's Boat tools may do, whatever an agent asks for. Enforced in
+ * the main process before any request reaches Boat.
+ */
+export type BoatSandboxPolicy = {
+  /**
+   * Create, resume and fork every sandbox with `noEnv`, so the account's
+   * GitHub token, secrets, model keys and Boat key never enter one.
+   */
+  keepCredentialsOut: boolean;
+  defaultType: BoatSandboxType;
+  defaultTtlMinutes: number;
+  /** The largest size and longest auto-stop an agent may ask for. */
+  maxType: BoatSandboxType;
+  maxTtlMinutes: number;
+};
+
+export const DEFAULT_BOAT_SANDBOX_POLICY: BoatSandboxPolicy = {
+  keepCredentialsOut: true,
+  defaultType: "small",
+  defaultTtlMinutes: 60,
+  maxType: "large",
+  maxTtlMinutes: 8 * 60,
+};
+
+/**
+ * A policy that holds its own invariants: sizes are Boat's, auto-stop is
+ * between one minute and Boat's limit, and a default never exceeds its cap.
+ */
+export function normalizeBoatSandboxPolicy(input: Partial<Record<keyof BoatSandboxPolicy, unknown>> | undefined): BoatSandboxPolicy {
+  const fallback = DEFAULT_BOAT_SANDBOX_POLICY;
+  const minutes = (value: unknown, otherwise: number): number =>
+    typeof value === "number" && Number.isInteger(value) && value >= 1
+      ? Math.min(value, BOAT_TTL_LIMIT_MINUTES)
+      : otherwise;
+  const maxType = isBoatSandboxType(input?.maxType) ? input.maxType : fallback.maxType;
+  const maxTtlMinutes = minutes(input?.maxTtlMinutes, fallback.maxTtlMinutes);
+  const defaultType = isBoatSandboxType(input?.defaultType) ? input.defaultType : fallback.defaultType;
+  return {
+    keepCredentialsOut: input?.keepCredentialsOut !== false,
+    defaultType: boatSandboxTypeRank(defaultType) > boatSandboxTypeRank(maxType) ? maxType : defaultType,
+    defaultTtlMinutes: Math.min(minutes(input?.defaultTtlMinutes, fallback.defaultTtlMinutes), maxTtlMinutes),
+    maxType,
+    maxTtlMinutes,
+  };
+}
+
+export function boatSandboxTypeRank(type: BoatSandboxType): number {
+  return BOAT_SANDBOX_TYPES.indexOf(type);
+}
+
+/**
+ * Boat API keys start with `boat_`; older ones with `box_`. Anything shaped
+ * like one is masked before text leaves PwrAgent's Boat server.
+ */
+export const BOAT_API_KEY_PATTERN = /\b(?:boat|box)_[A-Za-z0-9_-]{8,}/g;
+
+export function redactBoatApiKeys(text: string): string {
+  return text.replace(BOAT_API_KEY_PATTERN, "[Boat key removed]");
+}
+
+/** A pasted key, trimmed. Undefined when it is not shaped like a Boat key. */
+export function normalizeBoatApiKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const key = value.trim();
+  return /^(?:boat|box)_[A-Za-z0-9_-]{8,512}$/.test(key) ? key : undefined;
+}
+
+/**
+ * The account behind the stored key. Shown in Settings only; federation
+ * strips it, and no agent tool returns it.
+ */
+export type BoatAccountSummary = {
+  login?: string;
+  plan?: string;
+  activeSandboxes?: number;
+  maxActiveSandboxes?: number;
+  /** False when Boat will not start a machine for this account right now. */
+  canStart?: boolean;
+  blockedReason?: string;
+};
+
+export type ConnectBoatRequest = { apiKey: string };
+export type SetBoatSandboxPolicyRequest = { policy: Partial<BoatSandboxPolicy> };
+export type SetBoatCleanupOnPrCloseRequest = { enabled: boolean };
+export type OpenBoatLinkRequest = { target: BoatLinkTarget };
+export type OpenBoatLinkResponse = { opened: boolean; error?: string };
+
 export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
+  BOAT_MCP_CONNECTION_ID,
 ] as const;
 /**
  * Any connection id. Remote connections are slugged from their display name,
@@ -130,13 +263,14 @@ export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
  * is nothing to sign in to, and any secrets it needs travel as environment
  * variables PwrAgent stores encrypted.
  */
-export type McpConnectionAuthMode = "oauth" | "local_cli" | "none";
+export type McpConnectionAuthMode = "oauth" | "local_cli" | "none" | "api_key";
 
 /**
  * `stdio` is an operator-configured local command (an MCP stdio server).
  * `github` is GitHub's MCP server, signed in with the GitHub CLI or a token.
+ * `boat` is PwrAgent's own server for Boat's API, signed in with an API key.
  */
-export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio" | "github";
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio" | "github" | "boat";
 
 /** One environment variable a local command server receives. */
 export type McpStdioEnvironmentEntry = {
@@ -263,6 +397,10 @@ export type McpConnectionRecord = {
    * absent reads as `true`.
    */
   sandboxerCleanupOnPrClose?: boolean;
+  /** Only the Boat connection has these. Absent reads as the defaults. */
+  boatPolicy?: BoatSandboxPolicy;
+  /** Boat's own cleanup switch; absent reads as `true`. */
+  boatCleanupOnPrClose?: boolean;
   /**
    * Present only on a connection to Linear's hosted MCP server: whether
    * images in text pasted from Linear are attached to the message, read
@@ -406,6 +544,8 @@ export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
   sandboxerCliState?: SandboxerCliState;
   sandboxerAccount?: SandboxerAccountSummary;
+  /** The Boat account behind the stored key. Settings only, as above. */
+  boatAccount?: BoatAccountSummary;
   /**
    * A `github` connection's account as last checked: its state, login and
    * scopes. Shown in Settings only; federation strips it, as it does the
@@ -445,6 +585,7 @@ export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpCo
   // owner's machine; a peer only ever needs the name and the switch.
   return connections.map(({
     sandboxerAccount: _account,
+    boatAccount: _boatAccount,
     githubAccount: _githubAccount,
     stdio: _stdio,
     ...connection
@@ -697,6 +838,7 @@ export const MCP_CONNECTION_DISPLAY_NAMES: Record<BuiltInMcpConnectionId, string
   [PWRSNAP_MCP_CONNECTION_ID]: "PwrSnap",
   [PWRGIT_MCP_CONNECTION_ID]: "PwrGit",
   [SANDBOXER_MCP_CONNECTION_ID]: "Sandboxer",
+  [BOAT_MCP_CONNECTION_ID]: "Boat",
 };
 
 /**
@@ -963,6 +1105,33 @@ export function resolveMcpConnectionSetup(
     return connection.enabled
       ? build("ready", "Signed in", `Turn Sandboxer on in a thread's MCP access. ${billing}`, "ok")
       : build("parked", "Parked", `Turn on Offer to threads, then turn Sandboxer on in a thread's MCP access. ${billing}`, "warn");
+  }
+
+  if (connection.kind === "boat") {
+    const billing =
+      "Sandboxes bill per second while they run. Closing the thread does not stop one; auto-stop or the agent does.";
+    if (connection.state === "temporarily_unavailable") {
+      return build("unavailable", "Unavailable", connection.detail ?? "Could not reach Boat. Check connectivity, then refresh status.", "err");
+    }
+    if (!configured) {
+      return build(
+        "login_required",
+        connection.state === "reauthorization_required" ? "Key rejected" : "Not connected",
+        connection.detail ?? "Paste a Boat API key to connect. PwrAgent keeps it encrypted and never shows it to an agent.",
+        "warn",
+      );
+    }
+    if (connection.boatAccount?.canStart === false) {
+      return build(
+        connection.enabled ? "ready" : "parked",
+        "Can't start",
+        connection.detail ?? "Boat will not start a new sandbox for this account right now. Running ones can still be listed and stopped.",
+        "warn",
+      );
+    }
+    return connection.enabled
+      ? build("ready", "Connected", `Turn Boat on in a thread's MCP access. ${billing}`, "ok")
+      : build("parked", "Parked", `Turn on Offer to threads, then turn Boat on in a thread's MCP access. ${billing}`, "warn");
   }
 
   if (
