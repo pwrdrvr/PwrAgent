@@ -822,13 +822,15 @@ the port. Passive readers remain unclaimed. The Outpost's existing acquisition
 of the same lease excludes these desktop owners without a database lock file.
 
 Both hosts open the profile's `state.db`, which holds messaging bindings,
-thread overlays and encrypted secret blobs. Desktop supplies Electron
-`safeStorage`, and Outpost supplies a profile-local file key through its Node
-host ports. Multiple instances on the same PwrAgent
-version may share a profile DB through SQLite WAL. Concurrent profile sharing
-requires the same version because the database also carries application-level
-ownership and dispatch state.
+thread overlays and encrypted secret blobs. SQLite WAL coordinates concurrent
+database access. Instances sharing a profile must run the same PwrAgent version
+because they share application-level ownership and dispatch state.
 See [Sharing a profile across versions](docs/runtime-configuration.md#sharing-a-profile-across-versions).
+
+Reading stored secrets still requires the original encryption backend and key.
+When Outpost opens a Desktop profile, Desktop-encrypted federation private keys
+remain unavailable. Outpost reports the mismatch and preserves the ciphertext,
+so federation cannot use the profile's existing identity there.
 
 `packages/sqlite-storage` owns the profile database opener, schema and migrations,
 including the sub-agent and usage-activity table helpers and write instrumentation.
@@ -1016,14 +1018,14 @@ graph TB
     SecStore --> StateDB
 ```
 
-Secrets — bot tokens, API keys — are never written to TOML and are never
-stored as plaintext in sqlite. PwrAgent encrypts them with Electron
-[`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage)
-and persists only the ciphertext blob. On macOS, Electron backs
-`safeStorage` with Keychain Access for the encryption keys, so decrypting
-the blob requires the same OS/user/app Keychain context. The app refuses
+PwrAgent persists secrets such as bot tokens and API keys only as ciphertext
+in SQLite. Desktop encrypts them with Electron
+[`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage).
+On macOS, Electron backs `safeStorage` with Keychain Access, so decryption
+requires the same OS/user/app Keychain context. Desktop refuses
 to write secrets when Electron reports an unsafe or unavailable
-`safeStorage` backend.
+`safeStorage` backend. Outpost encrypts secrets with a profile-local file key
+stored at `state/headless-secret.key`.
 
 ### Usage and pricing ledger
 
