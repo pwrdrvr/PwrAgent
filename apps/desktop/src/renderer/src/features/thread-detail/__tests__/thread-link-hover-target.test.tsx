@@ -1,9 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatArchiveCleanupNotice } from "../../../lib/archive-cleanup-notice";
+import { threadActionErrorContext } from "../../../lib/thread-action-error-context";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { ThreadRow } from "../../navigation/ThreadRow";
+import { AppNoticeToast } from "../../notifications/AppNoticeToast";
 import { ThreadHeader } from "../ThreadHeader";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
@@ -90,10 +94,19 @@ function rowElement(title: string): HTMLElement {
  */
 function scene(options: {
   headerThread?: NavigationThreadSummary;
+  openArchiveWarningThread?: () => void;
   text?: string;
   threads?: NavigationThreadSummary[];
 }) {
   const threads = options.threads ?? [targetThread, otherThread];
+  const archiveNotice = options.openArchiveWarningThread
+    ? formatArchiveCleanupNotice([{
+        removedWorktree: false,
+        deletedBranch: false,
+        worktreeState: "present",
+        skippedReason: "The worktree folder still exists, but its .git entry is missing. The folder was kept.",
+      }], threadActionErrorContext(otherThread))
+    : undefined;
   return (
     <ThreadLinkProvider onShowThread={vi.fn()} threads={threads}>
       {options.headerThread ? (
@@ -103,6 +116,13 @@ function scene(options: {
         />
       ) : null}
       {options.text ? <ThreadMarkdown text={options.text} /> : null}
+      {archiveNotice ? (
+        <AppNoticeToast
+          notice={archiveNotice}
+          onDismiss={vi.fn()}
+          onOpenThread={options.openArchiveWarningThread}
+        />
+      ) : null}
       <div className="sidebar">
         {threads.map((thread) => (
           <div key={thread.id}>{rowFor(thread)}</div>
@@ -358,6 +378,60 @@ describe("thread link hover target", () => {
 
     fireEvent.mouseLeave(screen.getByRole("button", { name: TITLE_LINK_NAME }));
     expect(rowElement("Unrelated thread")).not.toHaveClass("is-link-target");
+  });
+
+  it("never carries a title-link hover highlight past an outside pointer event", () => {
+    fc.assert(fc.property(
+      fc.constantFrom(targetThread, otherThread),
+      fc.array(fc.record({
+        next: fc.constantFrom(targetThread, otherThread),
+        deliveredLeave: fc.boolean(),
+        outsideEvent: fc.constantFrom("pointerDown", "pointerOver"),
+      }), { minLength: 1, maxLength: 5 }),
+      (initial, selections) => {
+        const view = renderScene({ headerThread: initial });
+        try {
+          for (const { next, deliveredLeave, outsideEvent } of selections) {
+            const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
+            fireEvent.mouseEnter(titleLink);
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(1);
+
+            const row = rowElement(next.title);
+            fireEvent[outsideEvent](titleLink);
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(1);
+            if (deliveredLeave) fireEvent.mouseLeave(titleLink);
+            // The renderer can still receive a pointer event from the sidebar
+            // when the title link missed its leave.
+            fireEvent[outsideEvent](row);
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(0);
+            // A subsequent selection reuses the same title link.
+            view.rerenderScene({ headerThread: next });
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(0);
+          }
+        } finally {
+          view.unmount();
+        }
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("clears a stale title-link hover when opening a thread from an archive warning", () => {
+    const openArchiveWarningThread = vi.fn(() => {
+      view.rerenderScene({ headerThread: otherThread, openArchiveWarningThread });
+    });
+    const view = renderScene({ headerThread: targetThread, openArchiveWarningThread });
+    fireEvent.mouseEnter(screen.getByRole("button", { name: TITLE_LINK_NAME }));
+    expect(rowElement(targetThread.title)).toHaveClass("is-link-target");
+
+    const warningLink = screen.getByRole("button", { name: OTHER_CHIP_NAME });
+    fireEvent.pointerDown(warningLink);
+    fireEvent.click(warningLink);
+
+    expect(openArchiveWarningThread).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", {
+      name: `Show selected thread in thread list: ${otherThread.title}`,
+    })).toBeInTheDocument();
+    expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(0);
   });
 
   it("keeps the title-bar highlight across a thread-membership change", () => {

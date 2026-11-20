@@ -15,6 +15,7 @@ import {
   useMemo,
   useRef,
   useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import { getDesktopApi } from "./desktop-api";
@@ -649,7 +650,7 @@ function isFocusVisible(element: Element): boolean {
 export function useThreadLinkHoverSource(
   target: ThreadLinkHoverTarget | undefined,
 ): {
-  showFromPointer: () => void;
+  showFromPointer: (event: MouseEvent<HTMLElement>) => void;
   hideFromPointer: () => void;
   /** Gated on visible keyboard focus — wire to `onFocus`. */
   showFromFocus: (element: Element) => void;
@@ -662,6 +663,7 @@ export function useThreadLinkHoverSource(
   // re-point effect below can tell a resting input from an idle one.
   const pointerOwnerRef = useRef<HoverSourceOwner>({ active: false });
   const focusOwnerRef = useRef<HoverSourceOwner>({ active: false });
+  const stopWatchingPointerRef = useRef<(() => void) | undefined>(undefined);
   const storeRef = useRef(store);
   storeRef.current = store;
   const targetRef = useRef(target);
@@ -681,14 +683,32 @@ export function useThreadLinkHoverSource(
     storeRef.current?.clear(owner);
   }, []);
 
-  const showFromPointer = useCallback(
-    () => showOwner(pointerOwnerRef.current),
-    [showOwner],
-  );
-  const hideFromPointer = useCallback(
-    () => hideOwner(pointerOwnerRef.current),
-    [hideOwner],
-  );
+  const hideFromPointer = useCallback(() => {
+    stopWatchingPointerRef.current?.();
+    stopWatchingPointerRef.current = undefined;
+    hideOwner(pointerOwnerRef.current);
+  }, [hideOwner]);
+  const showFromPointer = useCallback((event: MouseEvent<HTMLElement>) => {
+    if (!storeRef.current) return;
+    stopWatchingPointerRef.current?.();
+    const source = event.currentTarget;
+    const sourceDocument = source.ownerDocument;
+    // A mouseleave can be lost as the UI changes under the pointer. The next
+    // outside pointer event can still end the hover before a click retargets
+    // the title link to another selected thread.
+    const releaseOutsideSource = (event: PointerEvent): void => {
+      if (!source.contains(event.target as Node)) {
+        hideFromPointer();
+      }
+    };
+    sourceDocument.addEventListener("pointerover", releaseOutsideSource, true);
+    sourceDocument.addEventListener("pointerdown", releaseOutsideSource, true);
+    stopWatchingPointerRef.current = () => {
+      sourceDocument.removeEventListener("pointerover", releaseOutsideSource, true);
+      sourceDocument.removeEventListener("pointerdown", releaseOutsideSource, true);
+    };
+    showOwner(pointerOwnerRef.current);
+  }, [hideFromPointer, showOwner]);
   const hideFromFocus = useCallback(
     () => hideOwner(focusOwnerRef.current),
     [hideOwner],
@@ -707,9 +727,9 @@ export function useThreadLinkHoverSource(
     [showOwner],
   );
   const release = useCallback(() => {
-    hideOwner(pointerOwnerRef.current);
-    hideOwner(focusOwnerRef.current);
-  }, [hideOwner]);
+    hideFromPointer();
+    hideFromFocus();
+  }, [hideFromPointer, hideFromFocus]);
 
   // The link's target changed under a resting pointer or focus: follow it, so
   // the row that is lit is always the one activation would open.
@@ -730,15 +750,12 @@ export function useThreadLinkHoverSource(
   // A link can unmount under the pointer (its message re-renders, the
   // transcript navigates away) without ever seeing mouseleave.
   useEffect(() => {
-    const pointerOwner = pointerOwnerRef.current;
-    const focusOwner = focusOwnerRef.current;
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      storeRef.current?.clear(pointerOwner);
-      storeRef.current?.clear(focusOwner);
+      release();
     };
-  }, []);
+  }, [release]);
 
   return { showFromPointer, hideFromPointer, showFromFocus, hideFromFocus, release };
 }
