@@ -110,7 +110,7 @@ import {
 import {
   ThreadTurnQueue,
 } from "@pwragent/owner-core/thread-turn-queue";
-import { deleteThreadAssets } from "./thread-assets";
+import type { ThreadAssetOwner } from "./thread-assets";
 import {
   readStatusType,
 } from "./backend-registry-notifications";
@@ -192,6 +192,7 @@ export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
   "getCachedThreadSummary" | "getClient" | "publishLocalEvent" | "threadHasActiveTurn"
   | "resolveThreadEnvironmentCwd" | "withCodexThreadClient"
 >, ArchiveCleanupInventoryHost {
+  deleteOwnedThreadAssets(owner: ThreadAssetOwner): Promise<void>;
   readonly codexBackgroundTerminals: ReadonlyMap<string, CodexBackgroundTerminal[]>;
   readonly messagingStore?: MessagingArchiveCleanupStore | null;
   readonly pendingEnvironmentLaunchStore: PendingEnvironmentLaunchStore;
@@ -912,12 +913,12 @@ export class ThreadArchiveCoordinator {
       confirmAbsent: async (state) => {
         if (state.backend === "claude") {
           const absent = await this.context.providers.claude.confirmThreadAbsent(state.threadId);
-          if (absent) await deleteThreadAssets(state);
+          if (absent) await this.host().deleteOwnedThreadAssets(state);
           return absent;
         }
         if (isAcpBackendId(state.backend)) {
           const absent = !this.context.providers.acp.getSession(state.backend, state.threadId);
-          if (absent) await deleteThreadAssets(state);
+          if (absent) await this.host().deleteOwnedThreadAssets(state);
           return absent;
         }
         return await this.host().withCodexThreadClient(state.threadId, async (client) => {
@@ -927,7 +928,7 @@ export class ThreadArchiveCoordinator {
             // Only an explicit provider not-found response confirms deletion.
             // Transport errors, unloaded threads and profile changes retain refs.
             const absent = error instanceof Error && error.message.toLowerCase().includes("thread not found:");
-            if (absent) await deleteThreadAssets(state);
+            if (absent) await this.host().deleteOwnedThreadAssets(state);
             return absent;
           }
         });
@@ -974,7 +975,7 @@ export class ThreadArchiveCoordinator {
         // The provider deletes the complete family. Child notifications may
         // be missed, so release every owner's assets before forgetting refs.
         for (const thread of family) {
-          await deleteThreadAssets({ backend: thread.source, threadId: thread.id });
+          await this.host().deleteOwnedThreadAssets({ backend: thread.source, threadId: thread.id });
         }
         this.host().invalidateThreadListCache(root.source);
         for (const thread of family) this.invalidateArchiveCleanupReads(thread.source, undefined, true, thread.id, [], "deleted");

@@ -1520,7 +1520,7 @@ export class DesktopBackendRegistry {
     return this.threadInspectionTools.mutateThreadParentV1(request);
   }
 
-  private readonly agentMemory = new AgentMemoryStore();
+  private readonly agentMemory = new AgentMemoryStore(undefined, () => this.assertThreadOwnership());
 
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler = async (request) => {
     if (request.operation !== "agent_memory") {
@@ -1910,6 +1910,7 @@ export class DesktopBackendRegistry {
       assertNotBootstrap: (...args: Parameters<typeof this.assertNotBootstrap>) => this.assertNotBootstrap(...args),
       assertThreadNotHandingOff: (...args: Parameters<typeof this.assertThreadNotHandingOff>) => this.assertThreadNotHandingOff(...args),
       assertThreadNotLocked: (...args: Parameters<typeof this.assertThreadNotLocked>) => this.assertThreadNotLocked(...args),
+      deleteOwnedThreadAssets: (owner: ThreadAssetOwner) => this.deleteOwnedThreadAssets(owner),
       assertThreadOwnership: (...args: Parameters<typeof this.assertThreadOwnership>) => this.assertThreadOwnership(...args),
       attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
       authorizeAgentToolMcpCall: (...args: Parameters<typeof this.authorizeAgentToolMcpCall>) => this.authorizeAgentToolMcpCall(...args),
@@ -4288,6 +4289,11 @@ export class DesktopBackendRegistry {
   ): Promise<AgentMemoryResult> {
     this.assertNotBootstrap("accessAgentMemory");
     return await this.agentMemory.access(owner, operation, () => this.requireMemoryAgent(owner));
+  }
+
+  private async deleteOwnedThreadAssets(owner: ThreadAssetOwner): Promise<void> {
+    await this.agentMemory.purge(owner);
+    await deleteThreadAssets(owner);
   }
 
   private async requireMemoryAgent(owner: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
@@ -14850,6 +14856,7 @@ export class DesktopBackendRegistry {
           .join(", ")}`,
       );
     }
+    await this.agentMemory.drainMutations();
     this.ownerAdmission?.close();
   }
 
@@ -20490,7 +20497,7 @@ export class DesktopBackendRegistry {
         if (!this.closed) void this.sweepInactiveThreads({ manual: false });
       }
       const emitted = event.notification.method === "thread/deleted"
-        ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
+        ? this.deleteOwnedThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
             .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
             .then(() => this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery))
         : this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery);

@@ -1,3 +1,6 @@
+import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
+import { RuntimeLeaseManager } from "@pwragent/owner-core/runtime-lease-manager";
+import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
 import type { Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import fc from "fast-check";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
@@ -137,7 +140,7 @@ async function createFixture() {
   const claudeLaunches: ClaudeLaunch[] = [];
   const completedClaudeTurns = { count: 0 };
   /** A registry over the same profile database, as after an app restart. */
-  const open = () => {
+  const open = (ownerId?: string) => {
     const db = StateDb.open(dbPath);
     databases.push(db);
     const overlayStore = new SqliteOverlayStore(db);
@@ -150,6 +153,11 @@ async function createFixture() {
     const registry = createDesktopBackendRegistry({
       codexClient: new CodexAppServerClient({ directoryResolver: async () => [] }),
       overlayStore, messagingStore: null, threadTitleGenerationService: null,
+      ...(ownerId ? { ownerAdmission: new ProfileThreadOwnerAdmission(new RuntimeLeaseManager({
+        instanceId: ownerId, profileName: "default", processId: process.pid, startedAt: 1000,
+        cwd: root, now: () => 2000, systemBootedAt: 0, runtimeIdentityIsAlive: () => true,
+        store: new AppRuntimeInstanceStore(db),
+      })) } : {}),
       runtimeInstanceId: `agent-instructions-${registries.length}`, resolveLiveProfileRuntimeInstanceIds: () => [],
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(root, "claude")),
@@ -825,4 +833,26 @@ describe("Agent memory at the provider boundary", () => {
     expect(await second.registry.accessAgentMemory(identity, { action: "read_note", noteId: "progress" }))
       .toMatchObject({ exists: true, content: "Already reported the review." });
   });
+});
+
+it("gates memory mutations on the profile owner across independent database connections", async () => {
+  const { root, open } = await createFixture();
+  const first = open("memory-owner").registry;
+  const started = await first.startThread({ backend: "claude", cwd: root, agent: agent(FIRST) });
+  const identity = { backend: "claude", threadId: started.threadId } as const;
+  const second = open("memory-viewer").registry;
+  const initial = await second.accessAgentMemorySettings({ ...identity, operation: { action: "read_index" } });
+  if (!("revision" in initial)) throw new Error("Expected the index");
+  const edit = { action: "write_index", revision: initial.revision } as const;
+  await expect(second.accessAgentMemorySettings({ ...identity, operation: { ...edit, content: "viewer" } }))
+    .rejects.toThrow("Profile thread ownership is held by another PwrAgent runtime");
+  await expect(second.accessAgentMemory(identity, { action: "write_note", noteId: "progress", content: "viewer" }))
+    .rejects.toThrow("Profile thread ownership is held by another PwrAgent runtime");
+  await first.accessAgentMemorySettings({ ...identity, operation: { ...edit, content: "winner" } });
+  await first.close();
+  registries.splice(registries.indexOf(first), 1);
+  await expect(second.accessAgentMemorySettings({ ...identity, operation: { ...edit, content: "stale" } }))
+    .rejects.toThrow("Agent memory changed");
+  await expect(second.accessAgentMemorySettings({ ...identity, operation: { action: "read_index" } }))
+    .resolves.toMatchObject({ content: "winner" });
 });

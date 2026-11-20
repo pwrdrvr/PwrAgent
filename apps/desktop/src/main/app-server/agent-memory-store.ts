@@ -1,3 +1,4 @@
+import { isAgentMemoryRead } from "@pwragent/shared";
 import {
   AGENT_MEMORY_INDEX_BYTES,
   AGENT_MEMORY_NOTE_BYTES,
@@ -111,7 +112,22 @@ async function writeDocument(file: string, content: string): Promise<MemoryDocum
 
 /** Files belong to the owner profile and the stable PwrAgent thread identity. */
 export class AgentMemoryStore {
-  constructor(private readonly root = agentMemoryRoot()) {}
+  private readonly mutations = new Set<Promise<unknown>>();
+
+  constructor(
+    private readonly root = agentMemoryRoot(),
+    private readonly assertMutationOwner: () => void = () => {},
+  ) {}
+
+  private async trackMutation<T>(mutation: Promise<T>): Promise<T> {
+    this.mutations.add(mutation);
+    try { return await mutation; }
+    finally { this.mutations.delete(mutation); }
+  }
+
+  async drainMutations(): Promise<void> {
+    await Promise.allSettled(this.mutations);
+  }
 
   private threadDirectory(owner: MemoryOwner): string {
     const identity = createHash("sha256").update(JSON.stringify([owner.backend, owner.threadId])).digest("hex");
@@ -121,8 +137,10 @@ export class AgentMemoryStore {
   async access(owner: MemoryOwner, input: unknown, authorize: () => Promise<void>): Promise<AgentMemoryResult> {
     const args = parseMemoryArgs(input);
     const directory = this.threadDirectory(owner);
-    return await memoryFileLocks.run(directory, async () => {
+    const readOnly = isAgentMemoryRead(args);
+    const operation = memoryFileLocks.run(directory, async () => {
       await authorize();
+      if (!readOnly) this.assertMutationOwner();
       if (await directoryExists(this.root)) await directoryExists(directory);
       const notes = path.join(directory, "notes");
       if (args.action === "list") return { noteIds: await listNotes(notes) };
@@ -148,12 +166,15 @@ export class AgentMemoryStore {
       if (current.exists && current.content === args.content) return current;
       return await writeDocument(file, args.content);
     });
+    return await (readOnly ? operation : this.trackMutation(operation));
   }
 
   async purge(owner: MemoryOwner): Promise<void> {
     const directory = this.threadDirectory(owner);
-    await memoryFileLocks.run(directory, async () => {
-      if (await directoryExists(this.root)) await rm(directory, { recursive: true, force: true });
-    });
+    await this.trackMutation(memoryFileLocks.run(directory, async () => {
+      if (!await directoryExists(this.root) || !await directoryExists(directory)) return;
+      this.assertMutationOwner();
+      await rm(directory, { recursive: true, force: true });
+    }));
   }
 }

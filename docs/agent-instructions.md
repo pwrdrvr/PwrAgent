@@ -213,7 +213,9 @@ holds `index.md` and a `notes/` directory. The index holds up to 4 KiB of
 UTF-8 text. Each of up to 128 notes holds up to 16 KiB. A save over a limit
 leaves the previous file intact. The editor rejects stale revisions so an
 operator can reload and reconcile a concurrent change. These files add no
-SQLite writes.
+SQLite writes for memory content. Changes require the existing profile thread-owner
+lease. The lease can write to SQLite when first acquired. A secondary runtime can
+read memory. Saves and deletions require ownership.
 
 The owner fetches the index for each model-facing prompt, including the first
 prompt on start or resume. Claude receives context through the Agent SDK
