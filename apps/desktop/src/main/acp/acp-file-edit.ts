@@ -1,4 +1,4 @@
-import type { AppServerThreadFileDiff } from "@pwragent/shared";
+import type { AppServerThreadFileDiff } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   renderUnifiedFileDiff,
   unifiedDiffFileName,

@@ -1,4 +1,4 @@
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";

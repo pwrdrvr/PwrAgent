@@ -1,7 +1,8 @@
 import { setImmediate as settle } from "node:timers/promises";
 import fc from "fast-check";
 import { afterEach, expect, it } from "vitest";
-import type { AgentEvent, AppServerBackendKind } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import type { StateDb } from "../state/state-db";
 import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";

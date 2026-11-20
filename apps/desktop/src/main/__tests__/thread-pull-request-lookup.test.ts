@@ -1,4 +1,4 @@
-import type { PrSummary, RefreshThreadPullRequestsRequest } from "@pwragent/shared";
+import type { PrSummary, RefreshThreadPullRequestsRequest } from "@pwragent/shared/contracts/navigation";
 import { afterEach, expect, it, vi } from "vitest";
 import { ThreadPullRequestLookup } from "../app-server/thread-pull-request-lookup";
 import { ForgePrFetcher } from "../pr-status/forge-pr-fetcher";

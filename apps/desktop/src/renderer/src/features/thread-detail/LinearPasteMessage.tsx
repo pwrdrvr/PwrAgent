@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { LinearPasteLayout, LinearPastePiece } from "@pwragent/shared";
+import type { LinearPasteLayout, LinearPastePiece } from "@pwragent/shared/linear-paste";
 
 /**
  * Text the operator pasted from Linear, shown as Linear showed it: the

@@ -1,6 +1,6 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadRow } from "../ThreadRow";
 import { revealSelectedSidebarThreadRow } from "../reveal-selected-thread-row";
 

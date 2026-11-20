@@ -1,4 +1,4 @@
-import type { ThreadToolInvocationAlert } from "@pwragent/shared";
+import type { ThreadToolInvocationAlert } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import type { ThreadIncidentSummary } from "./thread-incident-summary";

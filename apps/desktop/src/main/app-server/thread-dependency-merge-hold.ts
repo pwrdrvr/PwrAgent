@@ -1,4 +1,4 @@
-import type { ThreadDependency } from "@pwragent/shared";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { parsePullRequestReferenceUrl } from "../pr-status/forge-reference";
 
 type Target = { backend: string; threadId: string; pullRequest?: string };

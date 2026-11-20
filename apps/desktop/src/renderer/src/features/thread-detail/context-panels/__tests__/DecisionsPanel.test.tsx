@@ -6,7 +6,7 @@ import type {
   DecisionsRailBatchPage,
   DecisionsRailBatchRequest,
   DecisionsRailSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
 import { DecisionsPanel } from "../DecisionsPanel";
 
 afterEach(cleanup);

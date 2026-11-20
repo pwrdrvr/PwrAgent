@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
+import type { NavigationLaunchpadDefaults } from "@pwragent/shared/contracts/navigation";
 import type { OpenVoiceManagerResponse } from "../../shared/native-voice";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";

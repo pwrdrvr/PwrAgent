@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PROJECT_FORGE_AUTOMATION, type ProjectForgeAutomation } from "@pwragent/shared";
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared/project-forge-automation";
 import {
   canEditProjectForgeAutomation,
   describeProjectAutoFixOverride,

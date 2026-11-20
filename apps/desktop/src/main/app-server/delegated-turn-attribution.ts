@@ -1,4 +1,4 @@
-import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 
 export { withoutTurnAttribution } from "@pwragent/owner-core/thread-steering-lifecycle";
 

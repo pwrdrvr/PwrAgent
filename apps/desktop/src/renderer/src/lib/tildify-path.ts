@@ -1,4 +1,4 @@
-import { abbreviateHomePath, formatFilesystemPath } from "@pwragent/shared";
+import { abbreviateHomePath, formatFilesystemPath } from "@pwragent/shared/path-display";
 
 /**
  * Compact display of absolute filesystem paths by collapsing the user's

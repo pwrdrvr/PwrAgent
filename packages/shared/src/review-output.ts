@@ -1,4 +1,8 @@
-import type { AppServerReviewOutput, AppServerReviewFinding, AppServerThreadReviewEntry } from "@pwragent/shared";
+import type {
+  AppServerReviewOutput,
+  AppServerReviewFinding,
+  AppServerThreadReviewEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * Exiting review mode is not proof that a review completed. Codex emits its

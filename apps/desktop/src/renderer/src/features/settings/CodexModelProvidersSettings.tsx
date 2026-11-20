@@ -8,8 +8,6 @@ import {
   suggestCodexModelProviderId,
   validateCodexBaseUrl,
   validateCodexModelProviders,
-  type BackendSummary,
-  type CodexModelProviderCatalogState,
   type CodexModelProviderImportCandidate,
   type CodexModelProviderImportScan,
   type CodexModelProviderRate,
@@ -17,7 +15,8 @@ import {
   type CodexModelProviderTestResult,
   type CodexProviderCatalogModel,
   type DesktopCodexModelProvider,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
+import { type BackendSummary, type CodexModelProviderCatalogState } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import { formatRelativeTime } from "../navigation/thread-time";

@@ -1,5 +1,6 @@
-import { buildModelMenu, codexProviderIdOfModel, formatModelOptionLabel, modelMenuOtherLabel } from "@pwragent/shared";
-import type { ModelMenuEntry } from "@pwragent/shared";
+import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
+import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared/codex-model-providers";
+import type { ModelMenuEntry } from "@pwragent/shared/model-menu";
 import {
   applyActionCapabilityLimits,
   capabilityProfilePageSize,

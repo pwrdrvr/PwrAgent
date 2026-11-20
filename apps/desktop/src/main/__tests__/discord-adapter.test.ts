@@ -9,10 +9,8 @@ import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import type {
-  NavigationSnapshot,
-  StartTurnRequest,
-} from "@pwragent/shared";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
+import type { StartTurnRequest } from "@pwragent/shared/contracts/agent";
 import { DiscordAdapter } from "@pwragent/messaging-provider-discord";
 import type {
   DiscordApi,

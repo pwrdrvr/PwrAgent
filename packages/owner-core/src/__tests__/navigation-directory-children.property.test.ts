@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery, type NavigationQueryIndex } from "../navigation-query-projection";
 import { NavigationQueryStore } from "../navigation-query-store";
 

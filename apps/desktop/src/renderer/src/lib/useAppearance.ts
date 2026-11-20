@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import {
   applyAppearanceAttributes,
   DEFAULT_APPEARANCE,

@@ -1,9 +1,9 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { CodexAsyncQuestion } from "@pwragent/shared/codex-async-questions";
 import type {
-  AppServerBackendKind,
-  CodexAsyncQuestion,
   ListOperatorRequestsRequest,
   OperatorAsyncQuestion,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
 
 export type AsyncQuestionStatus = "open" | "answered" | "dismissed";
 

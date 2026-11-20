@@ -1,4 +1,4 @@
-import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
+import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { parsePrRefFromUrl, type PrRef } from "./github-graphql-client";
 import { parseGitLabMrUrl } from "./gitlab-pr-fetcher";
 

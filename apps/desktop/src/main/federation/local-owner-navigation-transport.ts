@@ -1,4 +1,8 @@
-import { FEDERATION_CAPABILITIES, FEDERATION_PROTOCOL_VERSION, type FederationRequestEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_CAPABILITIES,
+  FEDERATION_PROTOCOL_VERSION,
+  type FederationRequestEnvelope,
+} from "@pwragent/shared/contracts/federation";
 import { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
 import type { OwnerNavigationRequest } from "../../shared/owner-request";
 import { NavigationQueryError } from "../app-server/navigation-query-store";

@@ -1,11 +1,7 @@
-import type {
-  AppServerBackendKind,
-  PwrAgentStarMapOperationName,
-} from "@pwragent/shared";
-import {
-  PWRAGENT_STAR_MAP_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentStarMapOperationName } from "@pwragent/shared/contracts/star-map-tools";
+import { PWRAGENT_STAR_MAP_OPERATION_NAMES } from "@pwragent/shared/contracts/star-map-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,

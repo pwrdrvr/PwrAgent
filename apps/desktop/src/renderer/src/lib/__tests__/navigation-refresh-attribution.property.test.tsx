@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { NavigationWindowQueries, navigationDemandKey } from "../navigation-window-queries";
 import type { DesktopApi } from "../desktop-api";
 

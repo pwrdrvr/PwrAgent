@@ -7,7 +7,7 @@ import {
   ALL_MESSAGING_PERMISSIONS,
   permissionForActionId,
   permissionForCommandVerb,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/rbac";
 
 import { MESSAGING_COMMAND_CATALOG } from "../messaging/core/messaging-command-catalog";
 

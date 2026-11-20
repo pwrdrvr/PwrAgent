@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { usePullRequestRefresh } from "../usePullRequestRefresh";
 

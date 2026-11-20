@@ -12,7 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerThreadImagePart } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerThreadImagePart } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ItemCompletedNotification } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { resetCachedActiveProfileNameForTests } from "../profile";
 

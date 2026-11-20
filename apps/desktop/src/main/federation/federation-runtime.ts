@@ -1,9 +1,9 @@
-import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
 import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
 import { FEDERATION_MEMBER_ROLE_DECLARE_METHOD, FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
-import type { FederationPeerRole } from "@pwragent/shared";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import { installOwnerEgressPolicy } from "./owner-egress-policy";
 import {
@@ -20,7 +20,7 @@ import {
 } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
-import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared/contracts/thread-todos";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
@@ -28,10 +28,16 @@ import { localThreadTodoOperations } from "../thread-todos/thread-todo-operation
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
-import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import type {
+  ServiceThread,
+  ServiceUiRequest,
+  ServiceUiResponse,
+} from "@pwragent/shared/contracts/federation-services";
 import {
-  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY,
-} from "@pwragent/shared";
+  FEDERATION_SERVICE_METHODS,
+  FEDERATION_SERVICE_CAPABILITY,
+  FEDERATION_SERVICE_V2_CAPABILITY,
+} from "@pwragent/shared/contracts/federation-services";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
 import { serviceDataEnvelope } from "./federation-service-stream";
@@ -40,16 +46,27 @@ import type {
   ListBackgroundTerminalsResponse,
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
-} from "@pwragent/shared";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/background-terminals";
+import type {
+  ReadUsageActivityRequest,
+  ReadUsageActivityResponse,
+  AnalyzeUsageActivityRequest,
+  AnalyzeUsageActivityResponse,
+} from "@pwragent/shared/contracts/usage-activity";
 import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, resolveFilePullThread } from "./federation-file-pull";
-import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
+import type {
+  HandoffInstanceThreadRequest,
+  HandoffInstanceThreadResult,
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest, type ThreadHandoffSendOptions } from "./thread-instance-handoff-service";
 import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDestination,
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
 import { FederationMessagingAttachmentExports, MESSAGING_ORIGINALS_CAPABILITY, MESSAGING_ORIGINALS_METHOD } from "./federation-messaging-attachments";
-import type { PwrAgentMessagingRequest, PwrAgentMessagingResponse } from "@pwragent/shared";
+import type {
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared/contracts/messaging-tools";
 import {
   FederationFilePushReceiver,
   FederationFilePushReceipts,
@@ -61,21 +78,32 @@ import {
   pushFederationFile,
   type PushFederationFileOptions,
 } from "./federation-file-push";
-import { summarizeThreadAgentChange } from "@pwragent/shared";
+import { summarizeThreadAgentChange } from "@pwragent/shared/navigation-state";
 import { FederationShutdown } from "./federation-shutdown";
-import { FEDERATION_HEALTH_CHANGED_METHOD, FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
-import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD, THREAD_TODO_FEED_ACKNOWLEDGED_METHOD } from "@pwragent/shared";
-import { mcpConnectionsForPeer } from "@pwragent/shared";
+import {
+  FEDERATION_HEALTH_CHANGED_METHOD,
+  FEDERATION_SHUTDOWN_CHANGED_METHOD,
+} from "@pwragent/shared/contracts/federation";
+import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared/navigation-query-events";
+import { THREAD_TODO_FEED_ACKNOWLEDGED_METHOD } from "@pwragent/shared/thread-todo-feed";
+import { mcpConnectionsForPeer } from "@pwragent/shared/contracts/mcp-connections";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
-import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { CloudflareClientConnection } from "@pwragent/shared/contracts/federation-cloudflare";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared/contracts/navigation";
 import { cloudflareConnector } from "./cloudflare-connector";
 import { CloudflareGateway } from "./cloudflare-gateway";
 import { loadCloudflareSetup } from "./cloudflare-setup-storage";
 import { getCloudflareAccessSignIn } from "./cloudflare-access-sign-in";
 import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./cloudflare-access-oauth";
-import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
-import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import type {
+  MarkNavigationDirectorySeenRequest,
+  MarkNavigationDirectorySeenResponse,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  RemoveNavigationDirectoryRequest,
+  RemoveNavigationDirectoryResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import { loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import {
@@ -84,39 +112,13 @@ import {
   type PeerChildSource,
   updateLocalSubthreadOrder,
 } from "../app-server/subthread-order-actions";
-import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
+import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
 import type {
   ReadFederationActivityRequest,
   ReadFederationActivityResponse,
-  InspectTokenMiserOutputRequest,
-  InspectTokenMiserOutputResponse,
-  AnalyzeThreadToolHistoryRequest,
-  AnalyzeThreadToolHistoryResponse,
-  AgentEvent,
-  ArchiveSubthreadPromotion,
-  AppServerListSkillsResponse,
-  AppServerListThreadsResponse,
-  AppServerReadThreadResponse,
-  AppServerThreadSummary,
-  AttachDirectoryToThreadResponse,
-  DetachDirectoryFromThreadRequest,
-  DetachDirectoryFromThreadResponse,
-  CancelQueuedTurnResponse,
-  MoveQueuedTurnResponse,
-  SetQueuedTurnPausedResponse,
-  ReleaseQueuedTurnResponse,
-  CancelThreadExecutionModeQueueResponse,
-  CheckThreadBranchDriftResponse,
-  CompactThreadResponse,
-  ControlActiveTurnResponse,
-  RewindThreadResponse,
-  PreviewThreadRewindResponse,
-  UndoThreadRewindResponse,
-  CreateScheduledThreadActionRequest,
-  CodexEnvironmentSetupProgressEvent,
   FederationCapability,
   FederationConnectionState,
   FederationDiagnosticEvent,
@@ -134,49 +136,47 @@ import type {
   FederationNotificationEnvelope,
   FederationServiceDataEnvelope,
   FederationPeerSummary,
-  TodoUnavailableInstance,
   FederationPinDisposition,
   FederationProtocolEnvelope,
   FederationSessionId,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
+  ResetFederationEnrollmentRequest,
+} from "@pwragent/shared/contracts/federation";
+import type {
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import type {
+  AgentEvent,
+  CancelQueuedTurnResponse,
+  MoveQueuedTurnResponse,
+  SetQueuedTurnPausedResponse,
+  ReleaseQueuedTurnResponse,
+  CancelThreadExecutionModeQueueResponse,
+  CheckThreadBranchDriftResponse,
+  CompactThreadResponse,
+  ControlActiveTurnResponse,
+  RewindThreadResponse,
+  PreviewThreadRewindResponse,
+  UndoThreadRewindResponse,
+  CodexEnvironmentSetupProgressEvent,
   ForkThreadResponse,
-  HandoffThreadWorkspaceResponse,
-  MoveThreadToMainCheckoutRequest,
-  MoveThreadToMainCheckoutResponse,
-  RecreateThreadWorktreeRequest,
-  RecreateThreadWorktreeResponse,
   InterruptTurnResponse,
-  ListScheduledThreadActionsRequest,
-  ListScheduledThreadActionsResponse,
   ListThreadMcpServersResponse,
   MaterializeDirectoryLaunchpadResponse,
   ListModelSettingsRecentsRequest,
   ListModelSettingsRecentsResponse,
   ListRecentFileReferencesResponse,
-  MarkThreadSeenResponse,
-  MessagingPlatformStatus,
-  PwrSnapConnectionStatus,
-  OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
-  ReadFederationPinImpactRequest,
-  ReadFederationPinImpactResponse,
-  RefreshDirectoryGitStatusesResponse,
-  RefreshOwnedThreadGitWorkingStateRequest,
-  RefreshThreadGitWorkingStateResponse,
-  RefreshThreadPullRequestsResponse,
-  ResetFederationEnrollmentRequest,
   RetainThreadBranchDriftResponse,
-  RenameThreadResponse,
   ReloadCodexMcpConfigResponse,
   RunCodexEnvironmentActionResponse,
-  ScheduledThreadActionIdRequest,
-  ScheduledThreadActionMutationResponse,
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeResponse,
-  SetThreadAgentRequest,
-  SetThreadAgentResponse,
-  SetThreadTokenMiserRequest,
-  SetThreadTokenMiserResponse,
   SetThreadModelSettingsResponse,
   StartReviewResponse,
   StartThreadResponse,
@@ -187,85 +187,92 @@ import type {
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
   UpdateThreadExpectedBranchResponse,
+} from "@pwragent/shared/contracts/agent";
+import type {
+  ArchiveSubthreadPromotion,
+  AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
+  MarkThreadSeenResponse,
+  RefreshDirectoryGitStatusesResponse,
+  RefreshOwnedThreadGitWorkingStateRequest,
+  RefreshThreadGitWorkingStateResponse,
+  RefreshThreadPullRequestsResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
+  SetThreadTokenMiserRequest,
+  SetThreadTokenMiserResponse,
+} from "@pwragent/shared/contracts/navigation";
+import type {
+  AppServerListSkillsResponse,
+  AppServerListThreadsResponse,
+  AppServerReadThreadResponse,
+  AppServerThreadSummary,
+  HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
+  RenameThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CreateScheduledThreadActionRequest,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { TodoUnavailableInstance } from "@pwragent/shared/contracts/thread-todos";
+import type { MessagingPlatformStatus } from "@pwragent/shared/contracts/messaging";
+import type { PwrSnapConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
+import type { OpenDesktopApplicationResponse } from "@pwragent/shared/contracts/settings";
 import {
   FEDERATION_INVITE_VERSION,
-  navigationInvalidationMayChangeMembership,
-  navigationQueryEventRequiresRefresh,
   FEDERATION_PROTOCOL_VERSION,
-  MAX_CELESTIAL_ASSIGNMENTS,
-  buildPrependPinRank,
   buildFederatedThreadRef,
-  expandNavigationRemoteOwner,
-  type NavigationRemoteOwner,
-  sortSubthreadSummaries,
-  buildThreadIdentityKey,
-  encodeLegacyThreadIdentityKey,
   federatedThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
-  isCelestialIconAssignment,
-  isCelestialIconId,
-  isStarMapArrangementEntry,
   isFederationGatewayEndpointUrl,
   isFederationInstanceId,
   isFederationEventClass,
-  isAppServerBackendKind,
   formatFederationPeerDisplayLabel,
   formatFederationPeerShortDisplayLabel,
   isRemoteFederationTarget,
-  mergeCelestialIconAssignments,
-  pickCelestialIcon,
-  resolveThreadTerminalCwd,
-  type ReadMarkdownFileRequest,
-  type ReadMarkdownFileResponse,
-  type ResolveTranscriptFilesRequest,
-  type ResolveTranscriptFilesResponse,
-  type AppServerListSkillsRequest,
-  type AppServerReadThreadRequest,
-  type AppServerBackendKind,
-  type AttachDirectoryToThreadRequest,
-  type CancelQueuedTurnRequest,
-  type MoveQueuedTurnRequest,
-  type SetQueuedTurnPausedRequest,
-  type ReleaseQueuedTurnRequest,
-  type CancelThreadExecutionModeQueueRequest,
-  type CelestialIconAssignment,
-  type CelestialIconId,
-  type CheckThreadBranchDriftRequest,
-  type CompactThreadRequest,
-  type ControlActiveTurnRequest,
-  type RewindThreadRequest,
-  type PreviewThreadRewindRequest,
-  type UndoThreadRewindRequest,
-  type ForkThreadRequest,
-  type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
   type FederationTarget,
-  type DesktopApplicationsSnapshot,
-  type DesktopFederationMode,
-  type HandoffThreadWorkspaceRequest,
+} from "@pwragent/shared/contracts/federation";
+import {
+  navigationInvalidationMayChangeMembership,
+  navigationQueryEventRequiresRefresh,
+} from "@pwragent/shared/navigation-query-events";
+import {
+  MAX_CELESTIAL_ASSIGNMENTS,
+  isCelestialIconAssignment,
+  isCelestialIconId,
+  mergeCelestialIconAssignments,
+  pickCelestialIcon,
+  type CelestialIconAssignment,
+  type CelestialIconId,
+  type SetCelestialIconRequest,
+  type SetCelestialIconResponse,
+} from "@pwragent/shared/contracts/celestial";
+import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
+import {
+  type NavigationRemoteOwner,
+  buildThreadIdentityKey,
+  encodeLegacyThreadIdentityKey,
+  isAppServerBackendKind,
+  type AttachDirectoryToThreadRequest,
   type GetNavigationSnapshotRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
-  type InterruptTurnRequest,
   type ListWorktreeUnpublishedCommitsRequest,
   type ListWorktreeUnpublishedCommitsResponse,
-  type ListMcpConnectionsResponse,
-  type ReadThreadMcpConnectionsRequest,
-  type SetThreadMcpConnectionsRequest,
-  type SetThreadMcpConnectionsResponse,
-  type DescribeThreadMcpConnectionsRequest,
-  type DescribeThreadMcpConnectionsResponse,
-  type ListThreadMcpServersRequest,
-  type MaterializeDirectoryLaunchpadRequest,
-  type MaterializeDirectoryLaunchpadOptions,
   type MarkThreadSeenRequest,
-  type ReloadCodexMcpConfigRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
-  type ContinueThreadEnvironmentStartupRequest,
-  type ContinueThreadEnvironmentStartupResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
   type AcknowledgeThreadEnvironmentFailureResponse,
   type SetThreadReactionRequest,
@@ -274,12 +281,6 @@ import {
   type SetThreadCheckoutHibernationResponse,
   type SetThreadLockResponse,
   type SetThreadReactionResponse,
-  type SetThreadPrAutoDispatchRequest,
-  type SetThreadPrAutoDispatchResponse,
-  type CancelThreadPrAutoDispatchRequest,
-  type CancelThreadPrAutoDispatchResponse,
-  type SendThreadPrAutoDispatchNowRequest,
-  type SendThreadPrAutoDispatchNowResponse,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type ReorderThreadPinsRequest,
@@ -295,31 +296,75 @@ import {
   type NavigationSnapshot,
   type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
-  type OpenDesktopApplicationRequest,
-  type QueueThreadExecutionModeRequest,
   type RefreshDirectoryGitStatusesRequest,
+  type SetThreadParentRequest,
+  type SetSubthreadsCollapsedRequest,
+  type SetSubthreadsCollapsedResponse,
+  type UpdateSubthreadOrderRequest,
+  type UpdateSubthreadOrderResponse,
+} from "@pwragent/shared/contracts/navigation";
+import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
+import {
+  isStarMapArrangementEntry,
+  type StarMapArrangementEntry,
+  type StarMapIntakeRequest,
+  type StarMapIntakeResponse,
+} from "@pwragent/shared/contracts/star-map";
+import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
+import {
+  type ReadMarkdownFileRequest,
+  type ReadMarkdownFileResponse,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
+  type DesktopApplicationsSnapshot,
+  type DesktopFederationMode,
+  type OpenDesktopApplicationRequest,
+} from "@pwragent/shared/contracts/settings";
+import {
+  type AppServerListSkillsRequest,
+  type AppServerReadThreadRequest,
+  type AppServerBackendKind,
+  type HandoffThreadWorkspaceRequest,
+  type RenameThreadRequest,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type CancelQueuedTurnRequest,
+  type MoveQueuedTurnRequest,
+  type SetQueuedTurnPausedRequest,
+  type ReleaseQueuedTurnRequest,
+  type CancelThreadExecutionModeQueueRequest,
+  type CheckThreadBranchDriftRequest,
+  type CompactThreadRequest,
+  type ControlActiveTurnRequest,
+  type RewindThreadRequest,
+  type PreviewThreadRewindRequest,
+  type UndoThreadRewindRequest,
+  type ForkThreadRequest,
+  type EnsureDirectoryLaunchpadRequest,
+  type InterruptTurnRequest,
+  type ListThreadMcpServersRequest,
+  type MaterializeDirectoryLaunchpadRequest,
+  type MaterializeDirectoryLaunchpadOptions,
+  type ReloadCodexMcpConfigRequest,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type SetThreadPrAutoDispatchRequest,
+  type SetThreadPrAutoDispatchResponse,
+  type CancelThreadPrAutoDispatchRequest,
+  type CancelThreadPrAutoDispatchResponse,
+  type SendThreadPrAutoDispatchNowRequest,
+  type SendThreadPrAutoDispatchNowResponse,
+  type QueueThreadExecutionModeRequest,
   type RecordModelSettingsRecentRequest,
   type RecordRecentFileReferencesRequest,
   type RetainThreadBranchDriftRequest,
-  type RenameThreadRequest,
   type ResolveActiveTurnRequest,
   type ResolveActiveTurnResponse,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
-  type SetCelestialIconRequest,
-  type SetCelestialIconResponse,
-  type SetFederationShortNameRequest,
-  type SetFederationShortNameResponse,
-  type FederationInstanceShortName,
-  type StarMapArrangementEntry,
-  type StarMapIntakeRequest,
-  type StarMapIntakeResponse,
   type SetCodexThreadEnvironmentRequest,
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
-  type SetThreadParentRequest,
-  type SetSubthreadsCollapsedRequest,
-  type SetSubthreadsCollapsedResponse,
   type StartReviewRequest,
   type StartThreadRequest,
   type SteerTurnRequest,
@@ -329,10 +374,21 @@ import {
   type DismissFailedSubAgentsRequest,
   type StopSubAgentRequest,
   type TrustCodexProjectRequest,
-  type UpdateSubthreadOrderRequest,
-  type UpdateSubthreadOrderResponse,
   type UpdateThreadExpectedBranchRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import {
+  type ListMcpConnectionsResponse,
+  type ReadThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
+} from "@pwragent/shared/contracts/mcp-connections";
+import {
+  type SetFederationShortNameRequest,
+  type SetFederationShortNameResponse,
+  type FederationInstanceShortName,
+} from "@pwragent/shared/contracts/federation-short-names";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins } from "../app-server/local-directory-pins";
@@ -373,7 +429,13 @@ import {
   steerInputOutcome,
   type CreatedThread,
 } from "./turn-input-viewers";
-import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt, SubmitDurableSteerRequest, DurableSteerReceipt } from "@pwragent/shared";
+import type {
+  SubmitDurableTurnRequest,
+  GetDurableTurnRequest,
+  DurableTurnReceipt,
+  SubmitDurableSteerRequest,
+  DurableSteerReceipt,
+} from "@pwragent/shared/contracts/durable-turn-requests";
 import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
@@ -409,7 +471,7 @@ import {
   encodeFederationInvite,
 } from "./federation-enrollment";
 import { searchFederatedContent } from "./federated-content-search-service";
-import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared";
+import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { FederatedSearchService } from "./federated-search-service";
 import {
   collectFederationHostInfo,
@@ -3147,7 +3209,7 @@ export class DesktopFederationRuntime {
       else this.threadServices().remove(thread, input.serviceId);
     }
     const services = rpc
-      ? await rpc.request<import("@pwragent/shared").ThreadService[]>({ method: FEDERATION_SERVICE_METHODS.list, params: thread, timeoutMs: 5000 })
+      ? await rpc.request<import("@pwragent/shared/contracts/federation-services").ThreadService[]>({ method: FEDERATION_SERVICE_METHODS.list, params: thread, timeoutMs: 5000 })
       : await this.threadServices().list(thread);
     assertViewing();
     // Never use caller-supplied owner/address/protocol to construct a listener or URL.
@@ -7899,7 +7961,7 @@ function localBackendOperations(): FederationBackendOperations {
       if (action === "list" || action === "active") return { holds: [], dependents: [] };
       throw new Error("Wait Until Done moved into Continue After. Update PwrAgent on this machine.");
     },
-    async manageThreadDependencies(request: unknown, options?: { requesterInstanceId?: string }): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
+    async manageThreadDependencies(request: unknown, options?: { requesterInstanceId?: string }): Promise<import("@pwragent/shared/contracts/thread-dependencies").ManageThreadDependenciesResponse> {
       const owned = readFederationThreadDependenciesRequest(request);
       if (!owned) throw new Error("Unknown Continue After action.");
       return await getDesktopBackendRegistry().manageThreadDependenciesForPeer(owned, options?.requesterInstanceId,

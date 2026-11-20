@@ -1,11 +1,13 @@
-import { threadSearchTextTerms } from "@pwragent/shared";
+import { threadSearchTextTerms } from "@pwragent/shared/thread-search-query";
 import { awaitThreadSearchRead } from "./thread-search-cancellation";
 import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ThreadSearchResult,
   ThreadSearchUnavailableScope,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-search";
 import type { RegistryReadThreadRequest } from "../app-server/registry-host-ports";
 
 const DEFAULT_TRANSCRIPT_READ_LIMIT = 80;

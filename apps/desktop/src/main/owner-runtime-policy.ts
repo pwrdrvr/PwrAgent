@@ -1,6 +1,12 @@
 import os from "node:os";
 import path from "node:path";
-import { codexProviderIdOfModel, type AppServerBackendKind, type AppServerCollaborationModeRequest, type FederationPeerRole, type ThreadExecutionMode } from "@pwragent/shared";
+import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
 import { resolveOutpostCodexHome, resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
 import { resolvePwragentRoot } from "./profile";
 

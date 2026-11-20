@@ -1,7 +1,8 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import fc from "fast-check";
-import type { AgentEvent, ThreadSubAgentStatus } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { ThreadSubAgentStatus } from "@pwragent/shared/contracts/navigation";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";

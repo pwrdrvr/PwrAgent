@@ -1,8 +1,6 @@
 import type { MenuItemConstructorOptions } from "electron";
-import {
-  profileMenuShortcutDigits,
-  type DesktopPwrAgentProfileSummary,
-} from "@pwragent/shared";
+import { profileMenuShortcutDigits } from "@pwragent/shared/profile-menu";
+import { type DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
 import {
   resolveKeybindings,
   type KeybindingActionId,

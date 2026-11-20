@@ -4,8 +4,9 @@ import type {
   ThreadReview,
   ThreadReviewIdentity,
   UpdateThreadReviewRequest,
-} from "@pwragent/shared";
-import { PWRAGENT_THREAD_REVIEW_OPERATION_NAMES, PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import { PWRAGENT_THREAD_REVIEW_OPERATION_NAMES } from "@pwragent/shared/contracts/thread-reviews";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { AgentToolDefinition } from "./agent-tool-definition";
 import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition";
 import { ThreadReviewError } from "../thread-reviews/thread-review-service";

@@ -6,7 +6,7 @@ import type {
   DesktopApplicationsSnapshot,
   DesktopGitDiscoverySnapshot,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";

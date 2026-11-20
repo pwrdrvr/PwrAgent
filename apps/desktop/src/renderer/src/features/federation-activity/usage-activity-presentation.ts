@@ -1,4 +1,8 @@
-import { usageActivityCoverage, usageChartStep, type UsageActivityRollup } from "@pwragent/shared";
+import {
+  usageActivityCoverage,
+  usageChartStep,
+  type UsageActivityRollup,
+} from "@pwragent/shared/contracts/usage-activity";
 import type { OwnedUsageRow } from "./usage-activity-summary";
 import { formatUsedPercent as usagePercent } from "../../lib/backend-status-format";
 import { projectLimit, type LimitProjection, type LimitSeries } from "./usage-limits";

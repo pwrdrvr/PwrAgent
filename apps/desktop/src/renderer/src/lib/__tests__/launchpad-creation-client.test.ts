@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { LaunchpadCreationStatus, MaterializeDirectoryLaunchpadResponse, CodexEnvironmentSetupProgressEvent } from "@pwragent/shared";
+import type {
+  LaunchpadCreationStatus,
+  MaterializeDirectoryLaunchpadResponse,
+  CodexEnvironmentSetupProgressEvent,
+} from "@pwragent/shared/contracts/agent";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "../launchpad-creation-client";
 import { applyLaunchpadEnvironmentSetupProgress } from "../launchpad-setup-progress";
 

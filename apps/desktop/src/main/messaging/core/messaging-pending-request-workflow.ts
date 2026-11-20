@@ -2,8 +2,23 @@ import type { MessagingPendingRequestContext } from "./messaging-pending-request
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import { messageOriginForInboundEvent } from "./messaging-command-helpers";
 import { threadIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, isTerminalTurnLifecycle } from "./messaging-backend-event-helpers";
-import { codexAsyncQuestionItemId, formatCodexAsyncQuestionReply, isCodexAsyncQuestionAnswered, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
-import type { AgentEvent, AppServerTurnInputItem, AppServerBackendKind, AppServerPendingRequestNotification, AppServerToolRequestUserInputNotification, FederationTarget, ThreadIdentifier } from "@pwragent/shared";
+import {
+  codexAsyncQuestionItemId,
+  formatCodexAsyncQuestionReply,
+  isCodexAsyncQuestionAnswered,
+  summarizeCodexAsyncQuestionReply,
+  type CodexAsyncQuestion,
+  type CodexAsyncQuestionReply,
+} from "@pwragent/shared/codex-async-questions";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerTurnInputItem,
+  AppServerBackendKind,
+  AppServerPendingRequestNotification,
+  AppServerToolRequestUserInputNotification,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundTextEvent, MessagingPendingIntentRecord, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingSurfaceAction, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
 import type { MessagingThreadAdmissionState } from "./messaging-adapter.js";

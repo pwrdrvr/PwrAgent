@@ -1,5 +1,5 @@
 import type { WebContents } from "electron";
-import type { StarMapViewSnapshot } from "@pwragent/shared";
+import type { StarMapViewSnapshot } from "@pwragent/shared/contracts/star-map-tools";
 
 /**
  * Latest published Star Map view, per publishing renderer.

@@ -2,11 +2,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ListScheduledThreadActionsResponse,
+  ScheduledThreadAction,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type {
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationThreadSummary,
-  ScheduledThreadAction,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   buildThreadComposerScopeKey,
   useComposerDraftStore,

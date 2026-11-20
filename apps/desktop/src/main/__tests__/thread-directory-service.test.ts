@@ -1,11 +1,11 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  buildThreadIdentityKey,
-  type AppServerBackendKind,
   type ContinueThreadEnvironmentStartupRequest,
   type ContinueThreadEnvironmentStartupResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import {
   ThreadDirectoryService,

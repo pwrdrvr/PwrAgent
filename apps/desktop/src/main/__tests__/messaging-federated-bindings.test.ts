@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

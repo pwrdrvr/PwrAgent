@@ -21,7 +21,7 @@ import os from "node:os";
 import {
   type FederationTailscaleStatus,
   isFederationGatewayEndpointUrl,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 
 /**
  * Upper bound on a synthesized list. Each unreachable candidate costs a

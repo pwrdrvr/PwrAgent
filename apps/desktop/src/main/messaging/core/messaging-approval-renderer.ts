@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
-  isSecretFieldLabel,
-  isSecretFieldName,
-  mcpElicitationPurpose,
+  type PendingRequestAction,
+} from "@pwragent/shared/pending-request-response";
+import { isSecretFieldLabel, isSecretFieldName } from "@pwragent/shared/secret-field-names";
+import { mcpElicitationPurpose } from "@pwragent/shared/mcp-elicitation-purpose";
+import {
   type AppServerMcpElicitationRequestNotification,
   type AppServerPendingRequestNotification,
-  type PendingRequestAction,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   MessagingApprovalDecision,
   MessagingApprovalIntent,

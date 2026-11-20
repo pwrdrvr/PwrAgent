@@ -10,10 +10,8 @@ import {
   type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
-import type {
-  AppServerSkillSummary,
-  ThreadJumpCandidate,
-} from "@pwragent/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadJumpCandidate } from "@pwragent/shared/thread-jump-match";
 import { CelestialIcon, FolderIcon, PullRequestIcon, ThreadIcon } from "../../icons";
 import { filterAtReferenceCandidates, type InstanceReference } from "../../lib/instance-references";
 import { InstanceGlyph } from "../federation/InstanceGlyph";

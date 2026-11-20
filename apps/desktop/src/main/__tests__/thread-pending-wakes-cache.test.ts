@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
-import type { ThreadPendingWakesList } from "@pwragent/shared";
+import type { ThreadPendingWakesList } from "@pwragent/shared/contracts/thread-pending-wakes";
 
 const THREAD = { backend: "codex" as const, threadId: "waiting" };
 const EMPTY: ThreadPendingWakesList = { wakes: [], ended: [] };

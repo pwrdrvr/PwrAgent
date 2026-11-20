@@ -26,10 +26,10 @@ import { promisify } from "node:util";
 import type {
   AcpAgentInstance,
   AcpAgentPreference,
-  AcpBackendId,
   AcpRejectedAgentInstance,
-  DesktopUpdateChannel,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
 import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";

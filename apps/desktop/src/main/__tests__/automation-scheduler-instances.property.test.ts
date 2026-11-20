@@ -4,7 +4,7 @@ import type {
   AutomationBacklogPolicy,
   AutomationRunOwner,
   AutomationRunSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry";

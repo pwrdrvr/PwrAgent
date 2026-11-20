@@ -4,8 +4,8 @@ import type {
   FocusedDiffAnalysisResponse,
   FocusedDiffHunkDecision,
   FocusedDiffHunkSummary,
-  FocusedDiffReasonCode
-} from "@pwragent/shared";
+  FocusedDiffReasonCode,
+} from "@pwragent/shared/contracts/diff-focus";
 import {
   getFocusedDiffEligibility,
   parseUnifiedDiff,

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 
 describe("AcpRolloutStore", () => {
   let tempDir: string;

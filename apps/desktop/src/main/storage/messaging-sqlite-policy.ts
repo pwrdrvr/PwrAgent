@@ -13,9 +13,7 @@ import type {
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
-import {
-  normalizeMessagingBindingTargetKind,
-} from "@pwragent/shared";
+import { normalizeMessagingBindingTargetKind } from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingDeliveryRecord,
 } from "../messaging/core/messaging-migrations.js";

@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { ThreadMaintenanceRun } from "@pwragent/shared";
+import type { ThreadMaintenanceRun } from "@pwragent/shared/thread-maintenance";
 import { newerRun, threadMaintenancePhase } from "../thread-maintenance-run-state";
 
 function snapshots(count: number): ThreadMaintenanceRun[] {

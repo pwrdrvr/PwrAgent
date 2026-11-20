@@ -11,11 +11,11 @@
  * `buildPendingRequestResponse` so the decision shape never drifts from the UI.
  */
 import type { Page } from "@playwright/test";
+import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import {
-  buildPendingRequestResponse,
   type AppServerPendingRequestNotification,
   type AppServerTurnInputItem,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /** A backend kind as the app reports it: "codex" or `acp:${id}`. */
 export type BackendKind = string;

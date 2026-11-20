@@ -1,4 +1,9 @@
-import type { AppServerBackendKind, BackendSummary, NavigationDirectorySummary, NavigationLaunchpadDraft } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type {
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingJsonValue, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { NavigationQueryStore } from "../../app-server/navigation-query-store";

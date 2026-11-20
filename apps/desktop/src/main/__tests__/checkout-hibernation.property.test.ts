@@ -3,11 +3,13 @@ import fc from "fast-check";
 import {
   CHECKOUT_HIBERNATION_SNAPSHOT_MB_CHOICES,
   normalizeCheckoutHibernationPolicy,
-  type AppServerThreadSummary,
   type DesktopCheckoutHibernationPolicy,
-  type ThreadOverlayState,
+} from "@pwragent/shared/checkout-hibernation-policy";
+import {
+  type AppServerThreadSummary,
   type WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { hibernationKeepReason } from "../app-server/checkout-hibernation";
 import { archiveCandidateKeepReason, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 

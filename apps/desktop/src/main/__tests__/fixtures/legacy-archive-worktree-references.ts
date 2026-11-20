@@ -4,7 +4,7 @@
 // correct and quadratic. Do not use it in production code.
 import path from "node:path";
 import { realpath } from "node:fs/promises";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ArchiveCleanupIntent } from "../../state/archive-cleanup-checkpoint";
 
 export type DeferredArchiveWorktree = NonNullable<ArchiveCleanupIntent["deferredWorktrees"]>[number];

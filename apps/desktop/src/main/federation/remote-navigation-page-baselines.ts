@@ -1,4 +1,4 @@
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryKey } from "@pwragent/owner-core/navigation-query-projection";
 
 /** Owner-only baselines. Viewer overlays are reapplied after every owner read.

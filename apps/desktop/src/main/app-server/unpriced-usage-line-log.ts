@@ -1,4 +1,4 @@
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { getMainLogger } from "../log";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");

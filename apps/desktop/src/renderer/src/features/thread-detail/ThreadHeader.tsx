@@ -1,8 +1,6 @@
-import type {
-  BackendSummary,
-  MessagingChannelKind,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";

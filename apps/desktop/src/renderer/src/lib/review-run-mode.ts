@@ -1,10 +1,8 @@
-import {
-  findPrimaryReviewWorkspaceCwd,
-  type AppServerBackendKind,
-  type BackendSummary,
-  type NavigationThreadSummary,
-  type ReviewRunMode,
-} from "@pwragent/shared";
+import { findPrimaryReviewWorkspaceCwd } from "@pwragent/shared/review-branches";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { type ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { prefersClaudeCodeReview } from "../../../shared/review-command";
 import { formatBackendLabel } from "./backend-label";
 

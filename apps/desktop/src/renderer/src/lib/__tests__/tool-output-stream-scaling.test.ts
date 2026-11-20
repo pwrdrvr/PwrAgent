@@ -1,4 +1,7 @@
-import type { AppServerThreadActivityDetail, AppServerThreadActivityEntry } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it } from "vitest";
 import { activityDetailsMatch } from "../activity-detail-match";
 import { appendCommandOutputDelta } from "../../features/thread-detail/live-transcript-activity";

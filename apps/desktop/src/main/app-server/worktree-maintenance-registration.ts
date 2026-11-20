@@ -1,6 +1,6 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
-import type { ThreadWorktreeRegistration } from "@pwragent/shared";
+import type { ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
 import { runGitCommand } from "./git-executable";
 
 export type CheckoutIdentity = Omit<ThreadWorktreeRegistration, "authorizedAt" | "requestedBy">;

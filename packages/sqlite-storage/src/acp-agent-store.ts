@@ -1,5 +1,5 @@
 import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "./state-db.js";
 /** Only SQLite index fields and the existing defensive payload guard belong here.
  * Launch descriptors, capabilities and registry policy remain host-owned. */

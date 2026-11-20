@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerReadThreadResponse, ThreadSearchResult } from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 
 describe("ProviderTranscriptThreadSearchAdapter", () => {

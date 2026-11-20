@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { rmSync } from "node:fs";
 import type { WebContents } from "electron";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOpenThreadInUi } from "../shell/native-voice/open-thread-in-ui";
 import { publishOperatorFocus, resetOperatorFocusRegistry } from "../shell/native-voice/operator-focus-registry";

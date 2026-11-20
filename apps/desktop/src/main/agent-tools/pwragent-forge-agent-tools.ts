@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { FORGE_READ_OPERATIONS, ForgeReadError, validateForgeReadArgs, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { agentToolFailure, agentToolSuccess, type AgentToolCallContext, type AgentToolDefinition } from "./agent-tool-definition";
 

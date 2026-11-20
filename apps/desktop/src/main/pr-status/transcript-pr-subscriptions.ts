@@ -1,10 +1,10 @@
 import {
   buildPullRequestStatusKey,
-  FORGE_PRODUCTS,
   type PrSummary,
   type SetTranscriptPullRequestsRequest,
   type TranscriptPullRequestStatuses,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { FORGE_PRODUCTS } from "@pwragent/shared/forge-product";
 import { parseForgePrRefFromUrl } from "./forge-pr-ref";
 import type { PrPollTarget } from "./pr-polling-scheduler";
 import { getMainLogger } from "../log";

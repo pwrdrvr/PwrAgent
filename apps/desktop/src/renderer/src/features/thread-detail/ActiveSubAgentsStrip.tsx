@@ -3,9 +3,11 @@ import {
   hasStoppableSubAgentRun,
   isCodexNativeSubAgent,
   isDecisionBatchSubAgent,
+} from "@pwragent/shared/subagent-kind";
+import {
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { isTerminalSubAgent } from "./context-panels/subagent-format";
 import { useNowWhileActive } from "./context-panels/RailCardTiming";
 import { SignalCount } from "../../components/SignalCount";

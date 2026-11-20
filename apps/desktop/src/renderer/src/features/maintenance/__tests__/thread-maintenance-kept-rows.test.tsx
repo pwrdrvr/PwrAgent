@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadMaintenanceKeptCheckout, ThreadMaintenanceScan } from "@pwragent/shared";
+import type {
+  ThreadMaintenanceKeptCheckout,
+  ThreadMaintenanceScan,
+} from "@pwragent/shared/thread-maintenance";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";
 

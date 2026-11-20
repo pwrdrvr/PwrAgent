@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { codexAsyncQuestionItemId, type CodexAsyncQuestion } from "@pwragent/shared";
+import { codexAsyncQuestionItemId, type CodexAsyncQuestion } from "@pwragent/shared/codex-async-questions";
 import {
   asyncQuestionDraftAnswer,
   formatAsyncQuestionDraftReply,

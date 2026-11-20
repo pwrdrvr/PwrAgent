@@ -6,12 +6,10 @@ import fc from "fast-check";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  buildAgentMemoryContext,
-  buildThreadIdentityKey,
-  STAR_MAP_MANAGER_AGENT_INSTRUCTIONS,
-  type AppServerBackendKind,
-} from "@pwragent/shared";
+import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { STAR_MAP_MANAGER_AGENT_INSTRUCTIONS } from "@pwragent/shared/contracts/star-map";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentClient } from "../acp/acp-client";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";

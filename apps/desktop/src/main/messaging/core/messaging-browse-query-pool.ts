@@ -1,6 +1,13 @@
 import type { MessagingBrowseSelectedProject } from "@pwragent/messaging-interface";
-import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { FederationRemoteTarget, NavigationDirectoryRow, NavigationQuery, NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationDirectoryRow,
+  NavigationQuery,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 
 export type MessagingBrowseOwner = { target?: FederationRemoteTarget; label: string };
 export type MessagingBrowseProjectRow = NavigationDirectoryRow & { owner?: MessagingBrowseOwner };

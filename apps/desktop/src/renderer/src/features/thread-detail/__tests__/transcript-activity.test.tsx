@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadActivityDetail, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TranscriptActivity } from "../TranscriptActivity";
 import { buildLiveActivityEntry } from "../live-transcript-activity";

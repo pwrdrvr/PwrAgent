@@ -1,4 +1,4 @@
-import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
 import {
   exactSummaryMoneyTitle,
   formatRoundedSummaryMoney,

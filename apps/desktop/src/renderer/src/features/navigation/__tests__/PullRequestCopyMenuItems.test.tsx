@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { resolvePrRollup } from "../../pr-status/pr-rollup";
 import { PR_COPY_MENU_LIMIT, PullRequestCopyMenuItems } from "../PullRequestCopyMenuItems";
 

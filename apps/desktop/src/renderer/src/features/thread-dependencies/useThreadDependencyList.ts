@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  AppServerBackendKind,
-  FederationTarget,
   ManageThreadDependenciesResponse,
   ThreadDependency,
-} from "@pwragent/shared";
-import { threadDependencyMarkDoneIndex } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-dependencies";
+import { threadDependencyMarkDoneIndex } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /** A wait on this thread that it can mark done, with the machine that keeps it. */

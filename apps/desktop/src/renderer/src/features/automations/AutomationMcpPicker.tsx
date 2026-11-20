@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type {
-  CodexMcpServerSummary,
-  McpConnectionStatus,
-} from "@pwragent/shared";
+import type { CodexMcpServerSummary } from "@pwragent/shared/contracts/agent";
+import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
 import { formatMcpConnectionState } from "../thread-detail/McpAccessPanel";
 
 /**

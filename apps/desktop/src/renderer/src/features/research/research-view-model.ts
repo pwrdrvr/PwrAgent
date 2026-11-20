@@ -1,4 +1,28 @@
-import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, researchWorkerTime, researchWorkerTimeUsed, sameResearchThread, withResearchBounds, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import {
+  researchApproachOccupiesSlot,
+  researchApproachResumable,
+  researchHarnessEffectiveState,
+  researchRunStoreSynced,
+  researchWorkerTime,
+  researchWorkerTimeUsed,
+  sameResearchThread,
+  withResearchBounds,
+  type ResearchApproach,
+  type ResearchEvent,
+  type ResearchEventPage,
+  type ResearchFinding,
+  type ResearchItem,
+  type ResearchRun,
+  type ResearchRunHeader,
+  type ResearchRunState,
+  type ResearchRunStore,
+  type ResearchRunSummary,
+  type ResearchSearchHit,
+  type ResearchSearchPage,
+  type ResearchSearchQuery,
+  type ResearchSubmission,
+} from "@pwragent/shared/research";
+import { type ResearchHarnessState } from "@pwragent/shared/research-harness";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,

@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type {
   AppServerListSkillsResponse,
-  BackendModelOption,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 
 export type ReplayResponseMethod = string;
 

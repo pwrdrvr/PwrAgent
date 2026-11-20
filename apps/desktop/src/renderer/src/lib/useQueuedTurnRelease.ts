@@ -1,12 +1,10 @@
-import { buildOwnedComposerScopeKey } from "@pwragent/shared";
+import { buildOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
 import { useEffect, useRef } from "react";
-import type {
-  AgentEvent,
-  AppServerTurnInputItem,
-  BackendSummary,
-  ComposerThreadOwner,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   getNextReleasableQueuedTurn,
   type ComposerDraftStore,

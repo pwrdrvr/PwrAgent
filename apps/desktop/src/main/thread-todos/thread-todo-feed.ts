@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ThreadTodo,
   ThreadTodoFeedDelta,
   ThreadTodoFeedSnapshot,
   ThreadTodoMergeMethodPreferences,
-} from "@pwragent/shared";
-import { buildThreadIdentityKey, compareThreadTodosNewestFirst } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { compareThreadTodosNewestFirst } from "@pwragent/shared/thread-todo-feed";
 import { getMainLogger } from "../log";
 
 const feedLog = getMainLogger("pwragent:thread-todos");

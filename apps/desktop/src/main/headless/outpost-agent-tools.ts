@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 
 /**
  * PwrAgent agent tools an untrusted model on the contained Outpost may call.

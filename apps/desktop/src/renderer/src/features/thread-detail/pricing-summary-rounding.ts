@@ -1,4 +1,4 @@
-import type { TokenMiserSavingsTerms } from "@pwragent/shared";
+import type { TokenMiserSavingsTerms } from "@pwragent/shared/token-miser-savings-summary";
 
 /** Display-only allocation for the two summary cards; never feed this into accounting. */
 export function roundPricingSummary(

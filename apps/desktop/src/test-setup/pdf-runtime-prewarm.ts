@@ -18,7 +18,7 @@
 //
 // The warm runs in a child process on purpose. Importing PDF.js also loads
 // `@napi-rs/canvas` and its native Skia binding -- PDF.js requires it during
-// module initialization -- and `vitest.workspace.ts` puts `desktop-main` on
+// module initialization -- and `vitest.workspace.mts` puts `desktop-main` on
 // `pool: "forks"` precisely to keep native bindings out of the process Vitest
 // itself runs in. A child pays the same page-cache and antivirus cost for the
 // same files and exits, so every fork afterwards gets the 111 ms path without

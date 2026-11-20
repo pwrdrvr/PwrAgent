@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsSnapshot, DesktopWorktreeFolderCheck } from "@pwragent/shared";
+import type {
+  DesktopSettingsSnapshot,
+  DesktopWorktreeFolderCheck,
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { WorktreesSettings } from "../WorktreesSettings";
 

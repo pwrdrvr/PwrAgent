@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyDirectory } from "@pwragent/shared";
+import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 

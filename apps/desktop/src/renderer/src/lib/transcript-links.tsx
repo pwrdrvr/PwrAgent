@@ -1,8 +1,6 @@
-import type {
-  AppServerBackendKind,
-  FederationInstanceId,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ReactNode } from "react";
 import { PullRequestLinkProvider } from "./pull-request-links";
 import { ThreadLinkProvider } from "./thread-links";

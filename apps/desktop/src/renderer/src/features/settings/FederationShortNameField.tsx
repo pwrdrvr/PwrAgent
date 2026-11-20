@@ -4,7 +4,7 @@ import {
   FEDERATION_SHORT_NAME_MAX_LENGTH,
   federationShortNameLength,
   normalizeFederationShortName,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-short-names";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 /**

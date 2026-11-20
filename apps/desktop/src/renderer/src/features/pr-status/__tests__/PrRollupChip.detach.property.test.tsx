@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import fc from "fast-check";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { PrRollupChip } from "../PrRollupChip";
 import { resolvePrRollup } from "../pr-rollup";
 

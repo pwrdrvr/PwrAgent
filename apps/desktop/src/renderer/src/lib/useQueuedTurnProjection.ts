@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type {
   ComposerDraftStore,
   ComposerQueuedTurnSnapshot,

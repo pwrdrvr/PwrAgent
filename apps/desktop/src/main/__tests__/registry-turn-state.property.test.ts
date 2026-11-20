@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import ts from "typescript";
 import { expect, it } from "vitest";
-import { buildThreadIdentityKey, type AppServerBackendKind, type ThreadExecutionMode } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import {
+  type AppServerBackendKind,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import type { CodexRetryableCompaction, ReviewSubAgentRecord } from "../app-server/backend-registry-types";
 import { RegistryTurnState } from "../app-server/registry-turn-state";

@@ -1,4 +1,7 @@
-import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DynamicToolCallResponse } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 

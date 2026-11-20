@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
   THREAD_TODO_MAX_PREREQUISITES,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import {
   buildPwrAgentThreadTodoToolDefinitions,

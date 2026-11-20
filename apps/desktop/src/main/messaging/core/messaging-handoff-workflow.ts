@@ -1,4 +1,8 @@
-import type { HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 import type {
   MessagingActiveTurnSummary, MessagingBindingRecord, MessagingCapabilityProfile, MessagingDeliveryResult,

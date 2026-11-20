@@ -1,7 +1,4 @@
-import type {
-  FederationInstanceId,
-  FederationTransferStats,
-} from "@pwragent/shared";
+import type { FederationInstanceId, FederationTransferStats } from "@pwragent/shared/contracts/federation";
 
 /**
  * Process-local wire-transfer accounting per directly connected peer.

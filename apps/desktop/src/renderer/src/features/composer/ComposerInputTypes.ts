@@ -1,5 +1,5 @@
 import type { JSONContent } from "@tiptap/react";
-import type { AppServerSkillSummary } from "@pwragent/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 
 /**
  * A zero-width mention token anchored at a plain-draft character offset.

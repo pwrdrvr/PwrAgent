@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { BackendModelOption, BackendSummary } from "@pwragent/shared";
+import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
 import {
   claudeCatalogArbitrary,
   codexCatalogArbitrary,

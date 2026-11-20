@@ -7,7 +7,7 @@ import {
 import { getMainLogger } from "../../log";
 import { classifyVoiceCamera, clefRequestsInFlight, judgeVoiceCameraRepeat } from "../../native-voice/clef-camera";
 import { SystemOneRejected, type SystemOneTarget } from "../../decision/system-one";
-import { decisionCameraCueAvailability } from "@pwragent/shared";
+import { decisionCameraCueAvailability } from "@pwragent/shared/decision-models";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
 import { ipcMain, type WebContents } from "electron";
 import type { MediaPermissionRules } from "../permission-policy";

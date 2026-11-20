@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "./fixtures/electron-test";
-import type { AppServerNotification, ThreadPrAutoDispatchPending, ThreadSubAgentSummary } from "@pwragent/shared";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  ThreadPrAutoDispatchPending,
+  ThreadSubAgentSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";

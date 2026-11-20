@@ -1,7 +1,5 @@
-import {
-  isAppServerBackendKind,
-  type ResolveProjectHeldWakeupsRequest,
-} from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { type ResolveProjectHeldWakeupsRequest } from "@pwragent/shared/project-forge-automation";
 
 /** A project path longer than this is not a key this instance wrote. */
 const MAX_PROJECT_DIRECTORY_KEY_LENGTH = 4_096;

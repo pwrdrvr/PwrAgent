@@ -21,8 +21,8 @@ import {
   type CodexModelProviderImportScan,
   type CodexModelProviderImportSkip,
   type CodexModelProviderImportSource,
-  type DesktopCodexAuthProfileDiscoverySnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/codex-model-providers";
+import { type DesktopCodexAuthProfileDiscoverySnapshot } from "@pwragent/shared/contracts/settings";
 import {
   CodexConfigTomlError,
   isCodexTomlTable,

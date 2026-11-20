@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
 import { ChevronDownIcon, FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";

@@ -2,9 +2,9 @@ import { useId, useState } from "react";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadPlanEntry,
-  DesktopApplicationsSnapshot,
-  EditGroupCommitState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopApplicationsSnapshot } from "@pwragent/shared/contracts/settings";
+import type { EditGroupCommitState } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { TranscriptPlan } from "./TranscriptPlan";

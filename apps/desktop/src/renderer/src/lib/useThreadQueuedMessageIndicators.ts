@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "./federated-thread-events";
 import { readRendererFederationTarget } from "./federation-window";
 import { useStableThreadIndicators } from "./useStableThreadIndicators";

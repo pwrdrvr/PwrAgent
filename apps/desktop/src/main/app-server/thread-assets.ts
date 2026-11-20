@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { copyFile, link, lstat, mkdir, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";

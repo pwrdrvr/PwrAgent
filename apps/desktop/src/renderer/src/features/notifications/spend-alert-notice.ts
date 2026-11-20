@@ -1,8 +1,6 @@
-import type {
-  AppServerBackendKind,
-  FederationInstanceId,
-  ThreadSpendAlert,
-} from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId } from "@pwragent/shared/contracts/federation";
+import type { ThreadSpendAlert } from "@pwragent/shared/token-usage-pricing";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import {

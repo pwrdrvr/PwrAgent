@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import type { NavigationRelativePinMove, NavigationThreadSummary } from "@pwragent/shared";
-import { comparePinnedThreads, isKeptAtTopThread, isPinnedThread, moveThreadKey } from "@pwragent/shared";
+import type {
+  NavigationRelativePinMove,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
+import {
+  comparePinnedThreads,
+  isKeptAtTopThread,
+  isPinnedThread,
+  moveThreadKey,
+} from "@pwragent/shared/thread-pins";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController } from "./drag-drop";

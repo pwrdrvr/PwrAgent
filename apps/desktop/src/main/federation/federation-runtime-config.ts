@@ -1,7 +1,7 @@
 import {
   DESKTOP_FEDERATION_MODE_DEFAULT,
   type DesktopFederationMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { ConfigDomainMap } from "../settings/config-store/config-domains";
 
 export type FederationRuntimeConfig = Readonly<{

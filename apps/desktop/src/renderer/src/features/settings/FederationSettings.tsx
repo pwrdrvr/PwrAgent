@@ -3,12 +3,14 @@ import { Select } from "../../components/Select";
 import { FederationCapabilities } from "./FederationCapabilities";
 import { CloudflareSetup } from "./CloudflareSetup";
 import { FederationConnections } from "../federation-activity/FederationConnections";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type {
-  CelestialIconId,
   DesktopFederationMode,
   DesktopSettingsSecretName,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
+} from "@pwragent/shared/contracts/settings";
+import type {
   FederationConnectionState,
   FederationCapability,
   FederationDiagnosticEvent,
@@ -23,15 +25,14 @@ import type {
   FederationTailscaleStatus,
   FederationTransferStats,
   ReadFederationPinImpactResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
+import { CELESTIAL_ICON_IDS, isCelestialIconId } from "@pwragent/shared/contracts/celestial";
+import { DESKTOP_FEDERATION_MODES } from "@pwragent/shared/contracts/settings";
 import {
-  CELESTIAL_ICON_IDS,
-  DESKTOP_FEDERATION_MODES,
   federationAssignedRoleMismatch,
   formatFederationPeerDisplayLabel,
-  isCelestialIconId,
   isFederationGatewayEndpointUrl,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import { CelestialIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";

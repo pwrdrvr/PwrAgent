@@ -3,11 +3,9 @@ import type {
   AppServerReviewFinding,
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
-} from "@pwragent/shared";
-import {
-  formatPathRelativeToDirectories,
-  reviewContextPullRequests,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { formatPathRelativeToDirectories } from "@pwragent/shared/path-display";
+import { reviewContextPullRequests } from "@pwragent/shared/contracts/thread-reviews";
 import { shortReviewSha } from "../../../../shared/review-command";
 import { reviewFindingTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";

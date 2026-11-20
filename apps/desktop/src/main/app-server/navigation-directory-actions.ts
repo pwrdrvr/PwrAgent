@@ -1,6 +1,22 @@
-import { buildThreadIdentityKey, directoryIncludesCheckout, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh,
-  type AgentEvent, type MarkNavigationDirectorySeenRequest, type MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
-import type { ArchiveThreadRequest, ArchiveThreadResponse, RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  type MarkNavigationDirectorySeenRequest,
+  type MarkNavigationDirectorySeenResponse,
+} from "@pwragent/shared/contracts/navigation";
+import { directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import {
+  navigationInvalidationMayChangeMembership,
+  navigationQueryEventRequiresRefresh,
+} from "@pwragent/shared/navigation-query-events";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  RemoveNavigationDirectoryRequest,
+  RemoveNavigationDirectoryResponse,
+} from "@pwragent/shared/contracts/navigation";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";

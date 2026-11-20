@@ -1,4 +1,4 @@
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 
 /**
  * Decide whether a usage line belongs to a Codex model provider. Returns

@@ -1,13 +1,13 @@
 import type { MessagingActivityStorage, RecordMessagingActivityInput, RecordMessagingPlatformResponseActivityInput } from "@pwragent/owner-core/messaging-activity-storage";
 export type { RecordMessagingActivityInput, RecordMessagingPlatformResponseActivityInput } from "@pwragent/owner-core/messaging-activity-storage";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   GetMessagingActivitySummaryResponse,
   MessagingActivityEntry,
   MessagingActivityKind,
   MessagingActivityOrigin,
   MessagingChannelKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
 import type { StateDb } from "./state-db";
 
 const DEFAULT_LIST_LIMIT = 100;

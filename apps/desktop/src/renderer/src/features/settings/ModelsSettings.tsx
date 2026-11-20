@@ -1,32 +1,33 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { buildProviderPickerEntries, providerPickerValue } from "@pwragent/shared/provider-picker";
+import { DECISION_PROVIDER_IDS, resolveDecisionModelSettings } from "@pwragent/shared/decision-models";
+import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import {
-  buildProviderPickerEntries,
-  providerPickerValue,
-  DECISION_PROVIDER_IDS,
-  formatFilesystemPath,
   isValidatedDiscoveryCandidate,
   MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
-  resolveDecisionModelSettings,
+} from "@pwragent/shared/contracts/settings";
+import {
   resolveDefaultLaunchpadExecutionMode,
   supportsProviderExecutionModeDefault,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import type {
-  BackendModelOption,
-  BackendSummary,
-  CodexModelProviderSettings,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
-  DesktopHelperModelSettings,
-  DesktopDecisionModelSettings,
   DesktopOpenAIDecisionsSettings,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
-  DesktopTaskMonitorModelChoice,
   DesktopUpdateChannel,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared/helper-models";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { modelSelectOptions } from "../../lib/model-select-options";

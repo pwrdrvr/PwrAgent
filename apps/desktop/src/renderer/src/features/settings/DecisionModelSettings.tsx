@@ -12,10 +12,12 @@ import {
   type DecisionModelChoice,
   type DecisionProviderId,
   type DesktopDecisionModelSettings,
+} from "@pwragent/shared/decision-models";
+import {
   type DesktopSettingsSecretName,
   type DesktopSettingsSecretState,
   type DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SecretField } from "./SecretField";

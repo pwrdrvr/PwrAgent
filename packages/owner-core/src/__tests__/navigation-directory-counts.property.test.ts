@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import { buildFederatedThreadRef, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery, type NavigationQueryIndex } from "../navigation-query-projection";
 
 type Node = { project: number; parent: number; pinned: boolean; remote: boolean };

@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared";
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

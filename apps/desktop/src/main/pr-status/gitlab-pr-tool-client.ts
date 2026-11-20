@@ -8,7 +8,7 @@ import {
 } from "./forge-pr-tool-shared";
 import { GitLabReadError, type GitLabPrFetcher, type GitLabWriteMethod } from "./gitlab-pr-fetcher";
 import { gitlabMergeTrainStatus } from "./pr-merge-queue";
-import { describeMergeQueueState, isMergeQueueActive } from "@pwragent/shared";
+import { describeMergeQueueState, isMergeQueueActive } from "@pwragent/shared/pr-merge-queue";
 
 const object = (value: unknown) => payloadObject(value, "GitLab");
 const items = (value: unknown) => payloadItems(value, "GitLab");

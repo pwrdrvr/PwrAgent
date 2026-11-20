@@ -4,18 +4,19 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerTurnInputItem,
-  FederationCapability,
-  FederationProtocolEnvelope,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationCapability, FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
+import type {
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   NavigationThreadSummary,
-  TrustCodexProjectRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { TrustCodexProjectRequest } from "@pwragent/shared/contracts/agent";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
-  buildFederatedThreadRef,
-  rankThreadJumpMatches,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,

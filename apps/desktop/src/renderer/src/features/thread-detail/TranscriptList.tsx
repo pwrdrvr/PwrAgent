@@ -21,26 +21,32 @@ import type {
   AppServerThreadFileChangeKind,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
+} from "@pwragent/shared/contracts/settings";
+import type {
   PendingRequestAction,
   PendingRequestApprovalContext,
   PendingRequestApprovalFileContext,
+} from "@pwragent/shared/pending-request-response";
+import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
   ThreadRewindRecord,
   ThreadTurnFailure,
   ThreadSubAgentSummary,
-  MarkdownFileViewerContext,
-  ForgeApprovalRememberOptionId,
-  ThreadTodoMergeMethod,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
+import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import { anchorTurnUsageEntries } from "@pwragent/shared/thread-usage-display";
 import {
-  anchorTurnUsageEntries,
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
-  parseCodexAsyncQuestionReply,
-} from "@pwragent/shared";
+} from "@pwragent/shared/pending-request-response";
+import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";

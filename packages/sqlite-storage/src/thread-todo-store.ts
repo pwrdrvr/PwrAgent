@@ -1,5 +1,5 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   ThreadTodo,
   ThreadTodoAction,
   ThreadTodoItem,
@@ -8,8 +8,12 @@ import type {
   ThreadTodoModelSettings,
   ThreadTodoProject,
   ThreadTodoStatus,
-} from "@pwragent/shared";
-import { isThreadTodoMergeMethod, isThreadTodoStatus, sameThreadTodoModelSettings } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import {
+  isThreadTodoMergeMethod,
+  isThreadTodoStatus,
+  sameThreadTodoModelSettings,
+} from "@pwragent/shared/contracts/thread-todos";
 import { recordModelSettingsRecent } from "./model-settings-recents-store";
 import type {
   InsertThreadTodoRecord,

@@ -1,5 +1,12 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { RESEARCH_FINDING_KINDS, RESEARCH_WORK_STATES, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchThread } from "@pwragent/shared";
+import {
+  RESEARCH_FINDING_KINDS,
+  RESEARCH_WORK_STATES,
+  type ResearchSearchHit,
+  type ResearchSearchPage,
+  type ResearchSearchQuery,
+  type ResearchThread,
+} from "@pwragent/shared/research";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { approachTitle, plural, researchLabel, researchReviewStatusLabel, type ResearchRunView } from "./research-view-model";

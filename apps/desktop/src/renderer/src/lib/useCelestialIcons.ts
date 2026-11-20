@@ -3,7 +3,7 @@ import {
   isCelestialIconAssignment,
   type CelestialIconAssignment,
   type CelestialIconId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/celestial";
 import type { DesktopApi } from "./desktop-api";
 
 export type CelestialIcons = {

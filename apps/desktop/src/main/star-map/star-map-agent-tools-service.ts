@@ -14,11 +14,9 @@ import type {
   StarMapFlightTarget,
   StarMapViewSnapshot,
   StarMapViewThread,
-} from "@pwragent/shared";
-import {
-  DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
-  isAppServerBackendKind,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map-tools";
+import { DEFAULT_STAR_MAP_VIEW_MAX_THREADS } from "@pwragent/shared/contracts/star-map-tools";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import { getOwnerHostServices } from "../owner-host";
 const sendStarMapCommand: ReturnType<typeof getOwnerHostServices>["starMap"]["sendCommand"] = (command) => getOwnerHostServices().starMap.sendCommand(command);

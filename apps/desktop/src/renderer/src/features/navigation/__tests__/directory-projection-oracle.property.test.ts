@@ -1,4 +1,9 @@
-import type { NavigationQueryEntry, NavigationQueryRequest, NavigationRow, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationQueryEntry,
+  NavigationQueryRequest,
+  NavigationRow,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";

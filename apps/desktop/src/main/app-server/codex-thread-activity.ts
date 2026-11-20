@@ -1,8 +1,8 @@
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
 import type {
-  AppServerCollaborationModeRequest,
   AppServerThreadStatus,
   ThreadExecutionMode,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { CodexRetryableOperation, PendingReviewStartRecord, ReviewSubAgentRecord, ReviewTerminal, StartingTurnOrigin } from "./backend-registry-types";
 
 type ReviewAdmissionFields = Omit<PendingReviewStartRecord, "status" | "reviewThreadId" | "reviewTurnId" | "error">;

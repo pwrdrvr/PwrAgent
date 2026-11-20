@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { useLayoutEffect, useMemo } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

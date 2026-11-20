@@ -5,10 +5,8 @@ import {
   type ReactElement,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import {
-  threadHasExactPrNumberMatch,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { threadHasExactPrNumberMatch } from "@pwragent/shared/thread-jump-match";
+import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { PrChip } from "../pr-status/PrChip";

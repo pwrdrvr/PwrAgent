@@ -4,9 +4,16 @@ import { join } from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  ThreadDependencyCiRunObservation, ThreadDependencyCiRunOutcome, ThreadDependencyCondition, ThreadDependencyEvidence,
-} from "@pwragent/shared";
-import { summarizeThreadDependencyPrompt, threadDependencyCiRunId, threadDependencyCiRunOutcomes } from "@pwragent/shared";
+  ThreadDependencyCiRunObservation,
+  ThreadDependencyCiRunOutcome,
+  ThreadDependencyCondition,
+  ThreadDependencyEvidence,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import { summarizeThreadDependencyPrompt } from "@pwragent/shared/contracts/thread-system-messages";
+import {
+  threadDependencyCiRunId,
+  threadDependencyCiRunOutcomes,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import { readDesktopSettingsConfig } from "../settings/desktop-config";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";

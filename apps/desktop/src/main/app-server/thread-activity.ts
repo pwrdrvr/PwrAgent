@@ -1,12 +1,12 @@
 import path from "node:path";
-import { formatWebSearchLabel } from "@pwragent/shared";
+import { formatWebSearchLabel } from "@pwragent/shared/command-action-labels";
 import type {
   AppServerThreadCommandDetail,
   AppServerSource,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 export function summarizeToolActivityItems(
   items: Record<string, unknown>[],

@@ -1,8 +1,5 @@
-import {
-  threadProviderIdentity,
-  type NavigationCounts,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { threadProviderIdentity } from "@pwragent/shared/provider-picker";
+import { type NavigationCounts, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 
 /**
  * The providers that own threads across every instance on the map, for the

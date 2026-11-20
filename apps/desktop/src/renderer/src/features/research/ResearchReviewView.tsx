@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { ResearchSubmission } from "@pwragent/shared";
+import type { ResearchSubmission } from "@pwragent/shared/research";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
 import { approachTitle, researchReviewStatusLabel, researchRevisionBlocker, type ResearchRunView } from "./research-view-model";

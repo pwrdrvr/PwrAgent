@@ -20,11 +20,8 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
-import {
-  federatedThreadIdentityKey,
-  type FederatedThreadRef,
-} from "@pwragent/shared";
+import { normalizeMessagingBindingTargetKind } from "@pwragent/shared/contracts/messaging";
+import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
   CURRENT_MESSAGING_STORE_VERSION,
   migrateMessagingStoreData,

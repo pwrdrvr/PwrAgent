@@ -1,4 +1,7 @@
-import type { FederationConnectionVia, FederationReceiverPermissions } from "@pwragent/shared";
+import type {
+  FederationConnectionVia,
+  FederationReceiverPermissions,
+} from "@pwragent/shared/contracts/federation";
 import { federationTrafficCaptureUntil, recordFederationTraffic } from "./observability";
 import http from "node:http";
 import net from "node:net";
@@ -14,14 +17,14 @@ import type {
   FederationInstanceRole,
   FederationProtocolEnvelope,
   FederationSessionId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import { getMainLogger } from "./observability";
 import {
   FEDERATION_PROTOCOL_VERSION,
   FEDERATION_TRANSPORT_VERSION,
   filterKnownFederationCapabilities,
   isFederationInstanceId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import {
   authenticateFederationReconnect,
   buildFederationGatewayAcceptedMessage,

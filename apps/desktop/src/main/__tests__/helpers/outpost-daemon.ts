@@ -5,7 +5,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { FEDERATION_PROTOCOL_VERSION, type AgentEvent, type FederationCapability } from "@pwragent/shared";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  type FederationCapability,
+} from "@pwragent/shared/contracts/federation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { FederationRemoteBackendClient } from "../../federation/federation-backend-bridge";
 import { decodeFederationInvite } from "../../federation/federation-enrollment";
 import { generateFederationIdentityKeyPair } from "../../federation/federation-identity";

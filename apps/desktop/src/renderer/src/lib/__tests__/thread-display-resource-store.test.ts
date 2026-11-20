@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
+import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
 import {
-  buildThreadPricingDisplay,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../desktop-api";
 import { ThreadDisplayResourceStore } from "../thread-display-resource-store";
 

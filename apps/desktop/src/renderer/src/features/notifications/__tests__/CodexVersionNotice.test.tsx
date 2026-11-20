@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopCodexVersionAdvisory,
   DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import {
   CodexVersionNotice,
   buildCodexVersionNotice,

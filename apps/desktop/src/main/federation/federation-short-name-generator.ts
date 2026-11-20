@@ -4,8 +4,8 @@ import {
   federationShortNameKey,
   federationShortNameLength,
   normalizeFederationShortName,
-  type FederationHostInfo,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-short-names";
+import { type FederationHostInfo } from "@pwragent/shared/contracts/federation";
 
 /**
  * One machine in the short-name prompt. Instances are grouped by full

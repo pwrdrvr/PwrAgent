@@ -1,7 +1,21 @@
 import type { MessagingAccessControl } from "./messaging-access-control";
 import type { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { type MessagingDeliveryGuard, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import type { AgentEvent, AppServerBackendKind, FederatedThreadRef, FederationTarget, MessagingDynamicToolCategory, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadIdentifier } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederatedThreadRef, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type {
+  PwrAgentMessagingBoundThreadSummary,
+  PwrAgentMessagingRequest,
+} from "@pwragent/shared/contracts/messaging-tools";
+import type {
+  NavigationSelectedDetailRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingChannelKind, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
@@ -12,7 +26,7 @@ import { type MessagingNavigationContext } from "./messaging-thread-state.js";
 import type { MessagingToolUpdatePolicy } from "./messaging-tool-update-policy.js";
 import type { MessagingOriginalAttachmentStore } from "./messaging-original-attachment-store.js";
 import type { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
-import type { MessagingPermissionId, RbacResolution } from "@pwragent/shared";
+import type { MessagingPermissionId, RbacResolution } from "@pwragent/shared/contracts/rbac";
 
 export interface MessagingAgentToolHost {
   readonly retainedRequestSource: (context: PwrAgentMessagingRequest["context"]) => MessagingRequestSource | undefined;

@@ -1,5 +1,5 @@
 import type { MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
-import type { MessagingPermissionId } from "@pwragent/shared";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingReviewSubmission } from "./messaging-review-context";
 import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundEvent, MessagingInboundMediaEvent, MessagingInboundTextEvent, MessagingManagedTopicRecord, MessagingMonitorSubscriptionRecord, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";

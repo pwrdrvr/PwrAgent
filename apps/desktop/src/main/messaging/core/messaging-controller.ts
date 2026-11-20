@@ -33,8 +33,38 @@ import { MessagingBrowseWorkflow } from "./messaging-browse-workflow";
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
-import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, isAppServerBackendKind, readProviderResponseBlockNotification, describeProviderResponseBlock } from "@pwragent/shared";
-import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, FederationTarget, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import {
+  readProviderResponseBlockNotification,
+  describeProviderResponseBlock,
+} from "@pwragent/shared/provider-response-block";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  ThreadIncomingWorkSummary,
+  AppServerBackendKind,
+  AppServerPendingRequestNotification,
+  AppServerThreadMessageOrigin,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  AutomationMessagingConversationSnapshot,
+  AutomationRunSourceMetadata,
+  AutomationRunOutputDecision,
+} from "@pwragent/shared/contracts/automations";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type {
+  PwrAgentMessagingBoundThreadSummary,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared/contracts/messaging-tools";
+import type {
+  NavigationSelectedDetailRequest,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";

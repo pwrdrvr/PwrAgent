@@ -1,14 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationDirectoryRow } from "@pwragent/shared/contracts/navigation";
 import type {
-  AppServerTurnInputItem,
-  NavigationDirectoryRow,
   StarMapIntakeCandidate,
   StarMapIntakeCandidateSource,
   StarMapIntakePhase,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/star-map";
 import { getMainLogger } from "../log";
 import { resolveActiveProfileDir, resolvePwragentRoot } from "../profile";
 import { readLocalNavigationDirectoryIndex } from "./navigation-directory-index";

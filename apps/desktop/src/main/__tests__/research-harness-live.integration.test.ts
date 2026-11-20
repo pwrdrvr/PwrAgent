@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { researchDeadlinePassed, type ResearchHarnessConfig, type ResearchHarnessRequest } from "@pwragent/shared";
+import { researchDeadlinePassed } from "@pwragent/shared/research";
+import { type ResearchHarnessConfig, type ResearchHarnessRequest } from "@pwragent/shared/research-harness";
 import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-service";
 import { probeResearchModel, researchModelRequest } from "@pwragent/owner-core/research-model-adapter";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";

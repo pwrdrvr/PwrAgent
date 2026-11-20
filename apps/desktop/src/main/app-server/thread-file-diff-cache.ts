@@ -6,7 +6,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadFileDiffRef,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 const MAX_THREAD_DIFF_CACHE_ENTRIES = 5_000;
 const MAX_THREAD_DIFF_CACHE_CHARS = 20_000_000;

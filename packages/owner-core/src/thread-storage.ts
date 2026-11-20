@@ -1,4 +1,8 @@
-import type { AppServerBackendKind, AppServerThreadTitleSource, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerThreadTitleSource,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 /** Local owner identity. A mounted peer is never an entry in this registry. */
 export type OwnerThreadIdentity = {

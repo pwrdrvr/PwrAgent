@@ -2,13 +2,13 @@ import type {
   AcpAgentUpdateStatus,
   AcpAgentInstance,
   AcpRejectedAgentInstance,
-  AcpBackendId,
   BackendAcpAuthStatus,
   BackendAcpDistributionKind,
   BackendAcpInstallStatus,
   BackendAcpRuntimeCapabilities,
   BackendAcpVerificationStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/backend";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import type { AcpAgentCapabilities } from "./acp-agent-capabilities.js";
 

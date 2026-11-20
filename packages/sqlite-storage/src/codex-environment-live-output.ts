@@ -1,4 +1,4 @@
-import type { ThreadOverlayState } from "@pwragent/shared";
+import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 
 type Runtime = NonNullable<ThreadOverlayState["codexEnvironmentRuntime"]>;
 

@@ -1,7 +1,11 @@
 import { headlessAutomationRecords } from "./helpers/headless-automation-records";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerBackendKind, AppServerNotification } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  AppServerBackendKind,
+  AppServerNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import type { ReviewSubAgentRecord, TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
 import { taskMonitorThreadKey } from "../app-server/thread-turn-keys";

@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
 import { AgentToolRouter } from "./agent-tool-router";

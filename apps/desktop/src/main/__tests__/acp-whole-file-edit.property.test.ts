@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { AppServerThreadActivityEntry, AppServerThreadFileDiff } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityEntry,
+  AppServerThreadFileDiff,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { acpDiffContentIsWholeFile } from "../acp/acp-file-edit";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
 import { applyUnifiedDiff, fileLines, parseHunks } from "./helpers/unified-diff";

@@ -1,11 +1,11 @@
 import { stat as fsStat } from "node:fs/promises";
 import path from "node:path";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  AppServerBackendKind,
   EnsureDirectoryLaunchpadResponse,
   RegisterDirectoryFromDiskFailureReason,
   RegisterDirectoryFromDiskResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
 import { runGitCommand } from "./git-executable";
 
 /**

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AppServerThreadEntry,
-  ThreadMessagingBindingTransition,
-} from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadMessagingBindingTransition } from "@pwragent/shared/contracts/navigation";
 import {
   MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX,
   buildMessagingBindingTransitionActivityEntries,

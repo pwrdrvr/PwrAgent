@@ -6,7 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { CodexEnvironmentActionRun } from "@pwragent/shared";
+import type { CodexEnvironmentActionRun } from "@pwragent/shared/contracts/normalized-app-server";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { statusPulseRef } from "../../lib/status-pulse";
 import {

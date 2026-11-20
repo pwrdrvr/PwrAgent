@@ -1,4 +1,4 @@
-import { resolvePullRequestIdentity, type PrSummary } from "@pwragent/shared";
+import { resolvePullRequestIdentity, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildPullRequestReferenceUrl,
   parsePullRequestReferenceUrl,

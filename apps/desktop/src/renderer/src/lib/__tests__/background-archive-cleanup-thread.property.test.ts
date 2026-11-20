@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { resolveBackgroundCleanupThread } from "../background-archive-cleanup-thread";
 
 it("resolves blocker names only from an unambiguous identity on the owning instance", () => {

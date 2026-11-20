@@ -1,4 +1,8 @@
-import { forgeMergeMethods, settleMergeMethod, type ThreadTodoMergeMethod } from "@pwragent/shared";
+import {
+  forgeMergeMethods,
+  settleMergeMethod,
+  type ThreadTodoMergeMethod,
+} from "@pwragent/shared/contracts/thread-todos";
 import { ForgeReadError, repositoryKey, type ForgeRepository } from "./forge-tool-contract";
 import { repositoryFromPr, resolveForgeRepositories, type ForgeReadScope } from "./forge-read-service";
 import type { ForgePrToolContext } from "./forge-pr-tool-shared";

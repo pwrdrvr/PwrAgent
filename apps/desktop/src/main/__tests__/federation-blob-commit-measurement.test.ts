@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared/contracts/federation";
 import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES, FederationResumableBlobReceiver } from "@pwragent/federation/federation-resumable-blob";
 
 it.skipIf(process.env.PWRAGENT_MEASURE_BLOB_COMMIT !== "1")("measures durable blob commit cost on the current filesystem", async () => {

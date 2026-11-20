@@ -1,7 +1,8 @@
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { operatorTodoItemKey, threadReviewTodo, type ThreadReview } from "@pwragent/shared";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
+import { threadReviewTodo, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import { OperatorRequestService } from "../operator-requests/operator-request-service";
 import { OperatorRequestStore, OPERATOR_REQUEST_RETENTION_MS } from "../storage/operator-request-store";
 import { ThreadReviewService } from "../thread-reviews/thread-review-service";

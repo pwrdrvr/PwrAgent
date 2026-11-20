@@ -1,8 +1,14 @@
 import type {
-  FederationJumpSearchProgress, FederationJumpSearchRequest, FederationJumpSearchResponse,
-  FederationRemoteTarget, NavigationQueryPage, NavigationQueryRequest, NavigationRow,
-} from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES, sortThreadJumpMatches } from "@pwragent/shared";
+  FederationJumpSearchProgress,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
+import { sortThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 
 /** Search retains only one bounded page per admitted owner for this request. */
 export async function searchNavigationOwners(params: {

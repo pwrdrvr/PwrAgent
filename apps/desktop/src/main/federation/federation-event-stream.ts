@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 
 export const FEDERATION_EVENT_STREAM_METHOD = "backend.eventStream";
 

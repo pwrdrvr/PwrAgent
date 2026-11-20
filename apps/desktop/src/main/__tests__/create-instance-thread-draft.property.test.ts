@@ -1,5 +1,6 @@
 import fc from "fast-check";
-import type { BackendModelOption, NavigationLaunchpadConfigResponse } from "@pwragent/shared";
+import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
+import type { NavigationLaunchpadConfigResponse } from "@pwragent/shared/contracts/navigation";
 import { expect, it } from "vitest";
 import { assertThreadModelSettingsAvailable } from "../app-server/thread-model-admission";
 import { buildLaunchpadDraft } from "../federation/federation-agent-tools-service";

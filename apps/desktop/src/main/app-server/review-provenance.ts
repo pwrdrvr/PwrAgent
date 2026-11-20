@@ -3,8 +3,8 @@ import type {
   AppServerReviewPullRequest,
   AppServerReviewTarget,
   LinkedDirectorySummary,
-  PrSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   normalizeFullRef,
   type NamedReviewPullRequest,

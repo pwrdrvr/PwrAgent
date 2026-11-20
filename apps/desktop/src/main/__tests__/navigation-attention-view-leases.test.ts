@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 
 const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "attention" },

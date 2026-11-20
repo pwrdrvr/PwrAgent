@@ -1,12 +1,12 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import {
-  operatorTodoItemKey,
   threadTodoThreadKey,
   type ThreadTodo,
   type ThreadTodoProject,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { reviewTranscriptEntryId } from "../review-tracking";
 import type { ThreadTodosView } from "../thread-todos-view";

@@ -1,4 +1,5 @@
-import { splitGraphemes, type AppServerBackendKind } from "@pwragent/shared";
+import { splitGraphemes } from "@pwragent/shared/text-graphemes";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildThreadTitlePrompt } from "./thread-title-prompt";
 
 export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v3";

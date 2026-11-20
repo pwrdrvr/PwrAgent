@@ -9,7 +9,7 @@ import {
   existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -115,7 +115,7 @@ export function verifyRuntime(root, pin, { requireSigned = true, probe = true } 
   return m;
 }
 
-export async function stageRuntime({ manifestPath, platform, arch, output, cache = join(tmpdir(), "pwrgit-runtime-cache") }) {
+export async function stageRuntime({ manifestPath, platform, arch, output, cache = join(homedir(), ".cache", "pwrgit-runtime") }) {
   const pin = readRuntimeManifest(manifestPath, platform, arch);
   if (existsSync(output)) {
     try { verifyRuntime(output, pin); return pin; } catch { /* Replace a stale stage atomically. */ }
@@ -141,7 +141,7 @@ export async function stageRuntime({ manifestPath, platform, arch, output, cache
   const previous = join(temp, "previous");
   mkdirSync(staging);
   try {
-    checked("tar", ["-xzf", archive, "-C", staging]);
+    checked("tar", ["-xpzf", archive, "-C", staging]);
     verifyRuntime(staging, pin);
     if (existsSync(output)) renameSync(output, previous);
     try { renameSync(staging, output); }

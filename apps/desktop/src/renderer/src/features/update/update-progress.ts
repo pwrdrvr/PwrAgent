@@ -3,7 +3,7 @@
 // Split out of the component because the interesting part of a progress card
 // is the wording and the arithmetic, and neither needs a DOM to be checked.
 
-import { releaseNotesUrl } from "@pwragent/shared";
+import { releaseNotesUrl } from "@pwragent/shared/release-notes";
 import type { AppUpdateStatus } from "../../../../shared/app-metadata";
 import { formatByteCount } from "../../lib/format-bytes";
 

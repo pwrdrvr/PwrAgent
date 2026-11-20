@@ -11,8 +11,8 @@ import type {
   DecisionsRailSnapshot,
   DecisionsProfileDecision,
   DecisionsProfileDeleteResult,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import {
   OPENAI_DECISIONS_ORIGIN,
   OPENAI_DECISIONS_PRICING_CATALOG_ID,

@@ -1,8 +1,8 @@
 import type {
   CodexEnvironmentStartupFailure,
-  CodexThreadEnvironmentRuntime,
   CreatedThreadEnvironmentReport,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/agent";
+import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared/contracts/normalized-app-server";
 
 const SETUP_OUTPUT_TAIL_LENGTH = 2000;
 

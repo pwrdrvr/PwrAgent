@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AutomationSchedulingStatus } from "@pwragent/shared";
+import type { AutomationSchedulingStatus } from "@pwragent/shared/contracts/automations";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatRuntimeLeaseHolder } from "../../lib/runtime-identity";
 

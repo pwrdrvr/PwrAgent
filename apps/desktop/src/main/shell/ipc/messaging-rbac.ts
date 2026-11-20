@@ -8,7 +8,6 @@ import {
   type DeleteRbacAttachmentResponse,
   type DeleteRbacRoleRequest,
   type DeleteRbacRoleResponse,
-  type MessagingChannelKind,
   type ReadRbacKnownSubjectsResponse,
   type ReadRbacPolicyResponse,
   type RbacAttachment,
@@ -19,7 +18,8 @@ import {
   type WriteRbacAttachmentResponse,
   type WriteRbacRoleRequest,
   type WriteRbacRoleResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/rbac";
+import { type MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
 
 import {
   MESSAGING_RBAC_DELETE_ATTACHMENT_CHANNEL,

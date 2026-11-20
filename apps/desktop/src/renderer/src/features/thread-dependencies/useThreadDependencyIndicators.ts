@@ -1,6 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import type { AppServerBackendKind, FederationTarget, NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
-import { buildThreadIdentityKey, threadDependencyConditionPhrase, threadDependencyDeliveryTarget } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import {
+  threadDependencyConditionPhrase,
+  threadDependencyDeliveryTarget,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {

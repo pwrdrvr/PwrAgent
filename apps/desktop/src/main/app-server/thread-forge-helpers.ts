@@ -1,5 +1,5 @@
 import { type PullRequestRepositoryRef } from "../pr-status/forge-reference";
-import { normalizePullRequestProvider } from "@pwragent/shared";
+import { normalizePullRequestProvider } from "@pwragent/shared/contracts/navigation";
 
 
 

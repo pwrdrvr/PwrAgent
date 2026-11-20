@@ -1,5 +1,5 @@
-import type { AppServerThreadEntry } from "@pwragent/shared";
-import { isTerminalTurnMetadata } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import { isTerminalTurnMetadata } from "@pwragent/shared/thread-usage-display";
 import { readRendererSequence } from "./live-transcript-activity";
 import { isConcreteWorkEntry } from "./transcript-render-items";
 

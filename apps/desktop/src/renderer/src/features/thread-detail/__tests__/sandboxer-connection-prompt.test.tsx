@@ -6,7 +6,7 @@ import {
   SANDBOXER_MCP_CONNECTION_ID,
   type McpConnectionStatus,
   type McpConnectionsChangedEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   SandboxerConnectionPrompt,

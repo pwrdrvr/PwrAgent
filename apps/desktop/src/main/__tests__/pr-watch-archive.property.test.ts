@@ -1,7 +1,14 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { buildLegacyEncodedThreadIdentityKey, buildPullRequestStatusKey, type AgentEvent, type PrSummary, type ThreadDependency, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
+import {
+  buildLegacyEncodedThreadIdentityKey,
+  buildPullRequestStatusKey,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import { type ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 
 import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
 import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";

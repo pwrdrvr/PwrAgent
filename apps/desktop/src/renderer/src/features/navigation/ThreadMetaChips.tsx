@@ -1,6 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
-import type { NavigationThreadSummary, ThreadTodo } from "@pwragent/shared";
-import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import {
   BranchIcon,
   ContinueAfterIcon,

@@ -3,7 +3,7 @@ import type {
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
   FederationTailscaleStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverCommands } from "../settings/command-discovery";
 import { getDesktopFederationRuntime } from "./federation-runtime";

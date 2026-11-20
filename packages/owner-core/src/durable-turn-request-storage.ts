@@ -1,4 +1,7 @@
-import type { DurableTurnReceipt, DurableSteerReceipt } from "@pwragent/shared";
+import type {
+  DurableTurnReceipt,
+  DurableSteerReceipt,
+} from "@pwragent/shared/contracts/durable-turn-requests";
 
 export type DurableRequestReceipt = DurableTurnReceipt | DurableSteerReceipt;
 

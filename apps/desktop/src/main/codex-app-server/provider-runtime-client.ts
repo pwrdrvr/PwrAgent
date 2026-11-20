@@ -1,4 +1,7 @@
-import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
+import {
+  parseCodexProviderModelId,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared/codex-model-providers";
 import { assertOutpostCodexProvider } from "../owner-runtime-policy";
 import type { CodexAppServerClient } from "./desktop-client";
 import {

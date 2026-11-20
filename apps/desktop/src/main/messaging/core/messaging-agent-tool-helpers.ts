@@ -3,7 +3,15 @@ import { type ActiveAgentMessagingOrigin } from "./messaging-backend-event-helpe
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isVisibleStreamOutcome } from "./messaging-reply-receipts";
-import type { AppServerBackendKind, FederatedThreadRef, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingResponse, NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type {
+  PwrAgentMessagingBoundThreadSummary,
+  PwrAgentMessagingLocationSummary,
+  PwrAgentMessagingManagedConversationSummary,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared/contracts/messaging-tools";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord, MessagingChannelRef, MessagingDeliveryResult, MessagingInboundEvent, MessagingImagePart, MessagingPrivateReplySource } from "@pwragent/messaging-interface";
 import { type MessagingNavigationContext } from "./messaging-thread-state.js";
 

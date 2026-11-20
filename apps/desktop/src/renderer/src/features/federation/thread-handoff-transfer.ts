@@ -2,7 +2,7 @@ import type {
   HandoffInstanceThreadResult,
   ThreadHandoffPhase,
   ThreadHandoffProgress,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 
 export type ThreadHandoffOperation = "copy" | "move";
 

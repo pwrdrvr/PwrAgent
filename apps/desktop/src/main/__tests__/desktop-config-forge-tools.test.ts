@@ -6,7 +6,7 @@ import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   resolveForgeAgentToolAccess,
   type ForgeAgentToolRule,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/forge-agent-tools";
 import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";

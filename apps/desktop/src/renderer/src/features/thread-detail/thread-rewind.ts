@@ -2,8 +2,8 @@ import type {
   AppServerBackendKind,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
-  NavigationLaunchpadImageAttachment,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationLaunchpadImageAttachment } from "@pwragent/shared/contracts/navigation";
 
 /**
  * The user messages a rewind can go back before: the first prompt of each

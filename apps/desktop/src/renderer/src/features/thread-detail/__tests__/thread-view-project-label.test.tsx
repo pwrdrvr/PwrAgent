@@ -2,7 +2,10 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import { useThreadNavigation } from "../../../lib/useThreadNavigation";
 import { navigationOwnerApiFixture } from "../../../test/navigation-owner-api-fixture";

@@ -7,8 +7,8 @@ import {
   type ChangeEvent,
   type ReactNode,
 } from "react";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
 import type {
-  AcpAgentSettingsEntry,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopBootInfo,
@@ -17,13 +17,15 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
+  SettingsCredentialTestKind,
+  SettingsCredentialTestResult,
+} from "@pwragent/shared/contracts/settings";
+import type {
   MessagingChannelKind,
   MessagingPairingApprovalTarget,
   MessagingPairingScope,
-  SettingsCredentialTestKind,
-  SettingsCredentialTestResult,
-} from "@pwragent/shared";
-import { isMessagingRuntimeSecret } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/messaging";
+import { isMessagingRuntimeSecret } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {

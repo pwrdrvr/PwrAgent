@@ -2,7 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import { SettingsField, SettingsPendingIndicator } from "./SettingsLayout";
 import { formatSourceLabel } from "./settings-fields";
 

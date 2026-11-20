@@ -4,7 +4,8 @@ import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thr
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
-import type { LaunchpadCreationStatus, RemoteThreadPinPublication } from "@pwragent/shared";
+import type { LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
+import type { RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
@@ -29,7 +30,6 @@ import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupP
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AppServerBackendKind,
-  AppServerCollaborationModeRequest,
   AppServerRenamedTitleSource,
   AppServerReviewTarget,
   AppServerThreadImagePart,
@@ -38,38 +38,45 @@ import type {
   ArchiveThreadCleanupResult,
   ArchiveCleanupProgress,
   CodexThreadEnvironmentRuntime,
-  DesktopProviderModelDefaults,
-  FederationInstanceId,
-  FederationRemoteTarget,
-  FederationTarget,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   RestoreThreadResponse,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type { DesktopProviderModelDefaults } from "@pwragent/shared/contracts/settings";
+import type {
+  FederationInstanceId,
+  FederationRemoteTarget,
+  FederationTarget,
+  FederationPeerSummary,
+} from "@pwragent/shared/contracts/federation";
+import type {
   NavigationBrowseMode,
-  NavigationResumeState,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationRelativePinMove,
-  FederationPeerSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+  ThreadAgentMetadata,
+  ThreadLock,
+  SetThreadCheckoutHibernationResponse,
+  ThreadSubAgentSummary,
+} from "@pwragent/shared/contracts/navigation";
+import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
+import type {
   ProjectForgeAutomation,
   ProjectHeldWakeup,
   ResolveProjectHeldWakeupsRequest,
   ResolveProjectHeldWakeupsResponse,
-  ThreadAgentMetadata,
-  ThreadExecutionMode,
-  ThreadLock,
-  SetThreadCheckoutHibernationResponse,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/project-forge-automation";
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -79,22 +86,23 @@ import {
   changedProviderModelDefaultBackends,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  DEFAULT_NAVIGATION_BROWSE_MODE,
+  isSubthreadLaunchpadKey,
+  normalizeNavigationBrowseMode,
+} from "@pwragent/shared/contracts/navigation";
+import {
   canonicalizeNavigationPath,
   classifyDirectory,
   directoryIncludesCheckout,
-  isDefaultProjectForgeAutomation,
-  parseOwnedComposerScopeKey,
-  compareThreadsByCreatedAtDesc,
-  DEFAULT_NAVIGATION_BROWSE_MODE,
-  federatedThreadIdentityKey,
-  isRemoteFederationTarget,
-  isSubthreadLaunchpadKey,
-  normalizeNavigationBrowseMode,
-  normalizeNavigationResumeState,
-  normalizeRenamedTitleSource,
-  resolveThreadParentKey,
-  shortenDerivedThreadTitle,
-} from "@pwragent/shared";
+} from "@pwragent/shared/directory-navigation";
+import { isDefaultProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
+import { parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
+import { compareThreadsByCreatedAtDesc } from "@pwragent/shared/thread-pins";
+import { federatedThreadIdentityKey, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { normalizeNavigationResumeState } from "@pwragent/shared/navigation-resume-state";
+import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";

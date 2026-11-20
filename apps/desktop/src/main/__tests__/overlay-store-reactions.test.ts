@@ -1,7 +1,5 @@
-import type {
-  AppServerThreadSummary,
-  ThreadSubAgentSummary,
-} from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

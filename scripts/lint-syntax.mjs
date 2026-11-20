@@ -1,14 +1,21 @@
 import { globSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkImportBoundaries } from "./lint-module-barrels.mjs";
 import { repositoryRoot, runOxlint } from "./oxlint.mjs";
 
 export function syntaxLintPaths(directory = repositoryRoot) {
-  // cmd.exe does not expand *.ts. Expand root files here so Windows checks the
+  // cmd.exe does not expand globs. Expand root files here so Windows checks the
   // same configs as macOS/Linux; directory walking is handled by Oxlint.
-  return ["packages", "apps", ...globSync("*.ts", { cwd: directory })];
+  return ["packages", "apps", ...globSync(["*.ts", "*.mts"], { cwd: directory })];
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = runOxlint(".oxlintrc.json", syntaxLintPaths());
+  const violations = checkImportBoundaries(repositoryRoot);
+  if (violations.length) {
+    console.error(violations.join("\n"));
+    process.exitCode = 1;
+  } else {
+    process.exitCode = runOxlint(".oxlintrc.json", syntaxLintPaths());
+  }
 }

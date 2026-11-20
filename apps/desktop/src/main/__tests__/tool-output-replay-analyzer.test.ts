@@ -1,4 +1,4 @@
-import type { AppServerThreadReplay } from "@pwragent/shared";
+import type { AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it } from "vitest";
 import { analyzeNormalizedToolReplay } from "../app-server/tool-output-replay-analyzer";
 

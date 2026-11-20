@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import type { CodexModelProviderSettings } from "@pwragent/shared/codex-model-providers";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime, readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
 import { startBridge } from "../codex-app-server/local-responses-bridge.mjs";
 

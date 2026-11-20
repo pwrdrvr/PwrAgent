@@ -1,11 +1,13 @@
 import "@testing-library/jest-dom/vitest";
+import { buildThreadMarkdownLink } from "@pwragent/shared/contracts/thread-link";
 import {
-  buildThreadMarkdownLink,
   type AppServerBackendKind,
   type AppServerThreadEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type NavigationQueryRequest,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";

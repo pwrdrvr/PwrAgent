@@ -1,7 +1,10 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerNotification, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

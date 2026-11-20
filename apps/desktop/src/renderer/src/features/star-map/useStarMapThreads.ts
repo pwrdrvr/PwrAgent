@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
-  type FederationPeerSummary,
   type NavigationCounts,
   type NavigationStarMapFacetCounts,
   type NavigationStarMapFilterSelection,
@@ -11,7 +10,8 @@ import {
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { type FederationPeerSummary } from "@pwragent/shared/contracts/federation";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { navigationGeometryBudget, navigationExactRowsBudget, navigationAttentionRowsBudget } from "../../lib/navigation-metadata-budget";
 import { navigationQueryEventRequiresRefresh } from "../../lib/navigation-query-events";

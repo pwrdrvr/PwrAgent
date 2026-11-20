@@ -5,8 +5,8 @@ import type {
   HandoffInstanceThreadResult,
   RetryThreadHandoffNowRequest,
   ThreadHandoffProgress,
-} from "@pwragent/shared";
-import { isFederationInstanceId } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-instance-handoff";
+import { isFederationInstanceId } from "@pwragent/shared/contracts/federation";
 import {
   FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,

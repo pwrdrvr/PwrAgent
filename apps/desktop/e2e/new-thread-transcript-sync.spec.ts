@@ -3,7 +3,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import type { StartThreadRequest, StartThreadResponse } from "@pwragent/shared";
+import type { StartThreadRequest, StartThreadResponse } from "@pwragent/shared/contracts/agent";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";

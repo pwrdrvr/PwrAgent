@@ -109,7 +109,7 @@ try {
   for (const [index, mutation] of selected.entries()) {
     const source = baseline.get(mutation.file);
     writeFileSync(mutation.file, mutation.transform(source));
-    const result = spawnSync("pnpm", ["exec", "vitest", "run", "--config", "vitest.workspace.ts", testPath, "-t", mutation.test], { encoding: "utf8", timeout: 45000, maxBuffer: 2 * 1024 * 1024 });
+    const result = spawnSync("pnpm", ["exec", "vitest", "run", "--config", "vitest.workspace.mts", testPath, "-t", mutation.test], { encoding: "utf8", timeout: 45000, maxBuffer: 2 * 1024 * 1024 });
     writeFileSync(mutation.file, source);
     const output = (result.stdout ?? "") + (result.stderr ?? "");
     writeFileSync(`${directory}/${mutation.name}.log`, output);

@@ -1,7 +1,10 @@
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import {
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
+  type ThreadExecutionMode,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import {
   type BackendAccountSummary,
   type BackendAcpRuntimeCapabilities,
   type BackendAcpSessionRuntimeState,
@@ -11,13 +14,14 @@ import {
   type BackendRateLimitSummary,
   type BackendRuntimeBuild,
   type BackendSummary,
+} from "@pwragent/shared/contracts/backend";
+import {
   type NavigationLaunchpadDefaults,
-  type ThreadExecutionMode,
   isAcpBackendId,
-  modelMenuEntryProviderId,
   navigationLaunchpadProviderKey,
-  parseProviderPickerValue,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { modelMenuEntryProviderId } from "@pwragent/shared/model-menu";
+import { parseProviderPickerValue } from "@pwragent/shared/provider-picker";
 import {
   acpRuntimeValueLooksPrivileged,
   type AcpRuntimeClient,

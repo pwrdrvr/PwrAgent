@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   resolveThreadTodoModelSettings,
   sameThreadTodoModelSettings,
-  type BackendSummary,
   type ThreadTodoAction,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-todos";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
 import { fitTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchMachines, todoDispatchSpeed } from "../todo-dispatch-model";
 
 const thread = { backend: "claude" as const, model: "opus", reasoningEffort: "high" };

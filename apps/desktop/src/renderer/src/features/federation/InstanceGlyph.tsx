@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { CelestialIconId } from "@pwragent/shared";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { CelestialIcon } from "../../icons";
 import { useFederationInstanceNames } from "../../lib/federation-display-label";
 

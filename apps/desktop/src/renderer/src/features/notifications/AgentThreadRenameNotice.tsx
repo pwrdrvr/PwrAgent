@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { RENAME_THREAD_EXPECTED_NAME_MISMATCH, type AgentEvent } from "@pwragent/shared";
+import { RENAME_THREAD_EXPECTED_NAME_MISMATCH } from "@pwragent/shared/contracts/normalized-app-server";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";

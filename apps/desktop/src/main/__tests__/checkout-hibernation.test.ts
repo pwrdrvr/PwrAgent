@@ -6,8 +6,17 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy, PrSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse,
-  ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  WorktreeSnapshotSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type {
+  PwrAgentThreadOrchestrationRequest,
+  PwrAgentThreadOrchestrationResponse,
+} from "@pwragent/shared/contracts/thread-orchestration-tools";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CheckoutPathOwners } from "../app-server/checkout-path-owners";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
@@ -266,7 +275,7 @@ function registrationTool(registry: DesktopBackendRegistry) {
   return { approvals, live, call };
 }
 
-type RegistrationCard = import("@pwragent/shared").AppServerToolRequestUserInputNotification;
+type RegistrationCard = import("@pwragent/shared/contracts/normalized-app-server").AppServerToolRequestUserInputNotification;
 
 function waitForRegistrationCard(registry: DesktopBackendRegistry): Promise<RegistrationCard> {
   fixtureOwner.check();

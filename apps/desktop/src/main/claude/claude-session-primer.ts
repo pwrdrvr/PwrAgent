@@ -1,4 +1,4 @@
-import type { AppServerThreadEntry } from "@pwragent/shared";
+import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** The most transcript a primer carries, in characters (about 15k tokens). */
 export const CLAUDE_PRIMER_MAX_CHARS = 60_000;

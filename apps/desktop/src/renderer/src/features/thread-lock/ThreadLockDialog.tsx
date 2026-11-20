@@ -8,7 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { THREAD_LOCK_NOTE_MAX_LENGTH } from "@pwragent/shared";
+import { THREAD_LOCK_NOTE_MAX_LENGTH } from "@pwragent/shared/thread-lock";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
 

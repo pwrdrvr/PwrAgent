@@ -1,11 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import {
-  buildFederatedThreadRef,
-  type FederationRemoteTarget,
-  type NavigationSnapshot,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import { buildFederatedThreadRef, type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import { type NavigationSnapshot, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 
 const owners = ["peer-one", "peer-two", "peer-three", "peer-four"] as const;

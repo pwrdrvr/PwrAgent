@@ -1,9 +1,9 @@
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  PWRAGENT_TOOL_NAMESPACE,
-  type AppServerBackendKind,
   type CreateInstanceThreadResult,
   type PwrAgentFederationOperationName,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation-tools";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   agentToolFailure,

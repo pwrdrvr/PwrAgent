@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { RESEARCH_MAX_MINUTES } from "@pwragent/shared";
+import { RESEARCH_MAX_MINUTES } from "@pwragent/shared/research";
 import { Select } from "../../components/Select";
 
 const UNITS = [{ value: "minutes", label: "Minutes", minutes: 1 }, { value: "hours", label: "Hours", minutes: 60 }, { value: "days", label: "Days", minutes: 1440 }] as const;

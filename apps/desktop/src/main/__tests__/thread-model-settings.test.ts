@@ -1,4 +1,4 @@
-import { providerPickerValue } from "@pwragent/shared";
+import { providerPickerValue } from "@pwragent/shared/provider-picker";
 import { expect, it, vi } from "vitest";
 import { ThreadModelSettings, type ThreadModelSettingsHost } from "../app-server/thread-model-settings";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

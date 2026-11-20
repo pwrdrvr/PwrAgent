@@ -4,7 +4,7 @@
 // the precedence in one place means the badge the user sees and the binary that
 // actually runs can never disagree. Mirrors PwrSnap's acp-instance-resolver.
 
-import type { AcpAgentInstance, AcpAgentPreference } from "@pwragent/shared";
+import type { AcpAgentInstance, AcpAgentPreference } from "@pwragent/shared/contracts/backend";
 
 /**
  * Pick the active instance from a discovered list, honoring the user's

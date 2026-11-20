@@ -1,5 +1,10 @@
-import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { FederationTarget, NavigationIdentity, NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationIdentity,
+  NavigationQueryEntry,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 
 export type NavigationArchiveMember = Pick<NavigationThreadSummary, "id" | "source" | "federation"> & {

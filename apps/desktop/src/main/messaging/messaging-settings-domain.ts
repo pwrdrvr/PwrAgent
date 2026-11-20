@@ -1,7 +1,4 @@
-import type {
-  DesktopSettingsSnapshot,
-  DesktopSettingsValue,
-} from "@pwragent/shared";
+import type { DesktopSettingsSnapshot, DesktopSettingsValue } from "@pwragent/shared/contracts/settings";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,

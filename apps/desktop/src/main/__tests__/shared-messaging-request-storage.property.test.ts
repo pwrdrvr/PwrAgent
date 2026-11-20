@@ -4,7 +4,7 @@ import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import type { MessagingRequestSource } from "@pwragent/owner-core/messaging-request-storage";
-import type { PwrAgentMessagingResponse } from "@pwragent/shared";
+import type { PwrAgentMessagingResponse } from "@pwragent/shared/contracts/messaging-tools";
 import { SqliteMessagingRequestStore as SharedStore } from "@pwragent/sqlite-storage/messaging-request-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteMessagingRequestStore as DesktopStore } from "../storage/messaging-request-store";

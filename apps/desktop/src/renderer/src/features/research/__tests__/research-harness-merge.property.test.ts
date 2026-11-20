@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { projectResearchRun, researchEventPage, type ResearchEvent } from "@pwragent/shared";
+import { projectResearchRun, researchEventPage, type ResearchEvent } from "@pwragent/shared/research";
 import { researchActivityRows, researchMapBranches } from "../research-view-model";
 import { harnessRun, harnessRunView } from "./research-harness-fixture";
 

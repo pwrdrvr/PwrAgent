@@ -2,7 +2,7 @@ import type {
   FederationCapability,
   FederationPeerId,
   FederationSessionId,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/federation";
 
 export type FederationActiveSession = {
   sessionId: FederationSessionId;

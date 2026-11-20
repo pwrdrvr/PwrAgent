@@ -1,4 +1,5 @@
-import type { CelestialIconId, FederationHealthStatus } from "@pwragent/shared";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { filterDirectoryReferenceCandidates, type ReferenceDirectory } from "./directory-references";
 import { federationDisplayLabel } from "./federation-display-label";
 

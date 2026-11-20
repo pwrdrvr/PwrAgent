@@ -1,4 +1,6 @@
-import { isWorkspaceHandoffDirectory, type AppServerThreadSummary, type NavigationSnapshot } from "@pwragent/shared";
+import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { type NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import { parseForgeRemote, resolveGitHubRepoForDirectory } from "./git-remote";
 import { buildPrRepositoryKey } from "./pr-auto-dispatch";
 

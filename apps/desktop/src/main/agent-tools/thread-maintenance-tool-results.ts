@@ -1,14 +1,16 @@
 import type {
   ApplyThreadMaintenanceToolArgs,
+  ThreadMaintenancePlanToolResult,
+  ThreadMaintenanceRunToolResult,
+  ThreadMaintenanceScanToolResult,
+} from "@pwragent/shared/contracts/thread-tools";
+import type {
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceOwnedCheckout,
   ThreadMaintenanceCoverage,
-  ThreadMaintenancePlanToolResult,
   ThreadMaintenanceRun,
-  ThreadMaintenanceRunToolResult,
   ThreadMaintenanceScan,
-  ThreadMaintenanceScanToolResult,
-} from "@pwragent/shared";
+} from "@pwragent/shared/thread-maintenance";
 
 /** Idle rows returned to an agent across all projects. */
 export const THREAD_MAINTENANCE_TOOL_ROW_LIMIT = 200;

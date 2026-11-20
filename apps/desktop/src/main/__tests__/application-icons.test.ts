@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DesktopApplicationsSnapshot } from "@pwragent/shared";
+import type { DesktopApplicationsSnapshot } from "@pwragent/shared/contracts/settings";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   resetDecodedApplicationIconsForTests,

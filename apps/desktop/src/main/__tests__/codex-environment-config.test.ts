@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { CodexEnvironmentOption, NavigationLaunchpadDraft } from "@pwragent/shared";
+import type { CodexEnvironmentOption, NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 import {
   listCodexEnvironmentOptions,
   parseCodexEnvironmentToml,

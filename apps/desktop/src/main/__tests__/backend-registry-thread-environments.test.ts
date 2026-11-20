@@ -10,7 +10,7 @@ import { createDesktopBackendRegistry } from "../app-server/backend-registry-wir
 import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
-import { launchpadStorageKey } from "@pwragent/shared";
+import { launchpadStorageKey } from "@pwragent/shared/contracts/navigation";
 import {
   mkdir,
   mkdtemp,
@@ -28,11 +28,11 @@ import {
 } from "vitest";
 import type {
   AcpBackendId,
-  AgentEvent,
   AppServerPendingRequestNotification,
-  BackendAcpRuntimeCapabilities,
   CodexThreadEnvironmentRuntime,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { BackendAcpRuntimeCapabilities } from "@pwragent/shared/contracts/backend";
 import { CodexEnvironmentCommandError, type CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import * as codexEnvironmentRuntime from "../app-server/codex-environment-runtime";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

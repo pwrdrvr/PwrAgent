@@ -1,9 +1,9 @@
 import {
   automaticProviderMonitorModel,
-  type BackendSummary,
   type DesktopHelperModelSettings,
   type DesktopTaskMonitorModelChoice,
-} from "@pwragent/shared";
+} from "@pwragent/shared/helper-models";
+import { type BackendSummary } from "@pwragent/shared/contracts/backend";
 import { Select, type SelectOption } from "../../components/Select";
 import { modelSelectOptions } from "../../lib/model-select-options";
 import { helperModelRunningLabel } from "./HelperModelSettings";

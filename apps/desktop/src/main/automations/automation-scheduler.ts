@@ -7,11 +7,11 @@ import type {
   AutomationRunStatus,
   AutomationRunSummary,
   AutomationRunWindow,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import {
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   resolveAutomationRunsPerHour,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import type { CreateAutomationRunInput } from "@pwragent/owner-core/automation-storage";
 import {
   computeNextAutomationRunAt,

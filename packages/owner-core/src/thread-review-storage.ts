@@ -1,4 +1,4 @@
-import type { ListThreadReviewsRequest, ThreadReview } from "@pwragent/shared";
+import type { ListThreadReviewsRequest, ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 
 export type ThreadReviewPullRequest = {
   provider: string;

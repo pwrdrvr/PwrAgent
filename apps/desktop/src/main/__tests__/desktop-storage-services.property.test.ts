@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
-import type { ModelSettingsRecentsScope } from "@pwragent/shared";
+import type { ModelSettingsRecentsScope } from "@pwragent/shared/contracts/agent";
 import type { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { listModelSettingsRecents as storedModels, recordModelSettingsRecent as storeModel } from "../state/model-settings-recents-store";

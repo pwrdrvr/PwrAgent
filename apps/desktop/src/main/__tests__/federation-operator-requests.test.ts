@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ListOperatorRequestsResponse } from "@pwragent/shared";
-import { operatorQuestionItemKey, operatorTodoItemKey, projectOperatorItemKey } from "@pwragent/shared";
+import type { ListOperatorRequestsResponse } from "@pwragent/shared/contracts/operator-requests";
+import {
+  operatorQuestionItemKey,
+  operatorTodoItemKey,
+  projectOperatorItemKey,
+} from "@pwragent/shared/contracts/operator-requests";
 import { FederatedOperatorRequestService } from "../federation/federation-operator-requests";
 import type { OperatorQuestionOperation } from "../federation/federation-operator-questions";
 

@@ -1,10 +1,9 @@
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import {
-  buildThreadIdentityKey,
   type AppServerThreadSummary,
-  type DesktopThreadArchivePolicy,
-  type ThreadOverlayState,
   type WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type DesktopThreadArchivePolicy } from "@pwragent/shared/thread-archive-policy";
 import { isProtectedArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 
 export type ThreadArchiveRetentionDeps = {

@@ -1,4 +1,5 @@
-import type { AppServerTurnInputItem, PwrAgentMessagingAttachmentSummary } from "@pwragent/shared";
+import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
+import type { PwrAgentMessagingAttachmentSummary } from "@pwragent/shared/contracts/messaging-tools";
 import { randomUUID } from "node:crypto";
 import type {
   MessagingAttachmentDescriptor,

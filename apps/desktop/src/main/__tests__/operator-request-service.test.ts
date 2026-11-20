@@ -1,21 +1,23 @@
 import fs from "node:fs";
 import { FederatedOperatorRequestService } from "../federation/federation-operator-requests";
-import { projectOperatorItemKey } from "@pwragent/shared";
+import { projectOperatorItemKey } from "@pwragent/shared/contracts/operator-requests";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
-  AgentEvent,
   AppServerBackendKind,
   AppServerPendingRequestNotification,
-  OperatorRequestsChangedEvent,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { OperatorRequestsChangedEvent } from "@pwragent/shared/contracts/operator-requests";
 import {
   codexAsyncQuestionItemId,
   formatCodexAsyncQuestionReply,
+} from "@pwragent/shared/codex-async-questions";
+import {
   operatorQuestionItemKey,
   operatorServerRequestItemKey,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/operator-requests";
 import {
   OperatorRequestService,
   type OperatorRequestRegistry,

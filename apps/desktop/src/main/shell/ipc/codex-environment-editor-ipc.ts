@@ -10,7 +10,7 @@ import type {
   ReadCodexEnvironmentDocumentResponse,
   SaveCodexEnvironmentDocumentRequest,
   SaveCodexEnvironmentDocumentResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/codex-environment-editor";
 import {
   listCodexEnvironmentFiles,
   readCodexEnvironmentFile,

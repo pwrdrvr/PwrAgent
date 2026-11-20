@@ -169,8 +169,8 @@ const fake = vi.hoisted(() => {
   };
 });
 
-// The shared module is real, loaded once across resetModules for each run.
-vi.mock("@pwragent/shared", async (importOriginal) => await importOriginal());
+// Reuse the real settings module across resetModules for each run.
+vi.mock("@pwragent/shared/contracts/settings", async (importOriginal) => await importOriginal());
 vi.mock("electron", () => ({
   app: { isPackaged: true, getVersion: () => "1.0.0" },
   autoUpdater: fake.native,

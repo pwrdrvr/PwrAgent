@@ -12,10 +12,14 @@ import {
   FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+} from "@pwragent/shared/contracts/forge-agent-tools";
+import {
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
+} from "@pwragent/shared/contracts/mcp-connections";
+import {
   type AppServerMcpElicitationRequestNotification,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 
 const openExternalUrl = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/open-external-url", () => ({ openExternalUrl }));

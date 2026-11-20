@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { AppServerTurnInputItem, MessagingCausalSourceRef } from "@pwragent/shared";
+import type {
+  AppServerTurnInputItem,
+  MessagingCausalSourceRef,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingBindingRecord, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
 

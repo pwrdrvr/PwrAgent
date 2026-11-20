@@ -1,4 +1,5 @@
-import type { NavigationThreadSummary, ThreadTodo, ThreadTodoMessageTarget } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadTodo, ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
 import { threadMachineFrom } from "../thread-search/thread-address";
 import type { ThreadTodoLocalMachine } from "./thread-todos-view";
 

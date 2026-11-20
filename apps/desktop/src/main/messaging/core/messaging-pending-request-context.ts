@@ -3,7 +3,10 @@ import type { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingAccessControl } from "./messaging-access-control";
 import type { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingDeliveryGuard, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliveryResult, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";

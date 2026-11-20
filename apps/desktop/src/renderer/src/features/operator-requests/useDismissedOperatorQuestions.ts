@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { OperatorQuestionThreadRequest } from "@pwragent/shared";
+import type { OperatorQuestionThreadRequest } from "@pwragent/shared/contracts/operator-requests";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const EMPTY: readonly string[] = [];

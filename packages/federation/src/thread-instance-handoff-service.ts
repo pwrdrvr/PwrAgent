@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult, ThreadHandoffExport, ThreadHandoffProgress, ThreadHandoffPrepareRequest, ThreadHandoffPrepareResult } from "@pwragent/shared";
+import type {
+  HandoffInstanceThreadRequest,
+  HandoffInstanceThreadResult,
+  ThreadHandoffExport,
+  ThreadHandoffProgress,
+  ThreadHandoffPrepareRequest,
+  ThreadHandoffPrepareResult,
+} from "@pwragent/shared/contracts/thread-instance-handoff";
 import type { createGitHandoffService, HandoffGitRunner } from "./git-instance-handoff";
 import type { FilePushResult, PushFederationFileOptions } from "./federation-file-push";
 import { decodeHandoffBytes, decodeThreadHandoff, encodeThreadHandoff, threadHistoryDigest, THREAD_HANDOFF_MAX_BYTES } from "./thread-handoff-package";

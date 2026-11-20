@@ -5,11 +5,11 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import { hasStoppableSubAgentRun } from "@pwragent/shared/subagent-kind";
 import {
-  hasStoppableSubAgentRun,
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useSubAgents } from "./useSubAgents";

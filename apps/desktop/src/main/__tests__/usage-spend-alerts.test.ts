@@ -1,8 +1,5 @@
-import type {
-  DesktopSpendAlertPolicy,
-  ThreadPricingSummary,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+import type { DesktopSpendAlertPolicy } from "@pwragent/shared/contracts/settings";
+import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { describe, expect, it } from "vitest";
 import {
   detectUsageSpendAlerts,

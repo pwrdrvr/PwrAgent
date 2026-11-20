@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FederationJumpSearchProgress, NavigationQueryRequest } from "@pwragent/shared";
+import type {
+  FederationJumpSearchProgress,
+  NavigationQueryRequest,
+} from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";

@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type {
-  DesktopManagedGitSnapshot,
-  ManagedGitActionRequest,
-} from "@pwragent/shared";
+import type { DesktopManagedGitSnapshot, ManagedGitActionRequest } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   ManagedRuntimeProgressStrip,

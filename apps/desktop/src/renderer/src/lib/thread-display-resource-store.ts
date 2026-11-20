@@ -1,5 +1,8 @@
-import type { AppServerReadThreadRequest, ThreadDisplayData } from "@pwragent/shared";
-import { THREAD_DISPLAY_MAX_PAGE_ROWS } from "@pwragent/shared";
+import type {
+  AppServerReadThreadRequest,
+  ThreadDisplayData,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { THREAD_DISPLAY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "./desktop-api";
 
 export type DisplayResourceState = { data?: ThreadDisplayData; loading?: boolean; error?: string };

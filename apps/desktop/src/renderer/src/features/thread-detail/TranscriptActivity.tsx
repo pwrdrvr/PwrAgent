@@ -1,14 +1,16 @@
 import { memo, useId, useState } from "react";
 import { useTranscriptActivityDetails } from "../../lib/useTranscriptActivityDetails";
-import { transcriptImageUnavailableReason } from "@pwragent/shared";
+import { transcriptImageUnavailableReason } from "@pwragent/shared/transcript-image-sources";
 import type {
   AppServerSkillSummary,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import { formatActivityText } from "./activity-path-display";

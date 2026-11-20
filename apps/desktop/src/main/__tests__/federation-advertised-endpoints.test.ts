@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FederationTailscaleStatus } from "@pwragent/shared";
+import type { FederationTailscaleStatus } from "@pwragent/shared/contracts/federation";
 import {
   buildFederationAdvertisedEndpoints,
   federationHostnameEndpointCandidate,

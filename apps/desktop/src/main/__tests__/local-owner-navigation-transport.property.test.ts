@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   FEDERATION_CAPABILITIES,
   FEDERATION_PROTOCOL_VERSION,
-  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type FederationRequestEnvelope,
+} from "@pwragent/shared/contracts/federation";
+import {
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationQueryPage,
   type NavigationQueryRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
 import type { OwnerNavigationRequest } from "../../shared/owner-request";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";

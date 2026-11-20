@@ -3,11 +3,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ManageThreadDependenciesRequest,
+  ThreadDependency,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationThreadSummary,
-  ThreadDependency,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { ContinueAfterDialog } from "../ContinueAfterDialog";

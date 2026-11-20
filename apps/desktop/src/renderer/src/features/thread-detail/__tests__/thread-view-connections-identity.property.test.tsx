@@ -2,7 +2,10 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { NavigationDirectorySummary, NavigationLaunchpadDraft } from "@pwragent/shared";
+import type {
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import { ThreadView, type ThreadViewProps } from "../ThreadView";

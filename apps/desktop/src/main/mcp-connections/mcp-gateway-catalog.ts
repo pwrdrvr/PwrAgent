@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Tool, Implementation, InitializeResult } from "@modelcontextprotocol/sdk/types.js";
 import { lazyModule } from "../lazy-module";
 import { mcpTypes } from "./mcp-sdk";
-import type { McpConnectionToolApproval } from "@pwragent/shared";
+import type { McpConnectionToolApproval } from "@pwragent/shared/contracts/mcp-connections";
 import type { McpSkillSummary } from "./mcp-skills-relay";
 
 export type McpGatewaySource = {

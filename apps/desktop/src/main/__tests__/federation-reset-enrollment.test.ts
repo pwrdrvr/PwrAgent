@@ -3,7 +3,7 @@
 // keep a dual-mode instance dialing the gateway it was just told to forget,
 // with no pinned keys left to satisfy it.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());

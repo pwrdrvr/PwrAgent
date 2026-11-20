@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AutomationRunStatus, AutomationRunTranscriptEvent, AutomationTriggerDefinition } from "@pwragent/shared";
+import type {
+  AutomationRunStatus,
+  AutomationRunTranscriptEvent,
+  AutomationTriggerDefinition,
+} from "@pwragent/shared/contracts/automations";
 import { mergeTranscriptEvents as sharedMerge } from "@pwragent/owner-core/automation-transcript-merge";
 import { AutomationStore as SharedStore } from "@pwragent/sqlite-storage/automation-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";

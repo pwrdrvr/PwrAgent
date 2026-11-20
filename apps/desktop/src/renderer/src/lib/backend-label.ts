@@ -1,4 +1,5 @@
-import type { AppServerBackendKind, BackendSummary } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 
 /**
  * Resolve the user-visible chip / dropdown label for a backend kind.

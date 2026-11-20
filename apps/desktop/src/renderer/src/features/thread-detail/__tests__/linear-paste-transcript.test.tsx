@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadMessageEntry } from "@pwragent/shared";
+import type { AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { TranscriptMessage } from "../TranscriptMessage";
 
 const IMAGE = `<linear-image quality="preview">${JSON.stringify({

@@ -1,4 +1,4 @@
-import type { ReadQueuedTurnResponse } from "@pwragent/shared";
+import type { ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import type { ComposerQueuedTurnSnapshot } from "./useComposerDraftStore";
 
 /** Convert only authoritative input. Display previews are never editable content. */

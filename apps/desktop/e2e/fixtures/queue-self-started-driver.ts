@@ -5,7 +5,7 @@ import path from "node:path";
 import { existsSync, readFileSync, watch } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { publishSelfStartedWakes } from "./self-started-wake-publication";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 
 import { CodexAppServerClient } from "../../src/main/codex-app-server/desktop-client";

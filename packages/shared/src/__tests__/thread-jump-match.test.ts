@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "../index";
+import type { NavigationThreadSummary, PrSummary } from "../contracts/navigation";
 import {
   parseThreadJumpQuery,
   rankThreadJumpMatches,

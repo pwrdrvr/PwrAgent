@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { PrActivitySnapshot, NavigationThreadSummary } from "@pwragent/shared";
+import type { PrActivitySnapshot } from "@pwragent/shared/contracts/pr-activity";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadLinkProvider } from "../../../../lib/thread-links";
 import { PrActivityPanel } from "../PrActivityPanel";
 

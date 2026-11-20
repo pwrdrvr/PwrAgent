@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   helperChoiceBackend,
   resolveHelperModel,
-  type AnalyzeUsageActivityResponse,
   type DesktopHelperModelSettings,
+} from "@pwragent/shared/helper-models";
+import {
+  type AnalyzeUsageActivityResponse,
   type UsageAnalysisModelBackend,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/usage-activity";
 import { Select } from "../../components/Select";
 import { usageClock, usageMoney } from "./usage-activity-presentation";
 import type { OwnedUsageRow, UsageGroup } from "./usage-activity-summary";

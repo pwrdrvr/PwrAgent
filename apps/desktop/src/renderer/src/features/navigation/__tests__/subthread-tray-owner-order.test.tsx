@@ -1,8 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryEntry,
+  NavigationQueryRequest,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { Sidebar } from "../Sidebar";

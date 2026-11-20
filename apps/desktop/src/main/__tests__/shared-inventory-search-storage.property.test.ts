@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ProviderThreadSnapshot } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { ThreadSearchProjectionSearchRequest } from "@pwragent/owner-core/thread-search-storage";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";

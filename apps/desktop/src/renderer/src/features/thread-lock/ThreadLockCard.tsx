@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { ThreadLock } from "@pwragent/shared";
+import type { ThreadLock } from "@pwragent/shared/contracts/navigation";
 import { LockIcon } from "../../icons";
 
 const LOCKED_AT_FORMAT = new Intl.DateTimeFormat(undefined, {

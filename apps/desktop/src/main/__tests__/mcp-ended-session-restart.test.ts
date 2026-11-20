@@ -1,4 +1,4 @@
-import type { McpConnectionKind } from "@pwragent/shared";
+import type { McpConnectionKind } from "@pwragent/shared/contracts/mcp-connections";
 import { describe, expect, it, vi } from "vitest";
 import { endedLocalSessionRestart } from "../mcp-connections/mcp-connection-gateway-service";
 

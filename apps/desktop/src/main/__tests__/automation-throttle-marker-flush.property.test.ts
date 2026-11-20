@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { AutomationRunSourceMetadata } from "@pwragent/shared";
+import type { AutomationRunSourceMetadata } from "@pwragent/shared/contracts/automations";
 import type { AutomationRunner } from "../automations/automation-runner";
 import {
   AutomationScheduler,

@@ -6,7 +6,7 @@ import {
   type DecisionsRailProvider,
   type DecisionsRailQuestion,
   type DecisionsRailSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/decisions-rail";
 import type { RailChipTone } from "./RailStatusChip";
 
 /** The Decisions tab's words and numbers. Pure, so the node test project covers it. */

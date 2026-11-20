@@ -1,20 +1,20 @@
 import type {
   AppServerBackendKind,
   AppServerNotification,
-  DesktopToolOutputAlertPolicy,
   ThreadToolInvocationAlert,
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { DesktopToolOutputAlertPolicy } from "@pwragent/shared/contracts/settings";
 import {
   buildThreadToolIncidentPrompt,
-  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   TOOL_OUTPUT_CAP_CHARS,
   TOOL_OUTPUT_TOKEN_CHAR_RATIO,
   TOOL_OUTPUT_WARNING_CHARS,
   toolOutputWarningChars,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import { DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
 import { redactCommandText } from "../util/redact-command-text";
 import { gatewayInvocationName } from "../mcp-connections/mcp-gateway-attribution";
 

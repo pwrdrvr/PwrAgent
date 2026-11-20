@@ -1,6 +1,11 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { buildThreadIdentityKey, isAcpBackendId, type AgentEvent, type AppServerBackendKind, type AppServerNotification } from "@pwragent/shared";
+import { buildThreadIdentityKey, isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import {
+  type AppServerBackendKind,
+  type AppServerNotification,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadNamingLifecycle, type ThreadNamingHost } from "../thread-naming-lifecycle";
 import type { OwnerThreadIdentity } from "../thread-storage";
 

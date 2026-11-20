@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
 import {
   buildManagedGrokBuildNotice,
   buildXaiGrokCliUpdateNotice,

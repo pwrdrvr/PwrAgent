@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type NavigationSnapshot, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { type NavigationSnapshot, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 
 async function advance() { for (let i = 0; i < 120; i++) await Promise.resolve(); }

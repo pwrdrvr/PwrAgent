@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { AgentEvent, TrustCodexProjectRequest } from "@pwragent/shared";
+import type { AgentEvent, TrustCodexProjectRequest } from "@pwragent/shared/contracts/agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CodexConfigWarningBanner } from "../CodexConfigWarningBanner";

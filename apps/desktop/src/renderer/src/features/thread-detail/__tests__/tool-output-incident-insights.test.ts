@@ -1,4 +1,4 @@
-import type { ThreadToolInvocationRecord } from "@pwragent/shared";
+import type { ThreadToolInvocationRecord } from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it } from "vitest";
 import {
   buildCategoryComposition,

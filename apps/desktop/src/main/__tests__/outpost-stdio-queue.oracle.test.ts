@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { buildProviderPickerEntries, canonicalDurableTurnRequest, type NavigationLaunchpadDraft, type SubmitDurableTurnRequest } from "@pwragent/shared";
+import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
+import { canonicalDurableTurnRequest } from "@pwragent/shared/durable-turn-request";
+import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
+import type { SubmitDurableTurnRequest } from "@pwragent/shared/contracts/durable-turn-requests";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostDaemon } from "./helpers/outpost-daemon";

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { formatFilesystemPath } from "@pwragent/shared";
+import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import type { SettingsChipTone } from "./SettingsLayout";
 
 export interface SettingsPathRowChip {

@@ -2,17 +2,16 @@ import { createPrWatchOwnerId } from "./pr-watch-owner";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
-  CausalMessagingContext,
   AppServerTurnInputItem,
-  PrSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { CausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type {
   PullRequestTerminalDetails,
   ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
-import {
-  buildPullRequestStatusKey,
-  describeMergeQueueRemoval,
-  mergeQueueNoun,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { describeMergeQueueRemoval, mergeQueueNoun } from "@pwragent/shared/pr-merge-queue";
 import type {
   PrStatusWatchStorage,
   PrStatusWatchClaim,

@@ -1,7 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
-import { isToolManagedWorktreePath } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildPwrAgentChildProcessEnv } from "../../child-process-env";
 import { getMainLogger } from "../../log";
 import { runGitCommand } from "../../app-server/git-executable";

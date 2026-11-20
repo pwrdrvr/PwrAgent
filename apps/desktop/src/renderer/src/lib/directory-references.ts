@@ -1,5 +1,9 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
-import { formatFilesystemPath, isReferenceableDirectory, isWindowsFilesystemPath, rankDirectoryMentionMatches } from "@pwragent/shared";
+import { formatFilesystemPath, isWindowsFilesystemPath } from "@pwragent/shared/path-display";
+import {
+  isReferenceableDirectory,
+  rankDirectoryMentionMatches,
+} from "@pwragent/shared/directory-mention-match";
 import { expandTildePath, getHomeDir, tildifyPath } from "./tildify-path";
 import { parseSkillMentionParts } from "./skill-mentions";
 

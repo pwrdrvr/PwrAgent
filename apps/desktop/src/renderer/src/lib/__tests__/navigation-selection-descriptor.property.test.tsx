@@ -1,7 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { expect, it } from "vitest";
 import fc from "fast-check";
-import type { AgentEvent, NavigationDirectoryRow, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationDirectoryRow,
+  NavigationQueryPage,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 

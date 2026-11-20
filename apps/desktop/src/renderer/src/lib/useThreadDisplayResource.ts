@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { NavigationThreadSummary, SubAgentLens, PricingGateSelection } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SubAgentLens } from "@pwragent/shared/subagent-kind";
+import type { PricingGateSelection } from "@pwragent/shared/thread-pricing-display";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { acquireThreadDisplayResource, type DisplayResourceState, type ThreadDisplayResourceStore } from "./thread-display-resource-store";

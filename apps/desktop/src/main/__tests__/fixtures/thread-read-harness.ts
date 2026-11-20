@@ -4,7 +4,7 @@ import type {
   AppServerBackendKind,
   AppServerNotification,
   AppServerThreadSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { DesktopBackendRegistry } from "../../app-server/backend-registry";
 import type { ThreadReadCounts } from "./thread-read-budget";
 

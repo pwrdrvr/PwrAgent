@@ -1,7 +1,7 @@
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import { CheckoutDirectoryOwners, candidateCheckoutDirectories } from "../app-server/thread-owned-checkouts";
 

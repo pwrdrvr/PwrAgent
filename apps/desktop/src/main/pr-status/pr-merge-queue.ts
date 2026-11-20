@@ -3,7 +3,7 @@ import type {
   PrMergeQueueRemovalReason,
   PrMergeQueueState,
   PrMergeQueueStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 
 /**
  * Reading a forge's merge queue (GitHub) or merge train (GitLab) into

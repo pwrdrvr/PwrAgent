@@ -1,4 +1,7 @@
-import { normalizeNavigationResumeState, type NavigationResumeState } from "@pwragent/shared";
+import {
+  normalizeNavigationResumeState,
+  type NavigationResumeState,
+} from "@pwragent/shared/navigation-resume-state";
 import { readRendererFederationTarget } from "./federation-window";
 
 export function readBridgedNavigationResumeState(): NavigationResumeState | undefined {

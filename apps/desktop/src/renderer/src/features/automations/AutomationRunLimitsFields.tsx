@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import {
   AUTOMATION_DAILY_RUN_LIMIT_OPTIONS,
   AUTOMATION_RUN_TIMEOUT_OPTIONS_MS,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/automations";
 import { Select } from "../../components/Select";
 
 /** The editor's value for an unset run timeout or daily run limit. */

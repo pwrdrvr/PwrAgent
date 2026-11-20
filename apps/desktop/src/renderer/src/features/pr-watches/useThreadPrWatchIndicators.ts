@@ -1,18 +1,16 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadPrAutoFixState, ThreadPrCiWatchMark } from "@pwragent/shared/contracts/thread-pr-watches";
 import type {
-  NavigationThreadSummary,
-  PrSummary,
-  ThreadPrAutoFixState,
-  ThreadPrCiWatchMark,
   ThreadPullRequestWatchEvent,
   ThreadPullRequestWatchSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-tools";
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   pullRequestMatchesRepositoryKey,
-  THREAD_PR_WATCH_CONTROL_CAPABILITY,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";

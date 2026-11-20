@@ -1,8 +1,17 @@
 import type { NavigationDiagnosticCause } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
-import type { FederationTarget, NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse,
-  NavigationLaunchpadConfigResponse, NavigationQueueProjection, ListScheduledThreadActionsResponse } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  NavigationIdentity,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigResponse,
+  NavigationQueueProjection,
+} from "@pwragent/shared/contracts/navigation";
+import type { ListScheduledThreadActionsResponse } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
+import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
 import { navigationQueryKey } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationQueryError } from "./navigation-query-store";
 

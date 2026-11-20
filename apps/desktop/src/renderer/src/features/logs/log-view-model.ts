@@ -1,7 +1,4 @@
-import type {
-  DesktopLogsContextLines,
-  DesktopLogsSearchMode,
-} from "@pwragent/shared";
+import type { DesktopLogsContextLines, DesktopLogsSearchMode } from "@pwragent/shared/contracts/settings";
 import type { AppLogEntry } from "../../../../shared/app-metadata";
 
 export const MAX_RENDERED_LOG_ENTRIES = 5000;

@@ -7,12 +7,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  AcpAgentSettingsEntry,
-  DesktopSettingsSecretName,
-  DesktopSettingsSnapshot,
-  ListAcpAgentSettingsRequest,
-} from "@pwragent/shared";
+import type { AcpAgentSettingsEntry, ListAcpAgentSettingsRequest } from "@pwragent/shared/contracts/backend";
+import type { DesktopSettingsSecretName, DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 import { slackCredentialProblem } from "../../messaging/slack-token-shape";

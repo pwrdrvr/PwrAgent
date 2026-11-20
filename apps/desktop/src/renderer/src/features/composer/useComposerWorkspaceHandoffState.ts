@@ -1,5 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { FederationTarget, HandoffThreadWorkspaceRequest, ThreadWorkspaceHandoffStrategy } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type {
+  HandoffThreadWorkspaceRequest,
+  ThreadWorkspaceHandoffStrategy,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";

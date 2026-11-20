@@ -1,13 +1,12 @@
 import { expect, it, vi } from "vitest";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import {
-  buildFederatedThreadRef,
   buildThreadIdentityKey,
-  federatedThreadIdentityKey,
-  findPeerCounterpartDirectory,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
-  type ProjectForgeAutomation,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
+import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
 import { appendViewerNavigationPins, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
@@ -51,7 +50,7 @@ it("reconciles saved active pins with owner lifecycle for both Attention rows an
   const queries = new NavigationQueryStore();
   const loadIndex = async () => appendViewerNavigationPins({ threads: [], directories: [] },
     await loadViewerNavigationPins(store, cache));
-  const read = (query: import("@pwragent/shared").NavigationQuery) => queries.readPage({ loadIndex,
+  const read = (query: import("@pwragent/shared/contracts/navigation").NavigationQuery) => queries.readPage({ loadIndex,
     scopeKey: "viewer", request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
   const assertCounts = async (active: number) => {
     const attention = await read({ kind: "lens", lens: "attention" });
@@ -227,7 +226,7 @@ it("groups a remote parent with its local child across checkout paths and resolv
   const viewer = appendViewerNavigationPins({ threads: [child], directories: [directory] }, [parent]);
   expect(viewer.directories).toHaveLength(1);
   expect(directory.threadKeys).toEqual(["codex:child-m4"]);
-  const project = (query: import("@pwragent/shared").NavigationQuery) => projectNavigationQuery({ index: viewer,
+  const project = (query: import("@pwragent/shared/contracts/navigation").NavigationQuery) => projectNavigationQuery({ index: viewer,
     request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
   const roots = project({ kind: "directory", directoryKey: directory.key });
   expect(roots.entries.map((entry) => entry.row.id)).toEqual(["parent-m5"]);
@@ -321,7 +320,7 @@ it.each(["complete", "checking"] as const)("keeps remote parentage global and di
     threadKeys: ["codex:parent"], needsAttentionCount: 0 };
   const viewer = appendViewerNavigationPins({ threads: [parent], directories: [directory] }, [child, otherParent, otherChild]);
   const index = { ...viewer, localInstanceId: "viewer", coverage: { state } };
-  const project = (query: import("@pwragent/shared").NavigationQuery) => projectNavigationQuery({ index,
+  const project = (query: import("@pwragent/shared/contracts/navigation").NavigationQuery) => projectNavigationQuery({ index,
     request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
   const roots = project({ kind: "directory", directoryKey: "repo" });
   expect(roots.entries.map(({ row }) => [row.ref.ownerInstanceId, row.id])).toEqual([[undefined, "parent"], ["other", "parent"]]);
@@ -406,7 +405,7 @@ it.each([
   for (const directories of [[collision, workspace], []]) {
     const viewer = appendViewerNavigationPins({ threads: [], directories }, [remote, { ...remote, id: "second",
       federation: { ...remote.federation!, ref: buildFederatedThreadRef({ backend: "codex", threadId: "second", instanceId: "other" }) } }]);
-    const project = (query: import("@pwragent/shared").NavigationQuery) => projectNavigationQuery({ index: viewer,
+    const project = (query: import("@pwragent/shared/contracts/navigation").NavigationQuery) => projectNavigationQuery({ index: viewer,
       request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
     const groups = project({ kind: "directory-index" }).directories;
     const workspaces = groups.filter((directory) => directory.kind === "workspace");
@@ -441,7 +440,7 @@ function ownerThread(id: string, path: string): NavigationThreadSummary {
 function ownerPinnedRows(params: {
   instanceId: string;
   threads: NavigationThreadSummary[];
-  directories: import("@pwragent/shared").NavigationDirectorySummary[];
+  directories: import("@pwragent/shared/contracts/navigation").NavigationDirectorySummary[];
 }): NavigationThreadSummary[] {
   const page = projectNavigationQuery({ index: { threads: params.threads, directories: params.directories },
     request: { protocol: 2, consumer: "main-sidebar", inventory: "owner", readReason: "pins",

@@ -1,14 +1,8 @@
 import { Fragment, useCallback, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import {
-  DESKTOP_UPDATE_CHANNELS,
-  DESKTOP_UPDATE_TRAINS,
-  releaseNotesUrl,
-} from "@pwragent/shared";
-import type {
-  DesktopUpdateChannel,
-  DesktopUpdateTrain,
-} from "@pwragent/shared";
+import { DESKTOP_UPDATE_CHANNELS, DESKTOP_UPDATE_TRAINS } from "@pwragent/shared/contracts/settings";
+import { releaseNotesUrl } from "@pwragent/shared/release-notes";
+import type { DesktopUpdateChannel, DesktopUpdateTrain } from "@pwragent/shared/contracts/settings";
 import type {
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,

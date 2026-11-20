@@ -1,4 +1,4 @@
-import type { AutomationRunOutputDecision } from "@pwragent/shared";
+import type { AutomationRunOutputDecision } from "@pwragent/shared/contracts/automations";
 
 export function parseAutomationOutputDecision(
   finalText: string | undefined,

@@ -2,12 +2,14 @@ import { app } from "electron";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
-  type AppServerBackendKind,
-  type AppServerThreadTitleSource,
-  type FederationRemoteTarget,
   type NavigationThreadSummary,
   type RemoteThreadPin,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
+import {
+  type AppServerBackendKind,
+  type AppServerThreadTitleSource,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   listRunningDetachedCommands,

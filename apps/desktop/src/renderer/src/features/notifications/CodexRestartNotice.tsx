@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CodexAppServerRestartStatus } from "@pwragent/shared";
+import type { CodexAppServerRestartStatus } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 

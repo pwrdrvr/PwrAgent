@@ -1,18 +1,20 @@
 import type {
   FederationRemoteTarget,
+  FederationCapability,
+  FederationPeerSummary,
+} from "@pwragent/shared/contracts/federation";
+import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationIdentity,
-  FederationCapability,
-  FederationPeerSummary,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/navigation";
 import {
   expandNavigationRemoteOwner,
-  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_REMOTE_OWNER_MAX_BYTES,
   navigationQueryPageBudgetBytes,
   navigationRemoteOwnerBytes,
-} from "@pwragent/shared";
+} from "@pwragent/shared/navigation-remote-owner";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryError } from "@pwragent/owner-core/navigation-query-store";
 
 /**

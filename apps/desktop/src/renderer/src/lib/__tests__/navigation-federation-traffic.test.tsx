@@ -1,7 +1,12 @@
 import { navigationRequestByteBudget } from "../../../../shared/__tests__/navigation-traffic-budget";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationIdentity, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type {
+  NavigationIdentity,
+  NavigationQueryPage,
+  NavigationRow,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { useThreadNavigation } from "../useThreadNavigation";

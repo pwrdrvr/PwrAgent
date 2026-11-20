@@ -1,14 +1,14 @@
 import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isFilePreviewPath } from "@pwragent/shared/file-preview";
+import { navigationWorkingStatePath } from "@pwragent/shared/navigation-query-events";
+import { transcriptFileReference } from "@pwragent/shared/transcript-file-reference";
+import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
-  isFilePreviewPath,
-  navigationWorkingStatePath,
-  transcriptFileReference,
-  type AppServerThreadSummary,
   type ResolveTranscriptFilesRequest,
   type ResolveTranscriptFilesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 export function transcriptThreadDirectories(thread: AppServerThreadSummary): string[] {
   return [...new Set([

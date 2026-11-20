@@ -2,19 +2,21 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   AppServerReviewFindingOutcome,
   AppServerThreadReviewEntry,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
   ListThreadReviewsRequest,
   RecordThreadReviewInput,
   ThreadReview,
   ThreadReviewIdentity,
   ThreadReviewResolution,
-  ThreadTodosChangedEvent,
   UpdateThreadReviewRequest,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodosChangedEvent } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_REVIEW_ITEM_STATUSES,
-  buildLegacyEncodedThreadIdentityKey,
   normalizeThreadReviewItemStatus,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
 import { normalizeReviewCategory, parseReviewOutputText, reviewEntryFailure, reviewEntryFindings } from "../../shared/review-output";
 

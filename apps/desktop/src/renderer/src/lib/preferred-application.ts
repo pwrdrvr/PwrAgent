@@ -1,7 +1,7 @@
 import type {
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 /**
  * Resolve the editor to use for "open in editor" affordances: the

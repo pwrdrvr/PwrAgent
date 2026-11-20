@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { transcriptFileReference } from "@pwragent/shared/transcript-file-reference";
 import {
-  transcriptFileReference,
   type MarkdownFileViewerContext,
   type ResolvedTranscriptFile,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   DesktopPwrAgentProfileSummary,
   ListDesktopPwrAgentProfilesResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "./desktop-api";
 
 export type PwrAgentProfilesState = {

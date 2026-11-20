@@ -1,7 +1,11 @@
 import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ListOperatorRequestsResponse, OperatorRequestsChangedEvent } from "@pwragent/shared";
-import { operatorQuestionItemKey, threadTodoThreadKey } from "@pwragent/shared";
+import type {
+  ListOperatorRequestsResponse,
+  OperatorRequestsChangedEvent,
+} from "@pwragent/shared/contracts/operator-requests";
+import { operatorQuestionItemKey } from "@pwragent/shared/contracts/operator-requests";
+import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodosPanel } from "../../thread-todos/ThreadTodosPanel";
 import type { ThreadTodosView } from "../../thread-todos/thread-todos-view";
 import { useOperatorRequests } from "../useOperatorRequests";

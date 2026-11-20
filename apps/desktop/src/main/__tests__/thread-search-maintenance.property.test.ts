@@ -1,7 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { AppServerBackendKind, AppServerThreadSummary } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerThreadSummary,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { StateDb } from "../state/state-db";
 import { ThreadSearchStore } from "../storage/thread-search-store";
 import { ThreadSearchService } from "../thread-search/thread-search-service";

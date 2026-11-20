@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import fc from "fast-check";
-import type { PwrAgentMessagingRequest } from "@pwragent/shared";
+import type { PwrAgentMessagingRequest } from "@pwragent/shared/contracts/messaging-tools";
 import { FederationMessagingAttachmentExports } from "../federation/federation-messaging-attachments";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import { MessagingOriginalAttachmentStore, ORIGINAL_ATTACHMENT_RETENTION_MS } from "../messaging/core/messaging-original-attachment-store";

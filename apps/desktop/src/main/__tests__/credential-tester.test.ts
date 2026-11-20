@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { CredentialTester } from "../credential-tester/credential-tester";
 import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
 

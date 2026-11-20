@@ -1,8 +1,25 @@
 import { type NewThreadOptionsSummary, type MessagingFullAccessControls } from "./messaging-callback-helpers";
-import { isThreadLockRefusal } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import { type MessagingLaunchpadDirectory, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
-import { buildFederatedThreadRef, buildThreadIdentityKey } from "@pwragent/shared";
-import type { AppServerBackendKind, CodexEnvironmentSetupProgressEvent, BackendAcpSessionRuntimeState, LinkedDirectorySummary, LaunchpadWorkMode, MaterializedDirectoryLaunchpadThread, NavigationLaunchpadDraft, NavigationLaunchpadConfiguration, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type {
+  AppServerBackendKind,
+  LinkedDirectorySummary,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  CodexEnvironmentSetupProgressEvent,
+  MaterializedDirectoryLaunchpadThread,
+} from "@pwragent/shared/contracts/agent";
+import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
+import type {
+  LaunchpadWorkMode,
+  NavigationLaunchpadDraft,
+  NavigationLaunchpadConfiguration,
+  NavigationThreadSummary,
+} from "@pwragent/shared/contracts/navigation";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingInboundEvent, MessagingAdapterState } from "@pwragent/messaging-interface";
 import { matchMessagingCommandVerb } from "./messaging-command-catalog.js";
 import { isNewAgentThreadLaunchAction, selectProjectFromValue } from "./messaging-resume-browser.js";

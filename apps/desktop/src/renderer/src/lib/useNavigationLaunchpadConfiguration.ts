@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FederationTarget, NavigationLaunchpadConfigResponse } from "@pwragent/shared";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { NavigationLaunchpadConfigResponse } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 
 type ConfigurationState = { key: string; value?: NavigationLaunchpadConfigResponse; error?: string; ready: boolean };

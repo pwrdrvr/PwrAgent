@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import {
   DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
   type DesktopContextMoonStyle,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/settings";
 
 /** Settings → Appearance → Context moon. Waxes to full where no provider is
  *  mounted. */

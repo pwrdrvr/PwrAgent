@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { DurableTurnReceipt } from "@pwragent/shared";
+import type { DurableTurnReceipt } from "@pwragent/shared/contracts/durable-turn-requests";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

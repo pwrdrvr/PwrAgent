@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { readNavigationArchiveGroup } from "../navigation-archive-group";
 

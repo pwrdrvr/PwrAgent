@@ -1,4 +1,4 @@
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { SettingsChipTone } from "./SettingsLayout";
 
 type ClaudeInstallation = BackendSummary["claude"];

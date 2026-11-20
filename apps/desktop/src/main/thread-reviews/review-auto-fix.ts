@@ -1,12 +1,14 @@
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
-  ReviewAfterAction,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { ReviewAfterAction } from "@pwragent/shared/contracts/agent";
+import type {
   ReviewAutoFixRun,
   ReviewAutoFixStatus,
   ThreadReview,
-} from "@pwragent/shared";
-import { threadReviewDisplayTitle } from "@pwragent/shared";
+} from "@pwragent/shared/contracts/thread-reviews";
+import { threadReviewDisplayTitle } from "@pwragent/shared/contracts/thread-reviews";
 import { autoFixReviewFindingsPrompt, orderReviewItems } from "../../shared/review-fix-prompts";
 
 export type ReviewAutoFixThread = { backend: AppServerBackendKind; threadId: string };

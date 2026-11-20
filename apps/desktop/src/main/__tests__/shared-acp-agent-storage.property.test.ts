@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { AcpAgentStore as SharedStore, type AcpInstalledAgentStorageRecord } from "@pwragent/sqlite-storage/acp-agent-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
-import type { AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import { AcpAgentStore as DesktopStore } from "../storage/acp-agent-store";
 import { createAcpAgentStorage } from "../storage/desktop-runtime-storage";
 import { AcpAgentService } from "../acp/acp-agent-service";

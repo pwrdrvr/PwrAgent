@@ -3,13 +3,13 @@ import type {
   PwrAgentAppOperationName,
   PwrAgentAppRequest,
   PwrAgentAppResponse,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/app-tools";
 import {
   PWRAGENT_APP_MANAGEMENT_ACTIONS,
   PWRAGENT_APP_OPERATION_NAMES,
-  PWRAGENT_TOOL_NAMESPACE,
   isPwrAgentUpdateVersion,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/app-tools";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,

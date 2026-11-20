@@ -2,7 +2,7 @@ import { SecretCiphertextError } from "../settings/secret-encryption-envelope";
 import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import type { CloudflareSignInStatus } from "@pwragent/shared";
+import type { CloudflareSignInStatus } from "@pwragent/shared/contracts/federation-cloudflare";
 import { isUnresolvedHost, unresolvedHostMessage } from "./cloudflare-dns";
 
 /**

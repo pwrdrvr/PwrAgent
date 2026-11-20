@@ -8,9 +8,13 @@ import { getDesktopOverlayStore } from "../../storage/desktop-overlay-store";
 import { readLocalNavigationDirectoryIndex } from "../../app-server/navigation-directory-index";
 import { getMainLogger } from "../../log";
 import { ipcMain } from "electron";
+import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  AppServerThreadMessageOrigin, FederationRemoteTarget, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot, ThreadTodosChangedEvent,
-} from "@pwragent/shared";
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
+  ThreadTodosChangedEvent,
+} from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_DELTA_EVENT_CHANNEL,

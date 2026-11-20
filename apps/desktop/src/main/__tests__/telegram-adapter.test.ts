@@ -9,12 +9,8 @@ import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import type {
-  AgentEvent,
-  InterruptTurnRequest,
-  NavigationSnapshot,
-  StartTurnRequest,
-} from "@pwragent/shared";
+import type { AgentEvent, InterruptTurnRequest, StartTurnRequest } from "@pwragent/shared/contracts/agent";
+import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import { TelegramAdapter } from "@pwragent/messaging-provider-telegram";
 import type {
   TelegramBotApi,

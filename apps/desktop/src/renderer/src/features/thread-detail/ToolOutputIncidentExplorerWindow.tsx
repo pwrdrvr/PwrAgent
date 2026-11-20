@@ -10,8 +10,6 @@ import {
 } from "react";
 import type {
   AppServerBackendKind,
-  FederationInstanceId,
-  FederationTarget,
   AppServerReadThreadResponse,
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
@@ -19,17 +17,20 @@ import type {
   ThreadCompactionRecord,
   ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
-  ThreadUsageLineRecord,
-  ToolOutputIncidentExplorerLens,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { FederationInstanceId, FederationTarget } from "@pwragent/shared/contracts/federation";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import type { ToolOutputIncidentExplorerLens } from "@pwragent/shared/contracts/tool-output-incidents";
 import {
   buildPricingDisplayLines,
   buildPricingDisplaySummary,
+} from "@pwragent/shared/thread-pricing-display";
+import {
   buildThreadToolIncidentPrompt,
-  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isFlaggedToolInvocation,
   toolOutputWarningChars,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/tool-output-incidents";
+import { DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { useDesktopSettings } from "../settings/useDesktopSettings";

@@ -12,14 +12,14 @@ import {
   type SandboxerAccountSummary,
   type SandboxerCliState,
   type SandboxerLinkTarget,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 
 export {
   SANDBOXER_CLI_PATH,
   SANDBOXER_LINKS,
   SANDBOXER_MCP_ARGS,
   SANDBOXER_SETUP_COMMAND,
-} from "@pwragent/shared";
+} from "@pwragent/shared/contracts/mcp-connections";
 import { mcpClientStdio } from "./mcp-sdk";
 
 type CliStatus = Pick<

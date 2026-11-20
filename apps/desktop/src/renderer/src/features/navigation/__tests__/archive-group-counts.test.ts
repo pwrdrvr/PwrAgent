@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import type { NavigationPresentedThread } from "../../../lib/navigation-loaded-rows";
 import { countArchiveGroup } from "../archive-group-counts";

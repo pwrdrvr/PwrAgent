@@ -1,10 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  DesktopTaskMonitorModelChoice,
-} from "@pwragent/shared";
+import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { DesktopTaskMonitorModelChoice } from "@pwragent/shared/helper-models";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { selectSections } from "../../../test/model-catalog";
 import { TaskMonitorModelSettings } from "../TaskMonitorModelSettings";

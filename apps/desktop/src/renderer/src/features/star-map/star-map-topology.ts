@@ -1,4 +1,4 @@
-import type { FederationInstanceRole, FederationPeerSummary } from "@pwragent/shared";
+import type { FederationInstanceRole, FederationPeerSummary } from "@pwragent/shared/contracts/federation";
 
 export type StarMapTopologyNode = {
   instanceId: string;
