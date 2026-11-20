@@ -2,6 +2,7 @@ import { findThreadForBinding } from "./messaging-callback-helpers";
 import { type ActiveAgentMessagingOrigin } from "./messaging-backend-event-helpers";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isVisibleStreamOutcome } from "./messaging-reply-receipts";
 import type { AppServerBackendKind, FederatedThreadRef, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingResponse, NavigationThreadSummary } from "@pwragent/shared";
 import type { MessagingBindingRecord, MessagingChannelRef, MessagingDeliveryResult, MessagingInboundEvent, MessagingImagePart, MessagingPrivateReplySource } from "@pwragent/messaging-interface";
 import { type MessagingNavigationContext } from "./messaging-thread-state.js";
@@ -252,10 +253,5 @@ export function managedConversationUnavailableMessage(
 }
 
 export function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): boolean {
-  return (
-    result.outcome === "presented" ||
-    result.outcome === "presented_new" ||
-    result.outcome === "updated" ||
-    result.outcome === "pinned"
-  );
+  return isVisibleStreamOutcome(result.outcome);
 }

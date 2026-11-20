@@ -75,6 +75,47 @@ export function isAcceptedDeliveryOutcome(
   return ACCEPTED_OUTCOMES.has(outcome);
 }
 
+/** Outcomes that leave a streamed message showing the update. */
+const VISIBLE_STREAM_OUTCOMES = new Set<MessagingDeliveryResult["outcome"]>([
+  "presented",
+  "presented_new",
+  "updated",
+  "pinned",
+]);
+
+export function isVisibleStreamOutcome(
+  outcome: MessagingDeliveryResult["outcome"],
+): boolean {
+  return VISIBLE_STREAM_OUTCOMES.has(outcome);
+}
+
+export type ReplyReceiptSettlement =
+  | { state: "sent" }
+  | { state: "owed"; reason: "rate-limited" | "stream-declined" }
+  | { state: "unknown"; reason: "send-failed" };
+
+/**
+ * How a provider's answer settles a receipt. Only a retryable rate limit, or
+ * a final stream edit the provider declined without an error, proves nothing
+ * visible was posted; every other unaccepted answer is ambiguous.
+ *
+ * A final stream edit counts as sent only when the message shows it. One the
+ * provider declined (streaming off, or nothing to edit) is owed, so the full
+ * text goes out as a new message, now or on the next adapter start.
+ */
+export function replyReceiptSettlement(
+  intentKind: string,
+  result: Pick<MessagingDeliveryResult, "outcome" | "rateLimit">,
+): ReplyReceiptSettlement {
+  const stream = intentKind === "stream_update";
+  if (stream ? isVisibleStreamOutcome(result.outcome) : isAcceptedDeliveryOutcome(result.outcome)) {
+    return { state: "sent" };
+  }
+  if (result.rateLimit?.retryable === true) return { state: "owed", reason: "rate-limited" };
+  if (stream && result.outcome !== "failed") return { state: "owed", reason: "stream-declined" };
+  return { state: "unknown", reason: "send-failed" };
+}
+
 export type OpenReplyReceiptDecision =
   | { action: "skip" }
   | { action: "resend" }

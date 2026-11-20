@@ -397,6 +397,7 @@ export class MessagingController {
         responseAttributionForBinding: (...args) => this.responseAttributionForBinding(...args),
         newIntentId: (...args) => this.newIntentId(...args),
         deliver: (...args) => this.deliver(...args),
+        keepsReplyReceipts: () => Boolean(this.options.store.settleDelivery),
         dismissTerminalPrivateResponseSurface: (...args) => this.dismissTerminalPrivateResponseSurface(...args),
       },
     });

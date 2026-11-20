@@ -33,7 +33,7 @@ import type {
 } from "./messaging-migrations";
 import {
   claimReplyReceipt,
-  isAcceptedDeliveryOutcome,
+  replyReceiptSettlement,
   openReplyReceiptId,
   openReplyReceiptRecord,
   releaseReplyReceipt,
@@ -644,10 +644,11 @@ export class MessagingOutboundDelivery {
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
         if (receipt) {
+          const sent = replyReceiptSettlement(routedIntent.kind, result).state === "sent";
           await this.settleReceipt(
             receipt,
-            isAcceptedDeliveryOutcome(result.outcome) ? "sent" : "withdrawn",
-            isAcceptedDeliveryOutcome(result.outcome) ? undefined : "cancelled",
+            sent ? "sent" : "withdrawn",
+            sent ? undefined : "cancelled",
             result,
           );
         }
@@ -685,14 +686,13 @@ export class MessagingOutboundDelivery {
       if (receipt) {
         // The settle replaces the delivery row every send writes, so a
         // receipt costs one commit more than an unmarked send: the marker.
-        // Only a retryable rate limit proves nothing visible was posted; a
-        // non-retryable one may follow a partly sent message.
-        if (result.rateLimit?.retryable === true && !isAcceptedDeliveryOutcome(result.outcome)) {
-          await this.settleReceipt(receipt, "owed", "rate-limited");
-        } else if (isAcceptedDeliveryOutcome(result.outcome)) {
+        const settlement = replyReceiptSettlement(routedIntent.kind, result);
+        if (settlement.state === "owed") {
+          await this.settleReceipt(receipt, "owed", settlement.reason);
+        } else if (settlement.state === "sent") {
           await this.settleReceipt(receipt, "sent", undefined, result);
         } else {
-          await this.settleReceipt(receipt, "unknown", "send-failed", result);
+          await this.settleReceipt(receipt, "unknown", settlement.reason, result);
         }
       } else {
         await this.options.store.recordDelivery({
