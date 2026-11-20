@@ -31,7 +31,7 @@
     "check:main-bytecode": "node ./scripts/build-main-bytecode.mjs",
     "check:renderer-bytecode": "node ./scripts/check-renderer-bytecode.mjs",
     "lint:eslint": "pnpm lint:oxlint && pnpm lint:oxlint:typed",
-    "lint:eslint:cached": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/**/*.{ts,tsx}\" \"*.ts\" --cache --cache-strategy content --cache-location .eslintcache-untyped",
+    "lint:eslint:cached": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/**/*.{ts,tsx}\" \"*.{ts,mts}\" --cache --cache-strategy content --cache-location .eslintcache-untyped",
     "lint:eslint:typed": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/src/**/*.{ts,tsx}\" --config eslint.typed.config.mjs --no-inline-config --report-unused-disable-directives-severity off",
     "lint:sql": "node ./scripts/lint-sql-templates.mjs",
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
