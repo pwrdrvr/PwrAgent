@@ -1690,7 +1690,7 @@ describe("TelegramAdapter", () => {
 
     expect(api.deleteWebhook).toHaveBeenCalledWith({
       drop_pending_updates: false,
-    });
+    }, expect.any(AbortSignal));
   });
 
   it("clears Telegram webhook on startup even when webhook info is empty", async () => {
@@ -1710,7 +1710,7 @@ describe("TelegramAdapter", () => {
 
     expect(api.deleteWebhook).toHaveBeenCalledWith({
       drop_pending_updates: false,
-    });
+    }, expect.any(AbortSignal));
   });
 
   it("registers PwrAgent bot commands on startup", async () => {
@@ -1770,7 +1770,7 @@ describe("TelegramAdapter", () => {
           description: "Show available PwrAgent commands",
         },
       ],
-    });
+    }, expect.any(AbortSignal));
   });
 
   it("logs safe token diagnostics before Telegram startup", async () => {
@@ -1832,7 +1832,7 @@ describe("TelegramAdapter", () => {
       pollOnStart: false,
     });
 
-    await expect(adapter.start(async () => {})).rejects.toBe(httpError);
+    await expect(adapter.start(async () => {})).rejects.toThrow(httpError.message);
 
     expect(logger.warn).toHaveBeenCalledWith("telegram getWebhookInfo failed", {
       error: "Network request for 'getWebhookInfo' failed!",

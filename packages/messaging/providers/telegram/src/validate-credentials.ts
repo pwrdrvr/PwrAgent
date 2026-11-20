@@ -4,6 +4,7 @@ import {
   type MessagingCredentialValidationResult,
   type TelegramCredentialValidationConfig,
 } from "@pwragent/messaging-interface";
+import { scrubBotToken } from "./telegram-error.ts";
 
 /**
  * Smoke-check the configured Telegram bot token by calling the Bot API
@@ -77,17 +78,4 @@ function formatAccount(me: {
   if (me.first_name) return me.first_name;
   if (typeof me.id === "number") return `Bot #${me.id}`;
   return "Telegram bot";
-}
-
-/**
- * Strip `/bot<token>` URL fragments from an arbitrary error message
- * so a network-layer failure can't surface the bot token to the
- * renderer or logs. The replacement preserves the surrounding URL
- * shape (`/bot<redacted>/getMe`) so the message stays diagnostically
- * useful.
- *
- * Exported for direct testing — not part of the public package API.
- */
-export function scrubBotToken(message: string): string {
-  return message.replace(/\/bot[^/\s]+/g, "/bot<redacted>");
 }
