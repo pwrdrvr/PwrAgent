@@ -52,8 +52,8 @@ build without this setting ignores the key and uses the home folder.
 
 `git worktree prune`, and `git gc` after `gc.worktreePruneExpire`, delete the Git records of a worktree
 whose folder is missing; the checkout is then no longer a working tree. An unplugged drive looks
-exactly like that. So every worktree PwrAgent creates or restores on a different volume from its
-repository is locked with `PWRAGENT_WORKTREE_LOCK_REASON` (`src/main/app-server/worktree-volume-lock.ts`),
+exactly like that. So every worktree PwrAgent creates or restores on a drive that can go away while its
+repository stays is locked with `PWRAGENT_WORKTREE_LOCK_REASON` (`src/main/app-server/worktree-volume-lock.ts`),
 as Git's documentation advises for removable media.
 
 - Create and remove worktrees only with `addManagedWorktree` and `removeManagedWorktree`
@@ -61,16 +61,18 @@ as Git's documentation advises for removable media.
   Windows process ownership stay with the caller (`removeGit` runs the remove alone when it needs
   options the unlock must not get). `managed-worktree-guard.test.ts` fails on a raw `git worktree`
   add, remove, lock, or unlock anywhere else in the main process.
-- The add locks the new worktree when its volume differs from the repository's (`stat().dev`), and
-  never fails creation over the lock.
+- The add locks the new worktree only when `needsDriveLock` holds: its volume (`stat().dev`) differs from
+  both the repository's and the home folder's. A prune runs in the repository, so a worktree on the
+  repository's drive never looks missing, and the home folder's drive is always mounted. So a worktree in
+  `$CODEX_HOME/worktrees` for a repository on an external drive stays unlocked, and Codex Desktop and plain
+  `git worktree remove` keep working on it. The add never fails creation over the lock.
 - The remove clears only PwrAgent's own lock, so a lock someone else set still stops the removal. It
   reads only this worktree's `locked` file (never `git worktree list`, which would make archiving a fleet
   quadratic), or, when the checkout folder may be gone, the `lock` record the caller passes.
 - Every check that treats a lock as a hold must ask `readWorktreeLockHolder` and refuse only on
   `other`: archive admission (`checkArchiveRegistration`) and hibernation (`inspectHibernationWorkspace`).
   Treating PwrAgent's own drive lock as a hold makes every worktree on another drive impossible to
-  archive or hibernate. Windows CI catches this because its fixture repositories are on `D:` while
-  worktrees are under the home folder on `C:`; macOS and Linux runners keep both on one volume.
+  archive or hibernate.
 - A thread handed in from another instance is created by `packages/federation`, which cannot import
   desktop code. The desktop wrapper in `src/main/federation/thread-instance-handoff-service.ts` calls
   `lockExternallyAddedWorktree` after the import and `unlockBeforeExternalRemoval` before its rollback.
