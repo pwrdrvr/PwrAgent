@@ -1495,12 +1495,12 @@ jobs:
       pull-requests: read
     timeout-minutes: 10
     outputs:
-      unit_mode: ${{ steps.plan.outputs.unit_mode }}
-      e2e_mode: ${{ steps.plan.outputs.e2e_mode }}
-      unit_linux_lanes: ${{ steps.plan.outputs.unit_linux_lanes }}
-      unit_windows_main_lanes: ${{ steps.plan.outputs.unit_windows_main_lanes }}
-      unit_windows_renderer_lanes: ${{ steps.plan.outputs.unit_windows_renderer_lanes }}
-      e2e_lanes: ${{ steps.plan.outputs.e2e_lanes }}
+      unit_mode: ${{ steps.lanes.outputs.unit_mode }}
+      e2e_mode: ${{ steps.lanes.outputs.e2e_mode }}
+      unit_linux_lanes: ${{ steps.lanes.outputs.unit_linux_lanes }}
+      unit_windows_main_lanes: ${{ steps.lanes.outputs.unit_windows_main_lanes }}
+      unit_windows_renderer_lanes: ${{ steps.lanes.outputs.unit_windows_renderer_lanes }}
+      e2e_lanes: ${{ steps.lanes.outputs.e2e_lanes }}
     steps:
       - name: Checkout the tested merge revision
         uses: actions/checkout@v7
@@ -1533,17 +1533,21 @@ jobs:
           node-version: "^24.22.1"
 
       - name: Plan the affected tests
-        id: plan
         run: node scripts/ci/write-pr-test-impact.mjs
 
       - name: Upload plan
         uses: actions/upload-artifact@v7
         with:
           # "Re-run failed jobs" keeps this job's result, so the lanes of a
-          # later attempt read the same artifact.
+          # later attempt read the same artifact for as long as it is kept.
           name: pr-test-impact-plan
           path: .local/ci/pr-test-impact/plan.json
           include-hidden-files: true
           if-no-files-found: error
           overwrite: true
-          retention-days: 7
+
+      # After the upload: a lane narrows only when the plan is there to
+      # download. If this job fails earlier, the lanes run the full suite.
+      - name: Publish the lanes
+        id: lanes
+        run: cat .local/ci/pr-test-impact/outputs >> "$GITHUB_OUTPUT"

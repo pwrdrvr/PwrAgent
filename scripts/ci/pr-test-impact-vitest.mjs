@@ -3,7 +3,7 @@ import { isBuiltin } from "node:module";
 import path from "node:path";
 import ts from "typescript";
 import { createVitest } from "vitest/node";
-import { testSidePath } from "./pr-test-impact.mjs";
+import { namesFile, testSidePath } from "./pr-test-impact.mjs";
 
 const codeFile = /\.[cm]?[jt]sx?$/;
 // A test that lists directories can read a file that no module imports.
@@ -13,7 +13,7 @@ const enumeratesFiles = /readdirSync|readdir\(|opendir|globSync|fast-glob|tinygl
 const computedLoader = /\bimport\s*\(\s*(?:[^"'`\s)]|`[^`]*\$\{)|\brequire\s*\(\s*(?:[^"'`\s)]|`[^`]*\$\{)|createRequire/;
 // A bundler, a worker or a TypeScript loader runs source that the Vitest
 // graph never links to the test that started it.
-const bundlesSource = /from "(?:esbuild|vite|rollup|rolldown)"/;
+const bundlesSource = /(?:\bfrom\s*|\bimport\(\s*|\brequire\(\s*)["'](?:esbuild|vite|electron-vite|rollup|rolldown)["']/;
 const loadsSource = /\bnew Worker\(|["'`]tsx["'`/]|--experimental-(?:strip|transform)-types/;
 const e2eDirectory = "apps/desktop/e2e/";
 const extensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -166,7 +166,8 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
     };
 
     const select = async (changes) => {
-      if (!specs.length || new Set(specs.map(keyOf)).size !== specs.length) {
+      // A file that two projects collect would need a selection per project.
+      if (!specs.length || new Set(specs.map(fileOf)).size !== specs.length) {
         return { mode: "full", reason: "missing or ambiguous Vitest test inventory" };
       }
       const present = changes.filter(({ status }) => status !== "D");
@@ -180,13 +181,10 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
       const { edges, importers, text } = loaded;
       const specFiles = new Map(specs.map((spec) => [fileOf(spec), spec]));
       const specsAmong = (files) => [...files].filter((file) => specFiles.has(file));
-      // Files that name a changed file in a string: by basename for data,
-      // and by module path for code, where `index` is named by its directory.
+      // Files that name a changed file in a string.
       const literalOwners = (file, loadersOnly = false) => {
-        const stem = path.posix.basename(file).replace(codeFile, "");
-        const needle = !codeFile.test(file) ? path.posix.basename(file)
-          : stem === "index" ? `/${path.posix.basename(path.posix.dirname(file))}` : `/${stem}`;
-        return [...edges.keys()].filter((candidate) => candidate !== file && text(candidate).includes(needle)
+        const named = namesFile(file);
+        return [...edges.keys()].filter((candidate) => candidate !== file && named(text(candidate))
           && (!loadersOnly || computedLoader.test(text(candidate))));
       };
 
@@ -249,8 +247,7 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
         if (!explained.has(file)) add(file, { reason: "Vitest related input" });
       }
       const product = changes.some(({ status, file }) => !testSidePath.test(file) && !specFiles.has(file)
-        && !file.startsWith(e2eDirectory)
-        && (edges.has(file) || codeFile.test(file) && (status === "D" || !isTypeOnly(root, file))));
+        && !file.startsWith(e2eDirectory) && (status === "D" || !isTypeOnly(root, file)));
       for (const file of edges.keys()) {
         const testSide = testSidePath.test(file) || specFiles.has(file);
         const reason = testSide && enumeratesFiles.test(text(file)) ? "always run: enumerates files"

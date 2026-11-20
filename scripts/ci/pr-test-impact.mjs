@@ -81,8 +81,8 @@ export function wholeSuiteReason(files) {
   for (const { status, file } of files) {
     if (status !== "A" && status !== "M" && status !== "D") return "type change or unsupported Git status";
     if (file === "pnpm-lock.yaml" || file === "pnpm-workspace.yaml" || /(?:^|\/)package\.json$/.test(file)
-      || file.startsWith("patches/")) return "dependency metadata or patch";
-    if (/^\.github\/|^scripts\/ci\/|(?:^|\/)(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
+      || /^\.(?:npmrc|nvmrc|pnpmfile\.cjs)$/.test(file) || file.startsWith("patches/")) return "dependency metadata or patch";
+    if (/^\.github\/|^scripts\/ci\/|(?:^|\/)(?:electron\.)?(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
       return "CI or test/build configuration";
     }
     if (/^apps\/desktop\/(?:native|build)\/|^apps\/desktop\/scripts\/(?:macos-|assemble-mac-|app-icon)|\.swift$|^apps\/desktop\/e2e\/(?:macos-|windows-|visual-regression\.spec\.ts|onboarding-wizard\.spec\.ts|fixtures\/detached-profile-instances\.ts)/.test(file)) {
@@ -90,6 +90,24 @@ export function wholeSuiteReason(files) {
     }
   }
   return undefined;
+}
+
+/**
+ * Whether a text names a file in a string: a data file by its basename, a
+ * module by its path without extension or by its basename, and an `index`
+ * module by its directory.
+ */
+export function namesFile(file) {
+  const base = path.posix.basename(file);
+  const stem = base.replace(codeFile, "");
+  if (stem === base) return (text) => text.includes(base);
+  if (stem === "index") {
+    const directory = `/${path.posix.basename(path.posix.dirname(file))}`;
+    return (text) => text.includes(directory);
+  }
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const named = new RegExp(`/${escape(stem)}|(?<![\\w.-])${escape(base)}`);
+  return (text) => named.test(text);
 }
 
 /**
@@ -105,21 +123,16 @@ export function harnessReferences(root = process.cwd(), config = "apps/desktop/p
     texts.set(file, readFileSync(path.join(root, file), "utf8"));
   }
   const configText = readFileSync(path.join(root, config), "utf8");
-  // A module is named by its path without extension, `index` by its directory.
-  const needle = (file) => {
-    const stem = path.posix.basename(file).replace(codeFile, "");
-    return `/${stem === "index" ? path.posix.basename(path.posix.dirname(file)) : stem}`;
-  };
   return (changed) => {
     const seen = new Set([changed]);
     const queue = [changed];
     const specs = new Set();
     let suite = false;
     while (queue.length) {
-      const name = needle(queue.pop());
-      if (configText.includes(name)) suite = true;
+      const named = namesFile(queue.pop());
+      if (named(configText)) suite = true;
       for (const [file, text] of texts) {
-        if (seen.has(file) || !text.includes(name)) continue;
+        if (seen.has(file) || !named(text)) continue;
         seen.add(file);
         if (/(?:^|\/)global-(?:setup|teardown)\./.test(file)) suite = true;
         else if (e2eSpec.test(file)) specs.add(file);
@@ -152,6 +165,8 @@ export async function planE2e(changes, { inventory, affected, testOnly = () => f
     }
     const { specs, suite } = harness(file);
     if (suite) return full("Playwright suite setup or configuration input", file);
+    // Nothing names this harness file, so nothing says which specs load it.
+    if (inside && !specs.length) return full("Playwright harness file has no spec owner", file);
     specs.forEach((spec) => select(spec, "names a changed file"));
   }
   let files;
@@ -163,6 +178,9 @@ export async function planE2e(changes, { inventory, affected, testOnly = () => f
   }
   const missing = [...reasons.keys()].find((file) => !files.includes(file));
   if (missing) return full("edited spec is absent from Playwright collection", missing);
+  // One lane runs a narrowed plan. A wider selection needs the full suite's
+  // four balanced lanes.
+  if (reasons.size > Math.ceil(files.length / 4)) return full("selection is wider than one Playwright lane");
   return {
     mode: "selected",
     total: files.length,

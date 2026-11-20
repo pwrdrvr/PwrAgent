@@ -63,9 +63,9 @@ const outputs = {
   unit_windows_renderer_lanes: JSON.stringify(lanes["windows-renderer"]),
   e2e_lanes: JSON.stringify(lanes.e2e),
 };
-if (process.env.GITHUB_OUTPUT) {
-  appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
-}
+// The job publishes these after it uploads the plan, so that a lane narrows
+// only when the plan is there to download.
+writeFileSync(`${directory}/outputs`, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${[
     "### Test plan for this pull request",

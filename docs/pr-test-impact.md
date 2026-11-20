@@ -57,9 +57,10 @@ affects. It follows static imports and literal dynamic imports, honors
 or environment reaches the change. The plan adds four rules.
 
 - **String references.** A changed file with no import edge selects the tests
-  that reach a module naming it: by basename for data such as a budget JSON,
-  and by module path for code. A changed module also selects the tests behind
-  any file that names it and contains a computed `import()` or `require()`.
+  that reach a module naming it: by basename, such as a budget JSON or a
+  script that a test spawns, and for code also by module path. A changed
+  module also selects the tests behind any file that names it and contains a
+  computed `import()` or `require()`.
 - **Type-only modules.** A module that emits no JavaScript has no runtime
   edge and selects nothing. Typecheck still covers it in `Lint`.
 - **Always-run tests.** A test, or test helper, that lists directories can
@@ -80,7 +81,8 @@ deleted `name.ts`, an `index` file, or a `__mocks__` entry).
 
 The full suite runs for:
 
-- dependency metadata, patches, CI, and test or build configuration;
+- dependency metadata, package-manager configuration, patches, CI, and test
+  or build configuration;
 - native or platform-only inputs;
 - a changed file that contains a computed import or `createRequire`;
 - an unresolved static import or a transform error anywhere in the graph;
@@ -106,8 +108,10 @@ narrows to:
 
 A unit-test input narrows only when everything that imports it, through any
 chain, is itself a test input. Global setup and teardown, any helper that the
-Playwright config names, a deleted harness file, and a non-module input such
-as an image or recorded fixture select the full suite.
+Playwright config names, a deleted harness file, a harness file that no file
+names, and a non-module input such as an image or recorded fixture select the
+full suite. So does a selection of more than a quarter of the specs, because
+one lane runs a narrowed plan.
 
 ## Known blind spots
 

@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { getPrDiff, listE2eFiles, planImpact, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { getPrDiff, harnessReferences, listE2eFiles, planImpact, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const source = "packages/shared/src/";
@@ -104,6 +104,9 @@ it("keeps the full suite for configuration, dependency and platform inputs, and 
     { file: "packages/shared/package.json", status: "M" },
     { file: "vitest.workspace.mts", status: "M" },
     { file: "apps/desktop/playwright.config.ts", status: "M" },
+    { file: "apps/desktop/electron.vite.config.ts", status: "M" },
+    { file: ".pnpmfile.cjs", status: "M" },
+    { file: ".nvmrc", status: "M" },
     { file: "apps/desktop/native/osx/example.swift", status: "M" },
     { file: "apps/desktop/e2e/windows-example.spec.ts", status: "M" },
     { file: ".github/workflows/ci.yml", status: "M" },
@@ -131,6 +134,16 @@ it("keeps the full suite for configuration, dependency and platform inputs, and 
   // A spec can bundle or spawn a helper that it never imports.
   expect((await planImpact(changes(helper), referenced(false))).e2e.selected)
     .toEqual([{ file: spec, reasons: ["names a changed file"] }]);
+  // Nothing says which specs load a harness file that no file names.
+  expect((await planImpact(changes(helper), { unit, e2e: { ...e2e, affected: () => [] } })).e2e)
+    .toEqual({ mode: "full", reason: "Playwright harness file has no spec owner", file: helper });
+  // One lane runs a narrowed plan, so it holds at most a quarter of the specs.
+  const specs = Array.from({ length: 8 }, (_, index) => `apps/desktop/e2e/spec-${index}.spec.ts`);
+  const wide = async (count) => (await planImpact(changes(helper), {
+    unit, e2e: { ...e2e, inventory: () => specs, affected: () => specs.slice(0, count), harness: () => ({ specs: [specs[0]], suite: false }) },
+  })).e2e;
+  expect((await wide(2)).selected).toHaveLength(2);
+  expect(await wide(3)).toMatchObject({ mode: "full", reason: "selection is wider than one Playwright lane" });
 
   const edited = await planImpact(changes(spec, "docs/notes.md"), {
     unit, e2e: { ...e2e, inventory: () => [spec, "apps/desktop/e2e/unrelated.spec.ts"] },
@@ -267,6 +280,12 @@ it("keeps tests that list files or run source outside the graph, and ignores typ
     write(file("bundle.mjs"), 'import { build } from "esbuild"; export default build;');
     write(file("bundled.test.mjs"), 'import bundle from "./bundle.mjs"; export default bundle;');
     write(file("worker.test.mjs"), 'import { Worker } from "node:worker_threads"; export default () => new Worker("./b.mjs");');
+    write(file("lazy-bundle.test.mjs"), 'export default () => import("esbuild");');
+    // No module imports the script or the data file. A test names each by
+    // its basename alone.
+    write(file("driver.mjs"), "export default 1;");
+    write(file("data.json"), "{}");
+    write(file("spawns.test.mjs"), 'export default ["driver.mjs", "data.json"].map((name) => new URL(name, import.meta.url));');
     await withVitestImpact(root, async (unit) => {
       const plan = async (...entries) => (await planImpact(entries, { unit })).unit;
       const names = (result) => result.selected?.map(({ file: selected }) => path.posix.basename(selected));
@@ -275,19 +294,27 @@ it("keeps tests that list files or run source outside the graph, and ignores typ
       const outside = "runs on product changes: executes source outside the Vitest graph";
 
       const narrowed = await plan(modified("a.mjs"));
-      expect(names(narrowed)).toEqual(["bundled.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "worker.test.mjs"]);
+      expect(names(narrowed)).toEqual(["bundled.test.mjs", "lazy-bundle.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "worker.test.mjs"]);
       expect(reasons(narrowed, "scan.test.mjs")).toEqual([{ file: file("scan.test.mjs"), reason: "always run: enumerates files" }]);
       expect(reasons(narrowed, "bundled.test.mjs")).toEqual([{ file: file("bundle.mjs"), reason: outside }]);
       expect(reasons(narrowed, "worker.test.mjs")).toEqual([{ file: file("worker.test.mjs"), reason: outside }]);
       // A change to tests alone gives a bundle nothing new to run.
       expect(names(await plan(modified("uses-a.test.mjs")))).toEqual(["scan.test.mjs", "uses-a.test.mjs"]);
+      // A script or a data file is product input too.
+      for (const name of ["driver.mjs", "data.json"]) {
+        const named = await plan(modified(name));
+        expect(names(named), name)
+          .toEqual(["bundled.test.mjs", "lazy-bundle.test.mjs", "scan.test.mjs", "spawns.test.mjs", "worker.test.mjs"]);
+        expect(reasons(named, "spawns.test.mjs"), name)
+          .toEqual([{ file: file(name), reason: `named in ${file("spawns.test.mjs")}` }]);
+      }
 
       const types = await plan(modified("types.ts"));
       expect(names(types)).toEqual(["scan.test.mjs"]);
       expect(types.ignored).toEqual([{ file: file("types.ts"), reason: "type-only module" }]);
 
       expect(names(await plan({ status: "D", file: file("removed.mjs") })))
-        .toEqual(["bundled.test.mjs", "scan.test.mjs", "worker.test.mjs"]);
+        .toEqual(["bundled.test.mjs", "lazy-bundle.test.mjs", "scan.test.mjs", "worker.test.mjs"]);
       // `kept.cjs` now answers an unchanged import of `./kept`.
       expect(await plan({ status: "D", file: file("kept.mjs") })).toMatchObject({
         mode: "full", reason: "deleted file can change module resolution",
@@ -316,6 +343,21 @@ it("uses Playwright's collected specs and widens when registration is absent or 
     expect((await planImpact(changes(spec), options)).e2e).toMatchObject({ mode: "full", reason: "Playwright collection failed" });
   });
 }, 30_000);
+
+it("follows a Playwright harness file that is named without a path to the specs that reach it", async () => {
+  await temporaryTree((root, write) => {
+    const e2e = (name) => `apps/desktop/e2e/${name}`;
+    write("apps/desktop/playwright.config.ts", "export default {};");
+    write(e2e("fixtures/bootstrap.mjs"), "");
+    write(e2e("fixtures/app.ts"), 'export const entry = path.join(fixtureDir, "bootstrap.mjs");');
+    write(e2e("launches.spec.ts"), 'import { entry } from "./fixtures/app";');
+    // Another file's name ends the same way and is not this file.
+    write(e2e("other.spec.ts"), 'const entry = "web-bootstrap.mjs";');
+    const harness = harnessReferences(root);
+    expect(harness(e2e("fixtures/bootstrap.mjs"))).toEqual({ specs: [e2e("launches.spec.ts")], suite: false });
+    expect(harness(e2e("fixtures/unnamed.ts"))).toEqual({ specs: [], suite: false });
+  });
+});
 
 it("splits a narrowed unit plan into lanes that cover every selected file once", () => {
   const projects = ["desktop-main", "desktop-renderer", "desktop-renderer-node", "messaging", "owner-core", "shared"];
