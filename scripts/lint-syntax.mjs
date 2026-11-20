@@ -1,6 +1,7 @@
 import { globSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkImportBoundaries } from "./lint-module-barrels.mjs";
 import { repositoryRoot, runOxlint } from "./oxlint.mjs";
 
 export function syntaxLintPaths(directory = repositoryRoot) {
@@ -10,5 +11,11 @@ export function syntaxLintPaths(directory = repositoryRoot) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = runOxlint(".oxlintrc.json", syntaxLintPaths());
+  const violations = checkImportBoundaries(repositoryRoot);
+  if (violations.length) {
+    console.error(violations.join("\n"));
+    process.exitCode = 1;
+  } else {
+    process.exitCode = runOxlint(".oxlintrc.json", syntaxLintPaths());
+  }
 }
