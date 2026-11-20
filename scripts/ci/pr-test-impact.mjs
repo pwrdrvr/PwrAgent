@@ -1,13 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-const sourcePath = /^(?:apps\/desktop\/src|packages\/.+\/src)\/.+\.[cm]?[jt]sx?$/;
+const codeFile = /\.[cm]?[jt]sx?$/;
+// Unit-test inputs that the application bundle never loads.
+export const testSidePath = /(?:^|\/)(?:__tests__|test-setup)\/|\.test\.[cm]?[jt]sx?$/;
 const e2eDirectory = "apps/desktop/e2e/";
 const e2eSpec = /^apps\/desktop\/e2e\/(?!.*\.inspect\.spec\.ts$).+\.(?:spec|test)\.[cm]?[jt]sx?$/;
-const full = (reason) => ({ mode: "full", reason });
+const full = (reason, file) => ({ mode: "full", reason, ...(file ? { file } : {}) });
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
 
 function gitFiles(root, revisions) {
@@ -66,10 +68,12 @@ export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   return source;
 }
 
+const nonProduct = (file) => file.startsWith("docs/") || file.toLowerCase().endsWith(".md") || file.startsWith(".agents/skills/");
+
 export function wholeSuiteReason(files) {
   if (!files.length) return "empty diff";
   for (const { status, file } of files) {
-    if (status !== "A" && status !== "M") return "deletion, rename, type change or unsupported Git status";
+    if (status !== "A" && status !== "M" && status !== "D") return "type change or unsupported Git status";
     if (file === "pnpm-lock.yaml" || file === "pnpm-workspace.yaml" || /(?:^|\/)package\.json$/.test(file)
       || file.startsWith("patches/")) return "dependency metadata or patch";
     if (/^\.github\/|^scripts\/ci\/|(?:^|\/)(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
@@ -78,58 +82,134 @@ export function wholeSuiteReason(files) {
     if (/^apps\/desktop\/(?:native|build)\/|^apps\/desktop\/scripts\/(?:macos-|assemble-mac-|app-icon)|\.swift$|^apps\/desktop\/e2e\/(?:macos-|windows-|visual-regression\.spec\.ts|onboarding-wizard\.spec\.ts|fixtures\/detached-profile-instances\.ts)/.test(file)) {
       return "native or platform-only input";
     }
-    if (/(?:^|\/)(?:fixtures|__fixtures__|snapshots|__snapshots__|[^/]+-snapshots|generated|dist|out|resources|test-setup|setup)\/|(?:^|\/)(?:global-setup|global-teardown|setup|act-warning-runner|sqlite-write-metrics-setup)\.[cm]?[jt]s$|\.snap$/.test(file)) {
-      return "fixture, generated input, snapshot or suite setup";
-    }
   }
   return undefined;
 }
 
-export async function planImpact(files, { fallback, unit, e2eFiles = listE2eFiles }) {
-  const reason = fallback ?? wholeSuiteReason(files);
-  if (reason) return { unit: full(reason), e2e: full(reason) };
-
-  const changed = files.map(({ file }) => file).sort();
-  let e2e = full(changed.some((file) => !file.startsWith(e2eDirectory))
-    ? "application impact has no explicit Playwright spec owner"
-    : "non-spec Playwright input or unrecognized spec");
-  if (changed.every((file) => e2eSpec.test(file))) {
-    try {
-      const inventory = await e2eFiles();
-      e2e = changed.every((file) => inventory.includes(file))
-        ? { mode: "selected", total: inventory.length, selected: changed.map((file) => ({ file, reasons: ["edited spec"] })) }
-        : full("edited spec is absent from Playwright collection");
-    } catch (error) {
-      e2e = { ...full("Playwright collection failed"), detail: error.message };
+/**
+ * Follows string references through the Playwright directory. A spec can
+ * reach a helper without importing it: several drivers are bundled or
+ * spawned by path, and Playwright records neither.
+ */
+export function harnessReferences(root = process.cwd(), config = "apps/desktop/playwright.config.ts") {
+  const texts = new Map();
+  for (const entry of readdirSync(path.join(root, e2eDirectory), { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !codeFile.test(entry.name)) continue;
+    const file = path.relative(root, path.join(entry.parentPath, entry.name)).split(path.sep).join("/");
+    texts.set(file, readFileSync(path.join(root, file), "utf8"));
+  }
+  const configText = readFileSync(path.join(root, config), "utf8");
+  // A module is named by its path without extension, `index` by its directory.
+  const needle = (file) => {
+    const stem = path.posix.basename(file).replace(codeFile, "");
+    return `/${stem === "index" ? path.posix.basename(path.posix.dirname(file)) : stem}`;
+  };
+  return (changed) => {
+    const seen = new Set([changed]);
+    const queue = [changed];
+    const specs = new Set();
+    let suite = false;
+    while (queue.length) {
+      const name = needle(queue.pop());
+      if (configText.includes(name)) suite = true;
+      for (const [file, text] of texts) {
+        if (seen.has(file) || !text.includes(name)) continue;
+        seen.add(file);
+        if (/(?:^|\/)global-(?:setup|teardown)\./.test(file)) suite = true;
+        else if (e2eSpec.test(file)) specs.add(file);
+        else queue.push(file);
+      }
     }
-  }
-
-  if (changed.some((file) => !sourcePath.test(file)) || changed.length > 6) {
-    return { e2e, unit: full("unsupported unit input or more than six changed source files") };
-  }
-  try {
-    return { e2e, unit: await unit(changed) };
-  } catch (error) {
-    return { e2e, unit: { ...full("Vitest planner error"), detail: String(error.message ?? error) } };
-  }
+    return { specs: [...specs], suite };
+  };
 }
 
-export function listE2eFiles(root = process.cwd(), config = "apps/desktop/playwright.config.ts") {
+/**
+ * Playwright launches the built application, and no recorded map says which
+ * specs execute a given product module. Only a diff confined to unit tests
+ * and the E2E harness narrows, to the specs that Playwright's import
+ * tracking or a string reference connects to a changed file.
+ */
+export async function planE2e(changes, { inventory, affected, testOnly = () => false, harness = () => ({ specs: [], suite: false }) }) {
+  const reasons = new Map();
+  const select = (file, reason) => reasons.set(file, [...new Set([...reasons.get(file) ?? [], reason])]);
+  for (const { status, file } of changes) {
+    const inside = file.startsWith(e2eDirectory);
+    if (inside && (status === "D" || !codeFile.test(file))) return full("deleted or non-module Playwright input", file);
+    if (inside && /(?:^|\/)global-(?:setup|teardown)\./.test(file)) return full("Playwright suite setup or configuration input", file);
+    if (!inside && (!testSidePath.test(file) || !await testOnly(file))) {
+      return full("application impact has no recorded Playwright spec owner", file);
+    }
+    if (e2eSpec.test(file)) {
+      select(file, "edited spec");
+      continue;
+    }
+    const { specs, suite } = harness(file);
+    if (suite) return full("Playwright suite setup or configuration input", file);
+    specs.forEach((spec) => select(spec, "names a changed file"));
+  }
+  let files;
+  try {
+    files = await inventory();
+    for (const spec of await affected()) if (!reasons.has(spec)) select(spec, "imports a changed file");
+  } catch (error) {
+    return { ...full("Playwright collection failed"), detail: error.message };
+  }
+  const missing = [...reasons.keys()].find((file) => !files.includes(file));
+  if (missing) return full("edited spec is absent from Playwright collection", missing);
+  return {
+    mode: "selected",
+    total: files.length,
+    selected: [...reasons].sort(([a], [b]) => a.localeCompare(b, "en")).map(([file, why]) => ({ file, reasons: why })),
+  };
+}
+
+export async function planImpact(files, { fallback, unit, e2e }) {
+  const reason = fallback ?? wholeSuiteReason(files);
+  if (reason) return { unit: full(reason), e2e: full(reason) };
+  const changes = files.filter(({ file }) => !nonProduct(file)).sort((a, b) => a.file.localeCompare(b.file, "en"));
+  const guarded = async (name, planner) => {
+    if (!changes.length) return full("no product input");
+    try {
+      return await planner(changes);
+    } catch (error) {
+      return { ...full(`${name} planner error`), detail: String(error.message ?? error) };
+    }
+  };
+  return {
+    unit: await guarded("Vitest", unit),
+    e2e: await guarded("Playwright", (input) => planE2e(input, e2e)),
+  };
+}
+
+function listPlaywright(root, config, extra) {
   const cli = createRequire(path.resolve("apps/desktop/package.json")).resolve("@playwright/test/cli");
   const configFile = path.resolve(root, config);
   const directory = mkdtempSync(path.join(os.tmpdir(), "pr-impact-playwright-"));
   const output = path.join(directory, "collected.json");
   try {
-    execFileSync(process.execPath, [cli, "test", "--list", "--reporter=json", "--config", configFile], {
+    execFileSync(process.execPath, [cli, "test", "--list", "--reporter=json", "--config", configFile, ...extra], {
       cwd: path.dirname(configFile), env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_FILE: output },
       timeout: 60_000, stdio: ["ignore", "pipe", "pipe"],
     });
     const { config: { rootDir }, suites, errors } = JSON.parse(readFileSync(output, "utf8"));
-    if (errors.length || !suites.length || !path.isAbsolute(rootDir)) throw new Error("Missing or incomplete Playwright collection");
+    if (errors.length || !path.isAbsolute(rootDir)) throw new Error("Missing or incomplete Playwright collection");
     return [...new Set(suites.map(({ file }) => path.relative(root, path.resolve(rootDir, file)).split(path.sep).join("/")))].sort();
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+export function listE2eFiles(root = process.cwd(), config = "apps/desktop/playwright.config.ts") {
+  const files = listPlaywright(root, config, []);
+  if (!files.length) throw new Error("Missing or incomplete Playwright collection");
+  return files;
+}
+
+// Playwright's own `--only-changed`: specs that changed since `base`, or
+// whose imports reach a file that did.
+export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwright.config.ts") {
+  return listPlaywright(root, config, [`--only-changed=${base}`, "--pass-with-no-tests"]);
 }
 
 export function describeLinuxEvidence(observed) {

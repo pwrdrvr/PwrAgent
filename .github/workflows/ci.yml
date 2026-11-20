@@ -1397,18 +1397,23 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  pr-test-impact:
-    name: PR test impact shadow
-    # Prototype only. The report consumes full-CI results and has no dependents.
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'prototype/pr-test-impact') && needs.flake-report.result != 'skipped' }}
-    needs: [flake-report]
+  pr-test-impact-plan:
+    name: PR test impact plan
+    # Prototype only. The narrowed jobs below run beside the required jobs
+    # and gate nothing; see docs/pr-test-impact.md.
+    if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'prototype/pr-test-impact') && needs.changes.outputs.code_impacting == 'true' }}
+    needs: [changes, install-deps]
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
       pull-requests: read
     timeout-minutes: 10
     continue-on-error: true
+    outputs:
+      unit_mode: ${{ steps.plan.outputs.unit_mode }}
+      unit_targets: ${{ steps.plan.outputs.unit_targets }}
+      e2e_mode: ${{ steps.plan.outputs.e2e_mode }}
+      e2e_count: ${{ steps.plan.outputs.e2e_count }}
     steps:
       - name: Checkout the tested merge revision
         uses: actions/checkout@v7
@@ -1440,6 +1445,175 @@ jobs:
         with:
           node-version: "^24.22.1"
 
+      - name: Plan the affected tests
+        id: plan
+        run: node scripts/ci/write-pr-test-impact.mjs plan
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-test-impact-plan-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact/plan.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  pr-test-impact-unit:
+    name: PR test impact unit (${{ matrix.target.name }}, ${{ matrix.target.os }})
+    # `live` executes this pull request's plan. A replay executes the plan of
+    # a recorded change set on this checkout.
+    if: ${{ needs.pr-test-impact-plan.outputs.unit_targets != '' && needs.pr-test-impact-plan.outputs.unit_targets != '[]' }}
+    needs: [pr-test-impact-plan, windows-install-deps]
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.pr-test-impact-plan.outputs.unit_targets) }}
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+
+      - name: Install ripgrep
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-ripgrep
+        timeout-minutes: 5
+
+      - name: Download plan
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact
+
+      - name: Run the selected Vitest files
+        timeout-minutes: 20
+        # The Windows unit lanes need a common MSYS parent and a temp
+        # directory off the OS volume; keep both here.
+        shell: bash
+        env:
+          PR_TEST_IMPACT_VITEST_CONFIG: ${{ runner.os == 'Linux' && 'vitest.linux-ci.ts' || 'vitest.workspace.ts' }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: pnpm exec node scripts/ci/run-pr-test-impact.mjs unit "${{ matrix.target.name }}"
+
+      - name: Upload result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-test-impact-result-unit-${{ matrix.target.name }}-${{ runner.os }}-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  pr-test-impact-e2e:
+    name: PR test impact E2E
+    # A selected plan with no spec starts no job.
+    if: ${{ needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && needs.pr-test-impact-plan.outputs.e2e_count != '0' }}
+    needs: [pr-test-impact-plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        with:
+          lfs: true
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+
+      - name: Install Linux window manager
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y openbox x11-utils
+
+      - name: Download plan
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact
+
+      - name: Run the selected Playwright specs
+        timeout-minutes: 12
+        env:
+          PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/pr-test-impact/e2e-report.json
+        run: |
+          set -euo pipefail
+          mapfile -t specs < <(node scripts/ci/run-pr-test-impact.mjs e2e-files)
+          if [[ "${#specs[@]}" -eq 0 ]]; then
+            echo "::error::The plan names no Playwright spec."
+            exit 1
+          fi
+          start=$(date +%s%3N)
+          status=0
+          xvfb-run --auto-servernum \
+            --server-args="-screen 0 1920x1080x24 -noreset" \
+            bash .github/scripts/run-linux-desktop-e2e.sh "${specs[@]}" --retries=0 || status=$?
+          PR_TEST_IMPACT_E2E_MS=$(( $(date +%s%3N) - start )) node scripts/ci/run-pr-test-impact.mjs e2e
+          exit "$status"
+
+      - name: Upload result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-test-impact-result-e2e-live-${{ runner.os }}-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  pr-test-impact:
+    name: PR test impact report
+    # Compares the narrowed jobs with the full lanes of the same attempt.
+    if: ${{ always() && !cancelled() && needs.pr-test-impact-plan.result == 'success' && needs.flake-report.result != 'skipped' }}
+    needs: [flake-report, pr-test-impact-plan, pr-test-impact-unit, pr-test-impact-e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "^24.22.1"
+
+      - name: Download plan
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact
+
+      - name: Download narrowed results
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: pr-test-impact-result-*-${{ github.run_attempt }}
+          merge-multiple: true
+          path: .local/ci/pr-test-impact/results
+
       - name: Download full suite evidence
         uses: actions/download-artifact@v8
         continue-on-error: true
@@ -1447,10 +1621,7 @@ jobs:
           name: ci-flake-report-${{ github.run_attempt }}
           path: .local/ci/pr-test-impact-observed
 
-      - name: Generate impact report
-        run: node scripts/ci/write-pr-test-impact.mjs
-
-      - name: Read full Linux unit step timings
+      - name: Read job timings
         continue-on-error: true
         uses: actions/github-script@v9
         with:
@@ -1463,13 +1634,12 @@ jobs:
               attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT),
               per_page: 100,
             });
-            const lanes = jobs.filter(({ name }) => /^Test \(lane [1-4] of 4\)$/.test(name));
-            fs.writeFileSync(".local/ci/pr-test-impact-baseline.json", JSON.stringify(lanes));
+            fs.writeFileSync(".local/ci/pr-test-impact-jobs.json", JSON.stringify(
+              jobs.map(({ name, conclusion, started_at, completed_at }) => ({ name, conclusion, started_at, completed_at })),
+            ));
 
-      - name: Execute and time selected Linux Vitest files
-        continue-on-error: true
-        timeout-minutes: 5
-        run: node scripts/ci/benchmark-pr-test-impact.mjs
+      - name: Generate report
+        run: node scripts/ci/write-pr-test-impact.mjs report
 
       - name: Upload impact report
         uses: actions/upload-artifact@v7

@@ -85,30 +85,61 @@ it("retains status and path identity from Git and falls back when main advances 
   });
 });
 
-it("treats unsupported changes as full suite even alongside a recognizable changed test", async () => {
-  const inputs = [
+it("keeps the full suite for configuration, dependency and platform inputs, and narrows E2E only without product input", async () => {
+  const unit = async () => ({ mode: "selected", selected: [], total: 1 });
+  const e2e = { inventory: () => [spec], affected: () => [spec], testOnly: () => true };
+  const modes = async (files, options = { unit, e2e }) => {
+    const result = await planImpact(files, options);
+    return [result.unit.mode, result.e2e.mode];
+  };
+  const everything = [
     { file: "pnpm-lock.yaml", status: "M" },
     { file: "patches/some-package.patch", status: "A" },
     { file: "packages/shared/package.json", status: "M" },
     { file: "vitest.workspace.ts", status: "M" },
     { file: "apps/desktop/playwright.config.ts", status: "M" },
-    { file: "apps/desktop/src/test-setup/state-db-template.ts", status: "M" },
-    { file: "apps/desktop/src/main/__tests__/fixtures/script.mjs", status: "M" },
-    { file: "apps/desktop/e2e/example.spec.ts-snapshots/example.webp", status: "M" },
     { file: "apps/desktop/native/osx/example.swift", status: "M" },
     { file: "apps/desktop/e2e/windows-example.spec.ts", status: "M" },
     { file: ".github/workflows/ci.yml", status: "M" },
     { file: "scripts/ci/runner.mjs", status: "M" },
-    { file: `${source}dependency.mjs`, status: "D" },
     { file: `${source}dependency.mjs`, status: "T" },
   ];
-  for (const change of inputs) {
-    const result = await planImpact([...changes(spec), change], { e2eFiles: () => [spec] });
-    expect([result.unit.mode, result.e2e.mode], JSON.stringify(change)).toEqual(["full", "full"]);
+  for (const change of everything) {
+    expect(await modes([...changes(spec), change]), JSON.stringify(change)).toEqual(["full", "full"]);
   }
-  const edited = await planImpact(changes(spec), { e2eFiles: () => [spec, "apps/desktop/e2e/unrelated.spec.ts"] });
-  expect(edited.e2e.selected.map(({ file }) => file)).toEqual([spec]);
-  const application = await planImpact(changes(`${source}dependency.mjs`), { unit: () => { throw new Error("broken"); } });
+  // No recorded map says which specs execute a product module, and
+  // Playwright cannot name the readers of a deleted or non-module input.
+  const playwrightOnly = [
+    { file: `${source}dependency.mjs`, status: "M" },
+    { file: `${source}dependency.mjs`, status: "D" },
+    { file: "apps/desktop/e2e/example.spec.ts-snapshots/example.webp", status: "M" },
+    { file: "apps/desktop/e2e/fixtures/helper.ts", status: "D" },
+    { file: "apps/desktop/e2e/global-setup.ts", status: "M" },
+  ];
+  for (const change of playwrightOnly) {
+    expect(await modes([...changes(spec), change]), JSON.stringify(change)).toEqual(["selected", "full"]);
+  }
+  const helper = "apps/desktop/e2e/fixtures/driver.ts";
+  const referenced = (suite) => ({ unit, e2e: { ...e2e, affected: () => [], harness: () => ({ specs: [spec], suite }) } });
+  expect(await modes(changes(helper), referenced(true))).toEqual(["selected", "full"]);
+  // A spec can bundle or spawn a helper that it never imports.
+  expect((await planImpact(changes(helper), referenced(false))).e2e.selected)
+    .toEqual([{ file: spec, reasons: ["names a changed file"] }]);
+
+  const edited = await planImpact(changes(spec, "docs/notes.md"), {
+    unit, e2e: { ...e2e, inventory: () => [spec, "apps/desktop/e2e/unrelated.spec.ts"] },
+  });
+  expect(edited.e2e).toMatchObject({ mode: "selected", total: 2, selected: [{ file: spec, reasons: ["edited spec"] }] });
+
+  // A unit-test input reaches a spec only through the harness's imports.
+  const unitTest = `${source}__tests__/value.test.ts`;
+  expect((await planImpact(changes(unitTest), { unit, e2e: { ...e2e, affected: () => [] } })).e2e)
+    .toEqual({ mode: "selected", total: 1, selected: [] });
+  expect((await planImpact(changes(unitTest), { unit, e2e })).e2e.selected)
+    .toEqual([{ file: spec, reasons: ["imports a changed file"] }]);
+  expect(await modes(changes(unitTest), { unit, e2e: { ...e2e, testOnly: () => false } })).toEqual(["selected", "full"]);
+
+  const application = await planImpact(changes(`${source}dependency.mjs`), { unit: () => { throw new Error("broken"); }, e2e });
   expect(application.e2e.mode).toBe("full");
   expect(application.unit.reason).toBe("Vitest planner error");
 });
@@ -153,24 +184,29 @@ const value = (await import("./barrel.mjs")).default; assert.equal(new AsyncLoca
 
     await withVitestImpact(root, async (unit) => {
       const options = { unit };
+      const selection = async (...changed) => (await planImpact(changes(...changed), options)).unit.selected?.map(({ file }) => file);
       const staticPlan = await planImpact(changes(files.changed), options);
-      expect(staticPlan.unit.selected?.map(({ file }) => file)).toEqual([files.owner]);
+      // A static owner must not mask a computed loader that names the file.
+      expect(staticPlan.unit.selected?.map(({ file }) => file)).toEqual([files.mixedOwner, files.owner]);
       expect(staticPlan.unit.total).toBe(5);
       expect(staticPlan.e2e.mode).toBe("full");
-      // A static owner can mask a second, opaque consumer of the same file.
-      // This known miss must be visible in shadow before considering a gate.
       const scored = compareFailures(staticPlan, { missingSlices: [], slices: [{
         kind: "unit", platform: "linux", key: "unit-fixture", first: { complete: true, errors: 0 },
         failures: observed.map((file) => ({ project: staticPlan.unit.selected[0].project, file })),
       }] });
       expect(scored.cases.map(({ file, outcome }) => [file, outcome]))
-        .toEqual([[files.owner, "covered"], [files.mixedOwner, "missed"]]);
+        .toEqual([[files.owner, "covered"], [files.mixedOwner, "covered"]]);
 
+      // Neither file has an import edge. Each reader names it in a string.
       write(files.disk, "2");
       write(files.dynamic, "export default 2;");
       expect(failures()).toEqual([files.owner, files.diskOwner, files.computedOwner, files.mixedOwner]);
-      expect((await planImpact(changes(files.disk), options)).unit.mode).toBe("full");
-      expect((await planImpact(changes(files.dynamic, files.changed), options)).unit.reason).toBe("no Vitest graph owner for changed source");
+      expect(await selection(files.disk)).toEqual([files.diskOwner]);
+      expect(await selection(files.dynamic)).toEqual([files.computedOwner]);
+      write(`${source}unnamed.bin`, "1");
+      expect((await planImpact(changes(`${source}unnamed.bin`), options)).unit).toMatchObject({
+        mode: "full", reason: "no unit owner for changed input",
+      });
       expect((await planImpact(changes(files.computedOwner), options)).unit.reason).toBe("computed import in changed source");
     }, "fixture.config.mjs");
   });
@@ -213,6 +249,46 @@ it("widens for an aliased createRequire loader with a computed specifier", async
   });
 }, 30_000);
 
+it("narrows through a side-effect-free barrel by imported name, and always runs tests that list files", async () => {
+  await temporaryTree(async (root, write) => {
+    const file = (name) => `${source}${name}`;
+    write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
+    write("packages/shared/package.json", '{ "sideEffects": false }');
+    write(file("index.mjs"), 'export * from "./a.mjs";\nexport * from "./b.mjs";\n');
+    write(file("a.mjs"), "export const a = 1;");
+    write(file("b.mjs"), "export const b = 2;");
+    write(file("types.ts"), "export interface Value { a: number }");
+    write(file("kept.cjs"), "module.exports = 1;");
+    write(file("uses-a.test.mjs"), 'import { a } from "./index.mjs"; export default a;');
+    write(file("uses-b.test.mjs"), 'import { b } from "./index.mjs"; export default b;');
+    write(file("whole.test.mjs"), 'import * as all from "./index.mjs"; export default all;');
+    write(file("scan.test.mjs"), 'import { readdirSync } from "node:fs"; export default readdirSync(".");');
+    await withVitestImpact(root, async (unit) => {
+      const plan = async (...entries) => (await planImpact(entries, { unit })).unit;
+      const names = (result) => result.selected?.map(({ file: selected }) => path.posix.basename(selected));
+      const modified = (name) => ({ status: "M", file: file(name) });
+
+      const narrowed = await plan(modified("a.mjs"));
+      expect(names(narrowed)).toEqual(["scan.test.mjs", "uses-a.test.mjs", "whole.test.mjs"]);
+      expect(narrowed.barrels).toEqual([file("index.mjs")]);
+      expect(narrowed.selected[0].reasons).toEqual([{ file: file("scan.test.mjs"), reason: "always run: enumerates files" }]);
+      // An edited barrel can rebind any name, so every importer runs.
+      expect(names(await plan(modified("index.mjs"))))
+        .toEqual(["scan.test.mjs", "uses-a.test.mjs", "uses-b.test.mjs", "whole.test.mjs"]);
+
+      const types = await plan(modified("types.ts"));
+      expect(names(types)).toEqual(["scan.test.mjs"]);
+      expect(types.ignored).toEqual([{ file: file("types.ts"), reason: "type-only module" }]);
+
+      expect(names(await plan({ status: "D", file: file("removed.mjs") }))).toEqual(["scan.test.mjs"]);
+      // `kept.cjs` now answers an unchanged import of `./kept`.
+      expect(await plan({ status: "D", file: file("kept.mjs") })).toMatchObject({
+        mode: "full", reason: "deleted file can change module resolution",
+      });
+    }, "fixture.config.mjs");
+  });
+}, 30_000);
+
 it("uses Playwright's collected specs and widens when registration is absent or collection fails", async () => {
   await temporaryTree(async (root, write) => {
     const config = "apps/desktop/playwright.config.cjs";
@@ -222,12 +298,15 @@ it("uses Playwright's collected specs and widens when registration is absent or 
     write(config, 'module.exports = { testDir: "./e2e" };');
     write(spec, register);
     write(other, register);
-    const e2eFiles = () => listE2eFiles(root, config);
-    expect((await planImpact(changes(spec), { e2eFiles })).e2e).toMatchObject({ mode: "selected", total: 2, selected: [{ file: spec }] });
+    const options = {
+      unit: async () => ({ mode: "full", reason: "not under test" }),
+      e2e: { inventory: () => listE2eFiles(root, config), affected: () => [spec] },
+    };
+    expect((await planImpact(changes(spec), options)).e2e).toMatchObject({ mode: "selected", total: 2, selected: [{ file: spec }] });
     write(spec, "export {};");
-    expect((await planImpact(changes(spec), { e2eFiles })).e2e).toMatchObject({ mode: "full", reason: "edited spec is absent from Playwright collection" });
+    expect((await planImpact(changes(spec), options)).e2e).toMatchObject({ mode: "full", reason: "edited spec is absent from Playwright collection" });
     write(spec, 'throw new Error("failed while collecting");');
-    expect((await planImpact(changes(spec), { e2eFiles })).e2e).toMatchObject({ mode: "full", reason: "Playwright collection failed" });
+    expect((await planImpact(changes(spec), options)).e2e).toMatchObject({ mode: "full", reason: "Playwright collection failed" });
   });
 }, 30_000);
 
