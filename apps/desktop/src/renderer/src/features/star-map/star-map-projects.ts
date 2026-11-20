@@ -129,10 +129,8 @@ function projectNameKey(label: string): string {
  *
  * A directory is identified everywhere else in the app by its absolute
  * path, and a path names a checkout on ONE machine. This lens pools a
- * whole federation, so keying its bodies on the path drew the same
- * repository once per machine. That pooling must keep one project per
- * owner. An owner with duplicate clones can declare which ones are one
- * project. Other clones stay independently addressable on that owner.
+ * whole federation, so keying its bodies on the path drew a separate
+ * project for every checkout.
  *
  * - A row whose owner could read a Git origin pools under that origin.
  *   It is the only part of a checkout that means the same thing
@@ -174,6 +172,14 @@ function identityForRow(
  * Built over the WHOLE fleet rather than one row at a time, because
  * whether a folder name can stand in for an origin is a question about
  * every other row that shares that name.
+ *
+ * On each owner, rows with matching reported origins share the fleet
+ * project by default. A folder name can stand in for an origin when the
+ * resolved identity has only one row on that owner. A single explicit
+ * checkout group claims that identity for the owner even when it is
+ * empty, and its excluded clones get separate bodies. When multiple
+ * explicit groups share an identity on one owner, each row there gets
+ * a separate body to preserve the owner's grouping.
  */
 export function starMapProjectIdentities(
   descriptorsByInstance?: ReadonlyMap<string, readonly NavigationDirectoryRow[]>,
@@ -184,6 +190,7 @@ export function starMapProjectIdentities(
     name: string;
     origin?: string;
     grouped: boolean;
+    emptyGroupCount: number;
   }[] = [];
   for (const [instanceId, descriptors] of descriptorsByInstance ?? []) {
     for (const descriptor of descriptors) {
@@ -193,6 +200,7 @@ export function starMapProjectIdentities(
         name: projectNameKey(descriptor.label),
         origin: descriptor.repositoryKey,
         grouped: Boolean(descriptor.checkoutPaths?.length),
+        emptyGroupCount: descriptor.emptyCheckoutGroupCount ?? 0,
       });
     }
   }
@@ -216,9 +224,12 @@ export function starMapProjectIdentities(
   for (const [instanceId, projects] of ownerProjects) {
     for (const [project, members] of projects) {
       const grouped = members.filter((member) => member.grouped);
-      const primary = members.length === 1 ? members[0] : grouped.length === 1 ? grouped[0] : undefined;
+      const emptyGroupCount = members.reduce((count, member) => Math.max(count, member.emptyGroupCount), 0);
+      const groupCount = grouped.length + emptyGroupCount;
       for (const row of members) {
-        identities.set(`${instanceId}\u0000${row.key}`, row === primary
+        const sharesProject = (groupCount === 0 && (members.length === 1 || Boolean(row.origin)))
+          || (groupCount === 1 && row === grouped[0]);
+        identities.set(`${instanceId}\u0000${row.key}`, sharesProject
           ? project : `checkout:${JSON.stringify([instanceId, row.key])}`);
       }
     }

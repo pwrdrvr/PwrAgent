@@ -2349,6 +2349,8 @@ export type NavigationDirectoryRow = {
   label: string;
   path?: string;
   checkoutPaths?: string[];
+  /** Star Map geometry only. Configured groups for this origin with no visible threads on this owner. */
+  emptyCheckoutGroupCount?: number;
   /**
    * Cross-machine repository identity for this row: the directory's
    * `remote.origin.url` as `host/owner/repo`, from
