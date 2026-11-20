@@ -251,6 +251,20 @@ describe("WorktreeReflinkCapabilityProbe", () => {
     expect((await probe.read("/repo")).capabilities).toEqual({ reflink: true, verifyFilters: false });
     await probe.read("/repo");
     expect(git.state.helpReads).toBe(1);
+    // A remembered answer is paired with the identity read now, which is what
+    // carries the environment the next run uses.
+    const fresh = { ...git.identify(), env: "now" };
+    const remembering = new WorktreeReflinkCapabilityProbe<Identity & { env?: string }>({
+      identify: async () => fresh,
+      readHelp: async (identity) => git.help(identity),
+    });
+    const first = await remembering.read("/repo");
+    fresh.env = "later";
+    const second = await remembering.read("/repo");
+    expect(second.identity.env).toBe("later");
+    expect(second.capabilities).toEqual(first.capabilities);
+    expect(git.state.helpReads).toBe(2);
+    git.state.helpReads = 1;
     git.install("/git/a", "pwrgit.2");
     expect((await probe.read("/repo")).capabilities).toEqual({ reflink: true, verifyFilters: true });
     expect(git.state.helpReads).toBe(2);

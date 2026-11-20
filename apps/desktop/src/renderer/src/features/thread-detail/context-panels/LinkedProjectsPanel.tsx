@@ -58,7 +58,11 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
     props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
   );
   const nativePickingDisabled = Boolean(props.thread.federation?.ref.target);
-  const [storageDirectoryId, setStorageDirectoryId] = useState<string>();
+  // This panel outlives a thread switch, so the open dialog names its thread.
+  const threadKey = `${props.thread.source}\0${props.thread.id}`;
+  const [storageFor, setStorageFor] = useState<{ thread: string; directory: string }>();
+  // Forgotten on the way out, so coming back to the thread does not reopen it.
+  if (storageFor && storageFor.thread !== threadKey) setStorageFor(undefined);
   // Git shares a linked worktree with its source checkout, on this machine.
   // One worktree stands in for the probe: the answer describes the selected
   // Git, not the directory, and the action is offered only once Git's own
@@ -81,7 +85,8 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
   const storage = useWorktreeStorageSession(storageApi, probeTarget);
   const canShareStorage = storage.state.runtime?.capabilities.reflink === true;
   const storageDirectory = storageApi && canShareStorage
-    ? directories.find((directory) => directory.id === storageDirectoryId && directory.kind === "worktree")
+    && storageFor?.thread === threadKey
+    ? directories.find((directory) => directory.id === storageFor.directory && directory.kind === "worktree")
     : undefined;
   const attachDirectory = async (): Promise<void> => {
     if (nativePickingDisabled) {
@@ -217,7 +222,7 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
                           aria-label={`Share storage for ${directory.label}`}
                           className="context-list__action"
                           type="button"
-                          onClick={() => setStorageDirectoryId(directory.id)}
+                          onClick={() => setStorageFor({ thread: threadKey, directory: directory.id })}
                         >
                           Share storage
                         </button>
@@ -411,7 +416,7 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
             worktreePath: storageDirectory.worktreePath ?? storageDirectory.path,
           }}
           turnActive={props.thread.threadStatus === "active"}
-          onClose={() => setStorageDirectoryId(undefined)}
+          onClose={() => setStorageFor(undefined)}
         />
       ) : null}
       {props.worktreeArchiveError ? (

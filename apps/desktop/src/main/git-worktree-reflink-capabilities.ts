@@ -99,7 +99,12 @@ export class WorktreeReflinkCapabilityProbe<Identity extends GitRuntimeIdentity 
   async read(cwd: string): Promise<WorktreeReflinkProbeResult<Identity>> {
     let identity = await this.dependencies.identify();
     for (let attempt = 0; attempt < MAX_PROBE_ATTEMPTS; attempt += 1) {
-      if (this.cached?.identity.key === identity.key) return this.cached;
+      // The capabilities are this Git's for good. The identity is the one just
+      // read: it carries the environment to run with now, not the one the
+      // probe ran with.
+      if (this.cached?.identity.key === identity.key) {
+        return { identity, capabilities: this.cached.capabilities };
+      }
       const epoch = this.epoch;
       let capabilities: WorktreeReflinkCapabilities;
       try {

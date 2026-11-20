@@ -10,6 +10,7 @@ import type {
 import {
   INITIAL_WORKTREE_STORAGE_STATE,
   reduceWorktreeStorage,
+  restartWorktreeStorage,
   worktreeStorageRunRequest,
   type WorktreeStorageState,
 } from "../worktree-storage-session";
@@ -168,6 +169,46 @@ describe("worktree storage session", () => {
     state = answer(state, "pwrgit.2");
     expect(state.verifyFilters).toBe(false);
     expect(worktreeStorageRunRequest(state, TARGET, "share")).not.toHaveProperty("verifyFilters");
+  });
+
+  it("does not take an answer addressed to the worktree it showed before", () => {
+    let state = reduceWorktreeStorage(INITIAL_WORKTREE_STORAGE_STATE, { type: "capabilities-requested" });
+    const previous = state.capabilityRequest;
+    // Another worktree takes the session, and asks its own first question.
+    state = reduceWorktreeStorage(restartWorktreeStorage(state), { type: "capabilities-requested" });
+    expect(state.capabilityRequest).not.toBe(previous);
+    expect(state.runtime).toBeUndefined();
+    const late = reduceWorktreeStorage(state, {
+      type: "capabilities-answered",
+      request: previous,
+      response: { status: "ready", capabilities: TRUTH["pwrgit.2"], runtimeKey: "pwrgit.2" },
+    });
+    expect(late).toBe(state);
+  });
+
+  it("drops the error from an unreadable probe once the capabilities are read, and keeps a run's error", () => {
+    let state = reduceWorktreeStorage(INITIAL_WORKTREE_STORAGE_STATE, { type: "capabilities-requested" });
+    state = reduceWorktreeStorage(state, {
+      type: "capabilities-failed", request: state.capabilityRequest, reason: "not ready",
+    });
+    expect(state.error).toBe("not ready");
+    const ready = (from: WorktreeStorageState): WorktreeStorageState => {
+      const requested = reduceWorktreeStorage(from, { type: "capabilities-requested" });
+      return reduceWorktreeStorage(requested, {
+        type: "capabilities-answered",
+        request: requested.capabilityRequest,
+        response: { status: "ready", capabilities: TRUTH["pwrgit.2"], runtimeKey: "pwrgit.2" },
+      });
+    };
+    state = ready(state);
+    expect(state.error).toBeUndefined();
+
+    state = reduceWorktreeStorage(state, { type: "run-started", mode: "share" });
+    state = reduceWorktreeStorage(state, {
+      type: "run-answered", request: state.runRequest, response: { status: "failed", reason: "index file corrupt" },
+    });
+    // A refresh on window focus must not erase why the share failed.
+    expect(ready(state).error).toBe("index file corrupt");
   });
 
   it("ignores a .2 capability answer that arrives after the answer to a newer request", () => {

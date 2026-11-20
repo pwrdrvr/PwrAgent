@@ -11,6 +11,7 @@ import type {
 import { buildPwrAgentChildProcessEnv } from "./child-process-env";
 import { getSelectedManagedGit } from "./git-command";
 import { gitCommandPreference, gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "./git-runtime";
+import { terminateOwnedProcessTree } from "./process-tree";
 import {
   WorktreeReflinkCapabilityProbe,
   type GitRuntimeIdentity,
@@ -301,7 +302,9 @@ async function readSelectedGitHelp(identity: RuntimeGitIdentity, cwd: string): P
     execFile(executable, ["-C", cwd, "worktree", "reflink", "-h"], {
       cwd: os.tmpdir(),
       encoding: "utf8",
-      env: identity.env,
+      // Git translates "usage:" and its descriptions. The rows are matched
+      // in the untranslated form, whatever the operator's locale.
+      env: { ...identity.env, LC_ALL: "C", LANGUAGE: "C" },
       maxBuffer: 256 * 1024,
       timeout: HELP_TIMEOUT_MS,
       windowsHide: true,
@@ -328,15 +331,22 @@ async function runSelectedGit(
   await new Promise<void>((resolve, reject) => {
     const child = spawn(executable, ["-C", cwd, ...args], {
       cwd: os.tmpdir(),
+      // Its own process group, so a stop reaches the Git it re-executes for
+      // another worktree and the filters that Git runs.
+      detached: process.platform !== "win32",
       env: identity.env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
     let stderr = "";
     let timedOut = false;
+    let termination: Promise<void> | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      termination = process.platform === "win32"
+        ? Promise.resolve().then(() => { child.kill(); })
+        : terminateOwnedProcessTree(child, { gracefulTimeoutMs: 250, forceTimeoutMs: 1_000 });
+      termination.catch(() => undefined);
     }, RUN_TIMEOUT_MS);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -350,11 +360,16 @@ async function runSelectedGit(
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (timedOut) reject(new Error("Git took too long to share this worktree's storage."));
-      else if (code !== 0) {
+      if (timedOut) {
+        // Settle once the whole group is gone, so a second share cannot
+        // start beside a filter this one left running.
+        const failure = new Error("Git took too long to share this worktree's storage.");
+        void (termination ?? Promise.resolve()).catch(() => undefined).then(() => reject(failure));
+      } else if (code !== 0) {
         reject(Object.assign(new Error(`Git exited with code ${code}.`), { exitCode: code ?? undefined, stderr }));
+      } else {
+        resolve();
       }
-      else resolve();
     });
   });
 }

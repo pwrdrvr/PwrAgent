@@ -176,6 +176,32 @@ describe("LinkedProjectsPanel", () => {
       expect(await screen.findByRole("dialog", { name: "Share worktree storage" })).toBeVisible();
     });
 
+    it("does not reopen for a thread when the panel comes back from another one", async () => {
+      const api = storageApi({ reflink: true, verifyFilters: false });
+      const panel = render(view(api));
+      fireEvent.click(await screen.findByRole("button", { name: "Share storage for Project" }));
+      expect(await screen.findByRole("dialog", { name: "Share worktree storage" })).toBeVisible();
+
+      const other: NavigationThreadSummary = { ...thread, id: "other" };
+      panel.rerender(view(api, other));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      // The other thread links the same directory, and did not ask for the dialog.
+      expect(await screen.findByRole("button", { name: "Share storage for Project" })).toBeVisible();
+      panel.rerender(view(api));
+      await screen.findByRole("button", { name: "Share storage for Project" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("does not restart its probe when the api object is rebuilt on a render", async () => {
+      const api = storageApi({ reflink: true, verifyFilters: false });
+      const panel = render(view(api));
+      await screen.findByRole("button", { name: "Share storage for Project" });
+      panel.rerender(view({ ...api }));
+      panel.rerender(view({ ...api }));
+      expect(screen.getByRole("button", { name: "Share storage for Project" })).toBeVisible();
+      expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalledTimes(1);
+    });
+
     it("is not offered when the selected Git has no such command", async () => {
       const api = storageApi({ reflink: false, verifyFilters: false });
       render(view(api));

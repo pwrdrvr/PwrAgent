@@ -63,17 +63,32 @@ export const INITIAL_WORKTREE_STORAGE_STATE: WorktreeStorageState = {
  * everything that was decided or measured for the old one.
  */
 function adoptRuntime(state: WorktreeStorageState, runtime: WorktreeReflinkRuntime): WorktreeStorageState {
+  // An error from failing to read the capabilities ends when they are read.
+  const error = state.capabilities === "unavailable" ? undefined : state.error;
   if (state.runtime?.runtimeKey === runtime.runtimeKey) {
-    return { ...state, capabilities: "ready", runtime };
+    return { ...state, capabilities: "ready", runtime, error };
   }
   return {
     ...state,
+    error,
     capabilities: "ready",
     runtime,
     verifyFilters: false,
     estimate: undefined,
     shared: undefined,
     runtimeChanged: state.runtime !== undefined,
+  };
+}
+
+/**
+ * A session for another worktree. The request numbers carry on from the old
+ * one, so an answer still on its way to it matches nothing here.
+ */
+export function restartWorktreeStorage(state: WorktreeStorageState): WorktreeStorageState {
+  return {
+    ...INITIAL_WORKTREE_STORAGE_STATE,
+    capabilityRequest: state.capabilityRequest,
+    runRequest: state.runRequest,
   };
 }
 
@@ -86,7 +101,8 @@ export function reduceWorktreeStorage(
       return {
         ...state,
         capabilityRequest: state.capabilityRequest + 1,
-        capabilities: state.runtime ? state.capabilities : "loading",
+        // A retry after a failed read keeps saying why until it is answered.
+        capabilities: state.runtime || state.capabilities === "unavailable" ? state.capabilities : "loading",
       };
     case "capabilities-answered": {
       if (event.request !== state.capabilityRequest) return state;

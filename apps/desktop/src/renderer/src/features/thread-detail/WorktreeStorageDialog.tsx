@@ -6,6 +6,7 @@ import { useModalDialog } from "../../lib/useModalDialog";
 import {
   INITIAL_WORKTREE_STORAGE_STATE,
   reduceWorktreeStorage,
+  restartWorktreeStorage,
   worktreeStorageRunRequest,
   type WorktreeStorageEvent,
   type WorktreeStorageOutcome,
@@ -41,6 +42,11 @@ export function useWorktreeStorageSession(
   const targetKey = target ? `${target.backend ?? ""}\0${target.threadId}\0${target.worktreePath}` : "";
   const targetRef = useRef(target);
   targetRef.current = target;
+  // Read through a ref: a parent that builds the api object on each render
+  // must not restart the session each render.
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const hasApi = Boolean(api);
   const apply = useCallback((event: WorktreeStorageEvent): WorktreeStorageState => {
     if (!mountedRef.current) return stateRef.current;
     const next = reduceWorktreeStorage(stateRef.current, event);
@@ -50,7 +56,7 @@ export function useWorktreeStorageSession(
   }, []);
 
   const readCapabilities = useCallback(() => {
-    const read = api?.readWorktreeReflinkCapabilities;
+    const read = apiRef.current?.readWorktreeReflinkCapabilities;
     const current = targetRef.current;
     if (!read || !current) return;
     const request = apply({ type: "capabilities-requested" }).capabilityRequest;
@@ -58,27 +64,28 @@ export function useWorktreeStorageSession(
       (response) => apply({ type: "capabilities-answered", request, response }),
       (error: unknown) => apply({ type: "capabilities-failed", request, reason: errorText(error) }),
     );
-  }, [api, apply]);
+  }, [apply]);
 
   useEffect(() => {
     mountedRef.current = true;
-    stateRef.current = INITIAL_WORKTREE_STORAGE_STATE;
-    setState(INITIAL_WORKTREE_STORAGE_STATE);
-    if (!targetKey) return undefined;
+    const restarted = restartWorktreeStorage(stateRef.current);
+    stateRef.current = restarted;
+    setState(restarted);
+    if (!targetKey || !hasApi) return undefined;
     readCapabilities();
     // Settings announces most runtime changes; a config file edited by hand,
     // or another window, is caught when this window is looked at again.
-    const unsubscribe = api?.onSettingsRuntimeChanged?.(() => readCapabilities());
+    const unsubscribe = apiRef.current?.onSettingsRuntimeChanged?.(() => readCapabilities());
     window.addEventListener("focus", readCapabilities);
     return () => {
       mountedRef.current = false;
       unsubscribe?.();
       window.removeEventListener("focus", readCapabilities);
     };
-  }, [api, readCapabilities, targetKey]);
+  }, [hasApi, readCapabilities, targetKey]);
 
   const run = useCallback((mode: WorktreeStorageRunMode) => {
-    const execute = api?.runWorktreeReflink;
+    const execute = apiRef.current?.runWorktreeReflink;
     const current = targetRef.current;
     if (!execute || !current) return;
     const request = worktreeStorageRunRequest(stateRef.current, current, mode);
@@ -90,7 +97,7 @@ export function useWorktreeStorageSession(
       (response) => apply({ type: "run-answered", request: started.runRequest, response }),
       (error: unknown) => apply({ type: "run-failed", request: started.runRequest, reason: errorText(error) }),
     );
-  }, [api, apply]);
+  }, [apply]);
 
   const setVerifyFilters = useCallback((checked: boolean) => {
     apply({ type: "verify-filters-set", checked });
