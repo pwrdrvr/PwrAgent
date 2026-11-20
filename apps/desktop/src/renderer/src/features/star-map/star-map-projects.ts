@@ -173,11 +173,13 @@ function identityForRow(
  * whether a folder name can stand in for an origin is a question about
  * every other row that shares that name.
  *
- * On each owner, rows with the same resolved identity share the fleet
- * project by default. A single explicit checkout group claims that
- * identity for the owner, and its excluded clones get separate bodies.
- * When multiple explicit groups share an identity on one owner, each
- * row there gets a separate body to preserve the owner's grouping.
+ * On each owner, rows with matching reported origins share the fleet
+ * project by default. A folder name can stand in for an origin when the
+ * resolved identity has only one row on that owner. A single explicit
+ * checkout group claims that identity for the owner even when it is
+ * empty, and its excluded clones get separate bodies. When multiple
+ * explicit groups share an identity on one owner, each row there gets
+ * a separate body to preserve the owner's grouping.
  */
 export function starMapProjectIdentities(
   descriptorsByInstance?: ReadonlyMap<string, readonly NavigationDirectoryRow[]>,
@@ -188,6 +190,7 @@ export function starMapProjectIdentities(
     name: string;
     origin?: string;
     grouped: boolean;
+    emptyGroupCount: number;
   }[] = [];
   for (const [instanceId, descriptors] of descriptorsByInstance ?? []) {
     for (const descriptor of descriptors) {
@@ -197,6 +200,7 @@ export function starMapProjectIdentities(
         name: projectNameKey(descriptor.label),
         origin: descriptor.repositoryKey,
         grouped: Boolean(descriptor.checkoutPaths?.length),
+        emptyGroupCount: descriptor.emptyCheckoutGroupCount ?? 0,
       });
     }
   }
@@ -220,8 +224,11 @@ export function starMapProjectIdentities(
   for (const [instanceId, projects] of ownerProjects) {
     for (const [project, members] of projects) {
       const grouped = members.filter((member) => member.grouped);
+      const emptyGroupCount = members.reduce((count, member) => Math.max(count, member.emptyGroupCount), 0);
+      const groupCount = grouped.length + emptyGroupCount;
       for (const row of members) {
-        const sharesProject = grouped.length === 0 || (grouped.length === 1 && row === grouped[0]);
+        const sharesProject = (groupCount === 0 && (members.length === 1 || Boolean(row.origin)))
+          || (groupCount === 1 && row === grouped[0]);
         identities.set(`${instanceId}\u0000${row.key}`, sharesProject
           ? project : `checkout:${JSON.stringify([instanceId, row.key])}`);
       }

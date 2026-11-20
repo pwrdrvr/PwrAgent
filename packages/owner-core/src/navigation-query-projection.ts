@@ -812,6 +812,22 @@ function buildProjectGeometry(
     }
     project.latestUpdatedAt = Math.max(project.latestUpdatedAt ?? 0, thread.updatedAt ?? 0);
   }
+
+  // Keep checkout exclusions when a configured group loses its last visible
+  // thread. Carry the group on the geometry of the same origin without
+  // adding an empty project or a new card page for it.
+  const emptyGroupsByOrigin = new Map<string, number>();
+  for (const directory of index.directories) {
+    if (!directory.checkoutPaths?.length || !directory.path || projects.has(directory.key)) continue;
+    const origin = repositories.get(directory.path)?.repositoryKey;
+    if (origin) emptyGroupsByOrigin.set(origin, (emptyGroupsByOrigin.get(origin) ?? 0) + 1);
+  }
+  if (emptyGroupsByOrigin.size > 0) {
+    for (const project of projects.values()) {
+      const emptyGroupCount = project.repositoryKey && emptyGroupsByOrigin.get(project.repositoryKey);
+      if (emptyGroupCount) project.emptyCheckoutGroupCount = emptyGroupCount;
+    }
+  }
   return [...projects.values()].sort((left, right) => left.key.localeCompare(right.key));
 }
 

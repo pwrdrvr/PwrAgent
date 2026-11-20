@@ -14,6 +14,30 @@ function descriptor(label: string, path: string, total: number, checkoutPaths?: 
   };
 }
 
+function checkSameNameFolders(folderCount: number, peerReportsOrigin: boolean) {
+  const folders = Array.from({ length: folderCount }, (_, index) => ({
+    ...descriptor("api", `/client-${index}/api`, 1), repositoryKey: undefined,
+  }));
+  const peer = { ...descriptor("api", "/peer/api", 1), repositoryKey: peerReportsOrigin ? ORIGIN : undefined };
+  const identityFor = starMapProjectIdentities(new Map([["local", folders], ["peer", [peer]]]));
+
+  for (const { key } of folders) {
+    expect(identityFor("local", key)).toBe(`checkout:${JSON.stringify(["local", key])}`);
+  }
+  expect(identityFor("peer", peer.key)).toBe(peerReportsOrigin ? `repo:${ORIGIN}` : "name:api");
+
+  const single = starMapProjectIdentities(new Map([["local", [folders[0]]], ["peer", [peer]]]));
+  expect(single("local", folders[0].key)).toBe(single("peer", peer.key));
+}
+
+it("keeps two originless api folders on one owner separate", () => {
+  checkSameNameFolders(2, false);
+});
+
+it("uses folder names across owners without pooling ambiguous folders on one owner", () => {
+  fc.assert(fc.property(fc.integer({ min: 2, max: 5 }), fc.boolean(), checkSameNameFolders));
+});
+
 it("pools same-origin clones across owners unless an explicit local group separates them", () => {
   // Each size describes a disjoint set of clones: one ungrouped clone or one group.
   const checkoutCount = fc.oneof({ withCrossShrink: true }, fc.constant(1), fc.integer({ min: 2, max: 5 }));
