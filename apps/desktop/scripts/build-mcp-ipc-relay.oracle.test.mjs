@@ -266,23 +266,41 @@ it("invalidates linked input identity even when library size and mtime are resto
   const source = join(library, "value.c");
   const object = join(library, "value.o");
   const archive = join(library, "libvalue.a");
-  const buildLibrary = (value) => {
-    writeFileSync(source, `const char *oracle_library_value(void) { return "${value}"; }\n`);
-    execFileSync("cc", ["-c", "-O2", source, "-o", object], { stdio: "pipe" });
-    execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
-  };
-  buildLibrary("lib-one");
-  writeFileSync(f.source, "const char *oracle_library_value(void);\n" + readFileSync(f.source, "utf8").replace('puts("source-one ', 'puts(oracle_library_value()); puts("source-one '));
+  writeFileSync(source, 'const char *oracle_library_value(void) { return "lib-one"; }\n');
+  execFileSync("cc", ["-c", "-O2", source, "-o", object], { stdio: "pipe" });
+  execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
+  // Use a whole-second timestamp so utimesSync can restore it exactly.
+  utimesSync(archive, 1, 1);
+  // This oracle only needs a caller for the archive symbol. The other cases
+  // exercise the real relay entry point and its headers.
+  writeFileSync(f.source, `#include <stdio.h>
+const char *oracle_library_value(void);
+int main(void) {
+  puts(oracle_library_value());
+  return 0;
+}
+`);
   writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${archive}`)}, "-o", output`));
   const output = f.build({ reuse: true });
-  expect(existsSync(`${output}.build.json`)).toBe(true);
-  expect(observe(output)).toBe("lib-one\nsource-one header-one flag-1");
-  const original = statSync(archive);
-  buildLibrary("lib-two");
-  utimesSync(archive, original.atime, original.mtime);
-  expect(statSync(archive).size).toBe(original.size);
+  const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
+  expect(inputs.some((input) => input.path === archive)).toBe(true);
+  expect(observe(output)).toBe("lib-one");
+  const original = statSync(archive, { bigint: true });
+  // Change the one object string in place. Its length and the archive layout
+  // stay fixed, and there is no second compiler or archiver invocation.
+  const bytes = readFileSync(archive);
+  const offset = bytes.indexOf("lib-one\0");
+  expect(offset).toBeGreaterThanOrEqual(0);
+  expect(bytes.indexOf("lib-one\0", offset + 1)).toBe(-1);
+  bytes.write("lib-two", offset);
+  writeFileSync(archive, bytes);
+  utimesSync(archive, 1, 1);
+  const updated = statSync(archive, { bigint: true });
+  expect(updated.ino).toBe(original.ino);
+  expect(updated.size).toBe(original.size);
+  expect(updated.mtimeNs).toBe(original.mtimeNs);
   f.build({ reuse: true });
-  expect(observe(output)).toBe("lib-two\nsource-one header-one flag-1");
+  expect(observe(output)).toBe("lib-two");
 });
 
 it("removes an installed Outpost helper after a failed POSIX rebuild and rejects Windows", () => {
