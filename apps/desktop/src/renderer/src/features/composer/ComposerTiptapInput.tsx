@@ -475,7 +475,10 @@ export function buildCommandChipDecorations(
     Decoration.inline(from, to, {
       class: "chip skill-chip composer-tiptap-input__command tooltip-target",
       "data-command-chip": chip.text,
-      ...(chip.tooltip ? { "data-tooltip": chip.tooltip } : {}),
+      ...(chip.tooltip ? {
+        "data-tooltip": chip.tooltip,
+        "data-tooltip-describe-editor": "",
+      } : {}),
     }),
   ]);
 }
