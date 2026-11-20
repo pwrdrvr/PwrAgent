@@ -1,4 +1,4 @@
-import { buildThreadIdentityKey, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh,
+import { buildThreadIdentityKey, directoryIncludesCheckout, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh,
   type AgentEvent, type MarkNavigationDirectorySeenRequest, type MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { ArchiveThreadRequest, ArchiveThreadResponse, RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./backend-registry";
@@ -27,11 +27,19 @@ export async function removeLocalNavigationDirectory(
   let changedDuringRead = false;
   const unsubscribe = registry.onEvent(() => { changedDuringRead = true; });
   let members: ArchiveThreadRequest[] = [];
+  let checkoutProject = false;
   try {
     const index = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory" });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
     if (changedDuringRead) throw new Error("Owner state changed during the directory check. Refresh navigation and try again.");
-    const directory = index.directories.find((candidate) => candidate.key === request.directoryKey);
+    const directory = index.directories.find((candidate) => directoryIncludesCheckout(candidate, request.directoryKey));
+    if (directory && directory.key !== request.directoryKey) {
+      throw new Error("This checkout belongs to a group. Choose the project from Directories.");
+    }
+    checkoutProject = Boolean(directory?.checkoutPaths);
+    if (checkoutProject && !request.archiveThreads) {
+      throw new Error("Use Project Checkouts to ungroup this project.");
+    }
     if (archiveWorkspace && directory?.kind !== "workspace") throw new Error("This workspace is no longer available on its owner.");
     if (request.archiveThreads && directory) {
       const keys = new Set(directory.threadKeys);
@@ -60,6 +68,7 @@ export async function removeLocalNavigationDirectory(
     }
     // Workspaces is a permanent navigation group, not a project registration.
     if (archiveWorkspace) return { directoryKey: request.directoryKey, cleanup };
+    if (checkoutProject) return { directoryKey: request.directoryKey, cleanup, registrationRetained: true };
     // Archiving can race new threads. Never hide a directory that still owns work.
     const response = await removeLocalNavigationDirectory({ ...request, archiveThreads: false });
     return { ...response, cleanup };

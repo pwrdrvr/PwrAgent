@@ -6119,7 +6119,7 @@ function useComposerController(props: ComposerProps) {
     tokens?: ComposerSkillToken[],
   ): NavigationDirectorySummary[] => {
     const excludePaths = [
-      props.directory?.path,
+      props.thread ? undefined : props.directory?.path,
       props.launchpad?.directoryPath,
       ...(props.thread?.linkedDirectories ?? []).flatMap((linked) => [
         linked.path,

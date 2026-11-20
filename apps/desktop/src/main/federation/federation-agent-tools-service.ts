@@ -451,6 +451,7 @@ async function listInstanceProjects(
         label: directory.label,
         kind: directory.kind,
         path: directory.path,
+        ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         ...(directory.repositoryKeys?.length ? { repositoryKeys: directory.repositoryKeys } : {}),
         ...(directory.localAvailability ? { localAvailability: directory.localAvailability } : {}),

@@ -129,6 +129,8 @@ export type NavigationLaunchpadAgent = Pick<
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
+  checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
   gitWorkingStateFetchedAt?: number;
   /** See `NavigationRow.homeProject`. */
@@ -1493,11 +1495,33 @@ export type NavigationDirectoryGitStatus = {
   statusUnavailableReason?: string;
 };
 
+export type ProjectCheckoutGroup = {
+  preferredPath: string;
+  paths: string[];
+  repositoryKey?: string;
+};
+
+export type SetProjectCheckoutGroupRequest = {
+  /** The checkout by which the editor opened the group. */
+  projectPath: string;
+  /** The group as shown when the editor opened, empty for an ungrouped checkout. */
+  previousPaths: string[];
+  group: ProjectCheckoutGroup;
+};
+
+export type NavigationCheckoutProject = {
+  key: string;
+  label: string;
+  repositoryKey?: string;
+};
+
 export type NavigationDirectorySummary = {
   key: string;
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  /** Explicitly grouped checkout roots. The row path is the preferred checkout. */
+  checkoutPaths?: string[];
   /**
    * The row was derived from a mounted remote thread, but this viewer has not
    * registered a matching local checkout yet. The Directories lens keeps the
@@ -2258,6 +2282,7 @@ export type NavigationRow = {
   hasAgentCommands?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
+  checkoutProject?: NavigationCheckoutProject;
   linkedDirectories: LinkedDirectorySummary[];
   linkedDirectoriesTruncated?: boolean;
   gitBranch?: string;
@@ -2323,6 +2348,7 @@ export type NavigationDirectoryRow = {
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  checkoutPaths?: string[];
   /**
    * Cross-machine repository identity for this row: the directory's
    * `remote.origin.url` as `host/owner/repo`, from
@@ -3916,7 +3942,11 @@ export type RemoveNavigationDirectoryRequest = {
   archiveThreads?: boolean;
   federationTarget?: FederationTarget;
 };
-export type RemoveNavigationDirectoryResponse = { directoryKey: string; cleanup?: ArchiveThreadCleanupResult[] };
+export type RemoveNavigationDirectoryResponse = {
+  directoryKey: string;
+  cleanup?: ArchiveThreadCleanupResult[];
+  registrationRetained?: true;
+};
 
 /** Resolve complete directory membership on its owner; never accept a renderer row allowlist. */
 export type MarkNavigationDirectorySeenRequest = {
