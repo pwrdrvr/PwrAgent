@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gitBoundary from "../app-server/git-executable";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { WorktreeRecoveryService } from "../app-server/worktree-recovery-service";
 import { PWRAGENT_WORKTREE_LOCK_REASON } from "../app-server/worktree-volume-lock";
@@ -163,6 +164,81 @@ describe("WorktreeRecoveryService", () => {
       expect(await readFile(file, "utf8")).toBe(contents);
       expect(await git(repoPath, ["rev-parse", snapshotRef])).toBe(snapshotCommit);
     });
+  });
+
+  it.each(["attached", "detached"] as const)("restores dirty edits under a non-ASCII path with legacy log encoding (%s)", async (mode) => {
+    const renamed = path.join(path.dirname(worktreePath), "café");
+    await git(repoPath, ["worktree", "move", worktreePath, renamed]);
+    const worktree = await realpath(renamed);
+    const file = path.join(worktree, "deliver.ts");
+    await writeFile(file, "export const delay = 300;\n");
+    const head = await git(worktree, ["rev-parse", "HEAD"]);
+    const status = await git(worktree, ["status", "--porcelain=v2"]);
+    const request = { backend: "codex" as const, threadId: "t1", repositoryPath: repoPath, worktreePath: worktree };
+    const { snapshotRef, snapshotCommit } = await new WorktreeArchiveService().hibernate({
+      ...request, capSnapshotBytes: 1024, beforeRemove: async () => () => {},
+    });
+    await git(repoPath, ["config", "i18n.logOutputEncoding", "ISO-8859-1"]);
+
+    await expect(service.recreate({ ...request, branch: "fix/retry-backoff", detached: mode === "detached" })).resolves.toMatchObject({
+      status: "recreated", checkpoint: { snapshotCommit, restored: true, changedFileCount: 1 },
+    });
+    expect(await git(worktree, ["rev-parse", "HEAD"])).toBe(head);
+    expect(await git(worktree, ["status", "--porcelain=v2"])).toBe(status);
+    expect(await readFile(file, "utf8")).toBe("export const delay = 300;\n");
+    expect(await git(repoPath, ["rev-parse", snapshotRef])).toBe(snapshotCommit);
+  });
+
+  // The current branch must still contain the pinned clean commit. A reset
+  // requires detached recovery, including a reset after the add preflight.
+  it.each(["before preflight", "during add"] as const)("offers detached recovery after a clean checkpoint's branch resets %s", async (when) => {
+    const file = path.join(worktreePath, "deliver.ts");
+    const branch = "fix/retry-backoff";
+    await writeFile(file, "export const delay = 2;\n");
+    await git(worktreePath, ["commit", "-am", "change the delay"]);
+    const head = await git(worktreePath, ["rev-parse", "HEAD"]);
+    const request = { backend: "codex" as const, threadId: "t1", repositoryPath: repoPath, worktreePath };
+    const { snapshotRef, snapshotCommit, sourceHead } = await new WorktreeArchiveService().archive(request);
+    const reset = () => git(repoPath, ["branch", "-f", branch, "main"]);
+    if (when === "before preflight") await reset();
+    const runGit = gitBoundary.runGitCommand;
+    const spy = vi.spyOn(gitBoundary, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (when === "during add" && args[0] === "worktree" && args[1] === "add") await reset();
+      return await runGit(cwd, args, options);
+    });
+    const recovery = { ...request, branch, checkpoint: { snapshotRef, snapshotCommit, sourceHead } };
+    try {
+      await expect(service.recreate(recovery)).resolves.toMatchObject({ status: "failed", reason: "branch-moved" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await exists(worktreePath)).toBe(false);
+    const resetTip = await git(repoPath, ["rev-parse", "main"]);
+    expect(await git(repoPath, ["rev-parse", branch])).toBe(resetTip);
+
+    await expect(service.recreate({ ...recovery, detached: true })).resolves.toMatchObject({
+      status: "recreated", checkpoint: { snapshotCommit, restored: true, changedFileCount: 0 },
+    });
+    expect(await git(worktreePath, ["rev-parse", "HEAD"])).toBe(head);
+    expect(await git(worktreePath, ["branch", "--show-current"])).toBe("");
+    expect(await git(worktreePath, ["status", "--porcelain=v2"])).toBe("");
+    expect(await readFile(file, "utf8")).toBe("export const delay = 2;\n");
+    expect(await git(repoPath, ["rev-parse", branch])).toBe(resetTip);
+  });
+
+  it("restores a clean checkpoint on a branch that advanced from the saved commit", async () => {
+    const branch = "fix/retry-backoff";
+    const request = { backend: "codex" as const, threadId: "t1", repositoryPath: repoPath, worktreePath };
+    const checkpoint = await new WorktreeArchiveService().archive(request);
+    const saved = checkpoint.snapshotCommit;
+    const tip = await git(repoPath, ["commit-tree", `${saved}^{tree}`, "-p", saved, "-m", "advance branch"]);
+    await git(repoPath, ["branch", "-f", branch, tip]);
+
+    await expect(service.recreate({ ...request, branch, checkpoint })).resolves.toMatchObject({
+      status: "recreated", branch, checkpoint: { restored: true, changedFileCount: 0 },
+    });
+    expect(await git(worktreePath, ["rev-parse", "HEAD"])).toBe(tip);
+    expect(await git(worktreePath, ["status", "--porcelain=v2"])).toBe("");
   });
 
   it("refuses a path something now occupies and changes nothing", async () => {

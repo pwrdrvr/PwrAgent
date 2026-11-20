@@ -110,8 +110,8 @@ function parseRecords(output: string): RecordedWorktree[] {
 
 /**
  * Puts a deleted worktree back where a thread recorded it, and releases
- * Git's record of a worktree a thread is leaving. Every check runs before the
- * first write, so a refusal leaves the repository as it found it.
+ * Git's record of a worktree a thread is leaving. Preflight checks run before
+ * the first write, and a clean checkpoint is verified again after checkout.
  */
 export class WorktreeRecoveryService {
   constructor(private readonly options: { gitEnv?: NodeJS.ProcessEnv } = {}) {}
@@ -150,6 +150,7 @@ export class WorktreeRecoveryService {
         checkpoint ? "done" : "skipped",
         checkpoint ? undefined : params.skipCheckpoint ? "Skipped on request." : "No checkpoint was saved.",
       );
+      const cleanCommit = checkpoint && checkpoint.base === checkpoint.commit ? checkpoint.commit : undefined;
 
       const recorded = await this.listRecords(repositoryPath);
       const ownRecord = (await Promise.all(recorded.map(async (record) => ({
@@ -193,6 +194,9 @@ export class WorktreeRecoveryService {
             `${branch} moved since its checkout was hibernated. The saved changes are kept in ${checkpoint?.ref ?? "a snapshot"}.`,
           );
         }
+        if (cleanCommit && tip !== cleanCommit) {
+          await this.assertCleanCheckpointInHistory(repositoryPath, cleanCommit, tip, branch);
+        }
         const elsewhere = recorded.find((record) => record !== ownRecord && record.branch === branch);
         if (elsewhere) {
           throw new RecoveryRefusal(
@@ -226,6 +230,16 @@ export class WorktreeRecoveryService {
         addArgs: detached ? ["--detach", worktreePath, startPoint] : [worktreePath, startPoint],
         git: (args) => this.git(repositoryPath, args),
       });
+      if (cleanCommit && !detached) {
+        try {
+          // A branch can move between preflight and Git's worktree add.
+          await this.assertCleanCheckpointInHistory(worktreePath, cleanCommit, "HEAD", startPoint);
+        } catch (error) {
+          // Let Git refuse removal if anything has already edited the new checkout.
+          await removeManagedWorktree({ worktreePath, git: (args) => this.git(repositoryPath, args) });
+          throw error;
+        }
+      }
       mark("add-worktree", "done");
 
       const warnings: string[] = [];
@@ -334,11 +348,17 @@ export class WorktreeRecoveryService {
   }
 
   private async inferCheckpointBase(repositoryPath: string, commit: string, worktreePaths: ReadonlySet<string>): Promise<string> {
-    const { stdout } = await this.git(repositoryPath, ["show", "-s", "--no-notes", "--no-show-signature", "--format=%P%x00%B", commit, "--"]);
-    const [parent, message = ""] = stdout.trimEnd().split("\0", 2);
+    // The archive writes paths as UTF-8. Read the commit without log recoding.
+    const { stdout } = await this.git(repositoryPath, ["cat-file", "commit", commit]);
+    const messageStart = stdout.indexOf("\n\n");
+    if (messageStart === -1) return commit;
+    const parents = stdout.slice(0, messageStart).split("\n").filter((line) => line.startsWith("parent "));
+    if (parents.length !== 1) return commit;
+    const parent = parents[0]!.slice("parent ".length);
+    const message = stdout.slice(messageStart + 2).trimEnd();
     const subjectEnd = message.indexOf("\n");
     const subjectPrefix = worktreeArchiveInternals.snapshotCommitSubjectPrefix;
-    if (!parent || parent.includes(" ") || subjectEnd === -1 || !message.startsWith(subjectPrefix)) return commit;
+    if (subjectEnd === -1 || !message.startsWith(subjectPrefix)) return commit;
     if (!message.slice(subjectPrefix.length, subjectEnd).includes(":")) return commit;
 
     // A synthetic snapshot names this checkout and its single parent. Keep
@@ -352,6 +372,15 @@ export class WorktreeRecoveryService {
       if (source === `Source HEAD: ${parent}`) return parent;
     }
     return commit;
+  }
+
+  private async assertCleanCheckpointInHistory(cwd: string, commit: string, tip: string, branch: string): Promise<void> {
+    try {
+      await this.git(cwd, ["merge-base", "--is-ancestor", commit, tip]);
+    } catch (error) {
+      if ((error as { code?: number }).code !== 1) throw error;
+      throw new RecoveryRefusal("branch-moved", "add-worktree", `The branch ${branch} no longer contains the saved commit.`);
+    }
   }
 
   private async applyCheckpoint(

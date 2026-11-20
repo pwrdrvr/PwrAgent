@@ -1483,9 +1483,8 @@ export class ThreadArchiveCoordinator {
           : { branch: snapshot.sourceBranch, detached: !snapshot.sourceBranch, expectedHead: snapshot.sourceHead }),
       }));
     let result = await recreate();
-    // The branch is checked out elsewhere, moved, or gone. Every refusal for
-    // those comes before Git writes anything, so the checkout comes back at
-    // its saved HEAD on a detached HEAD instead, and the branch is untouched.
+    // Recovery leaves no checkout behind when the branch is checked out
+    // elsewhere, moved, or gone. Retry at the saved HEAD, detached.
     const conflict = result.status === "failed" ? DETACHED_RESTORE_REASONS[result.reason] : undefined;
     let detachedFrom: WorktreeSnapshotSummary["detachedFrom"];
     if (result.status === "failed" && conflict && snapshot.sourceBranch && snapshot.sourceHead) {
