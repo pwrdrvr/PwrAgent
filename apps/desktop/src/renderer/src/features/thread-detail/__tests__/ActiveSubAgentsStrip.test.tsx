@@ -226,41 +226,31 @@ describe("ActiveSubAgentsStrip", () => {
 
     it("labels a partial preview and dismisses only the shown failures", async () => {
       const failures = [
-        buildSubAgent({ monitorId: "failed-a", status: "failed" }),
-        buildSubAgent({ monitorId: "failed-b", status: "failure" }),
+        buildSubAgent({ monitorId: "failed-a", attemptId: "attempt-a", status: "failed" }),
+        buildSubAgent({ monitorId: "failed-b", attemptId: "attempt-b", status: "failure" }),
       ];
       const preview = { ...buildThread([]), activeSubAgents: failures, activeSubAgentsIncomplete: true as const };
-      const withMore = { ...preview, activeSubAgentsMoreInPanel: true as const };
       const dismissFailedSubAgents = vi.fn(async () => ({ dismissedCount: 2 }));
-      // The owner removes the dismissed failures; the next preview it serves
-      // still has more in the panel.
-      const refresh = vi.fn(async () => {
-        view.rerender(<ActiveSubAgentsStrip
-          desktopApi={{ dismissFailedSubAgents }}
-          thread={{ ...withMore, activeSubAgents: [] }}
-        />);
-      });
-      const view = render(
-        <ActiveSubAgentsStrip desktopApi={{ dismissFailedSubAgents }} thread={preview} />,
-      );
+      const refresh = vi.fn(async () => undefined);
+      const stripProps = { desktopApi: { dismissFailedSubAgents }, onRefreshNavigation: refresh };
+      const { rerender } = render(<ActiveSubAgentsStrip {...stripProps} thread={preview} />);
       expect(screen.queryByText("More in Sub-agents")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Dismiss 2 shown failures" })).toBeInTheDocument();
-      view.rerender(
-        <ActiveSubAgentsStrip
-          desktopApi={{ dismissFailedSubAgents }}
-          onRefreshNavigation={refresh}
-          thread={withMore}
-        />,
-      );
+      expect(screen.getByRole("button", { name: "Dismiss 2 shown failures" })).toBeEnabled();
+      const previewWithMore = { ...preview, activeSubAgentsMoreInPanel: true as const };
+      rerender(<ActiveSubAgentsStrip {...stripProps} thread={previewWithMore} />);
       expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Dismiss 2 shown failures" }));
       await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
       expect(dismissFailedSubAgents).toHaveBeenCalledExactlyOnceWith({
-        backend: "codex", threadId: "parent-thread", attempts: [
-          { monitorId: "failed-a", attemptId: "1800000000000" },
-          { monitorId: "failed-b", attemptId: "1800000000000" },
+        backend: "codex",
+        threadId: preview.id,
+        attempts: [
+          { monitorId: "failed-a", attemptId: "attempt-a" },
+          { monitorId: "failed-b", attemptId: "attempt-b" },
         ],
       });
+      expect(screen.getByRole("button", { name: "Failed sub-agents, 2" })).toBeVisible();
+      rerender(<ActiveSubAgentsStrip {...stripProps} thread={{ ...previewWithMore, activeSubAgents: [] }} />);
       expect(screen.queryByRole("button", { name: "Failed sub-agents, 2" })).not.toBeInTheDocument();
       expect(screen.getByText("More in Sub-agents")).toBeInTheDocument();
     });
