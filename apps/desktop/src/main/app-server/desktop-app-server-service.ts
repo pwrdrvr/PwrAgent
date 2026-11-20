@@ -8352,6 +8352,7 @@ class DesktopAppServerService {
         authorizeLocalFile: async ({ backend, threadId }, file) => authorizeLocalFile(
           await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(backend, threadId), file),
         readLocalFile,
+        canClaimLocalFileWake: () => getDesktopBackendRegistry().tryAcquireThreadOwnership(),
         readCiRun: async (url) => await this.readDependencyCiRun(url),
         ciRunUrlOptions: () => this.ciRunUrlOptions(),
         ciRunChecked: (url) => this.getThreadDependencyCiRunPoller().checked(url),

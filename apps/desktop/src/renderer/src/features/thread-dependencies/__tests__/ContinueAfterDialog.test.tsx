@@ -83,6 +83,16 @@ describe("Continue After dialog", () => {
     open.mockRestore();
   });
 
+  it("shows a local watcher as text with no prerequisite thread to open", async () => {
+    const watcher: ThreadDependency = {
+      ...dependency,
+      conditions: [{ backend: "codex", threadId: "", when: "local_file", localFile: { path: "/work/result", since: 1 } }],
+    };
+    renderDialog(searchingApi(vi.fn(async () => ({ dependencies: [watcher] }))));
+    const label = await screen.findByText("Local watcher");
+    expect(label.closest("a, button")).toBeNull();
+  });
+
   it("shows a durable recovery suspension and lets the local operator rearm it", async () => {
     const hook = { ...dependency, repeat: true, conditions: [{ backend: "codex" as const, threadId: "waiting", when: "compaction_completed" as const }] };
     const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => ({

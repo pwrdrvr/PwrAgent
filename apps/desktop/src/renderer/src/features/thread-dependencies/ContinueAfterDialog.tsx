@@ -913,8 +913,8 @@ function DependencyCard(props: {
                   >
                     {threadDependencyConditionName(condition)}
                   </button>
-                ) : condition.subject !== undefined ? (
-                  <span className="thread-dependencies__thread">{condition.subject}</span>
+                ) : condition.localFile || condition.subject !== undefined ? (
+                  <span className="thread-dependencies__thread">{conditionName(condition)}</span>
                 ) : (
                   <DependencyThreadLink
                     backend={condition.backend}

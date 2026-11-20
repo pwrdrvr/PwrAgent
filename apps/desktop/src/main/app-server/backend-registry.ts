@@ -14590,6 +14590,16 @@ export class DesktopBackendRegistry {
     return this.closeOperation;
   }
 
+  /** Reserve the profile owner before a durable wake is claimed. */
+  tryAcquireThreadOwnership(): boolean {
+    try {
+      this.assertThreadOwnership();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private assertThreadOwnership(): void {
     if (this.closed || this.shutdownRequested) throw new Error("Desktop backend registry is closed");
     this.ownerAdmission?.assertOwnership();

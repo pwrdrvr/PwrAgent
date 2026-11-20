@@ -2,7 +2,7 @@ import { mkdir, symlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";
+import { buildDependencyTodo, ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";
 import { authorizeLocalFile, LOCAL_FILE_CHECK_INTERVAL_MS, LocalFilePoller, readLocalFile } from "../app-server/thread-dependency-local-files";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
@@ -121,6 +121,43 @@ describe("observing an existing local watcher", () => {
     await restarted.checkLocalFiles();
     expect(admit).toHaveBeenCalledTimes(1);
     expect(store.active()).toHaveLength(0);
+  });
+
+  it.each(["exited", "unreadable"] as const)("keeps work blocked when the watcher is %s", async (outcome) => {
+    const owner = coordinator({ readLocalFile: async () => {
+      if (outcome === "unreadable") throw new Error("permission denied");
+      return outcome;
+    } });
+    await register(owner, "release", "/release/terminal.marker");
+    await owner.checkLocalFiles();
+    const [wait] = store.list("codex", "release");
+    expect(wait).toMatchObject({ status: "delivered", outcome: "failure", evidence: [{ state: "failed" }] });
+    const card = buildDependencyTodo({ ...wait!, handoff: true });
+    expect(card.action).toBeUndefined();
+    expect(card.detail).toContain("Not started: Report the release result.");
+    expect(card.title).toMatch(/^Local watcher failed/);
+  });
+
+  it("leaves a terminal wake ready until a thread owner can claim it", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 6 }), async (deniedChecks) => {
+      submit.mockClear();
+      const consumer = crypto.randomUUID();
+      const marker = `/release/${consumer}/terminal.marker`;
+      terminal.add(marker);
+      let hasLease = false;
+      const owner = coordinator({
+        canClaimLocalFileWake: () => hasLease,
+      });
+      await register(owner, consumer, marker);
+      for (let i = 0; i < deniedChecks; i++) await owner.checkLocalFiles();
+      expect(store.list("codex", consumer)[0]).toMatchObject({ status: "ready", outcome: "success" });
+      expect(owner.hasPendingLocalFiles()).toBe(true);
+      expect(submit).not.toHaveBeenCalled();
+      hasLease = true;
+      await owner.checkLocalFiles();
+      await owner.checkLocalFiles();
+      expect(submit).toHaveBeenCalledTimes(1);
+    }), { numRuns: 12 });
   });
 
   it("budgets one watcher from registration through terminal delivery", async () => {
