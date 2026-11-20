@@ -1,5 +1,5 @@
 import { setImmediate as settle } from "node:timers/promises";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { registryModules } from "../app-server/backend-registry-wiring";
