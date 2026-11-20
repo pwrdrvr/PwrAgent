@@ -1,7 +1,8 @@
+import { EventEmitter } from "node:events";
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { OperatorRequestsChangedEvent } from "@pwragent/shared/contracts/operator-requests";
+import type { OwnerQueueEvents } from "../owner-queue-services";
 import {
   OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL, OPERATOR_REQUESTS_LIST_CHANNEL, OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
@@ -15,8 +16,7 @@ const fixture = vi.hoisted(() => {
       target, isDestroyed: () => false, send: vi.fn(),
     })),
     handlers: new Map<string, (event: unknown, request: unknown) => Promise<unknown>>(),
-    remote: vi.fn(async (..._args: unknown[]): Promise<unknown> => ["question-1"]), publish: vi.fn(), localDismiss: vi.fn(), localList: vi.fn(() => []),
-    broadcast: undefined as ((event: OperatorRequestsChangedEvent) => void) | undefined,
+    remote: vi.fn(async (..._args: unknown[]): Promise<unknown> => ["question-1"]), localDismiss: vi.fn(), localList: vi.fn(() => []),
     remoteListener: undefined as ((event: AgentEvent) => void) | undefined,
     peerListener: undefined as (() => void) | undefined,
   };
@@ -26,22 +26,12 @@ vi.mock("electron", () => ({ ipcMain: {
   removeHandler: (channel: string) => fixture.handlers.delete(channel),
   handle: (channel: string, handler: (event: unknown, request: unknown) => Promise<unknown>) => fixture.handlers.set(channel, handler),
 } }));
-vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
-vi.mock("../state/app-state", () => ({ getAppStateDb: () => ({}) }));
-vi.mock("../storage/desktop-operator-request-storage", () => ({ createOperatorRequestStorage: () => ({}) }));
-vi.mock("../operator-requests/operator-request-service", () => ({ OperatorRequestService: class {
-  constructor(options: { broadcast: (event: OperatorRequestsChangedEvent) => void }) { fixture.broadcast = options.broadcast; }
-  start() {}
-  stop() {}
-} }));
-vi.mock("../operator-requests/operator-request-runtime", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../operator-requests/operator-request-runtime")>(),
-  installOperatorRequestService: () => {},
+vi.mock("../operator-requests/operator-request-runtime", () => ({
   localOperatorQuestionOperations: { dismiss: fixture.localDismiss, listDismissed: fixture.localList },
 }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
-  requestOperatorQuestionOperation: fixture.remote, publishOperatorQuestionsChanged: fixture.publish, publishOperatorRequestsChanged: vi.fn(),
+  requestOperatorQuestionOperation: fixture.remote,
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
   onPeerStatusChanged: (listener: () => void) => { fixture.peerListener = listener; return () => {}; },
 }) }));
@@ -50,6 +40,8 @@ vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 import { registerOperatorRequestIpcHandlers } from "../shell/ipc/operator-requests-ipc";
 import { mainWindowEventChannels } from "../shell/main-window-channels";
 import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../shell/window-channels";
+
+const events: OwnerQueueEvents = new EventEmitter();
 
 // The real registry, fed the channels createMainWindow registers, so a
 // window missing a channel misses its broadcasts here as it does in the app.
@@ -64,7 +56,10 @@ function registerTestWindows(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   registerTestWindows();
-  registerOperatorRequestIpcHandlers();
+  registerOperatorRequestIpcHandlers({
+    operatorRequests: { list: () => ({ serverRequests: [], questions: [], seenKeys: [] }), markSeen: vi.fn() },
+    events,
+  });
 });
 
 const question = { backend: "codex", threadId: "thread-1", messageId: "question-1" };
@@ -104,11 +99,10 @@ describe("operator question IPC ownership", () => {
     expect(fixture.localDismiss).not.toHaveBeenCalled();
   });
 
-  it("serves local requests and publishes scoped owner changes to local windows and federation", async () => {
+  it("serves local requests and sends scoped owner changes to local windows", async () => {
     await fixture.handlers.get(OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL)!({ sender: fixture.windows[0] }, question);
     expect(fixture.localDismiss).toHaveBeenCalledWith(question);
-    fixture.broadcast!({ reason: "questions", backend: "codex", threadId: "thread-1" });
-    expect(fixture.publish).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" });
+    events.emit("operatorRequestsChanged", { reason: "questions", backend: "codex", threadId: "thread-1" });
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
   });

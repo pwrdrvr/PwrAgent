@@ -238,6 +238,8 @@ describe("DesktopBackendRegistry", () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-research-"));
       const db = openInMemoryStateDb();
       const storage = new ResearchStore(db);
+      let coordinatorThreadId: string | undefined;
+      const coordinatorFinished = createDeferred<void>();
       const workerFinished = createDeferred<void>();
       const atProviderPrompt = vi.fn((threadId: string, providerTurnId?: string) => {
         const worker = { backend, threadId };
@@ -256,13 +258,14 @@ describe("DesktopBackendRegistry", () => {
           discoverModels: async () => [],
           query: ({ options = {} }) => {
             const threadId = options.sessionId!;
+            const finished = threadId === coordinatorThreadId ? coordinatorFinished : workerFinished;
             atProviderPrompt(threadId);
             async function* messages(): AsyncGenerator<ClaudeMessage> {
               yield { type: "system", subtype: "init", session_id: threadId } as ClaudeMessage;
-              await workerFinished.promise;
+              await finished.promise;
               yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
             }
-            return Object.assign(messages(), { close: vi.fn(() => workerFinished.resolve()), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+            return Object.assign(messages(), { close: vi.fn(() => finished.resolve()), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
           },
         },
       }) : createAcpResearchRegistry();
@@ -298,6 +301,7 @@ describe("DesktopBackendRegistry", () => {
       const client = new McpClient({ name: "research-worker-fixture", version: "1.0.0" });
       try {
         const { threadId } = await registry.startThread({ backend, cwd: root, executionMode: "default" });
+        coordinatorThreadId = threadId;
         const coordinator = { backend, threadId };
         const parentTurn = await registry.startTurn({ ...coordinator, input: [{ type: "text", text: "Coordinate research" }] });
         expect(registry.researchContextIsLive({ ...coordinator, turnId: parentTurn.turnId, callId: "start", transport: "mcp" })).toBe(true);
@@ -342,11 +346,18 @@ describe("DesktopBackendRegistry", () => {
         }
         expect(storage.header(run!.id)?.activeWorkers).toBe(0);
         expect(storage.approaches(run!.id, { worker })).toMatchObject([{ state: "ended", worker: { ...worker, turnId } }]);
+        // A worker's terminal releases its slot while the coordinator is still live.
+        expect(registry.getActiveTurnForThread(coordinator)?.turnId).toBe(parentTurn.turnId);
         expect(onError).not.toHaveBeenCalled();
+        if (backend === "claude") {
+          coordinatorFinished.resolve();
+          await vi.waitFor(() => expect(registry.getActiveTurnForThread(coordinator)).toBeUndefined());
+        }
       } finally {
         await client.close();
         unsubscribe();
         research.close();
+        coordinatorFinished.resolve();
         workerFinished.resolve();
         await registry.close();
         db.close();
