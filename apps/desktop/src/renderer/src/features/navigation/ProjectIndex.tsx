@@ -28,7 +28,6 @@ import {
   projectTypeaheadIndex,
   sameProjectSpy,
   spyProjects,
-  type ProjectBlockBox,
   type ProjectSpy,
 } from "./project-index";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
@@ -58,21 +57,97 @@ const TYPEAHEAD_MS = 600;
 /** How long a dropped name keeps its outline. Matches the list's reveal. */
 const DROP_FLASH_MS = 1200;
 
-/** Read the Directories lens's project sections, in px from the list's top
- *  edge. The section is measured, not its sticky header: a stuck header
- *  reports where it is stuck, not where its project is. */
-function measureBlocks(list: HTMLElement): ProjectBlockBox[] {
-  const top = list.getBoundingClientRect().top;
-  const boxes: ProjectBlockBox[] = [];
-  for (const section of list.querySelectorAll<HTMLElement>(
-    "section.directory-row[data-directory-key]",
-  )) {
-    const key = section.dataset["directoryKey"];
-    if (key === undefined) continue;
-    const rect = section.getBoundingClientRect();
-    boxes.push({ key, top: rect.top - top, bottom: rect.bottom - top });
-  }
-  return boxes;
+function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => void): () => void {
+  let list: HTMLElement | null = null;
+  let sections: Element[] = [];
+  let frame = 0;
+
+  const measure = (): void => {
+    const target = list;
+    const height = target?.clientHeight ?? 0;
+    if (target === null || height === 0 || sections.length === 0) {
+      publish(NO_PROJECT_SPY);
+      return;
+    }
+    const top = target.getBoundingClientRect().top;
+    publish(spyProjects(sections.length, (index) => {
+      const section = sections[index]!;
+      const rect = section.getBoundingClientRect();
+      return {
+        key: section.getAttribute("data-directory-key")!,
+        top: rect.top - top,
+        bottom: rect.bottom - top,
+      };
+    }, height));
+  };
+  const schedule = (): void => {
+    if (frame !== 0) return;
+    frame = window.requestAnimationFrame(() => {
+      frame = 0;
+      measure();
+    });
+  };
+
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+  const findList = () => region.querySelector<HTMLElement>(":scope > .directory-list");
+  // DirectoriesList renders its sections as keyed direct children. Refresh
+  // their references on membership changes. Nested thread updates can
+  // invalidate the live children collection without changing this order.
+  const syncSections = (): void => {
+    sections = [];
+    if (list === null) return;
+    for (const child of list.children) {
+      if (child.matches("section.directory-row[data-directory-key]")) sections.push(child);
+      // Starting rows and the pin divider also shift the sections below them.
+      resize?.observe(child, { box: "border-box" });
+    }
+  };
+  const mutation = new MutationObserver((records) => {
+    if (records.some(({ target }) => target === region)) {
+      const next = findList();
+      if (next !== list) {
+        watchList(next);
+        schedule();
+        return;
+      }
+    }
+    const childChanges = records.filter(({ target }) => target === list);
+    if (childChanges.length === 0) return;
+    for (const { removedNodes } of childChanges) {
+      for (const child of removedNodes) {
+        if (child instanceof Element && child.parentElement !== list) resize?.unobserve(child);
+      }
+    }
+    syncSections();
+    schedule();
+  });
+  const watchList = (next: HTMLElement | null): void => {
+    list = next;
+    mutation.disconnect();
+    mutation.observe(region, { childList: true });
+    resize?.disconnect();
+    resize?.observe(region);
+    if (list !== null) {
+      mutation.observe(list, { childList: true });
+      resize?.observe(list);
+    }
+    syncSections();
+  };
+
+  watchList(findList());
+  // Capture programmatic scrolls and scrolls from the nested list. A resize
+  // in any section (including a tray opening above the viewport) can move
+  // the active boundary without a scroll event.
+  region.addEventListener("scroll", schedule, { capture: true, passive: true });
+  measure();
+  return () => {
+    window.cancelAnimationFrame(frame);
+    region.removeEventListener("scroll", schedule, { capture: true });
+    mutation.disconnect();
+    resize?.disconnect();
+    sections = [];
+    list = null;
+  };
 }
 
 /**
@@ -84,7 +159,7 @@ function measureBlocks(list: HTMLElement): ProjectBlockBox[] {
  */
 export const ProjectIndex = memo(function ProjectIndex(props: {
   projects: readonly ProjectIndexEntry[];
-  /** The sidebar's lane region. The Directories list scrolls inside it. */
+  /** The sidebar's lane region. The Directories list is its scrolling child. */
   scrollRegionRef: RefObject<HTMLDivElement | null>;
   /** The lane region's id, for each item's `aria-controls`. */
   scrollRegionId: string;
@@ -117,7 +192,10 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   const { scrollRegionRef, spy: spyEnabled } = props;
   const tooltip = useViewportTooltip({ className: "viewport-tooltip", placement: "beside" });
   const navRef = useRef<HTMLElement | null>(null);
-  const [spy, setSpy] = useState<ProjectSpy>(NO_PROJECT_SPY);
+  const [measuredSpy, setMeasuredSpy] = useState<ProjectSpy>(NO_PROJECT_SPY);
+  const lastSpy = useRef(NO_PROJECT_SPY);
+  const spy = spyEnabled ? measuredSpy : NO_PROJECT_SPY;
+  const currentProjectKey = spy.current;
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   // A name moved by ⌘⇧↑/↓, until its new place renders. React reorders by
   // moving <li>s, and Chromium drops focus from a node it moves, so ⌘⇧↓
@@ -229,70 +307,39 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   };
 
   const keys = props.projects.map((project) => project.key);
-  const keysKey = keys.join("\n");
-
-  const measure = useCallback((): void => {
-    if (!spyEnabled) {
-      setSpy((prev) => (sameProjectSpy(prev, NO_PROJECT_SPY) ? prev : NO_PROJECT_SPY));
-      return;
-    }
-    const list = scrollRegionRef.current?.querySelector<HTMLElement>(".directory-list");
-    if (!list) return;
-    const next = spyProjects(measureBlocks(list), list.clientHeight);
-    setSpy((prev) => (sameProjectSpy(prev, next) ? prev : next));
-  }, [scrollRegionRef, spyEnabled]);
-
-  // Follow the list: on scroll (one read per frame), and whenever the list
-  // changes height under a still scroll position — a project opening or
-  // closing, a page loading. The list is a descendant of the region and is
-  // remounted with the lens, so the scroll is caught on the way down.
   useEffect(() => {
+    const publish = (next: ProjectSpy): void => {
+      if (sameProjectSpy(lastSpy.current, next)) return;
+      lastSpy.current = next;
+      setMeasuredSpy(next);
+    };
     const region = scrollRegionRef.current;
-    if (!region || !spyEnabled) return undefined;
-    let frame = 0;
-    const schedule = (): void => {
-      if (frame !== 0) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        measure();
-      });
-    };
-    region.addEventListener("scroll", schedule, { capture: true, passive: true });
-    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
-    resize?.observe(region);
-    const list = region.querySelector(".directory-list");
-    if (list) {
-      resize?.observe(list);
-      for (const child of list.children) resize?.observe(child);
+    if (!region || !spyEnabled) {
+      publish(NO_PROJECT_SPY);
+      return undefined;
     }
-    return () => {
-      window.cancelAnimationFrame(frame);
-      region.removeEventListener("scroll", schedule, { capture: true });
-      resize?.disconnect();
-    };
-  }, [measure, scrollRegionRef, spyEnabled, keysKey]);
-  // And when the lens or the project set changes what is listed.
-  useLayoutEffect(measure, [measure, keysKey]);
+    return observeProjectSpy(region, publish);
+  }, [scrollRegionRef, spyEnabled]);
 
   // Keep the current project in view in the index, but never while the
   // operator is in it: an item must not move under the pointer, and a
   // keyboard walk owns the index's scroll.
   useLayoutEffect(() => {
     const nav = navRef.current;
-    if (nav === null || spy.current === null) return;
+    if (nav === null || currentProjectKey === null) return;
     if (pointerInside.current || nav.contains(document.activeElement)) return;
-    const item = findItem(nav, spy.current);
+    const item = findItem(nav, currentProjectKey);
     if (item === null) return;
     const navRect = nav.getBoundingClientRect();
     const rect = item.getBoundingClientRect();
     if (rect.top < navRect.top) nav.scrollTop += rect.top - navRect.top;
     else if (rect.bottom > navRect.bottom) nav.scrollTop += rect.bottom - navRect.bottom;
-  }, [spy.current]);
+  }, [currentProjectKey]);
 
   const selectedKey = props.projects.find((project) => project.containsSelection)?.key;
   const tabStop =
     (focusedKey !== null && keys.includes(focusedKey) ? focusedKey : null)
-    ?? spy.current
+    ?? (currentProjectKey !== null && keys.includes(currentProjectKey) ? currentProjectKey : null)
     ?? selectedKey
     ?? keys[0]
     ?? null;
@@ -506,7 +553,7 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
             </li>
           ) : null}
           {props.projects.map((project, index) => {
-            const current = project.key === spy.current;
+            const current = project.key === currentProjectKey;
             const movable = Boolean(project.movable && props.onDropProject);
             const row = (
               <li
