@@ -6065,7 +6065,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   private readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
     const payload = this.stateDb.getMeta(PROJECT_CHECKOUT_GROUPS_META_KEY);
-    return payload ? JSON.parse(payload) as ProjectCheckoutGroup[] : [];
+    if (!payload) return [];
+    // Every navigation read passes through here; an unreadable row must not
+    // take Directories down with it. The next save replaces it.
+    let groups: unknown;
+    try {
+      groups = JSON.parse(payload);
+    } catch {
+      return [];
+    }
+    return Array.isArray(groups) ? groups.filter((group): group is ProjectCheckoutGroup =>
+      typeof group?.preferredPath === "string"
+      && Array.isArray(group.paths)
+      && group.paths.every((path: unknown) => typeof path === "string")) : [];
   }
 
   /** The filesystem was checked before this write. Check group membership again inside the transaction. */

@@ -65,12 +65,15 @@ export async function validateProjectCheckoutGroup(
     .catch(() => undefined))?.stdout.trim();
   const repositoryKey = origin && !/^(?:[\\/]|\.{1,2}[\\/]|[a-z]:[\\/]|file:)/i.test(origin)
     ? normalizeGitOriginUrl(origin) : undefined;
+  // Real paths only prove that the checkouts are distinct. Directory rows are
+  // keyed by the paths their threads use, which may run through a symlink, so
+  // the group keeps the paths it was given.
   return {
-    projectPath: checkouts[paths.indexOf(projectPath)]?.path ?? projectPath,
+    projectPath,
     previousPaths,
     group: {
-      preferredPath: selected,
-      paths: checkouts.map((checkout) => checkout.path),
+      preferredPath,
+      paths,
       ...(repositoryKey ? { repositoryKey } : {}),
     },
   };

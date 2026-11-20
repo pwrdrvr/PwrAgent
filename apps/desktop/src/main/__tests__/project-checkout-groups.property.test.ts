@@ -1,4 +1,4 @@
-import { mkdir, realpath, rm } from "node:fs/promises";
+import { mkdir, realpath, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
@@ -105,6 +105,77 @@ it("uses the owner's preferred checkout for new work and leaves Git ownership of
     vi.unstubAllEnvs();
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+it("groups checkouts under the paths their threads use, even through a symlinked parent", async () => {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-project-checkouts-link-");
+  const db = StateDb.open(dbPath);
+  try {
+    const root = await realpath(tempDir);
+    const realParent = path.join(root, "real");
+    const linkedParent = canonicalizeNavigationPath(path.join(root, "linked"));
+    await mkdir(realParent);
+    await symlink(realParent, linkedParent, "dir");
+    const [first, second] = ["ProjectA", "ProjectB"];
+    await mkdir(path.join(realParent, first!));
+    await runGitCommand(path.join(realParent, first!), ["init"]);
+    await runGitCommand(path.join(realParent, first!), ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture"]);
+    await runGitCommand(realParent, ["clone", "--no-local", first!, second!]);
+
+    // Each checkout is opened either through the symlink or through its real parent.
+    const viaParents = fc.tuple(fc.boolean(), fc.boolean());
+    await fc.assert(fc.asyncProperty(viaParents, async ([firstLinked, secondLinked]) => {
+      const paths = [[first!, firstLinked], [second!, secondLinked]].map(([name, linked]) =>
+        canonicalizeNavigationPath(path.join(linked ? linkedParent : realParent, name as string)));
+      const threads: AppServerThreadSummary[] = paths.map((checkout, index) => ({
+        id: `link-${index}`, source: "codex", title: `Link ${index}`, titleSource: "derived",
+        linkedDirectories: [{ id: checkout, label: path.basename(checkout), path: checkout, kind: "local" }],
+      }));
+      const store = new SqliteOverlayStore(db);
+      const edit = await validateProjectCheckoutGroup({
+        projectPath: paths[0]!, previousPaths: [], group: { preferredPath: paths[1]!, paths },
+      });
+      expect(edit.group.paths).toEqual(paths);
+      expect(edit.group.preferredPath).toBe(paths[1]);
+      expect(store.setProjectCheckoutGroup(edit)).toBe(true);
+      const directories = store.readNavigationQueryIndex({ backend: "all", threads }).directories;
+      expect(directories.map((directory) => directory.path)).toEqual([paths[1]]);
+      expect(directories[0]!.threadKeys).toHaveLength(2);
+      store.setProjectCheckoutGroup({
+        projectPath: paths[1]!, previousPaths: paths, group: { preferredPath: paths[1]!, paths: [paths[1]!] },
+      });
+    }), { numRuns: 8 });
+  } finally {
+    db.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+it("reads navigation past any stored checkout-group payload and keeps only well-formed groups", () => {
+  const good = { preferredPath: "/fixture/preferred", paths: ["/fixture/old", "/fixture/preferred"] };
+  const payloads = fc.oneof(
+    fc.string(),
+    fc.json(),
+    fc.constant("[null,1,\"x\",{\"paths\":7}]"),
+    fc.constant(JSON.stringify([good, { preferredPath: 3, paths: [] }])),
+  );
+  fc.assert(fc.property(payloads, (payload) => {
+    const db = openInMemoryStateDb();
+    try {
+      db.setMeta("project-checkout-groups", payload);
+      const store = new SqliteOverlayStore(db);
+      const directories = store.readNavigationQueryIndex({ backend: "all", threads: [] }).directories;
+      for (const directory of directories) {
+        expect(directory.checkoutPaths?.every((path) => typeof path === "string") ?? true).toBe(true);
+      }
+      if (payload === JSON.stringify([good, { preferredPath: 3, paths: [] }])) {
+        expect(directories.map((directory) => directory.path)).toEqual([good.preferredPath]);
+      }
+    } finally {
+      db.close();
+    }
+  }), { numRuns: 60 });
 });
 
 it("keeps the last accepted grouping through preference changes, splits and stale edits", () => {

@@ -11099,7 +11099,7 @@ a.button {
   cursor: pointer;
 }
 
-.project-checkouts-dialog__icon:hover:not([disabled]) {
+.project-checkouts-dialog__icon:hover:not(:disabled) {
   border-color: var(--border-subtle);
   background: var(--bg-panel-elevated);
   color: var(--text-primary);
@@ -11110,7 +11110,11 @@ a.button {
   outline-offset: 0;
 }
 
-.project-checkouts-dialog__icon[disabled] {
+/* While a save or the folder picker runs, the fieldset disables every row
+   control. A fieldset-disabled button matches :disabled but carries no
+   [disabled] attribute, so the shared `.button[disabled]` rule misses it. */
+.project-checkouts-dialog__icon:disabled,
+.project-checkouts-dialog__body:disabled .button {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -11127,7 +11131,7 @@ a.button {
   font-size: 13px;
 }
 
-.project-checkouts-dialog__add:hover:not([disabled]) {
+.project-checkouts-dialog__add:hover:not(:disabled) {
   color: var(--text-primary);
 }
 
