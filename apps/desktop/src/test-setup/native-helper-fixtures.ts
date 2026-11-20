@@ -8,6 +8,7 @@ const consumers = {
   maintenanceCargo: "maintenance-cargo-output.property.test.ts",
   maintenanceAllocation: "maintenance-disk-usage.property.test.ts",
   mcpIpc: "mcp-ipc-http.test.ts",
+  markerProbe: "thread-dependency-marker-probe.property.test.ts",
 } as const;
 type Consumer = keyof typeof consumers;
 type HelperPaths = { relay: string; identity?: string };
@@ -59,10 +60,15 @@ export default async function setup(project: TestProject): Promise<() => Promise
       let fixture = fixtures.get(consumer);
       if (!fixture) {
         console.info(`[native-helper-fixtures] preparing ${consumer}`);
-        fixture = createNativeHelperFixture((root) => buildHelpers(root, consumer === "mcpIpc"));
+        fixture = createNativeHelperFixture((root) => buildHelpers(root, consumer === "mcpIpc" || consumer === "markerProbe"));
         fixtures.set(consumer, fixture);
       }
-      paths[consumer] = await fixture.ready;
+      try {
+        paths[consumer] = await fixture.ready;
+      } catch (error) {
+        console.error(`[native-helper-fixtures] ${consumer} failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
       console.info(`[native-helper-fixtures] ready ${consumer}`);
     }));
     project.provide("nativeHelperFixtures", { ...paths });
