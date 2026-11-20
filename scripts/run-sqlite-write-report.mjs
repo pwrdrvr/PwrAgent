@@ -22,7 +22,7 @@ mkdirSync(outDir, { recursive: true });
 
 const vitest = spawnSync(
   "pnpm",
-  ["exec", "vitest", "run", "--config", "vitest.workspace.ts", ...process.argv.slice(2)],
+  ["exec", "vitest", "run", "--config", "vitest.workspace.mts", ...process.argv.slice(2)],
   {
     cwd: repoRoot,
     env: {

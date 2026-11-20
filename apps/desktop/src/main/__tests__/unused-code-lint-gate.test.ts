@@ -15,7 +15,7 @@
 // typing mistakes in the pattern". `*.ts` is kept non-empty by exactly one
 // file, so the day the root's last TypeScript file is renamed the whole lint
 // run dies pointing at a typo that does not exist. Better to fail here, naming
-// the real cause. Today that file happens to be `vitest.workspace.ts`, whose
+// the real cause. Today that file happens to be `vitest.workspace.mts`, whose
 // removal would take the suite with it — the assertion is for the general
 // case, after Vitest 4's `projects` key retires that particular filename.
 import { readFileSync, readdirSync } from "node:fs";

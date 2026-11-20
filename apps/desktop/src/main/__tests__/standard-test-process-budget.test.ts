@@ -5,7 +5,7 @@
 // its bindings in forked OS processes. The pure projects retain `threads` to
 // avoid expanding normal test discovery into per-file process churn.
 import { describe, expect, it } from "vitest";
-import workspaceConfig from "../../../../../vitest.workspace";
+import workspaceConfig from "../../../../../vitest.workspace.mts";
 
 const EXPECTED_PROJECTS = [
   "desktop-main",
