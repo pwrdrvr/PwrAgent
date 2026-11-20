@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { findPrimaryThreadLinkedDirectory } from "@pwragent/shared/navigation-state";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { WorktreeSnapshotSummary } from "@pwragent/shared/contracts/normalized-app-server";
@@ -16,11 +16,17 @@ import {
   type ShowRailTooltip,
 } from "./context-rail-shared";
 import { openExternalUrl } from "../../../lib/open-external-url";
+import { useWorktreeStorageSession, WorktreeStorageDialog } from "../WorktreeStorageDialog";
 
 type LinkedProjectsPanelProps = {
   desktopApi?: Pick<
     DesktopApi,
-    "attachDirectoryToThread" | "detachDirectoryFromThread" | "pickDirectoryFromDisk"
+    | "attachDirectoryToThread"
+    | "detachDirectoryFromThread"
+    | "onSettingsRuntimeChanged"
+    | "pickDirectoryFromDisk"
+    | "readWorktreeReflinkCapabilities"
+    | "runWorktreeReflink"
   >;
   onRefreshNavigation?: () => Promise<void>;
   onRestoreWorktree?: (
@@ -52,6 +58,31 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
     props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
   );
   const nativePickingDisabled = Boolean(props.thread.federation?.ref.target);
+  const [storageDirectoryId, setStorageDirectoryId] = useState<string>();
+  // Git shares a linked worktree with its source checkout, on this machine.
+  // One worktree stands in for the probe: the answer describes the selected
+  // Git, not the directory, and the action is offered only once Git's own
+  // help has listed the command.
+  const storageApi = props.desktopApi?.readWorktreeReflinkCapabilities
+    && props.desktopApi.runWorktreeReflink
+    && !props.thread.federation?.ref.target
+    ? props.desktopApi
+    : undefined;
+  const probeWorktree = storageApi
+    ? directories.find((directory) => directory.kind === "worktree")
+    : undefined;
+  const probePath = probeWorktree ? probeWorktree.worktreePath ?? probeWorktree.path : undefined;
+  const probeTarget = useMemo(
+    () => (probePath
+      ? { backend: props.thread.source, threadId: props.thread.id, worktreePath: probePath }
+      : undefined),
+    [probePath, props.thread.id, props.thread.source],
+  );
+  const storage = useWorktreeStorageSession(storageApi, probeTarget);
+  const canShareStorage = storage.state.runtime?.capabilities.reflink === true;
+  const storageDirectory = storageApi && canShareStorage
+    ? directories.find((directory) => directory.id === storageDirectoryId && directory.kind === "worktree")
+    : undefined;
   const attachDirectory = async (): Promise<void> => {
     if (nativePickingDisabled) {
       return;
@@ -179,17 +210,31 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
                       {directory.label}
                     </TooltipValue>
                   </div>
-                  {canDetachDirectory ? (
-                    <button
-                      className="context-list__action context-list__action--danger"
-                      disabled={detaching}
-                      type="button"
-                      onClick={() => {
-                        void detachDirectory(directory);
-                      }}
-                    >
-                      {detaching ? "Detaching" : "Detach"}
-                    </button>
+                  {(canShareStorage && directory.kind === "worktree") || canDetachDirectory ? (
+                    <div className="context-list__actions">
+                      {canShareStorage && directory.kind === "worktree" ? (
+                        <button
+                          aria-label={`Share storage for ${directory.label}`}
+                          className="context-list__action"
+                          type="button"
+                          onClick={() => setStorageDirectoryId(directory.id)}
+                        >
+                          Share storage
+                        </button>
+                      ) : null}
+                      {canDetachDirectory ? (
+                        <button
+                          className="context-list__action context-list__action--danger"
+                          disabled={detaching}
+                          type="button"
+                          onClick={() => {
+                            void detachDirectory(directory);
+                          }}
+                        >
+                          {detaching ? "Detaching" : "Detach"}
+                        </button>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
                 <dl className="linked-project__facts">
@@ -355,6 +400,19 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
               ))}
           </ul>
         </div>
+      ) : null}
+      {storageApi && storageDirectory ? (
+        <WorktreeStorageDialog
+          api={storageApi}
+          label={storageDirectory.label}
+          target={{
+            backend: props.thread.source,
+            threadId: props.thread.id,
+            worktreePath: storageDirectory.worktreePath ?? storageDirectory.path,
+          }}
+          turnActive={props.thread.threadStatus === "active"}
+          onClose={() => setStorageDirectoryId(undefined)}
+        />
       ) : null}
       {props.worktreeArchiveError ? (
         <p className="context-empty context-empty--error">

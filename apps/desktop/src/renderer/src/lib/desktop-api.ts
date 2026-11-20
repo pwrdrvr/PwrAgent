@@ -1,4 +1,10 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type {
+  ReadWorktreeReflinkCapabilitiesRequest,
+  ReadWorktreeReflinkCapabilitiesResponse,
+  RunWorktreeReflinkRequest,
+  RunWorktreeReflinkResponse,
+} from "@pwragent/shared/contracts/worktree-reflink";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared/contracts/federation-services";
 import type {
   ResearchHarnessCheck,
@@ -1937,6 +1943,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readWorktreeImage?: (
     request: ReadWorktreeImageRequest
   ) => Promise<ReadWorktreeImageResponse>;
+  /** What the selected Git's `git worktree reflink` offers, for one worktree. */
+  readWorktreeReflinkCapabilities?: (
+    request: ReadWorktreeReflinkCapabilitiesRequest
+  ) => Promise<ReadWorktreeReflinkCapabilitiesResponse>;
+  /** Estimates, or shares, a worktree's storage with its source checkout. */
+  runWorktreeReflink?: (
+    request: RunWorktreeReflinkRequest
+  ) => Promise<RunWorktreeReflinkResponse>;
   getGlabStatus?: (request?: GetGlabStatusRequest) => Promise<GlabStatus>;
   pickGlabCommand?: () => Promise<PickGhCommandResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;

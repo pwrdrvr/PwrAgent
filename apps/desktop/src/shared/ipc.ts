@@ -529,6 +529,8 @@ export const NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL =
   "navigation:get-worktree-unpublished-commit-diff";
 export const NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL =
   "navigation:read-worktree-image";
+export const WORKTREE_REFLINK_CAPABILITIES_CHANNEL = "worktree-reflink:capabilities";
+export const WORKTREE_REFLINK_RUN_CHANNEL = "worktree-reflink:run";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =

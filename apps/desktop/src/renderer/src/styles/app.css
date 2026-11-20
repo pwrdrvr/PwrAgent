@@ -9355,6 +9355,124 @@ a.button {
   color: var(--danger-text);
 }
 
+/* Share worktree storage: the neutral confirm frame of the detach warning.
+   Nothing here is destructive, so the confirm takes the accent, not danger. */
+.worktree-storage-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim-strong);
+}
+
+.worktree-storage-dialog {
+  box-sizing: border-box;
+  width: min(440px, 100%);
+  max-height: 100%;
+  padding: 18px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.worktree-storage-dialog h2 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.worktree-storage-dialog p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.worktree-storage-dialog p strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.worktree-storage-dialog p.worktree-storage-dialog__status {
+  margin-top: 12px;
+  color: var(--text-primary);
+}
+
+.worktree-storage-dialog p.worktree-storage-dialog__notice {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.worktree-storage-dialog p.worktree-storage-dialog__error {
+  margin-top: 10px;
+  color: var(--danger-text);
+  font-size: 12px;
+}
+
+.worktree-storage-dialog__option.composer__checkbox {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 14px;
+  color: var(--text-primary);
+}
+
+.worktree-storage-dialog__option input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.worktree-storage-dialog__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.worktree-storage-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.worktree-storage-dialog__actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.worktree-storage-dialog__actions button:hover:not(:disabled),
+.worktree-storage-dialog__actions button:focus-visible:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.worktree-storage-dialog__actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.worktree-storage-dialog__actions .worktree-storage-dialog__confirm {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.worktree-storage-dialog__actions button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
 .thread-row__chip--muted {
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
