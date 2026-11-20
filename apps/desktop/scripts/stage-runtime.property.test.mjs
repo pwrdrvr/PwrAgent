@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -36,7 +37,7 @@ function build({ files, link }) {
   const root = mkdtempSync(join(tmpdir(), "pwragent-sealed-"));
   roots.push(root);
   writeFileSync(join(root, "pwrgit-build.json"), JSON.stringify({
-    version, source_revision: sourceRevision, primary_sha1: "SHA1_DC",
+    version, source_revision: sourceRevision, primary_sha1: "SHA1_DC", lfs_version: "3.7.1",
   }));
   for (const { rel, content, mode } of files) {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
@@ -97,5 +98,54 @@ describe.skipIf(process.platform === "win32")("custom Git sealed inventory, any 
       fc.pre(apply(kind, root, spec));
       expect(() => verifyRuntime(root, pin, { probe: false })).toThrow();
     }), { numRuns: 60 });
+  });
+});
+
+// The archive owns file modes. The caller's umask must not change the sealed
+// payload. Real tar extraction and the inventory verifier are the oracles.
+describe.skipIf(process.platform === "win32")("custom Git extraction modes", () => {
+  it("preserves sealed modes under umask 077 and generated caller masks", () => {
+    const { root, pin } = build({
+      files: [{ rel: "bin/git", mode: 0o755, content: `#!/bin/sh
+case "$*" in
+  '--version') echo 'git version ${version}' ;;
+  'version --build-options') printf '%s\\n' 'SHA-1: SHA1_DC' 'built from commit: ${sourceRevision}' ;;
+  '--exec-path') printf '%s/libexec/git-core\\n' "\${0%/bin/git}" ;;
+  'lfs version') echo 'git-lfs/3.7.1 fixture' ;;
+  *) exit 1 ;;
+esac
+` }],
+      link: true,
+    });
+    const temp = mkdtempSync(join(tmpdir(), "pwragent-extraction-"));
+    roots.push(temp);
+    const archive = join(temp, "fixture.tar.gz");
+    execFileSync("tar", ["-czf", archive, "-C", root, "."]);
+    const digest = sha256(readFileSync(archive));
+    renameSync(archive, join(temp, `${digest}.tar.gz`));
+    const manifestPath = join(temp, "manifest.json");
+    const consumer = new URL("./stage-runtime.mjs", import.meta.url);
+    writeFileSync(manifestPath, JSON.stringify({
+      schema: 1, ...pin.manifest,
+      consumer_sha256: sha256(readFileSync(consumer)),
+      assets: { "linux-x64": {
+        ...pin.asset, sha256: digest,
+        url: `https://github.com/huntharo/git/releases/download/v${version}/fixture.tar.gz`,
+      } },
+    }));
+    let run = 0;
+    // Preserve owner access to newly created staging directories.
+    fc.assert(fc.property(fc.integer({ min: 0, max: 0o077 }), (mask) => {
+      const output = join(temp, `staged-${run++}`);
+      // Use a child so the property never changes the test runner's umask.
+      execFileSync(process.execPath, ["--input-type=module", "-e", `
+        process.umask(Number(process.argv[1]));
+        globalThis.fetch = () => { throw new Error("Expected the pinned cached archive"); };
+        const { stageRuntime } = await import(${JSON.stringify(consumer.href)});
+        await stageRuntime({ manifestPath: process.argv[2], platform: "linux", arch: "x64",
+          output: process.argv[3], cache: process.argv[4] });
+      `, String(mask), manifestPath, output, temp], { stdio: "pipe" });
+      expect(verifyRuntime(output, pin, { probe: false }).version).toBe(version);
+    }), { numRuns: 12, examples: [[0o077]] });
   });
 });
