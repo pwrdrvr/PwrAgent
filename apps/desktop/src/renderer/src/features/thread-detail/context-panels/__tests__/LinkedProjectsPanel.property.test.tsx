@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import type { LinkedDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
 import fc from "fast-check";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -121,6 +121,41 @@ describe("linked project checkout identity", () => {
             fireEvent.click(panel.getByRole("button", { name: `Copy path for ${directories[sibling]!.kind} ${project}` }));
             expect(copyText).toHaveBeenLastCalledWith(expected);
           }
+        } finally {
+          panel.unmount();
+        }
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("offers Detach on the secondary worktree regardless of the display order", () => {
+    fc.assert(fc.property(
+      fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/),
+      fc.boolean(),
+      fc.boolean(),
+      (name, windows, reverse) => {
+        const root = windows ? "C:\\fixture\\worktrees\\" : "/fixture/worktrees/";
+        const primary: LinkedDirectorySummary = {
+          id: "primary", kind: "worktree", label: "Project", path: "/fixture/repos/Project",
+          worktreePath: `${root}${name}`,
+        };
+        const secondary: LinkedDirectorySummary = {
+          ...primary, id: "secondary", worktreePath: `${root}${name}-sibling`,
+        };
+        const panel = render(<LinkedProjectsPanel
+          desktopApi={{ detachDirectoryFromThread: vi.fn() }}
+          thread={{
+            ...threadFor(primary),
+            projectKey: `${primary.worktreePath?.replace(/\\/g, "/")}/src`,
+            linkedDirectories: reverse ? [secondary, primary] : [primary, secondary],
+          }}
+          showTooltip={() => undefined}
+          hideTooltip={() => undefined}
+        />);
+        try {
+          const rows = panel.getAllByRole("listitem");
+          expect(within(rows[reverse ? 0 : 1]!).getByRole("button", { name: "Detach" })).toBeVisible();
+          expect(within(rows[reverse ? 1 : 0]!).queryByRole("button", { name: "Detach" })).toBeNull();
         } finally {
           panel.unmount();
         }
