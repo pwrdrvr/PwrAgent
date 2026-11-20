@@ -22,6 +22,7 @@ const sessionWrites = new Map<string, {
   ready: Promise<() => Promise<void>>;
   closing?: Promise<void>;
 }>();
+const metadataWrites = new Map<string, Promise<void>>();
 
 async function replaceSessionSidecar(temporary: string, destination: string): Promise<void> {
   // On Windows, even a Node read handle that shares delete access can block
@@ -291,6 +292,24 @@ export class ClaudeSessionStore {
     }
   }
 
+  /** Read and replace a sidecar in order across local stores. Keep the shared
+   * file lock through the whole update, including any Windows rename backoff. */
+  async withMetadataMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const current = this.mutationContext.getStore();
+    if (current?.id === id && current.active) return await work();
+    const file = path.resolve(this.file(id, "json"));
+    const previous = metadataWrites.get(file);
+    const run = async () => {
+      await previous;
+      return await work();
+    };
+    const result = this.memory.has(id) ? run() : this.withWrite(id, run);
+    const settled = result.then(() => {}, () => {});
+    metadataWrites.set(file, settled);
+    try { return await result; }
+    finally { if (metadataWrites.get(file) === settled) metadataWrites.delete(file); }
+  }
+
   async read(id: string): Promise<ClaudeSession> {
     const held = this.memory.get(id);
     if (held) return JSON.parse(held.session) as ClaudeSession;
@@ -303,7 +322,7 @@ export class ClaudeSessionStore {
       if (held) held.session = JSON.stringify(session);
       return;
     }
-    await this.withWrite(session.thread.id, async () => {
+    await this.withMetadataMutation(session.thread.id, async () => {
       const destination = this.file(session.thread.id, "json");
       const temporary = `${destination}.${randomUUID()}.tmp`;
       try {
