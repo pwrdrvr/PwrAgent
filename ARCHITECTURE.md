@@ -6,36 +6,57 @@ dependency rules that keep the codebase navigable. For the user-facing
 pitch, see [README.md](README.md). For day-to-day development setup, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Desktop owners start in `apps/desktop/src/main/owner-services.ts`. This composition
-root constructs the process instances, installs tool and peer handlers before
-accepting work, and owns their shutdown order. Owner getters throw before the
-root starts. The root takes host ports for presentation, broadcasts, secrets,
-images and operating-system services; it imports no Electron or window code.
-`src/main/index.ts` delegates to the Electron bootstrap under `src/main/shell/`.
-IPC adapters and other window services live in that directory.
+Desktop and Outpost both call `startOwnerServices` in
+[`apps/desktop/src/main/owner-services.ts`](apps/desktop/src/main/owner-services.ts).
+This composition root constructs the backend registry, federation, messaging,
+automations and other profile services, installs tool and peer handlers, and
+defines their shutdown order. Owner getters throw before the root starts.
+Each host supplies `OwnerHostServices` for presentation, broadcasts, secrets,
+images and operating-system services. The shared root is Electron-free.
 
 ## Process model
 
-PwrAgent is an Electron app whose coding-agent runtimes execute outside
-Electron main. The renderer (React UI) talks to the main process over the
-standard Electron IPC bridge. Electron main connects to Codex App Server and
-to installed ACP coding-agent CLIs, including Grok Build.
+Desktop's `src/main/index.ts` delegates to the Electron bootstrap in
+[`src/main/shell/index.ts`](apps/desktop/src/main/shell/index.ts), which calls
+`startOwnerServices(createDesktopOwnerHostServices(), ...)`. The React renderer
+reaches owner services through the Electron IPC adapters in `shell/`. Outpost
+runs the same owner services in a Node process with a Codex-only execution policy.
 
 ```mermaid
 graph TB
     User[User]
     Renderer["Renderer<br/>React UI"]
     Main["Main process<br/>Electron"]
+    CLI["Outpost CLI"]
+    NodeHost["Outpost owner<br/>Node"]
     CodexProcess["Codex app-server<br/>managed process"]
     ACPAgents["ACP coding-agent CLIs<br/>Grok · Gemini · Kimi · Qwen"]
     Adapters["Messaging adapters<br/>Telegram / Discord / Mattermost / Slack"]
 
     User --> Renderer
     Renderer <-->|IPC bridge| Main
+    CLI <-->|Local Unix socket| NodeHost
     Main <-->|JSON-RPC over stdio| CodexProcess
+    NodeHost <-->|JSON-RPC over stdio| CodexProcess
     Main <-->|ACP over stdio| ACPAgents
     Main <-->|long-poll / WS / HTTP| Adapters
+    NodeHost <-->|long-poll / WS / HTTP| Adapters
 ```
+
+Each host runs its own process-local owner services and provider connections.
+PR #3600 moved Outpost to the shared owner runtime.
+[`packages/pwragent/scripts/build.mjs`](packages/pwragent/scripts/build.mjs)
+calls `buildHeadless` from
+[`apps/desktop/scripts/build-headless.mjs`](apps/desktop/scripts/build-headless.mjs)
+in portable mode. The builder bundles
+[`src/main/headless/index.ts`](apps/desktop/src/main/headless/index.ts) as
+`packages/pwragent/dist/index.js`, with ESM chunks, worker entries and runtime
+metadata alongside it. `pwragent serve` loads that entry from
+[`packages/pwragent/src/daemon.js`](packages/pwragent/src/daemon.js). The daemon
+handles the owner lock, Codex sandbox preflight, local socket and signals.
+`startHeadlessHost` creates `OwnerHostServices` for Node and calls
+`startOwnerServices` in active-profile mode. Socket requests go through
+`handleOutpostCommand` to the shared registry and federation services.
 
 A few invariants worth knowing up front:
 
@@ -555,33 +576,12 @@ helper execution, model resolution, diagnostics and the existing sub-agent and
 usage persistence effects. Completion waits for all admitted work, including
 work admitted by a preceding title event.
 
-Outpost now supplies the same title lifecycle with its existing Codex client's
-structured title helper. The accepted first-turn event retains the immediate
-prompt fallback and admits one helper attempt; duplicate observations do not
-run it again. The naming lifecycle protects explicit renames while a helper is
-pending. The client selects an offered helper model, uses an ephemeral scratch
-thread with hooks, notifications, project instructions and MCP tools disabled,
-and cleans it up without adding it to job or navigation inventories. Outpost's
-host policy explicitly sets approval `never` and read-only sandboxing on both
-primary and legacy helper creation and on its turn. Shutdown settles admitted
-title work before closing owner storage. Unsupported providers gain no execution.
-
-Outpost's real job turn path also uses shared turn-start admission after native
-thread preparation, rechecking a handoff lock before inference. Its durable job
-acceptance, fingerprint and confirmed thread/turn outcomes remain host effects;
-the lifecycle adds no retry identity or replay after restart.
-
-Both Outpost native creation paths now use `ThreadCreationLifecycle`. The
-federation host records positive native membership before attempting canonical
-metadata, so a failed host finalizer retains the provider identity and cannot
-hide acceptance. Actual job turns use `ThreadTurnStartLifecycle.submitCodex`
-and `finalizeCodex`; durable job confirmation precedes independent title/event
-finalization. Observer and diagnostic failures cannot undo a committed job or
-replace a provider outcome. A refused confirmed-turn write records the known
-thread/turn identity as unknown through the existing terminal boundary, without
-resending provider input. A terminal arriving during finalization retires the
-job once. Hosts omit unsupported effect ports; desktop retains its complete
-typed host contracts and existing construction. No extra tools or reach result.
+Outpost uses the same registry, title generation and thread creation and turn
+start lifecycles for Codex. The shared title path retains the immediate prompt
+fallback and admits one helper attempt after the first turn is accepted.
+The naming lifecycle protects explicit renames while the ephemeral structured
+helper runs. Outpost applies its provider and execution policy through its host
+ports.
 
 Steer-request admission lives in `owner-core/thread-steering-lifecycle.ts`.
 It qualifies request ids by backend, thread and expected turn, fences changed
@@ -592,16 +592,9 @@ events retire that turn's admissions. Desktop supplies provider execution and
 causal-origin merging/persistence through host ports, retaining their existing
 locks, storage sites and event order. The core does not infer active turns.
 
-Outpost uses this same admission and submission path for federation steering
-and active-turn steering. Its host resolves the latest active job, rechecks
-handoff locks before native submission, and retains authenticated causal origin
-only after provider acceptance. Retention reads the captured job again, preserving
-concurrent terminal outcomes and other accepted origins. Failed retention retries
-only that effect. Legacy peers without a request id retain independent sends.
-Runtime interruption uses the shared interruption coordinator while keeping its
-durable interrupting/RPC/restoration boundaries; it does not retire steering
-admission until the provider terminal. Sparse ports omit unsupported provider,
-review, attachment and restart effects; desktop retains its complete contracts.
+Outpost routes federation and local active-turn steering through the same
+registry admission and submission path. Its local socket delegates interruption
+to the registry's active-turn control method as well.
 
 Interruption target coordination lives in
 `owner-core/thread-interruption-lifecycle.ts`. It resolves the reviewer that
@@ -622,14 +615,9 @@ continuations, title generation, correspondence and event delivery. Closing
 the queue cancels its pending drains at the same registry shutdown boundary.
 The generated queue model runs against this shared implementation; desktop's
 restart-gate model and actual registry construction/projection oracle exercise
-its host wiring. Outpost's executable Runtime also constructs that class
-directly. Continued-thread jobs commit acceptance before entering its FIFO;
-the host supplies the existing turn lifecycle, one daemon-global provider
-slot, handoff/intake gates and typed queue events/projections. Prompts stay in
-memory. Cancellation settles the job before dispatch, and shutdown or recovery
-settles unfinished queued jobs as unknown without restoring or replaying input.
-New-thread jobs still require an idle host. Confirmed provider acceptance cannot
-return to a retryable FIFO after a host confirmation failure.
+its host wiring. Outpost uses that same registry and queue. Turns on separate
+threads can overlap, and the registry admits new thread creation while other
+turns run. The built Node concurrency oracle exercises both behaviors.
 The queue also retains that acceptance when its started lifecycle publication
 rejects. Buffered native terminals still settle ownership and install failure
 holds; observer failures cannot restore accepted start or steering input.
@@ -667,28 +655,14 @@ prompt under its own immutable held identity. The existing attachment admission
 reservation deduplicates matching prompts only while they still wait; a new wake
 never changes another acceptance. Unlock preserves FIFO and independent review
 holds, and shutdown never restores these transient prompts.
-Each accepted Outpost job retains its own input and delivery fingerprint until
-dispatch, where the combined-delivery rule above applies. At the FIFO head a
-delivery joins the current native turn, or starts a new turn when idle. The existing steering lifecycle
-receives that job's exact request identity and captured native target. A durable
-starting claim precedes inference; the daemon-global dispatch slot stays held
-through acknowledgement and origin finalization. The original active job keeps
-control ownership. Provider terminals settle the accepted interjections against
-that same turn; uncertainty, shutdown and recovery never restore their input.
-CLI interruption also requires that original active job; an interjection's
-confirmed target does not grant it native control. Shutdown drains restored
-entries again after admitted dispatch settles, including a refused claim.
-Explicit new turns, requested settings and durable turn receipts retain ordinary
-turn admission. Delivery metadata uses the existing job payload, without a schema
-change, and is part of each fresh immutable fingerprint.
 Explicit Retry also admits held, unclaimed individual guidance into a confirmed
 running native turn when that same
 steering path is eligible. It rechecks live owner/project/handoff gates and
-immutable acceptance before claiming the captured target; occupied dispatch,
+the current queue entry before claiming the captured target. Occupied dispatch,
 uncertainty and shutdown still refuse it. Shared release preserves review
 holds behind a dispatch gate and cannot start work after queue close. The
-original job retains native control; accepted or uncertain guidance never
-returns to the waiting FIFO.
+active turn retains its identity. Accepted or uncertain guidance stays out of
+the waiting FIFO.
 The composer permits owner-backed Retry during a live turn and retains the
 waiting row unless the owner reports acceptance. Scheduled Retry still waits
 for the active turn to finish.
@@ -720,25 +694,18 @@ admission, so early lifecycle outcomes survive the response. A durable new-turn
 receipt remains attached to its cancelled original identity, and cannot replay
 or retarget changed input.
 
-Desktop and Outpost construct the same `DurableTurnRequestService` from
-owner-core for durable turn admission. The profile binding supplies the existing
-FULL/immediate inbox storage port. Authenticated issuer/device namespaces and
-owner-bound payload hashes precede dispatch. Outpost assigns one safe immutable
-identity to the receipt, durable job, live queue and events, then calls its
-existing turn path. Both the durable feature grant and `turn_control` are
-required; nested messaging origins retain their additional grant and origin
-authentication. Proven queue boundaries reconcile receipts. Shutdown or a
+Both hosts use the federation runtime's `DurableTurnRequestService` from
+owner-core. The profile binding supplies the FULL/immediate inbox storage port.
+Authenticated caller namespaces and owner-bound payload hashes precede dispatch
+through the registry. The Outpost CLI's `submit` and `receipt` commands use that
+inbox with a local caller scope. For peers, the applicable durable feature grant
+and `turn_control` are required. Nested messaging origins retain their additional
+grant and origin authentication. Queue events reconcile receipts. Shutdown or a
 missing live queue yields uncertainty without restoring input or reclaiming a
 dispatch claim. Changing accepted input requires cancellation and a new UUID.
-
-Outpost also registers the existing durable steering methods on that same inbox.
-Both `turn_control` and `durable_steer_requests_v1` are required. Its host port
-calls the existing active-turn control method, using the receipt identity as the
-steer request id and the caller's expected native turn as the target. The receipt
-acknowledges acceptance of the interjection, independently of eventual turn output;
-it creates no job or FIFO entry and cannot displace waiting input. Issuer/device
-and start/steer namespaces remain separate. Native or result-persistence uncertainty
-retains the durable claim across retries and restart without sending again.
+Durable steering uses the same inbox with a separate request namespace and the
+caller's expected native turn. The receipt acknowledges the interjection's
+acceptance independently of the eventual turn outcome.
 
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,
@@ -843,7 +810,7 @@ Persistent state is split across three categories. Each has its own
 location, its own format, and its own concurrency story. The diagrams
 below are layered separately so you can read each layer on its own.
 
-### Desktop state (sqlite WAL)
+### Profile state (SQLite WAL)
 
 Local provider ownership is admitted independently of federation/messaging
 service enablement. The production BackendRegistry receives the owner-core
@@ -854,55 +821,55 @@ ACP pooled/ephemeral startup and registry thread/turn/helper admissions share
 the port. Passive readers remain unclaimed. The Outpost's existing acquisition
 of the same lease excludes these desktop owners without a database lock file.
 
-The desktop main process owns a single sqlite database holding messaging
-bindings, the thread overlay (per-thread UI state), and
-`safeStorage`-encrypted secret blobs. Multiple instances on the same PwrAgent
-version may share a profile DB through SQLite WAL. Concurrent profile sharing
-requires the same version because the database also carries application-level
-ownership and dispatch state.
+Both hosts open the profile's `state.db`, which holds messaging bindings,
+thread overlays and encrypted secret blobs. SQLite WAL coordinates concurrent
+database access. Instances sharing a profile must run the same PwrAgent version
+because they share application-level ownership and dispatch state.
 See [Sharing a profile across versions](docs/runtime-configuration.md#sharing-a-profile-across-versions).
+
+Reading stored secrets still requires the original encryption backend and key.
+When Outpost opens a Desktop profile, Desktop-encrypted federation private keys
+remain unavailable. Outpost reports the mismatch and preserves the ciphertext,
+so federation cannot use the profile's existing identity there.
 
 `packages/sqlite-storage` owns the profile database opener, schema and migrations,
 including the sub-agent and usage-activity table helpers and write instrumentation.
-The package also owns `AppRuntimeInstanceStore`, implementing owner-core runtime
-lease ports with injected host liveness and the existing PID-owned lease
-transactions. Desktop constructs it through a private `main/storage` binding at
-the existing app-state lifecycle site. Both hosts use this same storage without moving runtime identity observation
-into the database. The real Outpost daemon opens the profile through its
-`federation-core.ts` binding and takes both federation and messaging leases
-before job recovery, provider startup or listener creation. It drains services
-before releasing them. Desktop supplies its existing defaults to the same
-owner-core runtime lease manager. Both use the existing profile marker format
-and file heartbeat; no SQLite heartbeat is introduced. The Outpost bundle
-externalizes its own pinned native SQLite dependency, and its application code
-receives shutdown and handle-free owner storage ports. Desktop's runtime gates observe the same lease
-rows; configured enablement remains separate from effective runtime ownership.
-Outpost's production jobs and thread registry now use that same database. The
-shared v81 migration adds owner-job acceptance/outcome metadata; existing thread
-overlays remain the canonical metadata registry. Its first start validates host
-identity, backs up legacy jobs and threads, imports both in one FULL-durability
-transaction, then retires matching JSON files. A committed manifest makes partial
-retirement restartable without reimport or replay. Active jobs become unknown.
-Private identity, projects, tools and intake ledgers stay host-owned. Outpost
-reads retained provider inventory independently of canonical metadata; SQLite
-contains no provider transcript or prompt text.
-Before opening its listeners, Outpost now completes active and archived Codex
-protocol discovery. Navigation refreshes that inventory without writing unchanged
-snapshots; provider mutations fence older in-flight discoveries. Fresh provider
-archive membership outranks an unstamped retained flag, while newer canonical
-archive/restore timestamps still fence older retained inventory.
+`startOwnerServices` opens the database through `main/storage` and `main/state`.
+`AppRuntimeInstanceStore` implements the owner-core lease ports with injected
+host liveness and PID-owned transactions. Outpost acquires both the federation
+and messaging leases before writing startup configuration or starting providers
+and listeners. Its `serve` command holds a separate exclusive headless lock and
+passes the previous lock holders' instance IDs to the lease manager for crash
+recovery. The shared shutdown path drains services and releases their leases
+before the host closes profile state. Both hosts use the profile file heartbeat,
+and the portable Outpost bundle loads its pinned native SQLite dependency at
+runtime. Configured enablement and effective runtime ownership remain separate.
+
+The earlier Outpost runtime's v81 migration added owner-job acceptance and
+outcome metadata. It validated host identity, backed up legacy jobs and threads,
+and imported both in one FULL-durability transaction before retiring the matching
+JSON files. The committed manifest made partial retirement restartable without
+reimport or replay, and active jobs became unknown. See the
+[storage migration notes](packages/sqlite-storage/README.md#historical-outpost-storage-migrations)
+for those boundaries. The Node owner uses the shared profile and durable request
+inbox. Existing thread overlays remain the canonical metadata registry. SQLite
+stores metadata and receipt state, with provider transcripts kept by providers.
+
+Outpost schedules provider prewarm through the shared startup path. Navigation
+refreshes provider inventory without writing unchanged snapshots. Provider
+mutations fence older in-flight discoveries. Fresh provider archive membership
+outranks an unstamped retained flag, while newer canonical archive/restore
+timestamps still fence older retained inventory.
 Complete discovery also atomically records retirement of previously confirmed
 native Codex identities with its inventory replacement. Retained metadata cannot
 resurrect those members after restart. Native creation retains confirmation in
-its existing commit and fences older discoveries. Unconfirmed imported owners
-and durable accepted-job identities remain independently retained; job request,
-fingerprint, thread and turn identities and restart without replay are preserved.
+its existing commit and fences older discoveries.
 Incomplete or failed walks publish no retirement, and late events do not recreate
 retired members. No schema change or SQLite timer is introduced.
 Desktop and Outpost retain readable owner identities separately from that native
 inventory. The shared retention storage port derives pending legacy identities
 from the committed import manifest and byte-verified PwrAgent backup, and accepted
-identities from durable jobs; arbitrary overlays provide neither proof. Both
+identities from the earlier Outpost runtime's durable job records. Both
 hosts read live canonical titles, pins, parents, seen watermarks and settings.
 These projections never enter provider inventories or start provider work.
 Retained-only identities follow the same durable archive/restore observations,
@@ -912,11 +879,9 @@ unnamed fallback, through one atomic metadata boundary. A later retirement canno
 be overwritten by a late confirmation. Repeated observations and passive reads
 make no commits. Native forks use the same confirmed-creation boundary as starts.
 Both hosts project canonical title provenance against the last acknowledged
-native name. Imported names without that acknowledgement stay visible; Outpost
-publishes them through the shared naming lifecycle before discovery completes.
-An acknowledged Outpost rename reaches Codex before owner success. Desktop's
-name-event pipeline retains the same title/provenance fact; a later differing
-native name wins over its old acknowledgement. No transcript is stored.
+native name. Imported names without that acknowledgement stay visible. The
+shared name-event pipeline retains native acknowledgements and title provenance.
+A later differing native name wins over its old acknowledgement.
 Retained profile reads qualify every identity by backend, including Claude and
 ACP. Outpost reads actual active and archived ACP session metadata through the
 shared storage port, including uninstalled agents, with the same pure summary
@@ -936,9 +901,8 @@ Desktop native name events update already published non-Codex inventory rows
 without changing membership freshness. Existing owner observation sequences
 fence late lists, and startup hydration projects canonical Codex titles through
 compact overlay batches before publishing retained rows.
-Claude profile discovery now reads PwrAgent's actual `state/claude/*.json`
-metadata through a shared reader used by the desktop session store and a
-handle-free Outpost binding. Active and archived records need no retained
+Claude profile discovery reads PwrAgent's `state/claude/*.json` metadata
+through the shared session store. Active and archived records need no retained
 inventory. Native metadata owns Claude names/provenance, archive membership and
 execution mode; shared overlays retain pins, parents, seen watermarks and model
 overrides. Completed discovery supersedes older retained rows and excludes
@@ -1054,14 +1018,14 @@ graph TB
     SecStore --> StateDB
 ```
 
-Secrets — bot tokens, API keys — are never written to TOML and are never
-stored as plaintext in sqlite. PwrAgent encrypts them with Electron
-[`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage)
-and persists only the ciphertext blob. On macOS, Electron backs
-`safeStorage` with Keychain Access for the encryption keys, so decrypting
-the blob requires the same OS/user/app Keychain context. The app refuses
+PwrAgent persists secrets such as bot tokens and API keys only as ciphertext
+in SQLite. Desktop encrypts them with Electron
+[`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage).
+On macOS, Electron backs `safeStorage` with Keychain Access, so decryption
+requires the same OS/user/app Keychain context. Desktop refuses
 to write secrets when Electron reports an unsafe or unavailable
-`safeStorage` backend.
+`safeStorage` backend. Outpost encrypts secrets with a profile-local file key
+stored at `state/headless-secret.key`.
 
 ### Usage and pricing ledger
 
@@ -1154,13 +1118,13 @@ For a hands-on walkthrough when adding a new platform, see
 ## Dependency boundaries
 
 PwrAgent enforces a strict layered dependency architecture via
-[`dependency-cruiser`](.dependency-cruiser.cjs). The hierarchy reads
-bottom to top — leaves at the bottom import nothing else internal.
+[`dependency-cruiser`](.dependency-cruiser.cjs). Solid arrows show workspace
+imports. The dashed arrow shows the packaging script's build call.
 
 ```mermaid
 graph TB
-    DesktopApp["apps/desktop"]
-    Outpost["packages/pwragent · src/federation-core.ts"]
+    DesktopApp["apps/desktop · Electron shell and Node host"]
+    Outpost["packages/pwragent · CLI and serve wrapper"]
     OwnerCore["packages/owner-core"]
     SqliteStorage["packages/sqlite-storage"]
     Federation["packages/federation"]
@@ -1177,12 +1141,7 @@ graph TB
     DesktopApp --> OwnerCore
     DesktopApp --> SqliteStorage
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
-    Outpost --> Federation
-    Outpost --> AgentTools
-    Outpost --> Shared
-    Outpost --> MsgInterface
-    Outpost --> OwnerCore
-    Outpost --> SqliteStorage
+    Outpost -.->|Packaging invokes headless build| DesktopApp
     OwnerCore --> Shared
     SqliteStorage --> Shared
     SqliteStorage --> OwnerCore
@@ -1204,31 +1163,35 @@ other package access crosses the IPC bridge through the main process.
 Run `pnpm lint:boundaries` locally before pushing; CI fails the build on
 any violation.
 
-Federation, agent-tools, and the messaging interface are independent siblings
-above shared. The owner-core package imports only shared and holds navigation
-projection, Attention ordering, and thread-title policy. The Outpost may use the
-reusable libraries and owner-core through its bundle entry; its JavaScript
-consumes the bundle.
-Every package under `packages/` is forbidden from importing `apps/`.
+Federation, agent-tools, the messaging interface and `@pwragent/owner-core`
+each depend only on `@pwragent/shared` among workspace packages. Owner-core
+contains host-independent services, policies and ports. These include navigation
+projection and Attention ordering, thread creation, naming, turn and control
+lifecycles, queueing, the durable request service, runtime lease management,
+research, the Codex App Server client and storage contracts.
 
-Only Outpost's `federation-core.ts` binding imports the shared SQLite package;
-its runtime and daemon code cannot import raw storage or the native driver.
+Runtime library and CLI source under `packages/*/src` and `packages/*/bin`
+cannot import `apps/`. Outpost consumes its built `dist/index.js` and uses no
+direct workspace package imports in `packages/pwragent/src`. The packaging
+script invokes the headless builder as a build-time step outside that runtime
+source boundary.
 
 SQLite storage is below the hosts and may depend only on shared contracts and
-owner-core ports. Desktop application modules cannot import it or the raw
-database binding; their storage adapters and state internals own that access.
+owner-core ports among workspace packages. Storage adapters and state internals
+in `apps/desktop/src/main` own raw profile database access for both hosts.
+The Outpost CLI and serve wrapper cannot access raw SQLite.
 
 ## Workspace map
 
 | Path | What's there |
 |---|---|
-| `apps/desktop` | Electron app — main process, renderer, IPC bridge |
+| `apps/desktop` | Electron shell, renderer and IPC bridge, plus the shared owner composition root and headless Node entry |
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
 | `packages/federation` | Owner contract, federation transport, enrollment, routing and RPC |
 | `packages/agent-tools` | Agent tool definitions, routing and messaging tool contracts |
-| `packages/owner-core` | Shared navigation projection, Attention ordering, and thread-title policy (`@pwragent/owner-core`) |
+| `packages/owner-core` | Host-independent owner services, lifecycle policy, Codex App Server client, and storage ports (`@pwragent/owner-core`) |
 | `packages/sqlite-storage` | Portable profile SQLite opening, schema, migrations, table helpers and write accounting |
-| `packages/pwragent` | Headless Outpost daemon and CLI, with reusable libraries bundled through `src/federation-core.ts` |
+| `packages/pwragent` | Outpost CLI, local socket wrapper, and distribution of the built Node owner |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |
 | `packages/messaging/providers/discord` | Discord adapter (`discord.js`) |

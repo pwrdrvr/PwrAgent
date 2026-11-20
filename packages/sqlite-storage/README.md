@@ -1,24 +1,26 @@
 # Profile SQLite storage
 
 This package owns PwrAgent's profile `state.db` opener, schema and migration
-ladder. Desktop consumes this implementation through `main/storage`; its
-state-internal compatibility exports contain no second implementation.
+ladder. Desktop and the Outpost Node host both call
+[`startOwnerServices`](../../apps/desktop/src/main/owner-services.ts), which
+opens profile state through `storage/` and `state/` under `apps/desktop/src/main`.
+Storage adapters and state internals own the database handle. Owner services
+use storage ports, and the Outpost CLI delegates to the built owner entry.
 
 The shared `AppRuntimeInstanceStore` implements owner-core runtime lease ports
-for profile messaging, federation and MCP connections. Desktop constructs it
-through its private `main/storage` binding at the existing app-state lifecycle
-site. Host liveness remains injected. PID-owned leases, immediate acquisition,
-dead-owner grace and messaging side effects retain the original transactions;
-no heartbeat or new write is introduced.
+for profile messaging, federation and MCP connections. Both hosts construct
+it at the shared app-state lifecycle site through the private `main/storage`
+binding. Host liveness remains injected. PID-owned leases, immediate acquisition,
+dead-owner grace and messaging side effects retain the original transactions.
 
-The real Outpost daemon also opens the profile database through its
-`federation-core.ts` host binding. That binding returns shutdown and handle-free owner storage ports, uses the
-same runtime lease manager as desktop, and holds both profile-federation and
-messaging leases before starting a provider, recovering jobs or opening a
-listener. Shutdown drains the runtime before releasing leases and closing the
-database. The private headless owner lock, an OS lock the kernel releases when its
-holder exits, still guards crash recovery and names the dead owners whose
-leases a replacement may reclaim at once.
+The Node host's exclusive profile policy takes federation and messaging leases
+before it writes startup configuration or starts providers and listeners.
+The shared shutdown path drains services and releases their leases before the
+host closes the database. The `serve` wrapper holds a separate headless owner
+lock that the kernel releases on exit. It passes the previous lock holders'
+instance IDs to the shared lease manager so a replacement can reclaim their
+leases immediately. The portable bundle loads its pinned native SQLite
+dependency at runtime.
 
 Desktop's production registry admits local thread creation, turns, reviews,
 automation and helpers through an owner-core application port, and guards
@@ -31,10 +33,9 @@ Passive viewers do not claim a lease. Repeated owner admissions only read it;
 no schema, lock file or SQLite heartbeat is added.
 
 `profile-runtime-markers.ts` owns the existing PID/instance/start-time marker
-format, freshness checks and file heartbeat. Desktop retains its profile path
-resolution and process defaults. The marker timer performs no SQLite writes;
-the shared manager receives host liveness and boot time through its ports.
-Outpost has its own pinned native SQLite dependency external to the JS bundle.
+format, freshness checks and file heartbeat. The marker timer performs no
+SQLite writes. The shared manager receives host liveness and boot time through
+its ports.
 
 The shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 to-do and review storage ports. Their private desktop bindings keep the existing
@@ -74,60 +75,12 @@ the profile database; legacy inline payload moves, compare-and-set cleanup,
 claims/recovery, bounded projection cursors and transactions are preserved.
 
 Shared `SqliteDurableTurnRequestStore` implements the owner-core durable inbox
-port. Its private desktop binding retains the existing federation factory and
+port. Both hosts use the same storage factory in the federation runtime, with
 synchronous FULL/immediate receipt and claim commits before dispatch. The prior
-connection durability mode is restored on success or refusal. Receipt SQL,
-caller/request/queue identities, expiry and transaction sites are unchanged.
-Outpost's private profile binding also supplies this handle-free port to the
-same owner-core inbox service. Receipt, job, FIFO and event identities agree;
-authenticated callers cannot read another issuer/device's receipts. Accepted
-queued input is transient and is never restored after shutdown or recovery.
-
-`outpost-durable-turn-write-budgets.json` measures actual feature boundaries:
-queued admission is four commits/32,960 observed WAL bytes (3.296 MB/day at
-100/day), direct admission seven/41,200 (4.12 MB/day), queued dispatch including
-the prior terminal five/16,480 (1.648 MB/day), cancellation or native completion
-two/8,240 each (0.824 MB/day), and shutdown of one active plus one queued job
-three/12,360 (1.236 MB at 100 shutdowns/day). One hundred duplicate submissions
-plus reads and one hundred uncertain retries plus reads each make zero commits.
-Setup is excluded; no schema, timer or inherited budget changes.
-
-`outpost-durable-steer-write-budgets.json` measures the actual Outpost steering
-inbox through its existing native control path. Receipt admission, claim and
-accepted result cost three commits/four statements/three changed rows with
-24,720 observed WAL bytes; an uncertain native outcome has the same cost.
-At 100 steers/day each projects to 2.472 MB/day. A fresh-host read settling one
-stale claim costs one commit/4,120 bytes (0.412 MB/day at 100/day). One hundred
-matching accepted retries plus reads and one hundred uncertain retries plus
-reads each make zero commits and no native resend. Setup is excluded. Steering
-adds no job, schema, timer or write to an existing accepted job's fingerprint.
-
-`outpost-queued-steer-write-budgets.json` measures individual ordinary agent
-admission through the actual owner and existing shared queue. Acceptance, native
-target claim, origin retention and running confirmation cost four commits/20,600
-observed WAL bytes (2.06 MB/day at 100/day). Native uncertainty costs three
-commits/16,480 bytes (1.648 MB/day); refused running confirmation costs four/20,600.
-One terminal settling the original job and one interjection costs two/8,240
-(0.824 MB/day). Shutdown of original, steered and waiting jobs costs three/12,360;
-their existing atomic recovery costs one/4,120. Each 100 matching accepted or
-uncertain retries makes zero commits and no native resend. Setup is excluded.
-Retiring a refused claim restored behind shutdown's first cancellation sweep
-costs two commits/8,240 bytes (0.824 MB/day at 100/day), excluding acceptance.
-One hundred interjection-identity interrupt refusals add zero writes or native
-control calls; native interruption stays with the original active job.
-The existing job payload retains a bounded delivery enum and captured native
-identity, never prompt text. No schema, timer or inherited budget changes.
-
-`outpost-held-steer-retry-write-budgets.json` measures explicit Retry after an
-individual guidance entry was accepted and held before its native claim.
-Successful target claim, original-owner origin retention and running confirmation
-cost three commits/12,360 observed WAL bytes (1.236 MB/day at 100 retries/day).
-Native uncertainty costs two commits/8,240 bytes (0.824 MB/day); confirmation
-uncertainty costs three/12,360. A refused claim and each 100 duplicate or gated
-retries cost zero commits and add no native resend. Shutdown after successful
-Retry settles original and guidance jobs in two commits/8,240 bytes. Setup and
-acceptance are excluded; real drains/timers and all inherited budgets remain
-unchanged. Retry adds no persistence site or idle write.
+connection durability mode is restored on success or refusal. The inbox shares
+queue identities with the registry and reconciles receipts from queue events.
+Receipt reads are scoped to the authenticated caller. The inbox stores payload
+fingerprints and outcomes, and the live queue holds the pending input.
 
 Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
 ACP session metadata and last-observed command ports. Desktop's private bindings
@@ -332,6 +285,17 @@ Supported isolated Electron E2E runs those factories and the real cleanup servic
 with an invented transport, observes later portable WAL commits through a retained
 port, and hands persisted cleanup outcomes back to Node after graceful shutdown.
 
+## Historical Outpost storage migrations
+
+The notes below record the earlier Outpost runtime's adoption of shared SQLite,
+retained metadata, turn lifecycles and write budgets. Test names, host classes
+and measurements refer to that migration. Current Outpost startup opens the
+shared profile database and uses the registry, queue and durable request inbox
+constructed by the shared owner services. Legacy JSON job and thread import
+described below was part of the earlier adoption. The separate
+[live Docker identity migration](../pwragent/LIVE-DOCKER-MIGRATION.md) records
+the one-off enrollment handoff to the Node host.
+
 `outpost-profile-runtime.property.test.ts` checks generated live-owner models,
 actual binding cleanup on held leases and statement refusal, the handle-free
 host interface, and measured lifecycle/idle budgets in the separate
@@ -345,7 +309,7 @@ explicit crash recovery and restart without replay, including the existing
 lease, refuses its desktop federation runtime, transfers ownership to desktop,
 refuses Outpost startup while desktop holds it, and transfers back after quit.
 
-The production Outpost's JobStore and HeadlessBackend now use shared SQLite.
+The earlier Outpost's `JobStore` and `HeadlessBackend` moved to shared SQLite.
 The job storage port retains acceptance fingerprints, confirmed thread/turn
 identities and terminal outcomes without prompts or transcripts. Owner metadata
 uses the existing SqliteOverlayStore registry; its synchronous storage methods
@@ -625,3 +589,49 @@ local draft and submits changed text with a new identity. The separate
 (including `forEdit`) and 1,000 stale-hash cancellation refusals as zero commits,
 statements, rows and WAL bytes: incremental 0 MB/day. Accepted fingerprints,
 cancellation write costs, shutdown and restart without replay are unchanged.
+
+`outpost-durable-turn-write-budgets.json` measures actual feature boundaries:
+queued admission is four commits/32,960 observed WAL bytes (3.296 MB/day at
+100/day), direct admission seven/41,200 (4.12 MB/day), queued dispatch including
+the prior terminal five/16,480 (1.648 MB/day), cancellation or native completion
+two/8,240 each (0.824 MB/day), and shutdown of one active plus one queued job
+three/12,360 (1.236 MB at 100 shutdowns/day). One hundred duplicate submissions
+plus reads and one hundred uncertain retries plus reads each make zero commits.
+Setup is excluded; no schema, timer or inherited budget changes.
+
+`outpost-durable-steer-write-budgets.json` measures the actual Outpost steering
+inbox through its existing native control path. Receipt admission, claim and
+accepted result cost three commits/four statements/three changed rows with
+24,720 observed WAL bytes; an uncertain native outcome has the same cost.
+At 100 steers/day each projects to 2.472 MB/day. A fresh-host read settling one
+stale claim costs one commit/4,120 bytes (0.412 MB/day at 100/day). One hundred
+matching accepted retries plus reads and one hundred uncertain retries plus
+reads each make zero commits and no native resend. Setup is excluded. Steering
+adds no job, schema, timer or write to an existing accepted job's fingerprint.
+
+`outpost-queued-steer-write-budgets.json` measures individual ordinary agent
+admission through the actual owner and existing shared queue. Acceptance, native
+target claim, origin retention and running confirmation cost four commits/20,600
+observed WAL bytes (2.06 MB/day at 100/day). Native uncertainty costs three
+commits/16,480 bytes (1.648 MB/day); refused running confirmation costs four/20,600.
+One terminal settling the original job and one interjection costs two/8,240
+(0.824 MB/day). Shutdown of original, steered and waiting jobs costs three/12,360;
+their existing atomic recovery costs one/4,120. Each 100 matching accepted or
+uncertain retries makes zero commits and no native resend. Setup is excluded.
+Retiring a refused claim restored behind shutdown's first cancellation sweep
+costs two commits/8,240 bytes (0.824 MB/day at 100/day), excluding acceptance.
+One hundred interjection-identity interrupt refusals add zero writes or native
+control calls; native interruption stays with the original active job.
+The existing job payload retains a bounded delivery enum and captured native
+identity, never prompt text. No schema, timer or inherited budget changes.
+
+`outpost-held-steer-retry-write-budgets.json` measures explicit Retry after an
+individual guidance entry was accepted and held before its native claim.
+Successful target claim, original-owner origin retention and running confirmation
+cost three commits/12,360 observed WAL bytes (1.236 MB/day at 100 retries/day).
+Native uncertainty costs two commits/8,240 bytes (0.824 MB/day); confirmation
+uncertainty costs three/12,360. A refused claim and each 100 duplicate or gated
+retries cost zero commits and add no native resend. Shutdown after successful
+Retry settles original and guidance jobs in two commits/8,240 bytes. Setup and
+acceptance are excluded; real drains/timers and all inherited budgets remain
+unchanged. Retry adds no persistence site or idle write.
