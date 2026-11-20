@@ -27,7 +27,7 @@ import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
-import { asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import { asPlainRecord, assistantItemIdForBackendEvent, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { automatedWorkStartedLabel, automationRunFailureNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { MessagingBrowseWorkflow } from "./messaging-browse-workflow";
 import { rememberBoundedMap } from "../../bounded-map";
@@ -397,7 +397,6 @@ export class MessagingController {
         responseAttributionForBinding: (...args) => this.responseAttributionForBinding(...args),
         newIntentId: (...args) => this.newIntentId(...args),
         deliver: (...args) => this.deliver(...args),
-        keepsReplyReceipts: () => Boolean(this.options.store.settleDelivery),
         dismissTerminalPrivateResponseSurface: (...args) => this.dismissTerminalPrivateResponseSurface(...args),
       },
     });
@@ -4876,24 +4875,6 @@ function describeDeliveryCheckReason(reason: MessagingReplyReceiptReason): strin
     default:
       return "Its delivery could not be confirmed.";
   }
-}
-
-function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {
-  if (
-    event.notification.method !== "item/started"
-    && event.notification.method !== "item/completed"
-  ) {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { id?: unknown; itemId?: unknown; item_id?: unknown };
-  }).item;
-  for (const value of [item?.id, item?.itemId, item?.item_id]) {
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return undefined;
 }
 
 function selectAssistantImagesForCapability(

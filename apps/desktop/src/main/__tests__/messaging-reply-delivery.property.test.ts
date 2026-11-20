@@ -44,6 +44,8 @@ const FAULTS = [
   "rate-limited-not-retryable",
   "send-failed",
   "send-throws",
+  // A final stream edit fails, landing or not; a message sends cleanly.
+  "stream-edit-fails",
   // After the send: the process dies before the provider answers.
   "crash-after-send",
   // Before the settle: the settle write fails after the provider accepted.
@@ -52,7 +54,8 @@ const FAULTS = [
 type Fault = (typeof FAULTS)[number];
 const MODES = ["message", "stream-final", "stream-terminal"] as const;
 type Mode = (typeof MODES)[number];
-type Step = { fault: Fault; landed: boolean; mode?: Mode };
+/** `markerFails` adds a marker write failure to any other fault. */
+type Step = { fault: Fault; landed: boolean; mode?: Mode; markerFails?: boolean };
 
 const BINDING_ID = "fixture-binding";
 const THREAD_ID = "fixture-thread";
@@ -100,7 +103,7 @@ function boot(
   const store = new SqliteMessagingStore(w.db);
   const faulty = new Proxy(store, { get: (target, key) => {
     if (key === "recordDelivery") return async (delivery: Parameters<SqliteMessagingStore["recordDelivery"]>[0]) => {
-      if (fault.current?.fault === "marker-write-fails" && delivery.id.startsWith(receipts.OPEN_REPLY_RECEIPT_PREFIX)) {
+      if ((fault.current?.fault === "marker-write-fails" || fault.current?.markerFails) && delivery.id.startsWith(receipts.OPEN_REPLY_RECEIPT_PREFIX)) {
         throw new Error("Fixture marker write failure");
       }
       return await target.recordDelivery(delivery);
@@ -185,6 +188,10 @@ function boot(
       case "send-failed":
         if (step.landed) apply(intent);
         return { channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture send failure" };
+      case "stream-edit-fails":
+        if (intent.kind !== "stream_update") return apply(intent);
+        if (step.landed) apply(intent);
+        return { channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture edit failure" };
       case "send-throws":
         if (step.landed) apply(intent);
         throw new Error("Fixture socket reset");
@@ -358,6 +365,9 @@ describe("final reply delivery model", () => {
     ["a final stream edit fails after it landed", { fault: "send-failed", landed: true, mode: "stream-final" }, 1, true],
     ["the adapter is stopped before a streamed final", { fault: "adapter-stopped", landed: false, mode: "stream-final" }, 1, false],
     ["PwrAgent restarts while flushing a buffered stream", { fault: "crash-before-send", landed: false, mode: "stream-terminal" }, 0, true],
+    // With no marker there is nothing to flag, so the message fallback runs.
+    ["the marker write and the final edit both fail", { fault: "stream-edit-fails", landed: false, mode: "stream-final", markerFails: true }, 1, false],
+    ["the marker write and the buffered final edit both fail", { fault: "stream-edit-fails", landed: false, mode: "stream-terminal", markerFails: true }, 1, false],
   ] as const)("keeps a streamed final reply when %s", async (_name, step, copies, flagged) => {
     const w = await runModel([step]);
     expect(outcome(w, 0)).toEqual({ copies, flagged });

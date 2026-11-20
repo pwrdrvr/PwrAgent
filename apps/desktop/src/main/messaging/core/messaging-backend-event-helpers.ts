@@ -376,6 +376,25 @@ export function artifactTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+/** The backend item an `item/started` or `item/completed` event names. */
+export function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {
+  if (
+    event.notification.method !== "item/started"
+    && event.notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+  const item = (event.notification.params as {
+    item?: { id?: unknown; itemId?: unknown; item_id?: unknown };
+  }).item;
+  for (const value of [item?.id, item?.itemId, item?.item_id]) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function turnIdForBackendEvent(event: AgentEvent): string | undefined {
   const params = event.notification.params as {
     turn?: { id?: unknown };

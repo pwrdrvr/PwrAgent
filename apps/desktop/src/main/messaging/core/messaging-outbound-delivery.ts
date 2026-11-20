@@ -66,6 +66,8 @@ export type MessagingReplyReceiptRequest = {
   attempts?: number;
   /** The caller already claimed the receipt; see claimReplyReceipt. */
   claimed?: boolean;
+  /** Set by `deliver` once the pending marker is written. */
+  kept?: boolean;
 };
 
 /** One send's open receipt and what the send proved about it. */
@@ -286,6 +288,7 @@ export class MessagingOutboundDelivery {
         ...receipt,
         at: receipt.receipt.markedAt,
       }));
+      request.kept = true;
       this.context.logger.debug?.("messaging reply receipt opened", {
         attempts: receipt.receipt.attempts,
         bindingId: binding.id,

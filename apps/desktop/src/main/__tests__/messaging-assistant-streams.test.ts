@@ -24,7 +24,6 @@ it("cancels an in-flight stream, owns the late surface once and returns the dism
         responseAttributionForBinding: async () => ({ label: "Fixture" }),
         newIntentId: prefix => prefix,
         dismissTerminalPrivateResponseSurface: dismiss,
-        keepsReplyReceipts: () => false,
         deliver: async (_intent, _binding, _event, guard) => {
           expect(guard?.isCancelled()).toBe(false);
           entered.resolve();
