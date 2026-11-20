@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
+  DesktopWorktreeFolderCheck,
+  DesktopWorktreeFolderStatus,
   DesktopWorktreeStorageLocation,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -83,7 +85,6 @@ export function WorktreesSettings(props: {
           {storage.value === "user-home" ? (
             <WorktreeFolderField
               baseDirectory={props.snapshot.worktrees.baseDirectory}
-              available={props.snapshot.worktrees.baseDirectoryAvailable}
               disabled={props.saving}
               desktopApi={props.desktopApi}
               onWriteConfig={props.onWriteConfig}
@@ -126,9 +127,60 @@ export function WorktreesSettings(props: {
   );
 }
 
+/**
+ * The folder's availability, asked of the main process when the pane shows a
+ * folder and again whenever the window regains focus (after plugging in a
+ * drive). `checking` until the answer for this folder arrives.
+ */
+function useWorktreeFolderStatus(
+  baseDirectory: string | undefined,
+  check: (() => Promise<DesktopWorktreeFolderCheck>) | undefined,
+): DesktopWorktreeFolderStatus | "checking" | undefined {
+  const [result, setResult] = useState<DesktopWorktreeFolderCheck>();
+  useEffect(() => {
+    if (!baseDirectory || !check) return;
+    let current = true;
+    const run = () => {
+      void check().then(
+        (checked) => {
+          if (current) setResult(checked);
+        },
+        () => {
+          // No answer: show no chip rather than a guess.
+          if (current) setResult({ directory: baseDirectory });
+        },
+      );
+    };
+    run();
+    window.addEventListener("focus", run);
+    return () => {
+      current = false;
+      window.removeEventListener("focus", run);
+    };
+  }, [baseDirectory, check]);
+  if (!baseDirectory || !check) return undefined;
+  return result?.directory === baseDirectory ? result.status : "checking";
+}
+
+const FOLDER_STATUS_CHIPS: Record<DesktopWorktreeFolderStatus | "checking", { label: string; modifier?: string }> = {
+  checking: { label: "Checking…" },
+  available: { label: "Available", modifier: "ok" },
+  missing: { label: "Not available", modifier: "err" },
+  "not-responding": { label: "Not responding", modifier: "err" },
+};
+
+function folderStatusError(baseDirectory: string, status: DesktopWorktreeFolderStatus | "checking" | undefined) {
+  if (status === "missing") {
+    return `${baseDirectory} is not available. Connect the drive or choose another folder; new worktrees cannot be created until then.`;
+  }
+  if (status === "not-responding") {
+    return `${baseDirectory} is not responding. Check the drive or network share, or choose another folder.`;
+  }
+  return undefined;
+}
+
 function WorktreeFolderField(props: {
   baseDirectory?: string;
-  available?: boolean;
   disabled: boolean;
   desktopApi?: DesktopApi;
   onWriteConfig?: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
@@ -150,15 +202,14 @@ function WorktreeFolderField(props: {
       setError("The folder picker could not open. Try again.");
     }
   };
-  const unavailable = props.baseDirectory !== undefined && props.available === false;
+  const status = useWorktreeFolderStatus(props.baseDirectory, props.desktopApi?.checkWorktreeFolder);
+  const chip = status ? FOLDER_STATUS_CHIPS[status] : undefined;
 
   return (
     <SettingsField
       label="Worktree folder"
       sub="Put worktrees on a drive with more room. Existing worktrees stay where they are."
-      error={error ?? (unavailable
-        ? `${props.baseDirectory} is not available. Connect the drive or choose another folder; new worktrees cannot be created until then.`
-        : undefined)}
+      error={error ?? (props.baseDirectory ? folderStatusError(props.baseDirectory, status) : undefined)}
       control={
         <div className="worktree-folder__row">
           <input
@@ -167,11 +218,11 @@ function WorktreeFolderField(props: {
             readOnly
             value={props.baseDirectory ?? "Home folder"}
           />
-          {props.baseDirectory ? (
+          {chip ? (
             <span
-              className={`settings-pathrow__chip ${unavailable ? "settings-pathrow__chip--err" : "settings-pathrow__chip--ok"}`}
+              className={`settings-pathrow__chip${chip.modifier ? ` settings-pathrow__chip--${chip.modifier}` : ""}`}
             >
-              {unavailable ? "Not available" : "Available"}
+              {chip.label}
             </span>
           ) : null}
           <button

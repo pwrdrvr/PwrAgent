@@ -10,7 +10,8 @@ import type {
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { worktreeArchiveInternals } from "./worktree-archive-service";
-import { isPwrAgentWorktreeLock, lockWorktreeOnSeparateVolume } from "./worktree-volume-lock";
+import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
+import { isPwrAgentWorktreeLock } from "./worktree-volume-lock";
 
 type RecordedWorktree = {
   path: string;
@@ -207,18 +208,20 @@ export class WorktreeRecoveryService {
         await rmdir(worktreePath);
       }
       if (ownRecord) {
-        if (ownLock) await this.git(repositoryPath, ["worktree", "unlock", ownRecord.path]);
-        await this.git(repositoryPath, ["worktree", "remove", ownRecord.path]);
+        // The folder may be gone, so the lock comes from Git's record.
+        await removeManagedWorktree({
+          worktreePath: ownRecord.path, lock: ownRecord, git: (args) => this.git(repositoryPath, args),
+        });
         mark("clear-record", "done");
       } else {
         mark("clear-record", "skipped", "Git had no record of the folder.");
       }
       await mkdir(path.dirname(worktreePath), { recursive: true });
-      await this.git(repositoryPath, detached
-        ? ["worktree", "add", "--detach", worktreePath, startPoint]
-        : ["worktree", "add", worktreePath, startPoint]);
-      await lockWorktreeOnSeparateVolume({
-        repoRoot: repositoryPath, worktreePath, git: (args) => this.git(repositoryPath, args),
+      await addManagedWorktree({
+        repoRoot: repositoryPath,
+        worktreePath,
+        addArgs: detached ? ["--detach", worktreePath, startPoint] : [worktreePath, startPoint],
+        git: (args) => this.git(repositoryPath, args),
       });
       mark("add-worktree", "done");
 
@@ -281,15 +284,14 @@ export class WorktreeRecoveryService {
     const ownPath = await comparablePath(params.worktreePath);
     for (const record of await this.listRecords(params.repositoryPath)) {
       if ((await comparablePath(record.path)) !== ownPath) continue;
-      if (isPwrAgentWorktreeLock(record) && await this.driveAttached(params.worktreePath)) {
-        await this.git(params.repositoryPath, ["worktree", "unlock", record.path]);
-        record.locked = false;
-      }
-      if (record.locked) {
+      // PwrAgent's own lock is cleared only while its drive is attached.
+      if (record.locked && !(isPwrAgentWorktreeLock(record) && await this.driveAttached(params.worktreePath))) {
         throw new Error(`Git has a lock on the record of ${params.worktreePath}.`);
       }
       // Without --force, Git removes only a record whose folder is gone.
-      await this.git(params.repositoryPath, ["worktree", "remove", record.path]);
+      await removeManagedWorktree({
+        worktreePath: record.path, lock: record, git: (args) => this.git(params.repositoryPath, args),
+      });
       return true;
     }
     return false;

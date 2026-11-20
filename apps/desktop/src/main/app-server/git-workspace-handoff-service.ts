@@ -16,7 +16,7 @@ import {
   readStatusWithoutNestedWorktrees,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { lockWorktreeOnSeparateVolume } from "./worktree-volume-lock";
+import { addManagedWorktree } from "./managed-worktree";
 import {
   computeWorktreePath,
   inspectGitWorkspace,
@@ -373,10 +373,12 @@ export class GitWorkspaceHandoffService {
     this.homeDir = options.homeDir;
   }
 
-  private async lockOnSeparateVolume(repositoryPath: string, worktreePath: string): Promise<void> {
-    await lockWorktreeOnSeparateVolume({
+  /** `git worktree add <addArgs>` with the drive lock (see managed-worktree.ts). */
+  private async addWorktree(repositoryPath: string, worktreePath: string, addArgs: string[]): Promise<void> {
+    await addManagedWorktree({
       repoRoot: repositoryPath,
       worktreePath,
+      addArgs,
       git: (args) => runGit(repositoryPath, args, this.gitEnv),
     });
   }
@@ -442,8 +444,7 @@ export class GitWorkspaceHandoffService {
           homeDir: this.homeDir, timestamp: params.now,
         });
         try {
-          await runGit(repositoryPath, ["worktree", "add", "--detach", targetPath, "HEAD"], this.gitEnv);
-          await this.lockOnSeparateVolume(repositoryPath, targetPath);
+          await this.addWorktree(repositoryPath, targetPath, ["--detach", targetPath, "HEAD"]);
         } catch (error) {
           await releaseReservationAndRethrow(targetPath, error);
         }
@@ -619,12 +620,7 @@ export class GitWorkspaceHandoffService {
     ).catch((error) => releaseReservationAndRethrow(targetPath, error));
     await mkdir(path.dirname(targetPath), { recursive: true });
     try {
-      await runGit(
-        context.repositoryPath,
-        ["worktree", "add", targetPath, context.branch],
-        this.gitEnv,
-      );
-      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
+      await this.addWorktree(context.repositoryPath, targetPath, [targetPath, context.branch]);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -699,12 +695,7 @@ export class GitWorkspaceHandoffService {
 
     await mkdir(path.dirname(targetPath), { recursive: true });
     try {
-      await runGit(
-        context.repositoryPath,
-        ["worktree", "add", "-b", newBranchName, targetPath, baseSha],
-        this.gitEnv,
-      );
-      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
+      await this.addWorktree(context.repositoryPath, targetPath, ["-b", newBranchName, targetPath, baseSha]);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -768,12 +759,7 @@ export class GitWorkspaceHandoffService {
 
     await mkdir(path.dirname(targetPath), { recursive: true });
     try {
-      await runGit(
-        context.repositoryPath,
-        ["worktree", "add", "--detach", targetPath, baseSha],
-        this.gitEnv,
-      );
-      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
+      await this.addWorktree(context.repositoryPath, targetPath, ["--detach", targetPath, baseSha]);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -906,14 +892,11 @@ export class GitWorkspaceHandoffService {
       .catch((error) => releaseReservationAndRethrow(targetPath, error));
     await mkdir(path.dirname(targetPath), { recursive: true });
     try {
-      await runGit(
+      await this.addWorktree(
         context.repositoryPath,
-        newBranchName
-          ? ["worktree", "add", "-b", newBranchName, targetPath, baseSha]
-          : ["worktree", "add", "--detach", targetPath, baseSha],
-        this.gitEnv,
+        targetPath,
+        newBranchName ? ["-b", newBranchName, targetPath, baseSha] : ["--detach", targetPath, baseSha],
       );
-      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -975,12 +958,7 @@ export class GitWorkspaceHandoffService {
       .catch((error) => releaseReservationAndRethrow(targetPath, error));
     await mkdir(path.dirname(targetPath), { recursive: true });
     try {
-      await runGit(
-        context.repositoryPath,
-        ["worktree", "add", targetPath, context.branch],
-        this.gitEnv,
-      );
-      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
+      await this.addWorktree(context.repositoryPath, targetPath, [targetPath, context.branch]);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
+import { addManagedWorktree, removeManagedWorktree } from "../app-server/managed-worktree";
 import {
   PWRAGENT_WORKTREE_LOCK_REASON,
   lockWorktreeOnSeparateVolume,
@@ -87,6 +88,45 @@ describe("worktree volume locks", () => {
         }
       }),
       { numRuns: 8 },
+    );
+  });
+
+  it("adds and removes through the helper, even when the checkout folder is gone", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (separateVolume, foreignLock, folderGone) => {
+        const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-managed-worktree-")));
+        cleanupPaths.push(root);
+        const repo = path.join(root, "repo");
+        await mkdir(repo);
+        git(repo, ["init", "-q", "-b", "main"]);
+        git(repo, ["-c", "user.name=PwrAgent Tests", "-c", "user.email=tests@example.invalid", "commit", "-q", "--allow-empty", "-m", "seed"]);
+        const container = path.join(root, "drive", ".pwragent", "worktrees", "m1abc");
+        await mkdir(container, { recursive: true });
+        const worktree = path.join(container, "Orbit");
+        const run = async (args: string[]) => git(repo, args);
+
+        await addManagedWorktree({
+          repoRoot: repo, worktreePath: worktree, addArgs: ["--detach", worktree, "HEAD"], git: run,
+          separateVolume: async () => separateVolume,
+        });
+        expect(record(repo, worktree)).toMatchObject({ locked: separateVolume });
+        if (foreignLock && !separateVolume) git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
+        const held = foreignLock && !separateVolume;
+        // With the folder gone, recovery passes Git's record for the lock.
+        if (folderGone) await rm(container, { recursive: true, force: true });
+        const removal = removeManagedWorktree({
+          worktreePath: worktree, force: !folderGone, git: run, lock: folderGone ? record(repo, worktree) : undefined,
+        });
+
+        if (held) {
+          await expect(removal).rejects.toThrow(/locked/);
+          expect(record(repo, worktree)).toMatchObject({ locked: true, lockReason: "operator hold" });
+        } else {
+          await removal;
+          expect(record(repo, worktree)).toBeUndefined();
+        }
+      }),
+      { numRuns: 16 },
     );
   });
 

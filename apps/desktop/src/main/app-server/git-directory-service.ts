@@ -22,7 +22,7 @@ import {
   readStatusWithoutNestedWorktrees,
 } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
-import { lockWorktreeOnSeparateVolume, unlockPwrAgentWorktreeLock } from "./worktree-volume-lock";
+import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
@@ -349,15 +349,11 @@ async function removeWorktreeAndPrune(params: {
   runGit: GitCommandRunner;
   worktreePath: string;
 }): Promise<void> {
-  await unlockPwrAgentWorktreeLock({
+  await removeManagedWorktree({
     worktreePath: params.worktreePath,
+    force: true,
     git: (args) => params.runGit(params.repoRoot, args, params.gitEnv),
   });
-  await params.runGit(
-    params.repoRoot,
-    ["worktree", "remove", "--force", params.worktreePath],
-    params.gitEnv,
-  );
   await pruneEmptyWorktreeParents(params.worktreePath);
 }
 
@@ -474,10 +470,9 @@ async function addExclusiveAttachedWorktree(params: {
   let addSucceeded = false;
   let entries: WorktreeEntry[] | undefined;
   try {
-    await runGit(repoRoot, ["worktree", "add", "--", worktreePath, branch], {
-      ...(params.gitEnv ?? process.env),
-      LC_ALL: "C",
-      LANGUAGE: "C",
+    const env = { ...(params.gitEnv ?? process.env), LC_ALL: "C", LANGUAGE: "C" };
+    await addManagedWorktree({
+      repoRoot, worktreePath, addArgs: ["--", worktreePath, branch], git: (args) => runGit(repoRoot, args, env),
     });
     addSucceeded = true;
     entries = await readWorktreeEntries(params);
@@ -486,9 +481,6 @@ async function addExclusiveAttachedWorktree(params: {
     if (occupied) {
       throw new WorktreeBranchAlreadyCheckedOutError(branch, occupied.path);
     }
-    await lockWorktreeOnSeparateVolume({
-      repoRoot, worktreePath, git: (args) => runGit(repoRoot, args, params.gitEnv),
-    });
   } catch (error) {
     entries ??= await readWorktreeEntries(params).catch(() => undefined);
     const checkoutPath = await normalizeFilesystemPath(worktreePath);
@@ -1594,13 +1586,11 @@ export class GitDirectoryService {
         } else {
           try {
             await mkdir(path.dirname(worktreePath), { recursive: true });
-            await this.runGitCommand(
+            await addManagedWorktree({
               repoRoot,
-              ["worktree", "add", "--", worktreePath, baseBranch],
-              this.gitEnv,
-            );
-            await lockWorktreeOnSeparateVolume({
-              repoRoot, worktreePath, git: (args) => this.runGitCommand(repoRoot, args, this.gitEnv),
+              worktreePath,
+              addArgs: ["--", worktreePath, baseBranch],
+              git: (args) => this.runGitCommand(repoRoot, args, this.gitEnv),
             });
           } catch (error) {
             await pruneEmptyWorktreeParents(worktreePath);
@@ -1653,13 +1643,11 @@ export class GitDirectoryService {
     });
     await mkdir(path.dirname(worktreePath), { recursive: true });
     try {
-      await this.runGitCommand(
+      await addManagedWorktree({
         repoRoot,
-        ["worktree", "add", "--detach", worktreePath, baseBranch],
-        this.gitEnv,
-      );
-      await lockWorktreeOnSeparateVolume({
-        repoRoot, worktreePath, git: (args) => this.runGitCommand(repoRoot, args, this.gitEnv),
+        worktreePath,
+        addArgs: ["--detach", worktreePath, baseBranch],
+        git: (args) => this.runGitCommand(repoRoot, args, this.gitEnv),
       });
     } catch (error) {
       await pruneEmptyWorktreeParents(worktreePath);
@@ -1784,8 +1772,7 @@ export class GitDirectoryService {
       }
 
       const branch = entry.branch ?? thread.observedGitBranch ?? thread.gitBranch;
-      await unlockPwrAgentWorktreeLock({ worktreePath, git: (args) => runGit(repoRoot, args, gitEnv) });
-      await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath], gitEnv);
+      await removeManagedWorktree({ worktreePath, force: true, git: (args) => runGit(repoRoot, args, gitEnv) });
       await pruneEmptyWorktreeParents(worktreePath);
 
       const result: ArchiveThreadCleanupResult = {

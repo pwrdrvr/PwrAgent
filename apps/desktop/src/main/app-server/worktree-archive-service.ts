@@ -12,7 +12,7 @@ import { runGitCommand } from "./git-executable";
 import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { sameRegisteredWorktree, worktreeDirectoryIdentity, type CheckoutIdentity } from "./worktree-maintenance-registration";
-import { lockWorktreeOnSeparateVolume, unlockPwrAgentWorktreeLock } from "./worktree-volume-lock";
+import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
 
 type GitResult = {
   stdout: string;
@@ -550,18 +550,19 @@ export class WorktreeArchiveService {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
       }
       assertRemoval?.();
-      await unlockPwrAgentWorktreeLock({
+      await removeManagedWorktree({
         worktreePath,
+        force: true,
         git: async (args) => (await this.runGit(repositoryPath, args)).stdout,
+        removeGit: async (args) => (await this.runGit(
+          repositoryPath,
+          args,
+          // Git for Windows can hand work to another git.exe after the launcher
+          // exits. Own that complete process tree atomically and do not report the
+          // archive complete until the Job's active-process count reaches zero.
+          { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
+        )).stdout,
       });
-      await this.runGit(
-        repositoryPath,
-        ["worktree", "remove", "--force", worktreePath],
-        // Git for Windows can hand work to another git.exe after the launcher
-        // exits. Own that complete process tree atomically and do not report the
-        // archive complete until the Job's active-process count reaches zero.
-        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
-      );
     }, assertRemoval));
   }
 
@@ -618,12 +619,13 @@ export class WorktreeArchiveService {
         branchReason = "The original branch is unavailable; restored its saved HEAD detached.";
       }
     }
-    await this.runGit(repositoryPath, sourceBranch
-      ? ["worktree", "add", worktreePath, sourceBranch]
-      : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit],
-    { ownProcessTree: params.restoreSourceCheckout });
-    await lockWorktreeOnSeparateVolume({
-      repoRoot: repositoryPath, worktreePath, git: (args) => this.runGit(repositoryPath, args),
+    await addManagedWorktree({
+      repoRoot: repositoryPath,
+      worktreePath,
+      addArgs: sourceBranch
+        ? [worktreePath, sourceBranch]
+        : ["--detach", worktreePath, sourceHead ?? restoreCommit],
+      git: (args) => this.runGit(repositoryPath, args, { ownProcessTree: params.restoreSourceCheckout }),
     });
     if (sourceHead && sourceHead !== restoreCommit) {
       // Populate the saved file tree, then return the index to the original
@@ -691,13 +693,12 @@ export class WorktreeArchiveService {
     );
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await this.runGit(repositoryPath, [
-      "worktree",
-      "add",
-      "--detach",
+    await addManagedWorktree({
+      repoRoot: repositoryPath,
       worktreePath,
-      snapshotCommit,
-    ]);
+      addArgs: ["--detach", worktreePath, snapshotCommit],
+      git: (args) => this.runGit(repositoryPath, args),
+    });
 
     const restoredAt = params.now ?? Date.now();
     return {

@@ -2,7 +2,7 @@ import { ThreadInstanceHandoffService as SharedHandoffService } from "@pwragent/
 import { createGitHandoffService } from "@pwragent/federation/git-instance-handoff";
 import { runGitCommand } from "../app-server/git-executable";
 import { computeWorktreePath, releaseWorktreePathReservation } from "../app-server/git-directory-service";
-import { lockWorktreeOnSeparateVolume, unlockPwrAgentWorktreeLock } from "../app-server/worktree-volume-lock";
+import { lockExternallyAddedWorktree, unlockBeforeExternalRemoval } from "../app-server/managed-worktree";
 export { THREAD_HANDOFF_METHODS, THREAD_HANDOFF_RETRY_NOW_EVENT } from "@pwragent/federation/thread-instance-handoff-service";
 export type { ImportInstanceThreadRequest, ThreadHandoffSendOptions } from "@pwragent/federation/thread-instance-handoff-service";
 
@@ -27,9 +27,9 @@ function lockingGitHandoffService(): ReturnType<typeof createGitHandoffService> 
     importGitHandoff: async (params) => {
       const rollback = await git.importGitHandoff(params);
       const runInRepository = (args: string[]) => runGitCommand(params.repository, args);
-      await lockWorktreeOnSeparateVolume({ repoRoot: params.repository, worktreePath: params.worktree, git: runInRepository });
+      await lockExternallyAddedWorktree({ repoRoot: params.repository, worktreePath: params.worktree, git: runInRepository });
       return async () => {
-        await unlockPwrAgentWorktreeLock({ worktreePath: params.worktree, git: runInRepository });
+        await unlockBeforeExternalRemoval({ worktreePath: params.worktree, git: runInRepository });
         await rollback();
       };
     },

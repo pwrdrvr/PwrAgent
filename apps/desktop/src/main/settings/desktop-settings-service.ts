@@ -4977,7 +4977,6 @@ export class DesktopSettingsService {
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
     baseDirectory?: string;
-    baseDirectoryAvailable?: boolean;
   } {
     const envValue = readEnvWorktreeStorage(this.env);
     const resolved: DesktopSettingsValue<DesktopWorktreeStorageLocation> =
@@ -4999,9 +4998,9 @@ export class DesktopSettingsService {
         resolved.value === "user-home"
           ? toForwardSlashes(userHomeWorktreesRoot(baseDirectory))
           : ".worktrees",
-      ...(baseDirectory
-        ? { baseDirectory, baseDirectoryAvailable: isExistingDirectory(baseDirectory) }
-        : {}),
+      // Availability is checked on demand (settings:worktree-folder), never
+      // here: a stat on a stale network mount would block the main process.
+      ...(baseDirectory ? { baseDirectory } : {}),
     };
   }
 
@@ -5171,10 +5170,3 @@ function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {
   return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
 }
 
-function isExistingDirectory(target: string): boolean {
-  try {
-    return statSync(target).isDirectory();
-  } catch {
-    return false;
-  }
-}

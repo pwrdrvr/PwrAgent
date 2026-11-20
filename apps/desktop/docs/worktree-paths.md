@@ -31,7 +31,13 @@ build without this setting ignores the key and uses the home folder.
   rows, project matching and maintenance need no new rules. Do not let the setting name the root directly.
 - `computeWorktreePath` never creates the folder itself, only `.pwragent/worktrees` beneath it. With an
   external drive unmounted, `mkdir -p /Volumes/<drive>/…` would silently put worktrees on the startup disk,
-  so allocation throws "Worktree folder … is not available" instead. Settings shows **Not available**.
+  so allocation throws "Worktree folder … is not available" instead.
+- The settings snapshot never stats the folder: on a stale network mount a stat can block the main
+  process for the network timeout. Settings → Worktrees asks `settings:worktree-folder-check`
+  (`checkWorktreeFolder` in `src/main/settings/worktree-folder-check.ts`) when it shows the folder and
+  whenever the window regains focus, and shows **Checking…**, **Available**, **Not available**, or
+  **Not responding** (no answer within 3 seconds). The check reads the configured folder itself; the
+  renderer cannot name a path.
 - Codex threads keep `$CODEX_HOME/worktrees` unless **Use for Codex threads too**
   (`base_directory_includes_codex = true`) is on. Codex Desktop lists an owner-marked worktree
   (`codex-thread.json` in its Git directory) only under `$CODEX_HOME/worktrees` (#164), so it does not
@@ -49,13 +55,19 @@ exactly like that. So every worktree PwrAgent creates or restores on a different
 repository is locked with `PWRAGENT_WORKTREE_LOCK_REASON` (`src/main/app-server/worktree-volume-lock.ts`),
 as Git's documentation advises for removable media.
 
-- Lock after every `git worktree add` with `lockWorktreeOnSeparateVolume`. It compares the volumes
-  (`stat().dev`) and never fails creation. That includes a thread handed in from another instance:
-  its worktree comes from `allocateCodexWorktreePath`, which can be on the folder, and the desktop
-  wrapper in `src/main/federation/thread-instance-handoff-service.ts` locks it after the import.
-- Before every PwrAgent removal, call `unlockPwrAgentWorktreeLock`. It reads only this worktree's
-  `locked` file (never `git worktree list`, which would make archiving a fleet quadratic) and clears
-  only PwrAgent's own lock, so a lock someone else set still stops the removal.
+- Create and remove worktrees only with `addManagedWorktree` and `removeManagedWorktree`
+  (`src/main/app-server/managed-worktree.ts`). Each caller passes its own Git runner, so environment and
+  Windows process ownership stay with the caller (`removeGit` runs the remove alone when it needs
+  options the unlock must not get). `managed-worktree-guard.test.ts` fails on a raw `git worktree`
+  add, remove, lock, or unlock anywhere else in the main process.
+- The add locks the new worktree when its volume differs from the repository's (`stat().dev`), and
+  never fails creation over the lock.
+- The remove clears only PwrAgent's own lock, so a lock someone else set still stops the removal. It
+  reads only this worktree's `locked` file (never `git worktree list`, which would make archiving a fleet
+  quadratic), or, when the checkout folder may be gone, the `lock` record the caller passes.
+- A thread handed in from another instance is created by `packages/federation`, which cannot import
+  desktop code. The desktop wrapper in `src/main/federation/thread-instance-handoff-service.ts` calls
+  `lockExternallyAddedWorktree` after the import and `unlockBeforeExternalRemoval` before its rollback.
 - Recovery (`worktree-recovery-service.ts`) clears PwrAgent's lock only when the worktree's `<hash>`
   container still exists. With the drive unplugged the container is gone too, and recovery refuses
   with "The drive that holds … is not connected" rather than recreating the checkout on the startup disk.

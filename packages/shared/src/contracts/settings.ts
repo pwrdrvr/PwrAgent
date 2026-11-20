@@ -55,6 +55,19 @@ export type DesktopWorktreeFolder = {
 };
 
 /**
+ * Whether the configured worktree folder can be used right now, checked on
+ * demand off the settings snapshot. `not-responding`: the check timed out,
+ * as on a stale network mount.
+ */
+export type DesktopWorktreeFolderStatus = "available" | "missing" | "not-responding";
+
+export type DesktopWorktreeFolderCheck = {
+  /** The configured folder that was checked; absent when none is set. */
+  directory?: string;
+  status?: DesktopWorktreeFolderStatus;
+};
+
+/**
  * Background PR status polling is enabled by default. An explicit false value
  * remains a kill switch for operators who need to disable the poller.
  */
@@ -1814,8 +1827,6 @@ export type DesktopSettingsSnapshot = {
      * then live in `<baseDirectory>/.pwragent/worktrees`. Absent: home folder.
      */
     baseDirectory?: string;
-    /** False when `baseDirectory` is missing, such as an unplugged drive. */
-    baseDirectoryAvailable?: boolean;
     /** Codex threads use the folder too; Codex Desktop then does not list them. */
     baseDirectoryIncludesCodex?: boolean;
   };

@@ -1,6 +1,7 @@
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailActiveBatches, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
+import type { DesktopWorktreeFolderCheck } from "@pwragent/shared";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
@@ -31,7 +32,7 @@ import {
   AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
 } from "../shared/ipc";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../shared/federation-receiving-folder";
-import { SETTINGS_RECEIVING_FOLDER_CHANNEL } from "../shared/ipc";
+import { SETTINGS_RECEIVING_FOLDER_CHANNEL, SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL } from "../shared/ipc";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
   NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
@@ -2249,6 +2250,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
   receivingFolder: async (request: ReceivingFolderRequest): Promise<ReceivingFolderResponse> =>
     await ipcRenderer.invoke(SETTINGS_RECEIVING_FOLDER_CHANNEL, request),
+  checkWorktreeFolder: async (): Promise<DesktopWorktreeFolderCheck> =>
+    await ipcRenderer.invoke(SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL),
   resolveTranscriptFiles: async (
     request: ResolveTranscriptFilesRequest,
   ): Promise<ResolveTranscriptFilesResponse> =>
