@@ -1,10 +1,12 @@
 import { FORGE_PRODUCTS, forgeKindForRemoteHost, type ForgeKind } from "@pwragent/shared/forge-product";
 import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { runGitCommand } from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { runPrMetadataGit, runPrMetadataProcess } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -113,7 +115,6 @@ type SshResolver = (host: string) => Promise<string | undefined>;
 // Share only running OpenSSH evaluations. A completed evaluation belongs to
 // its directory's existing TTL; a new probe must evaluate Include/Match again.
 let sshLookups = new WeakMap<SshResolver, Map<string, Promise<string | undefined>>>();
-const MAX_SSH_LOOKUPS = 128;
 
 export function clearGitHubRemoteCache(): void {
   remoteCache.clear();
@@ -277,15 +278,23 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver): Promise<str
   const pending = Promise.resolve().then(() => resolve(host)).finally(() => {
     if (lookups.get(host) === pending) lookups.delete(host);
   });
-  // Overflow starts independently; it never waits in a process queue or
-  // evicts a running owner's entry and starts a second owner for that key.
-  if (lookups.size < MAX_SSH_LOOKUPS) lookups.set(host, pending);
+  lookups.set(host, pending);
   return pending;
 }
 
 async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
+  // Git's `-C` requires an existing directory even with an explicit GIT_DIR.
+  // Leave repository discovery and ambiguous filesystem errors to Git.
+  if (path.isAbsolute(cwd)) {
+    try {
+      if (!(await stat(cwd)).isDirectory()) return [];
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return [];
+    }
+  }
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
-  const { stdout } = await runGitCommand(cwd, ["remote"], {
+  const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
     purpose: "pr-remotes",
     env: childEnv,
     maxBuffer: 64 * 1024,
@@ -295,7 +304,7 @@ async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
-        const result = await runGitCommand(
+        const result = await runPrMetadataGit(
           cwd,
           ["remote", "get-url", "--all", name],
           {
@@ -340,9 +349,11 @@ function readSshHost(remoteUrl: string): string | undefined {
   }
 }
 
-async function defaultResolveSshHostname(
-  host: string,
-): Promise<string | undefined> {
+function defaultResolveSshHostname(host: string): Promise<string | undefined> {
+  return runPrMetadataProcess(() => readSshHostname(host));
+}
+
+async function readSshHostname(host: string): Promise<string | undefined> {
   const finish = gitSubprocessDiagnostics.start("ssh-config", "pr-remotes", { sshHost: host });
   let failed = true;
   try {

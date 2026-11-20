@@ -2355,6 +2355,7 @@ class DesktopAppServerService {
       backend === "all" && !request.filter?.trim();
     await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
       replace: replaceThreadPrAttachments,
+      resolveUnattached: true,
     });
     const threadsWithPrimaryGitRepositories =
       this.applyPrimaryGitRepositories(canonicalSnapshot.threads);
@@ -2780,20 +2781,20 @@ class DesktopAppServerService {
 
   private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
-    options: { replace: boolean; isCurrent?: () => boolean },
+    options: { replace: boolean; isCurrent?: () => boolean; resolveUnattached?: boolean },
   ): Promise<void> {
     const primaryRepoResolutionByPath = new Map<
       string,
       Promise<string | undefined>
     >();
-    const primaryRepoKeys = await Promise.all(
-      threads.map(async (thread) =>
-        await resolvePrimaryThreadRepoKey(
-          thread,
-          primaryRepoResolutionByPath,
-        ),
-      ),
-    );
+    // The complete inventory still clears candidates for threads with no PRs.
+    // Only an attachment needs a primary key for polling or dispatch. Selected
+    // detail and forge rules resolve their own checkout when needed.
+    const primaryRepoKeys = await Promise.all(threads.map((thread) =>
+      thread.prs?.length || options.resolveUnattached
+        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
+        : undefined,
+    ));
     const liveThreadKeys = new Set<string>();
     const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
     for (const [index, thread] of threads.entries()) {
@@ -2849,7 +2850,7 @@ class DesktopAppServerService {
         prs: params.prs,
       },
     );
-    if (!current?.primaryRepoKey) {
+    if (params.prs.length > 0 && !current?.primaryRepoKey) {
       const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
       // Patch only the key onto whatever list is now current. A refresh may
       // have supplied a key, or dropped the thread, while this resolved.

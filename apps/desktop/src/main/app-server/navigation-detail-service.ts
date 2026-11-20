@@ -34,6 +34,7 @@ import { normalizeWorktreePathForComparison } from "./linked-directory-identity"
 import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
+import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-repository";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
@@ -429,7 +430,7 @@ export class NavigationDetailService {
     const checkoutHibernation = this.registry.readCheckoutHibernation({ backend: summary.source, threadId: summary.id });
     const worktreePath = primaryThreadWorktree(thread)?.worktreePath;
     const failedRestorePath = checkoutHibernation.restoreFailure?.worktreePath;
-    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
+    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories, primaryGitRepository] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
       detectMissingThreadWorkspace(thread, {
         readBranch: async (repositoryPath) =>
@@ -448,6 +449,7 @@ export class NavigationDetailService {
             gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined,
           }))
         : undefined,
+      thread.primaryGitRepository ?? resolvePrimaryThreadRepoKey(thread),
     ]);
     const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
       ? { name, ...subAgentCollection }
@@ -461,6 +463,7 @@ export class NavigationDetailService {
       : checkoutHibernation.progress ?? describeHibernatedThreadWorkspace(thread, checkoutHibernation.restoring);
     const configuration = {
       ...thread,
+      ...(primaryGitRepository ? { primaryGitRepository } : {}),
       ...(workspaceMissing ? { workspaceMissing } : {}),
       ...(workspaceHibernated ? { workspaceHibernated } : {}),
     };

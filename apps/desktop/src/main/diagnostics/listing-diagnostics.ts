@@ -37,7 +37,7 @@ const LABELS = new Set([
   "main-sidebar", "star-map", "exact-link", "messaging-browse", "settings", "unknown", "remote-window", "search", "mentions", "agent-tool",
   "directory-index", "directory", "children", "exact", "group-members", "model-inventory", "lens", "star-map-geometry", "messaging-threads", "messaging-projects",
   "demand", "refresh", "continuation", "rebaseline", "pins", "turn", "thread", "metadata", "federation", "messaging-bindings", "timer", "visibility", "event", "cursor-expired", "page-budget", "owner-invalidated", "provider-fallback",
-  "thread-list", "renderer-navigation-query", "federation-navigation-query", "navigation-snapshot", "startup-prewarm", "startup-provider-refresh", "authentication-recovery", "archive-cleanup", "thread-id-lookup", "agent-thread-inspection", "notification-context", "title-generation", "federation-thread-search",
+  "thread-list", "renderer-navigation-query", "federation-navigation-query", "owner-navigation-metadata", "navigation-snapshot", "startup-prewarm", "startup-provider-refresh", "authentication-recovery", "archive-cleanup", "thread-id-lookup", "agent-thread-inspection", "notification-context", "title-generation", "federation-thread-search",
 ]);
 /** Caller suffixes are fixed code vocabulary, not arbitrary request text. */
 function safeListingCaller(caller: string): string {

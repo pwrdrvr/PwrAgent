@@ -3,7 +3,7 @@ import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolveForgeReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
-import { runGitCommand } from "../app-server/git-executable";
+import { runPrMetadataGit } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
 
@@ -28,8 +28,9 @@ type TrackedRemoteBranch = {
 
 type StoredDiscoveryContext = { repos: GitHubRepoRef[]; defaults: DefaultBranchInfo };
 // Navigation/federation can canonicalize many threads sharing one checkout.
-// Coalesce their probes and bound both cache age and directory count.
-const storedDiscoveryContexts = new Map<string, { expiresAt: number; pending: Promise<StoredDiscoveryContext> }>();
+// Cache eviction and expiry apply only to completed observations.
+const storedDiscoveryContexts = new Map<string, { expiresAt: number; context: StoredDiscoveryContext }>();
+const storedDiscoveryReads = new Map<string, Promise<StoredDiscoveryContext>>();
 const STORED_DISCOVERY_CONTEXT_TTL_MS = 60_000;
 const MAX_STORED_DISCOVERY_CONTEXTS = 256;
 
@@ -296,8 +297,11 @@ function unnamedGitHubRepositories(repos: GitHubRepoRef[]): GitHubRepoRef[] {
 }
 
 function readStoredDiscoveryContext(cwd: string): Promise<StoredDiscoveryContext> {
+  const existing = storedDiscoveryReads.get(cwd);
+  if (existing) return existing;
   const cached = storedDiscoveryContexts.get(cwd);
-  if (cached && cached.expiresAt > Date.now()) return cached.pending;
+  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.context);
+  storedDiscoveryContexts.delete(cwd);
   const pending = resolveForgeReposForDirectory(cwd).then(async (repos) => {
     // An inconclusive repository identity keeps the attachment. Reading its
     // default branch cannot change that decision, and missing/local-only
@@ -307,17 +311,18 @@ function readStoredDiscoveryContext(cwd: string): Promise<StoredDiscoveryContext
       : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
     // Failed metadata probes are inconclusive, and must be retried rather
     // than extend the lifetime of a known-invalid attachment.
-    if ((repos.length === 0 || defaults.remotes.size === 0)
-      && storedDiscoveryContexts.get(cwd)?.pending === pending) {
-      storedDiscoveryContexts.delete(cwd);
+    const context = { repos, defaults };
+    if (repos.length > 0 && defaults.remotes.size > 0) {
+      if (storedDiscoveryContexts.size >= MAX_STORED_DISCOVERY_CONTEXTS) {
+        storedDiscoveryContexts.delete(storedDiscoveryContexts.keys().next().value!);
+      }
+      storedDiscoveryContexts.set(cwd, { expiresAt: Date.now() + STORED_DISCOVERY_CONTEXT_TTL_MS, context });
     }
-    return { repos, defaults };
+    return context;
+  }).finally(() => {
+    storedDiscoveryReads.delete(cwd);
   });
-  storedDiscoveryContexts.delete(cwd);
-  if (storedDiscoveryContexts.size >= MAX_STORED_DISCOVERY_CONTEXTS) {
-    storedDiscoveryContexts.delete(storedDiscoveryContexts.keys().next().value!);
-  }
-  storedDiscoveryContexts.set(cwd, { expiresAt: Date.now() + STORED_DISCOVERY_CONTEXT_TTL_MS, pending });
+  storedDiscoveryReads.set(cwd, pending);
   return pending;
 }
 
@@ -328,7 +333,7 @@ async function readTrackedRemoteBranch(params: {
 }): Promise<TrackedRemoteBranch | undefined> {
   let stdout: string;
   try {
-    ({ stdout } = await runGitCommand(
+    ({ stdout } = await runPrMetadataGit(
       params.cwd,
       [
         "for-each-ref",
@@ -389,7 +394,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
 }> {
-  const { stdout } = await runGitCommand(cwd, ["remote"], {
+  const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
     purpose: "pr-discovery",
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
@@ -437,7 +442,7 @@ async function readGitLine(
   args: string[],
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await runGitCommand(cwd, args, {
+    const { stdout } = await runPrMetadataGit(cwd, args, {
       purpose: "pr-discovery",
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,
