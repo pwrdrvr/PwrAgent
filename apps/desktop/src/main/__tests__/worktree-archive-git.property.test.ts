@@ -8,6 +8,7 @@ import fc from "fast-check";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import * as gitBoundary from "../app-server/git-executable";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { PWRAGENT_WORKTREE_LOCK_REASON } from "../app-server/worktree-volume-lock";
 import type { CheckoutIdentity } from "../app-server/worktree-maintenance-registration";
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 
@@ -232,7 +233,9 @@ it.runIf(process.platform !== "win32")("bounds archive-all Git output independen
 // with Git's own registration rather than production's scoped predicate.
 it("agrees with Git about archive eligibility across layouts and late registration changes", async () => {
   const layouts = ["ordinary", "linked-anchor", "alias", "bare", "separate"] as const;
-  const mutations = ["none", "locked", "late-lock", "late-terminal-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "late-head", "primary", "foreign", "subdirectory"] as const;
+  // drive-lock: PwrAgent's own lock on a worktree on another drive, which
+  // archive clears and removes; every other lock is a hold that refuses.
+  const mutations = ["none", "drive-lock", "late-drive-lock", "locked", "late-lock", "late-terminal-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "late-head", "primary", "foreign", "subdirectory"] as const;
   let completedRuns = 0;
   const property = fc.asyncProperty(fc.constantFrom(...layouts), fc.constantFrom(...mutations), fc.boolean(), async (layout, mutation, detached) => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-oracle-")));
@@ -271,6 +274,7 @@ it("agrees with Git about archive eligibility across layouts and late registrati
       }
       await writeFile(path.join(checkout, "preserved.txt"), "snapshot me");
       if (mutation === "locked") await git(repo, "worktree", "lock", "--reason", "oracle lock", checkout);
+      if (mutation === "drive-lock") await git(repo, "worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, checkout);
       const before = await git(repo, "worktree", "list", "--porcelain");
       expect(before).toContain(checkout.replaceAll("\\", "/"));
       if (mutation === "locked") expect(before).toContain("locked oracle lock");
@@ -288,6 +292,7 @@ it("agrees with Git about archive eligibility across layouts and late registrati
         beforeRemove: async () => {
           admissionReached = true;
           if (mutation === "late-lock") await git(repo, "worktree", "lock", checkout);
+          if (mutation === "late-drive-lock") await git(repo, "worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, checkout);
           if (mutation === "late-head") await git(checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "new HEAD");
           if (mutation === "late-backlink") await writeFile(path.join(admin, "gitdir"), `${path.join(repo, ".git")}\n`);
           if (mutation === "late-gitfile") {
@@ -302,7 +307,7 @@ it("agrees with Git about archive eligibility across layouts and late registrati
           return () => {};
         },
       });
-      if (mutation === "none") {
+      if (mutation === "none" || mutation === "drive-lock" || mutation === "late-drive-lock") {
         const snapshot = await archive;
         expect(snapshot.sourceHead).toBe(head);
         expect(snapshot.sourceBranch).toBe(detached ? undefined : "owned");

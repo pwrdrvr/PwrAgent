@@ -66,6 +66,11 @@ as Git's documentation advises for removable media.
 - The remove clears only PwrAgent's own lock, so a lock someone else set still stops the removal. It
   reads only this worktree's `locked` file (never `git worktree list`, which would make archiving a fleet
   quadratic), or, when the checkout folder may be gone, the `lock` record the caller passes.
+- Every check that treats a lock as a hold must ask `readWorktreeLockHolder` and refuse only on
+  `other`: archive admission (`checkArchiveRegistration`) and hibernation (`inspectHibernationWorkspace`).
+  Treating PwrAgent's own drive lock as a hold makes every worktree on another drive impossible to
+  archive or hibernate. Windows CI catches this because its fixture repositories are on `D:` while
+  worktrees are under the home folder on `C:`; macOS and Linux runners keep both on one volume.
 - A thread handed in from another instance is created by `packages/federation`, which cannot import
   desktop code. The desktop wrapper in `src/main/federation/thread-instance-handoff-service.ts` calls
   `lockExternallyAddedWorktree` after the import and `unlockBeforeExternalRemoval` before its rollback.

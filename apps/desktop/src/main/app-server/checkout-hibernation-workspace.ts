@@ -3,6 +3,7 @@ import path from "node:path";
 import { runGitCommand } from "./git-executable";
 import { inspectMaintenanceWorkspace } from "./thread-maintenance-workspace";
 import { WORKSPACE_KEEP_REASONS } from "./thread-archive-sweeper";
+import { readWorktreeLockHolder } from "./worktree-volume-lock";
 
 export const HIBERNATION_WORKSPACE_KEEP_REASONS = {
   missing: "Checkout missing",
@@ -86,7 +87,10 @@ export async function inspectHibernationWorkspace(
   for (const marker of IN_PROGRESS_MARKERS) {
     if (await exists(path.join(gitDirectory, marker))) return { keep: HIBERNATION_WORKSPACE_KEEP_REASONS.operation };
   }
-  if (await exists(path.join(gitDirectory, "locked"))) return { keep: HIBERNATION_WORKSPACE_KEEP_REASONS.locked };
+  // PwrAgent's drive lock is cleared when the checkout is removed; any other lock is a hold.
+  if (await readWorktreeLockHolder(gitDirectory).catch(() => "other" as const) === "other") {
+    return { keep: HIBERNATION_WORKSPACE_KEEP_REASONS.locked };
+  }
   const head = (await git(["rev-parse", "--verify", "HEAD"])).trim();
   let branch: string | undefined;
   try {

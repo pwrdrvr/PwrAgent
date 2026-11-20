@@ -50,6 +50,25 @@ export function isPwrAgentWorktreeLock(record: WorktreeLockRecord): boolean {
 }
 
 /**
+ * Who holds the lock in a worktree's own Git directory. `pwragent` is only
+ * PwrAgent's drive lock: PwrAgent's removal clears it first, so it must never
+ * stop archiving or hibernation. `other` is an operator's or another tool's
+ * hold, which must. A `locked` entry that cannot be read as a file counts as
+ * `other`.
+ */
+export async function readWorktreeLockHolder(gitDirectory: string): Promise<"none" | "pwragent" | "other"> {
+  let reason: string;
+  try {
+    reason = await readFile(path.join(gitDirectory, "locked"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "none";
+    if ((error as NodeJS.ErrnoException).code === "EISDIR") return "other";
+    throw error;
+  }
+  return reason.trim() === PWRAGENT_WORKTREE_LOCK_REASON ? "pwragent" : "other";
+}
+
+/**
  * Before PwrAgent removes a worktree: clears PwrAgent's own lock on it, and
  * leaves any other lock in place, so that removal still stops there. Reads
  * only this worktree's `locked` file; listing every worktree per removal

@@ -19,6 +19,7 @@ import { createTempStateDb } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { SnapshotTreeMismatchError, WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { PWRAGENT_WORKTREE_LOCK_REASON } from "../app-server/worktree-volume-lock";
 import {
   HIBERNATION_WORKSPACE_KEEP_REASONS,
   inspectHibernationWorkspace,
@@ -395,10 +396,18 @@ describe("hibernation workspace checks (real Git)", () => {
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.unretained });
   }));
 
-  it("keeps a locked worktree", ownFixtureTest(async () => {
+  // Rule: any lock is a hold except PwrAgent's own drive lock, which the
+  // removal clears; a worktree on another drive must still hibernate.
+  it.each([
+    ["with no reason", [], true],
+    ["with an operator's reason", ["--reason", "operator hold"], true],
+    ["with PwrAgent's drive lock", ["--reason", PWRAGENT_WORKTREE_LOCK_REASON], false],
+  ] as const)("keeps a worktree locked %s only when someone else holds it", ownFixtureTest(async (_name, reason, kept) => {
     const { repo, worktree } = await createFixture();
-    await git(repo, ["worktree", "lock", worktree]);
-    expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.locked });
+    await git(repo, ["worktree", "lock", ...reason, worktree]);
+    const inspection = await probe(worktree);
+    if (kept) expect(inspection).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.locked });
+    else expect(inspection).not.toHaveProperty("keep");
   }));
 });
 
@@ -419,6 +428,17 @@ describe("hibernating a checkout (real Git)", () => {
     expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("saved edit\n");
     // The per-path snapshot ref goes back to what it was: nothing.
     expect((await git(repo, ["for-each-ref", "refs/pwragent/snapshots/", "refs/codex/snapshots/"])).trim()).toBe("");
+  }));
+
+  it("hibernates a checkout under PwrAgent's drive lock and clears the lock with it", ownFixtureTest(async () => {
+    const { repo, worktree } = await createFixture();
+    await writeFile(path.join(worktree, "file.txt"), "saved edit\n");
+    await git(repo, ["worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, worktree]);
+    await new WorktreeArchiveService().hibernate({
+      ...identity, worktreePath: worktree, repositoryPath: repo, capSnapshotBytes: 5 * MB, beforeRemove: async () => () => {},
+    });
+    expect(await exists(worktree)).toBe(false);
+    expect(await git(repo, ["worktree", "list", "--porcelain"])).not.toContain(worktree.replaceAll("\\", "/"));
   }));
 
   it("caps the snapshot at the hibernation limit even where archive would allow more", ownFixtureTest(async () => {
