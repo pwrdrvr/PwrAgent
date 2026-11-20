@@ -42,7 +42,7 @@ selects the full suite.
 Vitest's related-file resolver decides which test files a changed module
 affects. It follows static imports and literal dynamic imports, honors
 `vi.mock`, and selects a whole project when a setup file, snapshot serializer
-or environment reaches the change. The plan adds four rules.
+or environment reaches the change. The plan adds five rules.
 
 - **Barrels.** `packages/shared` declares `"sideEffects": false`, and its
   index only re-exports. A test that reaches a changed module only through
@@ -56,8 +56,15 @@ or environment reaches the change. The plan adds four rules.
 - **Type-only modules.** A module that emits no JavaScript has no runtime
   edge and selects nothing. Typecheck still covers it in `Lint`.
 - **Always-run tests.** A test, or test helper, that lists directories can
-  read a file that nothing imports. Every plan includes those tests (77 of
-  2,276 files on 2026-11-20).
+  read a file that nothing imports. Every plan includes those tests (79 of
+  2,307 files on 2026-11-20).
+- **Tests that run source outside the graph.** A test that bundles source
+  with esbuild or Vite, starts a worker, or runs a TypeScript loader executes
+  modules that Vitest never links to it. Those tests, and the tests behind a
+  helper that imports a bundler, run whenever a file that is not a test input
+  changes (36 files on 2026-11-20). `headless-host.boot.oracle.test.ts`
+  bundles the headless entry this way. PR #3809 changed main-process modules
+  and had to update that test, which no import edge linked to them.
 
 A deleted file selects nothing by itself: an unchanged importer fails
 resolution, and a changed importer is in the diff. Deletion selects the full
@@ -98,7 +105,11 @@ as an image or recorded fixture select the full suite.
 ## Known blind spots
 
 - A test that launches a subprocess can execute a file that nothing imports
-  or names.
+  or names. The plan recognizes bundlers, workers and TypeScript loaders by
+  their text; a test that reaches source another way is not recognized.
+- A narrowed run does not exercise how the full suite is sharded. PR #4004
+  split a large test file, and one full Linux lane then failed 22 tests, 21
+  of them on the 5-second timeout, until the lane costs were rebalanced.
 - A computed import in an unchanged file is found only when that file names
   the changed module in a string.
 - Global state that one module of a side-effect-free package sets up for
@@ -129,17 +140,38 @@ Replaying the 297 code-impacting commits that reached `main` before
 | | Before | Now |
 | --- | --- | --- |
 | Commits with a narrowed Vitest plan | 71 (24%) | 208 (70%) |
-| Median share of test files, narrowed plans | | 11% |
-| Commits selecting at most 10% of test files | | 92 (31%) |
-| Commits selecting at most 20% of test files | | 134 (45%) |
-| Median share of test files, all commits | | 31% |
+| Median share of test files, narrowed plans | | 12% |
+| Commits selecting at most 10% of test files | | 79 (27%) |
+| Commits selecting at most 20% of test files | | 132 (44%) |
+| Median share of test files, all commits | | 32% |
 | Commits with a narrowed Playwright plan | | 37 (12%) |
 | Of those, commits selecting no spec | | 31 |
 
 This replay measures selection size. It cannot measure misses, because the
-commits it replays passed. The artifact fixture
+commits it replays passed.
+
+Misses were measured against the 77 red PR runs with a Linux test failure
+between 2026-11-16 and 2026-11-20: 750 failure records, planned from each
+run's changed files on the graph of 2026-11-20.
+
+| Failure records | Count | Full plan | Narrowed, selected | Narrowed, not selected |
+| --- | --- | --- | --- | --- |
+| Unit, failed again on retry | 92 | 18 | 74 | 0 |
+| Unit, no retry result | 606 | 359 | 228 | 19 |
+| Unit, passed on retry | 34 | 10 | 9 | 15 |
+| E2E, failed again on retry | 13 | 13 | 0 | 0 |
+| E2E, passed on retry | 5 | 5 | 0 | 0 |
+
+The 19 records with no retry result come from two runs. Eighteen are from
+the PR #4004 lane described above. One is a renderer test that timed out
+on a diff of two main-process tests and was fixed in the test itself. Before
+the rule for tests that run source outside the graph, a twentieth record was
+a real miss: the PR #3809 failure. Ten of the 15 that passed on retry are one
+case in `build-mcp-ipc-relay.oracle.test.mjs`, in ten different runs.
+
+The graph is today's, not each run's, so a dependency that has since changed
+can hide or invent a miss. The artifact fixture
 `scripts/ci/fixtures/pr-test-impact-red-runs.json` holds two archived red PR
-runs; both exercise full-suite fallback, so recall for narrowed plans is not
-yet established.
+runs; both exercise full-suite fallback.
 [OpenClaw's reported figures](https://vincent.build/openclaw-ci-cost-reduction/)
 come from a different workload and are not a controlled test of a selector.

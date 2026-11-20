@@ -255,7 +255,7 @@ it("widens for an aliased createRequire loader with a computed specifier", async
   });
 }, 30_000);
 
-it("narrows through a side-effect-free barrel by imported name, and always runs tests that list files", async () => {
+it("narrows through a side-effect-free barrel by imported name, and keeps tests that list files or run source outside the graph", async () => {
   await temporaryTree(async (root, write) => {
     const file = (name) => `${source}${name}`;
     write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
@@ -269,24 +269,38 @@ it("narrows through a side-effect-free barrel by imported name, and always runs 
     write(file("uses-b.test.mjs"), 'import { b } from "./index.mjs"; export default b;');
     write(file("whole.test.mjs"), 'import * as all from "./index.mjs"; export default all;');
     write(file("scan.test.mjs"), 'import { readdirSync } from "node:fs"; export default readdirSync(".");');
+    // Neither test imports `a.mjs`. One bundles source through a helper and
+    // the other starts a worker, so both can run it.
+    write("node_modules/esbuild/package.json", '{ "name": "esbuild", "main": "index.js" }');
+    write("node_modules/esbuild/index.js", "exports.build = () => {};");
+    write(file("bundle.mjs"), 'import { build } from "esbuild"; export default build;');
+    write(file("bundled.test.mjs"), 'import bundle from "./bundle.mjs"; export default bundle;');
+    write(file("worker.test.mjs"), 'import { Worker } from "node:worker_threads"; export default () => new Worker("./b.mjs");');
     await withVitestImpact(root, async (unit) => {
       const plan = async (...entries) => (await planImpact(entries, { unit })).unit;
       const names = (result) => result.selected?.map(({ file: selected }) => path.posix.basename(selected));
       const modified = (name) => ({ status: "M", file: file(name) });
+      const reasons = (result, name) => result.selected.find(({ file: selected }) => selected === file(name)).reasons;
+      const outside = "runs on product changes: executes source outside the Vitest graph";
 
       const narrowed = await plan(modified("a.mjs"));
-      expect(names(narrowed)).toEqual(["scan.test.mjs", "uses-a.test.mjs", "whole.test.mjs"]);
+      expect(names(narrowed)).toEqual(["bundled.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "whole.test.mjs", "worker.test.mjs"]);
       expect(narrowed.barrels).toEqual([file("index.mjs")]);
-      expect(narrowed.selected[0].reasons).toEqual([{ file: file("scan.test.mjs"), reason: "always run: enumerates files" }]);
+      expect(reasons(narrowed, "scan.test.mjs")).toEqual([{ file: file("scan.test.mjs"), reason: "always run: enumerates files" }]);
+      expect(reasons(narrowed, "bundled.test.mjs")).toEqual([{ file: file("bundle.mjs"), reason: outside }]);
+      expect(reasons(narrowed, "worker.test.mjs")).toEqual([{ file: file("worker.test.mjs"), reason: outside }]);
+      // A change to tests alone gives a bundle nothing new to run.
+      expect(names(await plan(modified("uses-a.test.mjs")))).toEqual(["scan.test.mjs", "uses-a.test.mjs"]);
       // An edited barrel can rebind any name, so every importer runs.
       expect(names(await plan(modified("index.mjs"))))
-        .toEqual(["scan.test.mjs", "uses-a.test.mjs", "uses-b.test.mjs", "whole.test.mjs"]);
+        .toEqual(["bundled.test.mjs", "scan.test.mjs", "uses-a.test.mjs", "uses-b.test.mjs", "whole.test.mjs", "worker.test.mjs"]);
 
       const types = await plan(modified("types.ts"));
       expect(names(types)).toEqual(["scan.test.mjs"]);
       expect(types.ignored).toEqual([{ file: file("types.ts"), reason: "type-only module" }]);
 
-      expect(names(await plan({ status: "D", file: file("removed.mjs") }))).toEqual(["scan.test.mjs"]);
+      expect(names(await plan({ status: "D", file: file("removed.mjs") })))
+        .toEqual(["bundled.test.mjs", "scan.test.mjs", "worker.test.mjs"]);
       // `kept.cjs` now answers an unchanged import of `./kept`.
       expect(await plan({ status: "D", file: file("kept.mjs") })).toMatchObject({
         mode: "full", reason: "deleted file can change module resolution",
@@ -324,19 +338,21 @@ it("counts omitted failures by exact project/file and leaves missing evidence vi
     missingSlices: [{ platform: "linux" }],
     slices: [
       { kind: "unit", platform: "linux", key: "unit-linux-1", first: { complete: true, errors: 0 }, failures: [
-        { project: "shared", file: "a.test.ts" }, { project: "desktop-main", file: "a.test.ts" },
+        { project: "shared", file: "a.test.ts" }, { project: "desktop-main", file: "a.test.ts", retry: "recovered" },
       ] },
       { kind: "e2e", platform: "linux", key: "e2e-linux-1", first: { complete: false, errors: 1 }, failures: [
         { file: spec }, { file: "apps/desktop/e2e/other.spec.ts" }, {},
       ] },
     ],
   });
-  expect(result).toMatchObject({ covered: 2, missed: 2, unknown: 1, missingLinuxSlices: 1,
+  expect(result).toMatchObject({ covered: 2, missed: 2, missedRecovered: 1, unknown: 1, missingLinuxSlices: 1,
     incompleteLinuxSlices: ["e2e-linux-1"], linuxSlicesWithErrors: ["e2e-linux-1"] });
-  expect(describeLinuxEvidence({ ...result, covered: 0, missed: 0, unknown: 0 }))
+  expect(describeLinuxEvidence({ ...result, missingLinuxSlices: 0, incompleteLinuxSlices: [], linuxSlicesWithErrors: [] }))
+    .toBe("2/2/1 (1 missed passed on retry)");
+  expect(describeLinuxEvidence({ ...result, covered: 0, missed: 0, missedRecovered: 0, unknown: 0 }))
     .toBe("0/0/0 (partial evidence: 1 missing, 1 incomplete, 1 with errors)");
   expect(describeLinuxEvidence({
-    ...result, covered: 0, missed: 0, unknown: 0, missingLinuxSlices: 0,
+    ...result, covered: 0, missed: 0, missedRecovered: 0, unknown: 0, missingLinuxSlices: 0,
     incompleteLinuxSlices: [], linuxSlicesWithErrors: [],
   })).toBe("0/0/0");
 });

@@ -220,7 +220,9 @@ export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwrig
 
 export function describeLinuxEvidence(observed) {
   if (observed.unavailable) return "evidence unavailable";
-  const counts = `${observed.covered}/${observed.missed}/${observed.unknown}`;
+  // A missed failure that passed on retry did not need the change to fail.
+  const counts = `${observed.covered}/${observed.missed}/${observed.unknown}`
+    + (observed.missedRecovered ? ` (${observed.missedRecovered} missed passed on retry)` : "");
   const missing = observed.missingLinuxSlices;
   const incomplete = observed.incompleteLinuxSlices.length;
   const errors = observed.linuxSlicesWithErrors.length;
@@ -248,6 +250,7 @@ export function compareFailures(plan, report) {
     cases,
     covered: cases.filter(({ outcome }) => outcome === "covered").length,
     missed: cases.filter(({ outcome }) => outcome === "missed").length,
+    missedRecovered: cases.filter(({ outcome, retry }) => outcome === "missed" && retry === "recovered").length,
     unknown: cases.filter(({ outcome }) => outcome === "unknown").length,
     receivedLinuxSlices: slices.length,
     missingLinuxSlices: report.missingSlices.filter(({ platform }) => platform === "linux").length,

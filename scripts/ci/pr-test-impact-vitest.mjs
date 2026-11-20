@@ -11,6 +11,10 @@ const enumeratesFiles = /readdirSync|readdir\(|opendir|globSync|fast-glob|tinygl
 // A loader whose specifier is computed can load a file that it only names
 // in a string, which the import graph never links.
 const computedLoader = /\bimport\s*\(\s*(?:[^"'`\s)]|`[^`]*\$\{)|\brequire\s*\(\s*(?:[^"'`\s)]|`[^`]*\$\{)|createRequire/;
+// A bundler, a worker or a TypeScript loader runs source that the Vitest
+// graph never links to the test that started it.
+const bundlesSource = /from "(?:esbuild|vite|rollup|rolldown)"/;
+const loadsSource = /\bnew Worker\(|["'`]tsx["'`/]|--experimental-(?:strip|transform)-types/;
 const e2eDirectory = "apps/desktop/e2e/";
 const extensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
@@ -447,12 +451,17 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
       for (const file of affected) {
         if (!explained.has(file)) add(file, { reason: "Vitest related input" });
       }
+      const product = changes.some(({ status, file }) => !testSidePath.test(file) && !specFiles.has(file)
+        && !file.startsWith(e2eDirectory)
+        && (edges.has(file) || codeFile.test(file) && (status === "D" || !isTypeOnly(root, file))));
       for (const file of edges.keys()) {
-        if ((testSidePath.test(file) || specFiles.has(file)) && enumeratesFiles.test(text(file))) {
-          for (const spec of specsAmong(dependents(importers, file))) {
-            add(spec, { file, reason: "always run: enumerates files" });
-          }
-        }
+        const testSide = testSidePath.test(file) || specFiles.has(file);
+        const reason = testSide && enumeratesFiles.test(text(file)) ? "always run: enumerates files"
+          : product && (bundlesSource.test(text(file)) || testSide && loadsSource.test(text(file)))
+            ? "runs on product changes: executes source outside the Vitest graph"
+            : undefined;
+        if (!reason) continue;
+        for (const spec of specsAmong(dependents(importers, file))) add(spec, { file, reason });
       }
 
       const entries = [...selected.values()].sort((a, b) => keyOfEntry(a).localeCompare(keyOfEntry(b), "en"));
