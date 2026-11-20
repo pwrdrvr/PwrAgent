@@ -1,4 +1,5 @@
 import { inspect } from "node:util";
+import { setImmediate, setTimeout as wait } from "node:timers/promises";
 import fc from "fast-check";
 import { GrammyError, HttpError } from "grammy";
 import { describe, expect, it, vi } from "vitest";
@@ -23,6 +24,9 @@ function timeout(method: StartupMethod, token: string): HttpError {
 function setup(
   botToken = syntheticToken,
   waitForStartupRetry: (delayMs: number, signal: AbortSignal) => Promise<void> = async () => {},
+  waitForStartupDelay = (delayMs: number, signal: AbortSignal) => delayMs === 5_000
+    ? wait(delayMs, undefined, { signal })
+    : waitForStartupRetry(delayMs, signal),
 ) {
   const api = {
     getMe: vi.fn().mockResolvedValue({ id: 42, is_bot: true, username: "TestBot" }),
@@ -36,13 +40,77 @@ function setup(
     bot: { api: api as unknown as TelegramBotApi, start: poll },
     config: { channel: "telegram" as const, botToken, authorizedActorIds: [] },
     logger,
-    waitForStartupRetry,
+    waitForStartupDelay,
   };
   const adapter = new TelegramAdapter(options);
   return { adapter, api, logger, poll };
 }
 
+function startupClock() {
+  let now = 0;
+  const timers: Array<{ at: number; fire: () => void }> = [];
+  return {
+    wait: (delayMs: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+      signal.throwIfAborted();
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      timers.push({
+        at: now + delayMs,
+        fire: () => {
+          signal.removeEventListener("abort", abort);
+          resolve();
+        },
+      });
+    }),
+    async advanceTo(target: number) {
+      for (;;) {
+        timers.sort((left, right) => left.at - right.at);
+        const timer = timers[0];
+        if (!timer || timer.at > target) break;
+        timers.shift();
+        now = timer.at;
+        timer.fire();
+        await setImmediate();
+      }
+      now = target;
+    },
+  };
+}
+
+async function expectIdentityLookupToYield(firstFailureMs: number) {
+  const clock = startupClock();
+  const { adapter, api, poll } = setup(syntheticToken, clock.wait, clock.wait);
+  // Leave the retry pending past the desktop deadline. Required setup is responsive.
+  api.getMe.mockImplementationOnce(async (signal: AbortSignal) => {
+    await clock.wait(firstFailureMs, signal);
+    throw timeout("getMe", syntheticToken);
+  }).mockImplementation(async (signal: AbortSignal) => {
+    await clock.wait(90_000, signal);
+    return { id: 42, is_bot: true, username: "TestBot" };
+  });
+
+  const startup = adapter.start(vi.fn());
+  try {
+    await clock.advanceTo(5_000);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
+    expect(poll).toHaveBeenCalledTimes(1);
+    expect(api.getMe.mock.lastCall?.[0].aborted).toBe(true);
+    expect(api.getWebhookInfo.mock.lastCall?.[0].aborted).toBe(false);
+  } finally {
+    await adapter.stop();
+    await startup;
+  }
+}
+
 describe("Telegram startup retries", () => {
+  it("limits cumulative time spent on optional identity attempts and backoff", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 90_000 }), expectIdentityLookupToYield));
+  });
+
+  it("starts required setup when the first identity request would have taken 45 seconds", async () => {
+    await expectIdentityLookupToYield(45_000);
+  });
+
   it("polls once after transient setup failures within the retry budget", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom(...startupMethods),

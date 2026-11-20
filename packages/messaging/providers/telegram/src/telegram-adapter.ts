@@ -73,6 +73,7 @@ import {
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
 const TELEGRAM_STARTUP_RETRY_DELAYS_MS = [1_000, 3_000];
+const TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS = 5_000;
 const TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const TELEGRAM_TYPING_SIGNAL_INTERVAL_MS = 4_000;
 const TELEGRAM_STREAM_DM_MIN_INTERVAL_MS = 1_000;
@@ -648,7 +649,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     now?: () => number;
     pollOnStart?: boolean;
     store?: MessagingCallbackHandleStore;
-    waitForStartupRetry?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+    waitForStartupDelay?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   };
   private startPromise?: Promise<void>;
   private lifecycleGeneration = 0;
@@ -816,10 +817,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     const { api } = this.bot;
     try {
-      // A failed identity lookup disables mention parsing. Slash commands
-      // still work if the remaining setup requests succeed.
-      const me = await this.runStartupRequest("getMe", () => api.getMe(signal), signal, tokenDiagnostics)
-        .catch(() => undefined);
+      const me = await this.readStartupIdentity(api, signal, tokenDiagnostics);
       if (signal.aborted) return;
       if (me?.username) {
         this.botUsername = me.username.toLowerCase();
@@ -873,6 +871,38 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     this.scheduleStreamCleanup();
   }
 
+  private async readStartupIdentity(
+    api: TelegramBotApi,
+    startupSignal: AbortSignal,
+    tokenDiagnostics: Record<string, unknown>,
+  ) {
+    const lookup = new AbortController();
+    const signal = AbortSignal.any([startupSignal, lookup.signal]);
+    // Identity enables mention parsing. Bound the request and its retries
+    // together so the remaining setup can proceed if identity is unavailable.
+    try {
+      return await Promise.race([
+        this.runStartupRequest("getMe", () => api.getMe(signal), signal, tokenDiagnostics)
+          .catch(() => undefined),
+        this.waitForStartupDelay(TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS, signal).then(() => {
+          if (!startupSignal.aborted) {
+            this.options.logger?.warn?.("telegram getMe timed out; @-mention commands disabled", {
+              timeoutMs: TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS,
+            });
+          }
+          return undefined;
+        }),
+      ]);
+    } finally {
+      lookup.abort();
+    }
+  }
+
+  private waitForStartupDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+    return this.options.waitForStartupDelay?.(delayMs, signal)
+      ?? wait(delayMs, undefined, { signal });
+  }
+
   private async runStartupRequest<T>(
     method: "getMe" | "getWebhookInfo" | "deleteWebhook" | "setMyCommands",
     request: () => Promise<T>,
@@ -900,11 +930,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           });
           throw failure;
         }
-        if (this.options.waitForStartupRetry) {
-          await this.options.waitForStartupRetry(delayMs, signal);
-        } else {
-          await wait(delayMs, undefined, { signal });
-        }
+        await this.waitForStartupDelay(delayMs, signal);
       }
     }
   }
