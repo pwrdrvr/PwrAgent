@@ -1477,7 +1477,7 @@ export class ThreadArchiveCoordinator {
         ...identity,
         repositoryPath: snapshot.repositoryPath,
         worktreePath: snapshot.worktreePath,
-        checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit },
+        checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit, sourceHead: snapshot.sourceHead },
         ...(detachedAt
           ? { detached: true, startPoint: detachedAt }
           : { branch: snapshot.sourceBranch, detached: !snapshot.sourceBranch, expectedHead: snapshot.sourceHead }),

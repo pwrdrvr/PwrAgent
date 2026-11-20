@@ -28,13 +28,13 @@ export type RecreateWorktreeParams = {
   /** Branch to put back. Undefined, or `detached`, adds a detached HEAD. */
   branch?: string;
   /** The checkpoint PwrAgent recorded when it archived this worktree. */
-  checkpoint?: { snapshotRef: string; snapshotCommit: string };
+  checkpoint?: { snapshotRef: string; snapshotCommit: string; sourceHead?: string };
   skipCheckpoint?: boolean;
   detached?: boolean;
   /** Refuse unless the branch still points here. A hibernated checkout comes
    * back only onto the commit it was saved on. */
   expectedHead?: string;
-  /** With `detached`: the commit to check out, ahead of the checkpoint's parent. */
+  /** With `detached`: explicitly choose the commit to check out. */
   startPoint?: string;
   now?: number;
 };
@@ -176,7 +176,7 @@ export class WorktreeRecoveryService {
       let startPoint: string;
       if (detached) {
         startPoint = params.startPoint
-          ?? checkpoint?.parent
+          ?? checkpoint?.base
           ?? (params.branch ? await this.resolveCommit(repositoryPath, `refs/heads/${params.branch}`) : undefined)
           ?? await this.resolveCommit(repositoryPath, "HEAD")
           ?? "HEAD";
@@ -231,7 +231,9 @@ export class WorktreeRecoveryService {
       const warnings: string[] = [];
       let checkpointResult: Extract<RecreateThreadWorktreeResponse, { status: "recreated" }>["checkpoint"];
       if (checkpoint) {
-        const applied = await this.applyCheckpoint(worktreePath, checkpoint.commit);
+        const applied = checkpoint.base === checkpoint.commit
+          ? { restored: true, changedFileCount: 0 }
+          : await this.applyCheckpoint(worktreePath, checkpoint.commit);
         if (applied.restored) {
           mark("apply-checkpoint", "done");
         } else {
@@ -304,7 +306,7 @@ export class WorktreeRecoveryService {
     repositoryPath: string,
     worktreePath: string,
     params: RecreateWorktreeParams,
-  ): Promise<{ ref: string; commit: string; parent?: string } | undefined> {
+  ): Promise<{ ref: string; commit: string; base?: string } | undefined> {
     if (params.checkpoint) {
       const commit = await this.resolveCommit(repositoryPath, params.checkpoint.snapshotRef);
       if (commit !== params.checkpoint.snapshotCommit) {
@@ -314,7 +316,10 @@ export class WorktreeRecoveryService {
           "The checkpoint saved when this worktree was archived is gone, so its uncommitted changes cannot come back.",
         );
       }
-      return { ref: params.checkpoint.snapshotRef, commit, parent: await this.resolveCommit(repositoryPath, `${commit}^1`) };
+      // Clean snapshots pin the saved HEAD itself. Dirty snapshots add a
+      // commit on top of it. Older records may only have the snapshot commit.
+      const base = params.checkpoint.sourceHead ?? await this.resolveCommit(repositoryPath, `${commit}^1`);
+      return { ref: params.checkpoint.snapshotRef, commit, base };
     }
     // A checkpoint written by an archive whose record was lost is still
     // found by the deterministic ref the archive names after the path.
@@ -322,7 +327,7 @@ export class WorktreeRecoveryService {
       const ref = worktreeArchiveInternals.snapshotRefForBackend(params.backend, candidate);
       const commit = await this.resolveCommit(repositoryPath, ref);
       if (commit) {
-        return { ref, commit, parent: await this.resolveCommit(repositoryPath, `${commit}^1`) };
+        return { ref, commit, base: await this.resolveCommit(repositoryPath, `${commit}^1`) };
       }
     }
     return undefined;

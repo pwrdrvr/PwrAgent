@@ -1423,6 +1423,7 @@ export type ThreadMissingWorkspace = {
   checkpoint?: {
     snapshotRef: string;
     snapshotCommit: string;
+    sourceHead?: string;
     archivedAt?: number;
   };
 };
