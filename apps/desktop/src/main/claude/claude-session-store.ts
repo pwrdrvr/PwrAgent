@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { lock } from "proper-lockfile";
 import type {
   AppServerThreadEntry,
@@ -21,6 +22,20 @@ const sessionWrites = new Map<string, {
   ready: Promise<() => Promise<void>>;
   closing?: Promise<void>;
 }>();
+
+async function replaceSessionSidecar(temporary: string, destination: string): Promise<void> {
+  // On Windows, even a Node read handle that shares delete access can block
+  // replacement of the destination. Give short-lived readers time to close.
+  for (let wait = 5; ; wait *= 2) {
+    try {
+      await rename(temporary, destination);
+      return;
+    } catch (error) {
+      if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM" || wait > 80) throw error;
+      await delay(wait);
+    }
+  }
+}
 
 export type ClaudeSession = {
   thread: AppServerThreadSummary;
@@ -293,7 +308,7 @@ export class ClaudeSessionStore {
       const temporary = `${destination}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, JSON.stringify(session), { mode: 0o600 });
-        await rename(temporary, destination);
+        await replaceSessionSidecar(temporary, destination);
       } finally {
         await rm(temporary, { force: true });
       }
