@@ -85,8 +85,12 @@ scope. The build command is the normal contributor entry point.
   emitted ESM and `vm.SourceTextModule`, with no SSR or CJS wrapper added.
 - The shared disposable compiler uses `--no-lazy` to compile nested,
   anonymous, arrow, object/class methods and field initializers. Application
-  modules are never executed or linked. Disassembly is reduced as it streams;
-  the report retains sizes and locations, not disassembly. The application
+  modules are never executed or linked. Each compilation splits its modules
+  across one compiler process per core, and the Node and Electron
+  compilations run together; the records keep the order of the modules.
+  Disassembly is reduced as it streams, or on Linux after the compiler has
+  written it to a temporary file, which costs less there than a pipe. The
+  report retains sizes and locations, not disassembly. The application
   and test workers keep their existing V8 tier flags; Sparkplug is not disabled.
 - Native ESM/script and Vitest evaluator frames are labeled
   `synthetic-module-wrapper`. Callbacks to the generated Rolldown runtime's
