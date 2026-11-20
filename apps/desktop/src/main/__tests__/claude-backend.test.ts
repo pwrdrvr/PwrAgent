@@ -28,6 +28,7 @@ import { reviewEntryFailure } from "../../shared/review-output";
 
 const roots: string[] = [];
 const backends: ClaudeBackend[] = [];
+const releaseBeforeBackendClose: Array<() => void> = [];
 // Session reads and titles compare the launch environment's Claude config
 // directory with this process's; the runner's own must not decide them.
 beforeEach(() => {
@@ -35,6 +36,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
+  // A timed-out test may still be suspended before its own finally block.
+  for (const release of releaseBeforeBackendClose.splice(0)) release();
   // A backend queues usage-limit writes into the temp root without the test
   // awaiting them, and a session can still be reporting its last turn.
   // close() joins both, so every backend finishes closing, even when another
@@ -84,7 +87,7 @@ async function* scheduleLoopWakeup(options: Options, prompt: string): AsyncGener
 
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
   generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
-} = {}) {
+} = {}, onEvent?: (event: AgentEvent) => void) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-"));
   roots.push(root);
   const store = new ClaudeSessionStore(root);
@@ -134,6 +137,7 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
         const { turn } = event.notification.params as { turn: { id: string } };
         turnCompletions.get(turn.id)?.resolve();
       }
+      onEvent?.(event);
     },
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
@@ -3469,6 +3473,9 @@ describe("Claude SDK backend", () => {
   describe("stopping a turn while Claude's own wake is pending", () => {
     const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
     async function stoppable(params: { wake?: "loop" | "cron" }) {
+      const assistantCompleted = Promise.withResolvers<AgentEvent["notification"]>();
+      const writingWakeTool = Promise.withResolvers<void>();
+      const releaseWakeToolWrite = Promise.withResolvers<void>();
       const interrupted = Promise.withResolvers<void>();
       const interrupt = vi.fn(async () => {
         interrupted.resolve();
@@ -3492,11 +3499,41 @@ describe("Claude SDK backend", () => {
         if (options.abortController!.signal.aborted) return;
         yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Request interrupted by user"] } as unknown as SDKMessage;
         await aborted;
-      }, { interrupt });
+      }, { interrupt }, ({ notification }) => {
+        if (notification.method === "item/completed" && (notification.params.item as { id?: string }).id === "reading") {
+          assistantCompleted.resolve(notification);
+        }
+      });
+      if (params.wake === "loop") {
+        releaseBeforeBackendClose.push(releaseWakeToolWrite.resolve);
+        const append = f.store.append.bind(f.store);
+        vi.spyOn(f.store, "append").mockImplementation(async (...args) => {
+          if (args[1].some((entry) => entry.id === "tool-wake")) {
+            writingWakeTool.resolve();
+            await releaseWakeToolWrite.promise;
+          }
+          await append(...args);
+        });
+      }
       const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
       const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: prompt }] });
-      await vi.waitFor(() => expect((f.backend.readThread(threadId)).then((replay) => replay.lastAssistantMessage))
-        .resolves.toBe("Reading the logs."));
+      const readThread = vi.spyOn(f.backend, "readThread");
+      // The completion notification follows the persisted assistant entry.
+      // Join it before reading replay, even when an earlier write stalls.
+      const ready = assistantCompleted.promise;
+      if (params.wake === "loop") {
+        try {
+          await writingWakeTool.promise;
+          expect(readThread).not.toHaveBeenCalled();
+          expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBeUndefined();
+        } finally {
+          releaseWakeToolWrite.resolve();
+        }
+      }
+      expect(await ready).toMatchObject({ params: {
+        threadId, turnId: turn.turnId, item: { id: "reading", type: "agentMessage", text: "Reading the logs." },
+      } });
+      expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("Reading the logs.");
       return { ...f, threadId, turn, interrupt };
     }
 
