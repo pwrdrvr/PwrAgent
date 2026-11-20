@@ -58,7 +58,15 @@ export function ActiveAutomationRunsStrip(props: {
       automation.lastRunStatus === "failed"
       && !dismissedFailures.has(`${automation.id}:${automation.lastRunId ?? ""}`),
   );
-  const visible = [...running, ...failed];
+  // Paused at its daily run limit: it stays until the operator resumes it,
+  // since nothing else will start its runs again.
+  const limited = automations.automations.filter(
+    (automation) =>
+      automation.pausedReason === "daily_run_limit"
+      && !isRunningAutomation(automation)
+      && !failed.includes(automation),
+  );
+  const visible = [...running, ...failed, ...limited];
 
   const now = useNowWhileActive(running.length > 0);
 
@@ -66,8 +74,16 @@ export function ActiveAutomationRunsStrip(props: {
     return null;
   }
 
-  const heading = running.length > 0 ? "Running automations" : "Failed automations";
-  const headingCount = running.length > 0 ? running.length : failed.length;
+  const heading = running.length > 0
+    ? "Running automations"
+    : failed.length > 0
+      ? "Failed automations"
+      : "Paused automations";
+  const headingCount = running.length > 0
+    ? running.length
+    : failed.length > 0
+      ? failed.length
+      : limited.length;
   const failedNote =
     running.length > 0 && failed.length > 0 ? `${failed.length} failed` : undefined;
 
@@ -107,22 +123,23 @@ export function ActiveAutomationRunsStrip(props: {
       <ul className="live-strip__list">
         {visible.map((automation) => {
           const failedRow = automation.lastRunStatus === "failed";
+          const limitedRow = !failedRow && automation.pausedReason === "daily_run_limit";
           const startedAt = automation.lastRunAt;
           return (
             <li
               className={`live-strip__item${
-                failedRow ? " live-strip__item--failed" : ""
+                failedRow || limitedRow ? " live-strip__item--failed" : ""
               }`}
               key={automation.id}
             >
               <span
                 aria-hidden="true"
                 className={
-                  failedRow
+                  failedRow || limitedRow
                     ? "status-dot status-dot--error"
                     : "status-dot status-dot--active status-dot--blink"
                 }
-                ref={failedRow ? undefined : statusPulseRef}
+                ref={failedRow || limitedRow ? undefined : statusPulseRef}
               />
               <span className="live-strip__item-text" title={automation.name}>
                 {automation.name}
@@ -130,10 +147,12 @@ export function ActiveAutomationRunsStrip(props: {
               {/* Never color alone — the row says its state in words. */}
               <span className="live-strip__item-time">
                 {failedRow
-                  ? "Failed"
-                  : automation.lastRunStatus === "running" && startedAt
-                    ? formatRunningDurationMs(Math.max(0, now - startedAt))
-                    : "Queued"}
+                  ? automation.lastRunFailureReason === "timed_out" ? "Timed out" : "Failed"
+                  : limitedRow
+                    ? "Daily limit reached"
+                    : automation.lastRunStatus === "running" && startedAt
+                      ? formatRunningDurationMs(Math.max(0, now - startedAt))
+                      : "Queued"}
               </span>
               {failedRow && automation.lastRunId
                 && props.desktopApi?.openAutomationRunWindow ? (
@@ -153,6 +172,18 @@ export function ActiveAutomationRunsStrip(props: {
                   }
                 >
                   Why?
+                </button>
+              ) : null}
+              {limitedRow ? (
+                <button
+                  aria-label={`Resume ${automation.name}, paused at its daily run limit`}
+                  className="live-strip__item-action"
+                  type="button"
+                  onClick={() =>
+                    void automations.resumeAutomation({ automationId: automation.id })
+                      .catch(() => undefined)}
+                >
+                  Resume
                 </button>
               ) : null}
               {failedRow ? (
