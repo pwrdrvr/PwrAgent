@@ -311,7 +311,7 @@ describe("TranscriptList", () => {
           loading={false}
           loadingMore={false}
           messagingBindingTransitions={[telegramBinding]}
-          pendingProtocolActivityEntry={lateLiveRow}
+          pendingProtocolActivityEntries={[lateLiveRow]}
           onLoadOlder={async () => undefined}
         />
       );
@@ -3877,7 +3877,7 @@ Implementation notes remain in a readable bubble.`;
         ]}
         loading={false}
         loadingMore={false}
-        pendingProtocolActivityEntry={{
+        pendingProtocolActivityEntries={[{
           type: "activity",
           id: "protocol-activity-1",
           summary: "MCP status updates (3)",
@@ -3891,7 +3891,7 @@ Implementation notes remain in a readable bubble.`;
             }
           ],
           turn: { id: "turn-1", status: "completed" }
-        }}
+        }]}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
@@ -3927,7 +3927,7 @@ Implementation notes remain in a readable bubble.`;
         ]}
         loading={false}
         loadingMore={false}
-        pendingProtocolActivityEntry={{
+        pendingProtocolActivityEntries={[{
           type: "activity",
           id: "live-mcp-protocol-status",
           summary: "MCP server ready",
@@ -3940,7 +3940,7 @@ Implementation notes remain in a readable bubble.`;
               status: "completed"
             }
           ]
-        }}
+        }]}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />

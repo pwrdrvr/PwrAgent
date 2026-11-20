@@ -1,9 +1,11 @@
 import { ContinueAfterStatus } from "../thread-dependencies/ContinueAfterStatus";
+import type { ModelRoutingNotification } from "./model-routing-activity";
 import {
-  isModelRoutingActivityEntry,
-  mergeModelRoutingActivityEntry,
-  type ModelRoutingNotification,
-} from "./model-routing-activity";
+  applyProtocolActivityNotice,
+  NO_PROTOCOL_ACTIVITY_ENTRIES,
+  protocolActivityEntriesAtTurnEnd,
+  type ProtocolActivityNotice,
+} from "./protocol-activity-entries";
 import {
   buildProviderResponseBlockEntry,
   parseRemoteOperatorItemKey,
@@ -45,7 +47,6 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
-  AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadImagePart,
@@ -222,11 +223,7 @@ import {
   type PendingMcpInteractionState,
   type McpApprovalPersistence,
 } from "./mcp-elicitation";
-import {
-  mergeActivityDetails,
-  readRendererSequence,
-  summarizeActivityStatus,
-} from "./live-transcript-activity";
+import { readRendererSequence } from "./live-transcript-activity";
 import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
 import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
 import {
@@ -561,100 +558,6 @@ function readCompletedPlanMarkdown(params: Record<string, unknown>): string | un
   return trimmed || undefined;
 }
 
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function buildMcpProtocolActivityEntry(
-  details: AppServerThreadActivityDetail[],
-  createdAt = Date.now(),
-): AppServerThreadActivityEntry {
-  return {
-    type: "activity",
-    id: "live-mcp-protocol-status",
-    createdAt,
-    summary: summarizeMcpProtocolActivity(details),
-    status: summarizeActivityStatus(details),
-    details,
-  };
-}
-
-function summarizeMcpProtocolActivity(details: AppServerThreadActivityDetail[]): string {
-  if (details.length === 1 && details[0]) {
-    return details[0].label;
-  }
-
-  return `MCP status updates (${details.length})`;
-}
-
-function mergeMcpProtocolActivityEntry(
-  current: AppServerThreadActivityEntry | undefined,
-  next: AppServerThreadActivityEntry,
-): AppServerThreadActivityEntry {
-  if (current?.id !== "live-mcp-protocol-status") {
-    return next;
-  }
-
-  return buildMcpProtocolActivityEntry(
-    mergeActivityDetails(current.details, next.details),
-    current.createdAt ?? next.createdAt
-  );
-}
-
-function buildMcpServerStatusActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
-  const serverName = readString(params, "name") ?? readString(params, "serverName");
-  const status = readString(params, "status") ?? "updated";
-  if (!serverName) {
-    return undefined;
-  }
-
-  const error = readString(params, "error");
-  const detailStatus: AppServerThreadActivityDetail["status"] =
-    status === "failed" || error
-      ? "failed"
-      : status === "cancelled"
-        ? "cancelled"
-        : status === "ready"
-          ? "completed"
-          : "in_progress";
-  const label = error
-    ? `MCP ${serverName} ${status}: ${error}`
-    : `MCP ${serverName} ${status}`;
-
-  return buildMcpProtocolActivityEntry([
-    {
-      id: `live-mcp-status-${serverName}`,
-      kind: "command",
-      label,
-      status: detailStatus,
-    },
-  ]);
-}
-
-function buildMcpOauthActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
-  const serverName = readString(params, "name") ?? readString(params, "serverName");
-  if (!serverName) {
-    return undefined;
-  }
-
-  const success = params.success === true;
-  const error = readString(params, "error");
-  const label = success
-    ? `MCP ${serverName} login completed`
-    : `MCP ${serverName} login failed${error ? `: ${error}` : ""}`;
-  const status: AppServerThreadActivityDetail["status"] = success ? "completed" : "failed";
-
-  return buildMcpProtocolActivityEntry([
-    {
-      id: `live-mcp-oauth-${serverName}`,
-      kind: "command",
-      label,
-      status,
-    },
-  ]);
-}
-
 function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
   if (!Array.isArray(value)) {
     return [];
@@ -682,25 +585,6 @@ function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
 
     return [{ step, status }];
   });
-}
-
-function buildWarningActivityEntry(params: {
-  id: string;
-  message: string;
-}): AppServerThreadActivityEntry | undefined {
-  const message = params.message.replace(/^warning:\s*/i, "").trim();
-  if (!message) {
-    return undefined;
-  }
-
-  return {
-    type: "activity",
-    id: params.id,
-    createdAt: Date.now(),
-    tone: "warning",
-    summary: `Warning: ${message}`,
-    details: [],
-  };
 }
 
 function buildLiveTurnMetadata(params: {
@@ -1288,8 +1172,10 @@ export function ThreadView(props: ThreadViewProps) {
   const incrementalMarkdownRenderer = useIncrementalMarkdownRenderer();
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
-  const [pendingProtocolActivityEntry, setPendingProtocolActivityEntry] =
-    useState<AppServerThreadActivityEntry>();
+  // MCP status, warnings and model routing: one row per kind of notice, so
+  // no notice erases another (`protocol-activity-entries.ts`).
+  const [pendingProtocolActivityEntries, setPendingProtocolActivityEntries] =
+    useState<readonly AppServerThreadActivityEntry[]>(NO_PROTOCOL_ACTIVITY_ENTRIES);
   const [pendingUsageActivityEntry, setPendingUsageActivityEntry] =
     useState<AppServerThreadActivityEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
@@ -1300,9 +1186,9 @@ export function ThreadView(props: ThreadViewProps) {
   // Edited files no longer need a snapshot — turn/completed defers the
   // cumulative diff entry into the transcript, where
   // `collectEditedFileGroups` accumulates it (and survives reloads via
-  // the persisted replay). `pendingProtocolActivityEntry` (MCP status /
-  // warnings) is not snapshotted because it doesn't belong in the
-  // rail; the dupe-fix that clears it on turn/completed still applies.
+  // the persisted replay). `pendingProtocolActivityEntries` (MCP status /
+  // warnings / model routing) are not snapshotted because they don't belong
+  // in the rail; the dupe-fix that clears them on turn/completed still applies.
   const [lastCompletedPlanEntry, setLastCompletedPlanEntry] =
     useState<AppServerThreadPlanEntry>();
   // Refs mirror the pending state so the turn/completed handler can read
@@ -1311,9 +1197,9 @@ export function ThreadView(props: ThreadViewProps) {
   const pendingActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
     undefined,
   );
-  const pendingProtocolActivityEntryRef = useRef<
-    AppServerThreadActivityEntry | undefined
-  >(undefined);
+  const pendingProtocolActivityEntriesRef = useRef<
+    readonly AppServerThreadActivityEntry[]
+  >(NO_PROTOCOL_ACTIVITY_ENTRIES);
   const pendingUsageActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
     undefined,
   );
@@ -1395,7 +1281,7 @@ export function ThreadView(props: ThreadViewProps) {
   // the feature hooks are stable; the event callback reads them after commit.
   const resetThreadViewState = useEventCallback(() => {
     setPendingActivityEntry(undefined);
-    setPendingProtocolActivityEntry(undefined);
+    setPendingProtocolActivityEntries(NO_PROTOCOL_ACTIVITY_ENTRIES);
     setPendingUsageActivityEntry(undefined);
     setPendingPlanEntry(undefined);
     setLastCompletedPlanEntry(undefined);
@@ -1430,12 +1316,12 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     pendingActivityEntryRef.current = pendingActivityEntry;
-    pendingProtocolActivityEntryRef.current = pendingProtocolActivityEntry;
+    pendingProtocolActivityEntriesRef.current = pendingProtocolActivityEntries;
     pendingUsageActivityEntryRef.current = pendingUsageActivityEntry;
     pendingPlanEntryRef.current = pendingPlanEntry;
   }, [
     pendingActivityEntry,
-    pendingProtocolActivityEntry,
+    pendingProtocolActivityEntries,
     pendingUsageActivityEntry,
     pendingPlanEntry,
   ]);
@@ -2547,16 +2433,16 @@ export function ThreadView(props: ThreadViewProps) {
     () => [
       ...props.transcriptEntries,
       ...(pendingActivityEntry ? [pendingActivityEntry] : []),
-      ...(pendingProtocolActivityEntry ? [pendingProtocolActivityEntry] : []),
+      ...pendingProtocolActivityEntries,
     ],
     [
       pendingActivityEntry,
-      pendingProtocolActivityEntry,
+      pendingProtocolActivityEntries,
       props.transcriptEntries,
     ],
   );
   const { openImageGallery, imageLightbox, setExpandedGallery } = useThreadImageGallery({
-    props, pendingTranscriptActivityEntry, pendingProtocolActivityEntry, pendingUsageActivityEntry,
+    props, pendingTranscriptActivityEntry, pendingProtocolActivityEntries, pendingUsageActivityEntry,
   });
 
   // One collector per mounted view: `props.transcriptEntries` gets a fresh
@@ -2884,27 +2770,18 @@ export function ThreadView(props: ThreadViewProps) {
         return;
       }
 
-      if (event.notification.method === "mcpServer/startupStatus/updated") {
-        const entry = buildMcpServerStatusActivityEntry(
-          event.notification.params as Record<string, unknown>
+      if (
+        event.notification.method === "mcpServer/startupStatus/updated"
+        || event.notification.method === "mcpServer/oauthLogin/completed"
+      ) {
+        const params = event.notification.params as Record<string, unknown>;
+        const notice: ProtocolActivityNotice =
+          event.notification.method === "mcpServer/startupStatus/updated"
+            ? { method: "mcpServer/startupStatus/updated", params }
+            : { method: "mcpServer/oauthLogin/completed", params };
+        setPendingProtocolActivityEntries((current) =>
+          applyProtocolActivityNotice(current, notice, { threadId: selectedThread.id })
         );
-        if (entry) {
-          setPendingProtocolActivityEntry((current) =>
-            mergeMcpProtocolActivityEntry(current, entry)
-          );
-        }
-        return;
-      }
-
-      if (event.notification.method === "mcpServer/oauthLogin/completed") {
-        const entry = buildMcpOauthActivityEntry(
-          event.notification.params as Record<string, unknown>
-        );
-        if (entry) {
-          setPendingProtocolActivityEntry((current) =>
-            mergeMcpProtocolActivityEntry(current, entry)
-          );
-        }
         return;
       }
 
@@ -2971,18 +2848,20 @@ export function ThreadView(props: ThreadViewProps) {
               : interruptedActivity,
           );
         }
-        // A reroute or verification request often explains why the turn
-        // ended, so it stays with the turn instead of vanishing with it. The
-        // slot is cleared at every turn end, so a routing row here is this
+        // A warning, reroute or verification request often explains why the
+        // turn ended, so it stays with the turn instead of vanishing with it.
+        // The rows are cleared at every turn end, so the rows here are this
         // turn's.
-        const routingActivity = pendingProtocolActivityEntryRef.current;
-        if (routingActivity && isModelRoutingActivityEntry(routingActivity)) {
+        for (const explaining of protocolActivityEntriesAtTurnEnd(
+          pendingProtocolActivityEntriesRef.current,
+          event.notification.method === "turn/failed" ? "failed" : "cancelled",
+        )) {
           deferLiveTranscriptEntry(
-            liveTerminalTurn ? { ...routingActivity, turn: liveTerminalTurn } : routingActivity,
+            liveTerminalTurn ? { ...explaining, turn: liveTerminalTurn } : explaining,
           );
         }
         setPendingActivityEntry(undefined);
-        setPendingProtocolActivityEntry(undefined);
+        setPendingProtocolActivityEntries(NO_PROTOCOL_ACTIVITY_ENTRIES);
         setPendingUsageActivityEntry(undefined);
         return;
       }
@@ -3016,22 +2895,23 @@ export function ThreadView(props: ThreadViewProps) {
           // Files, Plan) for the LiveWorkRail's "pinned to last turn"
           // display, then clear every pending slot so the transcript
           // doesn't render the same entry twice (the dupe-row bug
-          // from issue #495). pendingProtocolActivityEntry holds MCP
-          // status / warnings, which the rail doesn't own — we still
-          // clear it to fix the duplicate, but don't snapshot.
+          // from issue #495). pendingProtocolActivityEntries hold MCP
+          // status / warnings / model routing, which the rail doesn't
+          // own — we still clear them to fix the duplicate, but don't
+          // snapshot.
           const completedActivity = completeEntryTurn(pendingActivityEntryRef.current);
           if (completedActivity) {
             deferLiveTranscriptEntry(completedActivity);
           }
           setPendingActivityEntry(undefined);
 
-          const completedProtocolActivity = completeEntryTurn(
-            pendingProtocolActivityEntryRef.current,
-          );
-          if (completedProtocolActivity) {
-            deferLiveTranscriptEntry(completedProtocolActivity);
+          for (const protocolActivity of protocolActivityEntriesAtTurnEnd(
+            pendingProtocolActivityEntriesRef.current,
+            "completed",
+          )) {
+            deferLiveTranscriptEntry({ ...protocolActivity, turn: liveTurn });
           }
-          setPendingProtocolActivityEntry(undefined);
+          setPendingProtocolActivityEntries(NO_PROTOCOL_ACTIVITY_ENTRIES);
 
           const completedUsageActivity = completeEntryTurn(
             pendingUsageActivityEntryRef.current,
@@ -3052,15 +2932,12 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       if (event.notification.method === "warning") {
-        const message =
-          typeof event.notification.params.message === "string"
-            ? event.notification.params.message
-            : "";
-        setPendingProtocolActivityEntry(
-          buildWarningActivityEntry({
-            id: `live-warning-${selectedThread.id}`,
-            message,
-          })
+        const notice: ProtocolActivityNotice = {
+          method: "warning",
+          params: { message: event.notification.params.message },
+        };
+        setPendingProtocolActivityEntries((current) =>
+          applyProtocolActivityNotice(current, notice, { threadId: selectedThread.id })
         );
         return;
       }
@@ -3075,10 +2952,12 @@ export function ThreadView(props: ThreadViewProps) {
           turnId: liveNotificationTurnId(notification.params.turnId),
           activeTurnStartedAt: props.activeTurnStartedAt,
         });
-        setPendingProtocolActivityEntry((current) => {
-          const entry = mergeModelRoutingActivityEntry(current, notification);
-          return entry ? { ...entry, ...(turn ? { turn } : {}) } : current;
-        });
+        setPendingProtocolActivityEntries((current) =>
+          applyProtocolActivityNotice(current, notification, {
+            threadId: selectedThread.id,
+            ...(turn ? { turn } : {}),
+          })
+        );
         return;
       }
 
@@ -3839,7 +3718,7 @@ export function ThreadView(props: ThreadViewProps) {
               reglueRequestKey={transcriptReglueRequestKey}
               skills={props.skills}
               subAgents={selectedThread!.subAgents}
-              pendingProtocolActivityEntry={pendingProtocolActivityEntry}
+              pendingProtocolActivityEntries={pendingProtocolActivityEntries}
               pendingUsageActivityEntry={pendingUsageActivityEntry}
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
               onLoadOlder={loadOlderTranscript}
@@ -5249,11 +5128,11 @@ function useThreadQuestionReplies(
 
 // Snapshot the gallery when opened, independently of transcript hydration or streaming.
 function useThreadImageGallery({
-  props, pendingTranscriptActivityEntry, pendingProtocolActivityEntry, pendingUsageActivityEntry,
+  props, pendingTranscriptActivityEntry, pendingProtocolActivityEntries, pendingUsageActivityEntry,
 }: {
   props: ThreadViewProps;
   pendingTranscriptActivityEntry: AppServerThreadActivityEntry | undefined;
-  pendingProtocolActivityEntry: AppServerThreadActivityEntry | undefined;
+  pendingProtocolActivityEntries: readonly AppServerThreadActivityEntry[];
   pendingUsageActivityEntry: AppServerThreadActivityEntry | undefined;
 }) {
   const [expandedGallery, setExpandedGallery] = useState<{
@@ -5266,12 +5145,12 @@ function useThreadImageGallery({
       collectThreadImageGallery([
         ...props.transcriptEntries,
         pendingTranscriptActivityEntry,
-        pendingProtocolActivityEntry,
+        ...pendingProtocolActivityEntries,
         pendingUsageActivityEntry,
         props.pendingAssistantMessage,
       ]),
     [
-      pendingProtocolActivityEntry,
+      pendingProtocolActivityEntries,
       pendingTranscriptActivityEntry,
       pendingUsageActivityEntry,
       props.pendingAssistantMessage,
