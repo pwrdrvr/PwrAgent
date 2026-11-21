@@ -23,6 +23,7 @@ Pass environment to either tool to pick the child's environment by id or name, o
 Those tools create threads immediately. For an operator-dispatched follow-up, use add_todo with action.type=start_thread.
 Set action.workMode=worktree for Git work unless the instructions require a shared checkout. Use local to share the source checkout.
 Give the child its task in the assigned checkout. Do not ask the child to create a worktree.
+Set action.placement=top_level for work that stands alone, such as an unrelated bug or a new feature; it starts as its own thread in the project. Omitted or sub_thread files it under this thread. Work for another project is always top-level.
 Set action.backend for a different registered provider, plus its model and reasoningEffort from list_instance_projects.
 Use update_todo with backend, model and reasoningEffort to change an existing handoff card. Empty optional fields restore inheritance: source settings for the same provider, destination defaults for a different provider.
 Use manage_thread_dependencies with a marked_done condition to mark work waiting until someone says it is done; holdMerge holds merging, and deliver operator with steps reminds the operator of the follow-up.

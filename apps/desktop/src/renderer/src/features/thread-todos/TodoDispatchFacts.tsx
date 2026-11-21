@@ -5,12 +5,15 @@ import type {
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
   ThreadTodoModelSettings,
+  ThreadTodoPlacement,
   ThreadTodoWorkMode,
 } from "@pwragent/shared/contracts/thread-todos";
 import { CODEX_SPEED_LABELS, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
+  THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
   resolveThreadTodoModelSettings,
+  resolveThreadTodoPlacement,
   threadTodoActionProject,
 } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -21,6 +24,8 @@ import {
   LightningIcon,
   ServerIcon,
   ShieldIcon,
+  SubthreadIcon,
+  ThreadIcon,
   WorktreeIcon,
 } from "../../icons";
 import { TodoFactMenu, type TodoFactMenuEntry } from "./TodoFactMenu";
@@ -63,11 +68,13 @@ export type TodoDispatchTarget = {
   speed?: ReturnType<typeof todoDispatchSpeed> & { changed: boolean };
   workMode: ThreadTodoWorkMode;
   workModeChanged: boolean;
+  placement: TodoDispatchPlacement;
   environment: EnvironmentState & { selected?: string; changed: boolean };
   setMachine: (key: string) => void;
   pickModel: (settings: ThreadTodoModelSettings) => void;
   setSpeed: (speed: CodexSpeed) => void;
   setWorkMode: (workMode: ThreadTodoWorkMode) => void;
+  setPlacement: (placement: ThreadTodoPlacement) => void;
   setEnvironment: (environment: string) => void;
   /** A dispatch provider holds the choices, so every mounted copy of the card shares them. */
   choicesShared: boolean;
@@ -77,6 +84,57 @@ export type TodoDispatchTarget = {
   /** The run request's dispatch fields, as the chips show them. */
   runOptions: () => ThreadTodoRunOptions;
 };
+
+/**
+ * Where the started thread is filed. `lock` says why the operator cannot
+ * choose: another project or machine is always top-level, and an owner that
+ * predates placement always makes a sub-thread here.
+ */
+export type TodoDispatchPlacement = {
+  value: ThreadTodoPlacement;
+  /** The value before the operator's pick: the agent's proposal, else a sub-thread. */
+  defaultValue: ThreadTodoPlacement;
+  proposed: boolean;
+  lock?: "project" | "machine" | "owner";
+  changed: boolean;
+};
+
+/**
+ * Where a card's thread will be filed, and what the run request carries.
+ * Only an owner that honors placement hears a pick, and only one that
+ * differs from the card's own default.
+ */
+export function todoDispatchPlacement(params: {
+  todo: ThreadTodo;
+  picked?: ThreadTodoPlacement;
+  onOwner: boolean;
+  ownerHonorsPlacement: boolean;
+}): TodoDispatchPlacement & { send?: ThreadTodoPlacement } {
+  const action = params.todo.action?.type === "start_thread" ? params.todo.action : undefined;
+  const situation = { crossProject: params.todo.targetProject !== undefined, otherMachine: !params.onOwner };
+  const proposed = action?.placement;
+  const settledDefault = resolveThreadTodoPlacement({ ...(proposed ? { proposed } : {}), ...situation });
+  if (settledDefault.lock) {
+    return { value: settledDefault.placement, defaultValue: settledDefault.placement, proposed: false, lock: settledDefault.lock, changed: false };
+  }
+  // An older owner ignores placement: it files the thread as a sub-thread.
+  if (!params.ownerHonorsPlacement) {
+    return { value: "sub_thread", defaultValue: "sub_thread", proposed: false, lock: "owner", changed: false };
+  }
+  const value = resolveThreadTodoPlacement({
+    ...(params.picked ? { requested: params.picked } : {}),
+    ...(proposed ? { proposed } : {}),
+    ...situation,
+  }).placement;
+  const changed = value !== settledDefault.placement;
+  return {
+    value,
+    defaultValue: settledDefault.placement,
+    proposed: proposed !== undefined,
+    changed,
+    ...(changed ? { send: value } : {}),
+  };
+}
 
 /**
  * The machine, model, speed, Where and environment a start-thread card
@@ -139,6 +197,10 @@ export function useTodoDispatchTarget(params: {
   const defaultWorkMode: ThreadTodoWorkMode = action?.workMode ?? "local";
   const workMode = choices.workMode ?? defaultWorkMode;
 
+  const placement = todoDispatchPlacement({
+    todo, ...(choices.placement ? { picked: choices.placement } : {}), onOwner, ownerHonorsPlacement: owner.placement,
+  });
+
   const legacy = !owner.dispatchTarget;
   const environmentState = useDispatchEnvironments({ todo, machine, onOwner, enabled: isHandoff && !legacy });
   const environmentDefault = environmentState.status === "ready"
@@ -161,17 +223,22 @@ export function useTodoDispatchTarget(params: {
       model: ownerSelection,
       workMode: defaultWorkMode,
       workModeChanged: false,
+      placement,
       environment: { status: "loading", changed: false },
       setMachine: () => {},
       pickModel: params.pickOwnerModel,
       setSpeed: () => {},
       setWorkMode: () => {},
+      setPlacement: () => {},
       setEnvironment: () => {},
       choicesShared: context.provided,
       // Model and Where alone already fit the grid.
       settingsExpanded: true,
       setSettingsExpanded: () => {},
-      runOptions: () => ({ modelSettings: ownerSelection.settings }),
+      runOptions: () => ({
+        modelSettings: ownerSelection.settings,
+        ...(placement.send ? { placement: placement.send } : {}),
+      }),
     };
   }
   return {
@@ -186,6 +253,7 @@ export function useTodoDispatchTarget(params: {
     ...(speed ? { speed } : {}),
     workMode,
     workModeChanged: workMode !== defaultWorkMode,
+    placement,
     environment: {
       ...environmentState,
       ...(environmentSelected ? { selected: environmentSelected } : {}),
@@ -201,6 +269,7 @@ export function useTodoDispatchTarget(params: {
     },
     setSpeed: (next) => choose((current) => ({ ...current, speeds: { ...current.speeds, [machine.key]: next } })),
     setWorkMode: (next) => choose((current) => ({ ...current, workMode: next })),
+    setPlacement: (next) => choose((current) => ({ ...current, placement: next })),
     setEnvironment: (next) => choose((current) => ({
       ...current, environments: { ...current.environments, [machine.key]: next },
     })),
@@ -215,6 +284,7 @@ export function useTodoDispatchTarget(params: {
       ...(speed && (!onOwner || speed.changed) ? { speed: speed.speed } : {}),
       // Another machine's project preset must not replace what the chip says.
       ...(!onOwner || workMode !== defaultWorkMode ? { workMode } : {}),
+      ...(placement.send ? { placement: placement.send } : {}),
       ...(environmentSelected ? { environment: environmentSelected } : {}),
     }),
   };
@@ -496,6 +566,53 @@ export function TodoDispatchFacts(props: {
         : {})}
     />
   );
+  const placement = target.placement;
+  const placementProject = (target.onOwner ? project?.label : ready?.projectLabel ?? project?.label) ?? "the project";
+  const placementDefaultDetail = placement.proposed ? "Proposed" : "Default";
+  const placementEntries: TodoFactMenuEntry[] = [
+    {
+      kind: "item",
+      key: "sub_thread",
+      label: "Sub-thread of this thread",
+      ...(placement.defaultValue === "sub_thread" ? { detail: placementDefaultDetail } : {}),
+      checked: placement.value === "sub_thread",
+      onSelect: () => target.setPlacement("sub_thread"),
+    },
+    {
+      kind: "item",
+      key: "top_level",
+      label: `New thread in ${placementProject}`,
+      ...(placement.defaultValue === "top_level" ? { detail: placementDefaultDetail } : {}),
+      checked: placement.value === "top_level",
+      onSelect: () => target.setPlacement("top_level"),
+    },
+  ];
+  const placementValue = placement.value === "sub_thread" ? "Sub-thread" : "Top-level";
+  const placementDescription = placement.value === "sub_thread"
+    ? "Sub-thread of this thread"
+    : `New thread in ${placementProject}`;
+  const placementTooltip = placement.lock === "owner"
+    ? `Update PwrAgent on ${target.owner.label} to choose where the new thread is filed.`
+    : placement.lock ? THREAD_TODO_PLACEMENT_LOCK_MESSAGES[placement.lock] : undefined;
+  const threadChip = (
+    <TodoFactMenu
+      label="Where the new thread is filed"
+      value={placementValue}
+      entries={placementEntries}
+      changed={placement.changed}
+      disabled={props.disabled || placement.lock !== undefined}
+      testId="todo-dispatch-placement"
+      {...(compact
+        ? {
+            icon: placement.value === "sub_thread" ? SubthreadIcon : ThreadIcon,
+            // A sub-thread is the usual case, so it is the bare icon; a
+            // top-level start is named, as Speed names a faster tier.
+            iconOnly: placement.value === "sub_thread",
+            tooltip: placementTooltip ?? `Thread: ${placementDescription}`,
+          }
+        : placementTooltip ? { tooltip: placementTooltip } : {})}
+    />
+  );
   const env = target.legacy ? null : (
     <TodoFactMenu
       label="Environment for the new thread"
@@ -534,6 +651,7 @@ export function TodoDispatchFacts(props: {
               <span className="todo-dispatch-chips__static-label">{props.access}</span>
             </span>
           ) : null}
+          {threadChip}
           {where}
           {env}
           {toggle}
@@ -569,6 +687,10 @@ export function TodoDispatchFacts(props: {
               <dd>{props.access}</dd>
             </div>
           ) : null}
+          <div className="thread-todo-card__fact thread-todo-card__fact--model">
+            <dt>Thread</dt>
+            <dd>{threadChip}</dd>
+          </div>
           <div className={`thread-todo-card__fact${target.legacy ? "" : " thread-todo-card__fact--model"}`}>
             <dt>Where</dt>
             <dd>{where}</dd>

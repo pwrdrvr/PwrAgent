@@ -25,6 +25,8 @@ export type ThreadTodoInstance = {
    */
   dispatchTarget?: boolean;
   messageTarget?: boolean;
+  /** The peer advertises `thread_todo_placement`: as a card's owner it honors a placement pick. */
+  placement?: boolean;
 };
 
 /** This window's own machine. Without an instance id, a card cannot start here from a peer. */

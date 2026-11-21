@@ -2451,6 +2451,21 @@ describe("DesktopFederationRuntime", () => {
       expect(sent).toEqual([]);
     });
 
+    it("never sends a placement pick to an older owner that would nest the thread anyway", async () => {
+      const older = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_dispatch_target"]);
+      await expect(older.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }))
+        .rejects.toThrow("choose where the new thread is filed");
+      expect(older.sent).toEqual([]);
+      // The same owner still starts a card that carries no pick.
+      void older.runtime.requestThreadTodoOperation(target, "runAction", { id: "card" }).catch(() => undefined);
+      await vi.waitFor(() => expect(older.sent).toHaveLength(1));
+
+      const current = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement"]);
+      void current.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }).catch(() => undefined);
+      await vi.waitFor(() => expect(current.sent).toHaveLength(1));
+      expect(current.sent[0]).toMatchObject({ method: "threadTodos.runAction", params: { id: "card", placement: "top_level" } });
+    });
+
     it("names To-dos when the owner lacks thread_todos", async () => {
       const { runtime, sent } = viewerOf(["thread_detail", "turn_control", "thread_todo_plan"]);
       expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(false);

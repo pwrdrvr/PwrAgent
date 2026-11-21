@@ -105,6 +105,8 @@ export type TodoDispatchMachine = {
   unavailableReason?: string;
   /** It runs this build's to-do dispatch: Where, environment and speed. */
   dispatchTarget: boolean;
+  /** As a card's owner, it honors a sub-thread or top-level pick. */
+  placement: boolean;
 };
 
 export const LOCAL_DISPATCH_MACHINE = "local";
@@ -117,7 +119,7 @@ export const LOCAL_DISPATCH_MACHINE = "local";
 export function todoDispatchMachines(params: {
   ownerInstanceId?: string;
   ownerLabel?: string;
-  peers: readonly { instanceId: string; label: string; availability?: string; dispatchTarget?: boolean }[];
+  peers: readonly { instanceId: string; label: string; availability?: string; dispatchTarget?: boolean; placement?: boolean }[];
   local?: { instanceId?: string; label?: string };
 }): { owner: TodoDispatchMachine; machines: TodoDispatchMachine[] } {
   const ownerKey = params.ownerInstanceId ?? LOCAL_DISPATCH_MACHINE;
@@ -129,6 +131,7 @@ export function todoDispatchMachines(params: {
     label: (params.ownerInstanceId ? ownerPeer?.label ?? params.ownerLabel : params.local?.label) ?? "This machine",
     available: true,
     dispatchTarget: params.ownerInstanceId ? ownerPeer?.dispatchTarget === true : true,
+    placement: params.ownerInstanceId ? ownerPeer?.placement === true : true,
   };
   const others: TodoDispatchMachine[] = [];
   if (params.ownerInstanceId && params.local?.instanceId) {
@@ -138,6 +141,7 @@ export function todoDispatchMachines(params: {
       instanceId: params.local.instanceId,
       available: true,
       dispatchTarget: true,
+      placement: true,
     });
   }
   for (const peer of params.peers) {
@@ -153,6 +157,7 @@ export function todoDispatchMachines(params: {
       available,
       ...(available ? {} : { unavailableReason: FEDERATION_TARGET_AVAILABILITY_LABEL.unsupported }),
       dispatchTarget: peer.dispatchTarget === true,
+      placement: peer.placement === true,
     });
   }
   // An older owner ignores everything but the model, so its card offers

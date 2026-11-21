@@ -770,6 +770,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todo_dispatch_target",
   "thread_todo_message",
   "thread_todo_plan",
+  "thread_todo_placement",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -2809,6 +2810,12 @@ export class DesktopFederationRuntime {
     if (operation === "runAction" && request && "messageTarget" in request && request.messageTarget !== undefined
       && this.todoQueueUnavailableInstance(target, "thread_todo_message")) {
       throw new Error("Update the card's PwrAgent owner to send requests to existing threads.");
+    }
+    // An older owner ignores placement and nests the thread anyway, so an
+    // operator's pick must not reach it.
+    if (operation === "runAction" && request && "placement" in request && request.placement !== undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_placement")) {
+      throw new Error("Update the card's PwrAgent owner to choose where the new thread is filed.");
     }
     const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
       ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);

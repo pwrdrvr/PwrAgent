@@ -308,7 +308,7 @@ describe("to-do dispatch target", () => {
     const expand = screen.getByRole("button", { name: "Show start settings" });
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     await act(async () => { fireEvent.click(expand); });
-    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Machine", "Model", "Where", "Env"]);
+    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Machine", "Model", "Thread", "Where", "Env"]);
     expect(screen.queryByRole("group", { name: "Start settings" })).toBeNull();
     const collapse = screen.getByRole("button", { name: "Hide start settings labels" });
     expect(collapse.getAttribute("aria-expanded")).toBe("true");
@@ -343,6 +343,7 @@ describe("to-do dispatch target", () => {
     expect(within(row).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
       "Machine for the new thread: studio",
       "Model for the new thread: Claude, Opus 5.5, high",
+      "Where the new thread is filed: Sub-thread",
       "Where the new thread works: This thread's directory",
       "Environment for the new thread: Dev",
       "Show start settings",
@@ -356,6 +357,82 @@ describe("to-do dispatch target", () => {
     expect(chip("Where the new thread works").textContent).toBe("This thread's directory");
     expect(chip("Environment for the new thread").textContent).toBe("Dev");
     expect(api.listThreadTodoDispatchEnvironments).toHaveBeenCalledWith({ id: "card" });
+  });
+
+  it("files the thread as a sub-thread by default and sends a top-level pick", async () => {
+    const { onRun } = setup();
+    await settle();
+    expect(chip("Where the new thread is filed").getAttribute("data-tooltip")).toBe("Thread: Sub-thread of this thread");
+    await act(async () => { fireEvent.click(chip("Where the new thread is filed")); });
+    const menu = within(screen.getByRole("menu", { name: "Where the new thread is filed" }));
+    expect(menu.getAllByRole("menuitemradio").map((entry) => entry.textContent)).toEqual([
+      "Sub-thread of this threadDefault",
+      "New thread in atlas",
+    ]);
+    await act(async () => { fireEvent.click(menu.getByRole("menuitemradio", { name: /^New thread in atlas/ })); });
+    expect(chip("Where the new thread is filed").textContent).toBe("Top-level");
+    expect(chip("Where the new thread is filed").classList.contains("is-changed")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(card, expect.objectContaining({ placement: "top_level" }));
+    // Back to the default sends nothing, so the owner's own default holds.
+    await choose("Where the new thread is filed", "Sub-thread of this thread");
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun.mock.calls.at(-1)?.[1]).not.toHaveProperty("placement");
+  });
+
+  it("starts with the agent's top-level proposal, and sends a sub-thread pick against it", async () => {
+    const proposed: ThreadTodo = { ...card, action: { type: "start_thread", prompt: "Run the focused suite", placement: "top_level" } };
+    const { onRun } = setup({ todo: proposed });
+    await settle();
+    expect(chip("Where the new thread is filed").textContent).toBe("Top-level");
+    expect(chip("Where the new thread is filed").classList.contains("is-changed")).toBe(false);
+    await act(async () => { fireEvent.click(chip("Where the new thread is filed")); });
+    expect(within(screen.getByRole("menu", { name: "Where the new thread is filed" }))
+      .getByRole("menuitemradio", { name: /^New thread in atlas/ }).textContent).toBe("New thread in atlasProposed");
+    await act(async () => { fireEvent.click(screen.getByRole("menuitemradio", { name: /^Sub-thread of this thread/ })); });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(proposed, expect.objectContaining({ placement: "sub_thread" }));
+  });
+
+  it("locks the placement to top-level for another project or machine, and sends no pick there", async () => {
+    const { unmount } = setup({ todo: { ...card, targetProject: { key: "directory:/src/snap", label: "PwrSnap", path: "/src/snap" } } });
+    await settle();
+    const crossProject = chip("Where the new thread is filed") as HTMLButtonElement;
+    expect(crossProject.disabled).toBe(true);
+    expect(crossProject.textContent).toBe("Top-level");
+    expect(crossProject.getAttribute("data-tooltip")).toBe("Work for another project always starts as a top-level thread there.");
+    unmount();
+
+    const peerRun = setup().onRun;
+    await settle();
+    await choose("Where the new thread is filed", "Sub-thread of this thread");
+    await choose("Machine for the new thread", "win-lab / dev");
+    await settle();
+    const peer = chip("Where the new thread is filed") as HTMLButtonElement;
+    expect(peer.disabled).toBe(true);
+    expect(peer.getAttribute("data-tooltip")).toBe("A thread on another machine starts at the top of its project there.");
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(peerRun.mock.calls.at(-1)?.[1]).not.toHaveProperty("placement");
+  });
+
+  it("shows an older owner's card as a sub-thread it cannot change", async () => {
+    const remote: ThreadTodo = { ...card, federationTarget: { scope: "remote", instanceId: "win" } };
+    const { onRun } = setup({ todo: remote, instances: [{ ...WIN, placement: false }] });
+    await settle();
+    const locked = chip("Where the new thread is filed") as HTMLButtonElement;
+    expect(locked.disabled).toBe(true);
+    expect(locked.getAttribute("data-tooltip")).toBe("Update PwrAgent on win-lab / dev to choose where the new thread is filed.");
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun.mock.calls.at(-1)?.[1]).not.toHaveProperty("placement");
+  });
+
+  it("lets an owner that honors placement take a pick from a viewer", async () => {
+    const remote: ThreadTodo = { ...card, federationTarget: { scope: "remote", instanceId: "win" } };
+    const { onRun } = setup({ todo: remote, instances: [{ ...WIN, placement: true }], backendsTarget: { scope: "remote", instanceId: "win" } });
+    await settle();
+    await choose("Where the new thread is filed", "New thread in");
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(remote, expect.objectContaining({ placement: "top_level" }));
   });
 
   it("fits the model to a peer that lacks the provider, and restores the Mac's settings on the way back", async () => {

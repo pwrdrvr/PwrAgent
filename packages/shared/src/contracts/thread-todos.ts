@@ -42,6 +42,59 @@ export type ThreadTodoKind = "reminder" | "review" | "merge" | "handoff";
 export type ThreadTodoWorkMode = "local" | "worktree";
 
 /**
+ * Where a start-thread card files the thread it starts: under the thread
+ * that raised the card, or as a thread of its own in the project. The agent
+ * proposes one on the card; the operator can pick the other before starting.
+ */
+export const THREAD_TODO_PLACEMENTS = ["sub_thread", "top_level"] as const;
+
+export type ThreadTodoPlacement = (typeof THREAD_TODO_PLACEMENTS)[number];
+
+export function isThreadTodoPlacement(value: unknown): value is ThreadTodoPlacement {
+  return (
+    typeof value === "string"
+    && (THREAD_TODO_PLACEMENTS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Why a start cannot be a sub-thread: its parent must be on the same machine
+ * and in the same project.
+ */
+export type ThreadTodoPlacementLock = "project" | "machine";
+
+/**
+ * The placement a start uses. A start for another project, or on another
+ * machine, is always top-level. Otherwise the operator's pick, then the
+ * agent's proposal, then a sub-thread, which is what every card did before
+ * it could choose. `refused` is set when the operator asked for a sub-thread
+ * that cannot exist, so the owner can refuse instead of quietly ignoring it.
+ */
+export function resolveThreadTodoPlacement(params: {
+  requested?: ThreadTodoPlacement;
+  proposed?: ThreadTodoPlacement;
+  crossProject: boolean;
+  otherMachine: boolean;
+}): { placement: ThreadTodoPlacement; lock?: ThreadTodoPlacementLock; refused?: true } {
+  const lock: ThreadTodoPlacementLock | undefined = params.crossProject
+    ? "project"
+    : params.otherMachine ? "machine" : undefined;
+  if (lock) {
+    return {
+      placement: "top_level",
+      lock,
+      ...(params.requested === "sub_thread" ? { refused: true as const } : {}),
+    };
+  }
+  return { placement: params.requested ?? params.proposed ?? "sub_thread" };
+}
+
+export const THREAD_TODO_PLACEMENT_LOCK_MESSAGES: Record<ThreadTodoPlacementLock, string> = {
+  project: "Work for another project always starts as a top-level thread there.",
+  machine: "A thread on another machine starts at the top of its project there.",
+};
+
+/**
  * How the operator lands a PR. The operator picks it when clicking, not the
  * agent: the default comes from Settings, and a pick from the card's menu
  * sticks for that project.
@@ -187,6 +240,12 @@ export type ThreadTodoAction =
       /** The new thread's permissions. Absent inherits the source's mode. */
       executionMode?: ThreadExecutionMode;
       workMode?: ThreadTodoWorkMode;
+      /**
+       * Sub-thread of the raising thread, or a new top-level thread in the
+       * project. Absent is a sub-thread. A start for another project or on
+       * another machine is always top-level.
+       */
+      placement?: ThreadTodoPlacement;
     };
 
 export type ThreadTodoActionType = ThreadTodoAction["type"];
@@ -644,6 +703,12 @@ export type RunThreadTodoActionRequest = {
   modelSettings?: ThreadTodoModelSettings;
   /** Handoff cards only: the operator's Where, replacing the card's. */
   workMode?: ThreadTodoWorkMode;
+  /**
+   * Handoff cards only: the operator's placement, replacing the card's.
+   * A viewer sends it only to an owner that advertises
+   * `thread_todo_placement`; the owner refuses a sub-thread it cannot make.
+   */
+  placement?: ThreadTodoPlacement;
   /**
    * Handoff cards only: an environment id on the instance that starts the
    * thread, or `none`. Absent keeps that instance's default.
