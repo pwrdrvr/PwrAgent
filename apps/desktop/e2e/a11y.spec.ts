@@ -582,6 +582,34 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await expect(smokeThread).toBeVisible();
         });
 
+        await test.step("settings → profiles → guided Codex profile setup", async () => {
+          await app.window.getByRole("button", { name: "Open settings" }).click();
+          const settingsNav = app.window.getByRole("navigation", {
+            name: "Settings sections",
+          });
+          await expect(settingsNav).toBeVisible();
+          await settingsNav
+            .getByRole("button", { name: /^Profiles$/ })
+            .click();
+          await app.window
+            .getByRole("region", { name: "Profile settings" })
+            .getByRole("button", { name: "Add a Codex profile" })
+            .click();
+          const guided = app.window.getByRole("dialog", {
+            name: "Add a Codex profile",
+          });
+          await expect(guided).toBeVisible();
+          await runAxe(app.window, "settings → profiles → add a Codex profile");
+
+          await app.window.keyboard.press("Escape");
+          await expect(guided).toBeHidden();
+          await settingsNav
+            .getByRole("button", { name: /Exit Settings/i })
+            .click();
+          await expect(settingsNav).toBeHidden();
+          await expect(smokeThread).toBeVisible();
+        });
+
         // Key caps, a recorder that swallows keys, and per-row notices: its
         // own surface, so its own scan, with the recorder open.
         await test.step("settings → keyboard", async () => {

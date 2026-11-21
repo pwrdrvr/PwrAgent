@@ -1,0 +1,1578 @@
+/* ============================================================
+   SETTINGS GUIDED SETUP
+   Focused, one-task-at-a-time flows Settings opens for agents, Codex
+   profiles, and messaging (features/settings/guided-setup/). Copied from
+   the first-run onboarding styles and renamed so the two can change
+   independently; the visual reference is docs/design/onboarding-wizard-v1/.
+   Every color reads through tokens (docs/UI-THEME.md); radius stays at
+   8px or below.
+   ============================================================ */
+.guided-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+/* Focused as a whole on open, ahead of its first control (Close
+   onboarding). Its ring would outline the entire window. */
+.guided-setup-overlay:focus {
+  outline: none;
+}
+.guided-setup-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--scrim-strong);
+  pointer-events: none;
+}
+.guided-setup {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100vw - 64px));
+  max-height: calc(100vh - 64px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+  display: grid;
+  /* The wizard renders the rail on every step except Welcome. We
+     keep one frame width across all steps, but the row template
+     adapts so the rail's slot collapses on Welcome instead of
+     leaving an empty band above the body. */
+  grid-template-rows: auto auto 1fr auto;
+  overflow: hidden;
+}
+/* Dismiss-confirmation modal — rendered on top of the wizard
+   itself when the operator tries to bail out in bootstrap mode.
+   Three actions: Cancel / Skip-and-default / Exit. The X close
+   button on the titlebar and the Skip link in the footer both
+   route through this; ESC opens/closes it too. */
+.guided-setup__titlebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  -webkit-app-region: drag;
+}
+.guided-setup__titlebar button,
+.guided-setup__titlebar input,
+.guided-setup__titlebar a,
+.guided-setup__titlebar select,
+.guided-setup__titlebar [role="button"] {
+  -webkit-app-region: no-drag;
+}
+.guided-setup__eyebrow {
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.guided-setup__sep {
+  color: var(--text-subtle);
+}
+.guided-setup__crumb {
+  font: 600 13px/1 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+}
+.guided-setup__spacer {
+  flex: 1;
+}
+.guided-setup__close {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.guided-setup__close:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+}
+.guided-setup__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Step rail */
+.guided-setup__rail {
+  display: flex;
+  gap: 6px;
+  padding: 12px 18px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.guided-setup__rail-step {
+  flex: 1;
+  padding: 6px 10px 12px;
+  position: relative;
+}
+.guided-setup__rail-num {
+  font: 600 10px/1 var(--font-mono);
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.guided-setup__rail-label {
+  font: 600 13px/1 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+.guided-setup__rail-step.is-done .guided-setup__rail-num,
+.guided-setup__rail-step.is-done .guided-setup__rail-label {
+  color: var(--text-secondary);
+}
+.guided-setup__rail-step.is-current .guided-setup__rail-num {
+  color: var(--accent);
+}
+.guided-setup__rail-step.is-current .guided-setup__rail-label {
+  color: var(--text-primary);
+}
+.guided-setup__rail-step::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: transparent;
+  border-radius: 1px;
+}
+.guided-setup__rail-step.is-done::after {
+  background: var(--accent-border);
+}
+.guided-setup__rail-step.is-current::after {
+  background: var(--accent);
+}
+
+/* Body */
+.guided-setup__body {
+  padding: 22px 30px 18px;
+  overflow-y: auto;
+}
+/* Takes focus when a new step replaces the body; the step's own heading
+   is the visible landmark, so the container draws no ring. */
+.guided-setup__body:focus {
+  outline: none;
+}
+.guided-setup__head {
+  margin-bottom: 16px;
+}
+.guided-setup__title {
+  font: 650 22px/1.25 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  margin: 0 0 8px;
+  letter-spacing: -0.005em;
+}
+.guided-setup__title--center {
+  text-align: center;
+}
+.guided-setup__sub {
+  font: 400 14px/1.55 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 720px;
+}
+.guided-setup__sub--center {
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+}
+
+/* Footer */
+.guided-setup__footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.guided-setup__hint {
+  font: 500 12px/1 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+
+/* Buttons */
+.guided-setup__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font: 600 13px/1 var(--font-sans, sans-serif);
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-primary);
+}
+.guided-setup__btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.guided-setup__btn--primary {
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+.guided-setup__btn--primary:hover:not(:disabled) {
+  background: var(--accent-fill-strong);
+}
+.guided-setup__btn--primary:disabled {
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.guided-setup__btn--ghost {
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+.guided-setup__btn--ghost:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+/* Non-default accent action: orange outline, transparent fill. Pairs
+   with an adjacent --primary button as the deliberate alternative. */
+.guided-setup__btn--accent-outline {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+.guided-setup__btn--accent-outline:hover:not(.is-soft-disabled) {
+  background: var(--accent-soft);
+}
+/* Reads as not-yet-active but stays legible and clickable: a click in
+   this state replays the acknowledgement flash instead of advancing. Not
+   the native `disabled` attribute, which would swallow the click. Kept
+   below the full-strength outline (100% accent) so the locked vs. live
+   distinction stays visible, but dimmed only enough to signal "gated." */
+.guided-setup__btn--accent-outline.is-soft-disabled {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-muted));
+}
+/* The filled counterpart, for the gate's guided button: the same muted
+   look as `:disabled`, but it still takes the click that flashes the
+   acknowledgement. */
+.guided-setup__btn--primary.is-soft-disabled {
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+}
+.guided-setup__btn--primary.is-soft-disabled:hover {
+  background: var(--bg-panel-elevated);
+}
+.guided-setup__btn--link {
+  color: var(--text-muted);
+  padding: 8px 6px;
+}
+.guided-setup__btn--link:hover {
+  color: var(--text-primary);
+}
+
+/* Bootstrap-confirm — slim "set up `foo`?" screen shown when the
+   operator launched with --profile=foo / PWRAGENT_PROFILE=foo and
+   `foo` doesn't exist. Mirrors Welcome's centered layout so the
+   visual jump from confirm → Welcome stays gentle. */
+/* Welcome *//* Constrain the centered prose so it doesn't sprawl across the full
+   1120px frame and lose readability. The 4-item welcome list still
+   fills the canvas — it switches to 4 columns at this width. */
+/* Choice grids */
+.guided-setup__choices {
+  display: grid;
+  gap: 14px;
+}
+.guided-setup__choices--2 {
+  grid-template-columns: 1fr 1fr;
+}.guided-setup__choice {
+  position: relative;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.guided-setup__choice:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+.guided-setup__choice.is-selected {
+  border-color: var(--accent);
+  background: var(--bg-row-active);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+.guided-setup__choice:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.guided-setup__choice-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.guided-setup__choice-eyebrow {
+  font: 600 10px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.guided-setup__choice-title {
+  font: 650 15px/1.2 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+}
+.guided-setup__choice-preview {
+  border-radius: 8px;
+  overflow: hidden;
+}
+.guided-setup__choice-desc {
+  font: 400 13px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.guided-setup__choice-hint {
+  font: 500 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: 10px;
+  margin: 0;
+}
+
+/* Codex profile diagrams */
+.guided-setup__codex {
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  height: 200px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}.guided-setup__codex-node {
+  flex: 1;
+  max-width: 130px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.guided-setup__codex-node.is-accent {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+.guided-setup__codex-node.is-compact {
+  flex-direction: row;
+  text-align: left;
+  padding: 6px 8px;
+  gap: 8px;
+}
+/* PwrAgent's app icon is its own tile; a vendor mark sits on a neutral one,
+   so each diagram pairing reads as two apps at equal weight. Corner radii
+   track the app icon's (~22% of its edge). */
+.guided-setup__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.guided-setup__mark > img,
+.guided-setup__mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.guided-setup__mark--pwragent {
+  background: none;
+  border: 0;
+}
+/* The Blossom file carries OpenAI's own clear space (the mark covers about
+   half its canvas), so it fills the tile. The Grok logomark runs to the
+   edges of its file, so it is inset to the same optical size. Vendor marks
+   are never cropped, recolored, or faded. */
+.guided-setup__mark--grok > img,
+.guided-setup__mark--cli > svg {
+  width: 54%;
+  height: 54%;
+}
+.guided-setup__codex-avatar {
+  width: 26px;
+  height: 26px;
+}
+.guided-setup__codex-node.is-compact .guided-setup__codex-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+.guided-setup__codex-label {
+  font: 600 11px/1.2 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+}
+.guided-setup__codex-meta {
+  font: 500 9px/1.2 var(--font-mono);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.guided-setup__codex-link {
+  font: 600 16px/1 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}.guided-setup__codex-link--small {
+  font-size: 13px;
+}
+.guided-setup__codex-link--dashed {
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+/* Multiple variant: 3 mapped pairs stacked vertically + a faded
+   "Codex default — untouched" dashed footer that makes the data-leak
+   guarantee visible. Slightly taller than the other Codex diagrams
+   (260px vs 200px) so all three pairs plus the footer fit without
+   crowding. */
+.guided-setup__codex--multiple {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  height: 260px;
+  padding: 8px;
+  gap: 8px;
+}
+.guided-setup__codex-multi-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.guided-setup__codex-multi-pair {
+  display: grid;
+  grid-template-columns: 1fr 14px 1fr;
+  align-items: center;
+  gap: 4px;
+}
+.guided-setup__codex-node.is-tight {
+  padding: 4px 6px;
+  gap: 6px;
+  max-width: none;
+  min-width: 0;
+}
+.guided-setup__codex-node.is-tight .guided-setup__codex-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+.guided-setup__codex-node.is-tight .guided-setup__codex-label {
+  font-size: 10px;
+}
+.guided-setup__codex-node.is-tight .guided-setup__codex-meta {
+  font-size: 8px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.guided-setup__codex-node-text {
+  min-width: 0;
+}
+/* Fade the words, not the node: a node-level opacity would also fade the
+   Codex mark, and OpenAI's guidelines forbid altering it. */
+.guided-setup__codex-node.is-muted {
+  background: transparent;
+}
+.guided-setup__codex-node.is-muted .guided-setup__codex-node-text {
+  opacity: 0.7;
+}
+.guided-setup__codex-node.is-muted .guided-setup__codex-label,
+.guided-setup__codex-node.is-muted .guided-setup__codex-meta {
+  color: var(--text-muted);
+}
+.guided-setup__codex-node.is-dashed {
+  border-style: dashed;
+  border-color: var(--border-subtle);
+}
+.guided-setup__codex-multi-default {
+  display: grid;
+  grid-template-columns: auto 1fr 14px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.guided-setup__codex-multi-default-label {
+  font: 600 8px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Safety preamble */
+.guided-setup__safety {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.guided-setup__safety-icon {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  color: var(--accent);
+  margin-bottom: 4px;
+}.guided-setup__safety-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.guided-setup__safety-list li {
+  position: relative;
+  padding-left: 22px;
+  font: 400 14px/1.55 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__safety-list li::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.guided-setup__safety-list li strong {
+  color: var(--text-primary);
+}
+.guided-setup__safety-ack {
+  position: relative;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  cursor: pointer;
+}
+/* One-shot attention ring replayed when the operator clicks the
+   locked "Continue with messaging" button before ticking the box.
+   Snaps to full opacity (the flash) then eases away to nothing over
+   5s, leaving an inert opacity:0 overlay until the next replay. */
+.guided-setup__safety-ack-flash {
+  position: absolute;
+  inset: -3px;
+  border-radius: 8px;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 14px 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 0;
+  animation: guidedSetupAckFlash 5s ease-out forwards;
+}
+@keyframes guidedSetupAckFlash {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Hold a steady ring for the same window, then drop it — no fade
+     motion, just a non-animated appear/disappear. */
+  .guided-setup__safety-ack-flash {
+    animation: guidedSetupAckFlashReduced 5s steps(1, end) forwards;
+  }
+  @keyframes guidedSetupAckFlashReduced {
+    0% {
+      opacity: 1;
+    }
+    99% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+}
+.guided-setup__safety-ack.is-checked {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.guided-setup__safety-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid var(--text-muted);
+  background: var(--bg-input);
+  margin-top: 2px;
+  position: relative;
+  flex-shrink: 0;
+}
+.guided-setup__safety-check.is-on {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+}
+.guided-setup__safety-check.is-on::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid var(--button-text);
+  border-bottom: 2px solid var(--button-text);
+  transform: rotate(45deg);
+}
+.guided-setup__safety-ack-text {
+  font: 500 13px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__safety-ack-text strong {
+  color: var(--text-primary);
+}
+.guided-setup__safety-fork-hint {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  width: 100%;
+  text-align: center;
+  margin: 4px 0 0 0;
+}
+
+/* Provider table */
+.guided-setup__provider-table {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-panel-elevated);
+}
+.guided-setup__provider-row {
+  display: grid;
+  grid-template-columns: 36px 200px 1fr 130px 130px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.guided-setup__provider-row:last-child {
+  border-bottom: none;
+}
+.guided-setup__provider-row.is-head {
+  background: var(--bg-panel);
+  font: 600 10px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: default;
+}
+.guided-setup__provider-row.is-checked {
+  background: var(--bg-row-active);
+}
+.guided-setup__provider-check-cell {
+  display: inline-flex;
+  align-items: center;
+}
+.guided-setup__provider-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid var(--text-muted);
+  background: var(--bg-input);
+  position: relative;
+  display: inline-block;
+}
+.guided-setup__provider-check.is-on {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+}
+.guided-setup__provider-check.is-on::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid var(--button-text);
+  border-bottom: 2px solid var(--button-text);
+  transform: rotate(45deg);
+}
+.guided-setup__provider-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 650 14px/1.2 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+}
+.guided-setup__provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.guided-setup__provider-rec {
+  font: 600 9px/1 var(--font-sans, sans-serif);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  padding: 3px 5px;
+}
+.guided-setup__provider-notes {
+  font: 400 12px/1.45 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__provider-meta {
+  font: 500 12px/1 var(--font-mono);
+  color: var(--text-muted);
+}
+.guided-setup__provider-risk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 11px/1 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__provider-risk-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.guided-setup__provider-risk--low .guided-setup__provider-risk-dot {
+  background: var(--status-ok);
+}
+.guided-setup__provider-risk--med .guided-setup__provider-risk-dot {
+  background: var(--status-warning);
+}
+.guided-setup__provider-risk--high .guided-setup__provider-risk-dot {
+  background: var(--status-error);
+}
+
+/* Done screen */
+.guided-setup__done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 22px 18px;
+  /* Summary screen — center column over the full 1120px frame so
+     the check icon + title + dl stay visually anchored. */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+.guided-setup__done-check {
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.guided-setup__done-summary {
+  margin: 6px 0 0;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px 18px;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.guided-setup__done-summary > div {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  align-items: baseline;
+  gap: 14px;
+}
+.guided-setup__done-summary dt {
+  font: 600 11px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+.guided-setup__done-summary dd {
+  font: 600 13px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.guided-setup__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==============================================}
+
+   ONBOARDING WIZARD — Step 2b: Name codex profiles
+   ============================================================ */
+.guided-setup__profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 520px;
+  margin: 0 auto;
+}
+.guided-setup__profile-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+.guided-setup__profile-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 12px/1 var(--font-sans, sans-serif);
+}
+.guided-setup__profile-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 9px 12px;
+  font: 500 13px/1 var(--font-mono);
+  color: var(--text-primary);
+  width: 100%;
+}
+.guided-setup__profile-input:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.guided-setup__profile-input.is-invalid {
+  border-color: var(--status-error);
+}
+.guided-setup__profile-input[readonly] {
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+.guided-setup__profile-add {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+/* Rows with inline login controls — wider layout, expand to fit
+   per-row Log in / Copy URL / Check status buttons next to the name
+   input, plus a second row underneath for status text (email +
+   plan or error detail). */
+.guided-setup__profile-row--has-login {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  align-items: stretch;
+}
+.guided-setup__profile-row--has-login.is-ok {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.guided-setup__profile-row--has-login.is-error {
+  border-color: var(--status-error);
+}
+.guided-setup__profile-row-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.guided-setup__profile-row-top .guided-setup__profile-input {
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+.guided-setup__profile-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.guided-setup__profile-row-status--ok {
+  display: inline-flex;
+  align-items: center;
+  font: 600 13px/1 var(--font-sans, sans-serif);
+  color: var(--accent);
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+.guided-setup__profile-row-detail {
+  font: 400 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  padding-left: 42px;
+}
+.guided-setup__profile-row-detail--ok {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.guided-setup__profile-row-detail--error {
+  color: var(--status-error);
+}
+
+/* "I'll log in later" deferral link — intentionally low-affordance,
+   sits between the spacer and the hint so the operator's eye still
+   goes to the disabled Continue button first. */
+.guided-setup__btn--microlink {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font: 400 11px/1.2 var(--font-sans, sans-serif);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.guided-setup__btn--microlink:hover {
+  color: var(--text-secondary);
+}
+
+/* ==============================================}
+
+   ONBOARDING WIZARD — Step 3c: Per-provider inline setup
+   ============================================================ */
+.guided-setup__provider-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}.guided-setup__provider-setup-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  padding: 3px;
+  vertical-align: -7px;
+  margin-right: 10px;
+}
+.guided-setup__provider-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.guided-setup__notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--warning-surface, var(--bg-panel-elevated));
+  color: var(--text-secondary);
+  font: 500 12px/1.45 var(--font-sans, sans-serif);
+}
+.guided-setup__advanced {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.guided-setup__advanced > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font: 650 12px/1.4 var(--font-sans, sans-serif);
+}
+.guided-setup__advanced[open] > summary {
+  margin-bottom: 10px;
+}
+.guided-setup__field {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.guided-setup__field-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.guided-setup__field-label {
+  font: 650 13px/1.2 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  flex: 1;
+}
+.guided-setup__field-status {
+  display: inline-flex;
+}
+.guided-setup__field-pill {
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 4px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.guided-setup__field-pill.is-ok {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+.guided-setup__field-pill.is-warn {
+  color: var(--status-warning-text);
+  background: var(--warning-surface);
+  border-color: var(--border-strong);
+}
+.guided-setup__field-sub {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__field-error {
+  font: 600 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--danger-text);
+}
+.guided-setup__field-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.guided-setup__input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font: 500 12px/1.2 var(--font-mono);
+  color: var(--text-primary);
+  min-width: 0;
+}
+.guided-setup__input:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.guided-setup__provider-identity {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font: 500 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.guided-setup__provider-identity-text {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.guided-setup__provider-identity-pill {
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 4px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.guided-setup__provider-identity-pill.is-ok {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+.guided-setup__provider-identity-pill.is-err {
+  color: var(--danger-text);
+  background: var(--danger-surface, var(--bg-input));
+  border-color: var(--border-strong);
+}
+.guided-setup__provider-identity-account {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.guided-setup__provider-identity-detail {
+  color: var(--text-muted);
+}
+
+.guided-setup__segmented {
+  display: inline-flex;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 3px;
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+.guided-setup__segmented-btn {
+  font: 600 11px/1 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  padding: 7px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.guided-setup__segmented-btn.is-active {
+  background: var(--bg-row-active);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.guided-setup__segmented-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.guided-setup__segmented-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+/* Pairing block — sits below the field list inside a provider step */
+.guided-setup__pairing {
+  background: var(--bg-panel);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.guided-setup__pairing-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.guided-setup__pairing-token {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.guided-setup__pairing-token code {
+  flex: 1;
+  font: 700 14px/1.3 var(--font-mono);
+  color: var(--accent-bright);
+  letter-spacing: 0.08em;
+  word-break: break-all;
+}
+.guided-setup__pairing-warning {
+  margin: 8px 0 4px 0;
+  padding: 8px 10px;
+  background: var(--warning-surface, var(--bg-input));
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+}
+.guided-setup__pairing-warning strong {
+  color: var(--text-primary);
+}
+.guided-setup__pairing-warning em {
+  color: var(--status-warning-text);
+  font-style: normal;
+  font-weight: 600;
+}
+.guided-setup__pairing-warning-list {
+  margin: 0 0 4px 0;
+  padding-left: 20px;
+  font: 400 12px/1.55 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.guided-setup__pairing-warning-list strong {
+  color: var(--text-primary);
+}
+.guided-setup__pairing-warning-list code {
+  font: 600 11px/1.3 var(--font-mono);
+  color: var(--accent-bright);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.guided-setup__pairing-approve {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: 8px;
+}
+.guided-setup__pairing-approve-text {
+  flex: 1;
+  font: 500 13px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+}
+.guided-setup__pairing-approve-text strong {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.guided-setup__paired-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.guided-setup__paired-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+.guided-setup__paired-scope {
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 4px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+.guided-setup__paired-actor {
+  flex: 1;
+  font: 600 13px/1.3 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* ==============================================}
+
+   ONBOARDING WIZARD — AI provider requirements
+   Pre-rail prerequisite check shown before Welcome. Uses the
+   --narrow width (same as Welcome / Done). Provider tabs keep four
+   CLI setup paths compact without stacking four full cards.
+   ============================================================ */
+.guided-setup__prereqs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* Constrain the provider panel so it doesn't stretch across the
+     full 1120px canvas and feel like wasted horizontal space. */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+.guided-setup__backend-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.guided-setup__backend-tab {
+  appearance: none;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font: 600 12px/1.2 var(--font-sans, sans-serif);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.guided-setup__backend-tab:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.guided-setup__backend-tab.is-active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.guided-setup__backend-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.guided-setup__backend-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.guided-setup__backend-tab-dot.is-installed {
+  background: var(--status-ok);
+}
+.guided-setup__prereq-card {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.guided-setup__prereq-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.guided-setup__prereq-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.guided-setup__prereq-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  background: var(--bg-panel);
+}
+.guided-setup__prereq-title {
+  font: 650 14px/1.2 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.guided-setup__prereq-sub {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__prereq-status {
+  font: 600 11px/1 var(--font-sans, sans-serif);
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.guided-setup__prereq-status--ok {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+.guided-setup__prereq-status--missing {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+.guided-setup__prereq-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.guided-setup__prereq-detail code {
+  font: 500 12px/1.4 var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 2px 6px;
+  word-break: break-all;
+}
+.guided-setup__prereq-paths summary {
+  font: 500 12px/1.3 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: revert;
+}
+.guided-setup__prereq-paths p {
+  margin: 8px 0 0;
+  font: 400 11px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+.guided-setup__prereq-paths ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.guided-setup__prereq-paths li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  font: 500 11px/1.3 var(--font-mono);
+}
+.guided-setup__prereq-paths-reason {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.guided-setup__prereq-install {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.guided-setup__prereq-install ul {
+  list-style: none;
+  margin: 6px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.guided-setup__prereq-install code {
+  font: 500 11px/1.3 var(--font-mono);
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+.guided-setup__prereq-install-note {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+}
+/* Non-affiliation line under a surface that shows a vendor's name or mark. */
+.guided-setup__trademark-note {
+  margin: 0;
+  font: 400 11px/1.45 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+.guided-setup__choices + .guided-setup__trademark-note {
+  margin-top: 14px;
+}
+.guided-setup__prereq-install a {
+  color: var(--accent);
+  font: 600 11px/1.3 var(--font-sans, sans-serif);
+  text-decoration: none;
+}
+.guided-setup__prereq-install a:hover {
+  text-decoration: underline;
+}
+.guided-setup__prereq-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 30px;
+}
+.guided-setup__prereq-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font: 600 11px/1.3 var(--font-sans, sans-serif);
+}
+.guided-setup__prereq-error {
+  color: var(--danger-text);
+  font: 500 11px/1.35 var(--font-sans, sans-serif);
+}
+/* ------------------------------------------------------------
+   Settings-only pieces
+   ------------------------------------------------------------ */
+
+/* A row label that is not an input: the Codex account being signed in. */
+.guided-setup__profile-input--static {
+  align-items: baseline;
+  display: inline-flex;
+  gap: 8px;
+}
+.guided-setup__profile-input-meta {
+  color: var(--text-muted);
+  font: 400 12px/1.3 var(--font-sans, sans-serif);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A notice that carries its own fix, e.g. Turn on messaging. */
+.guided-setup__notice--action {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+/* The safety gate in front of Settings → Messaging. */
+.guided-setup-gate {
+  padding: 28px 24px 22px;
+}
+.guided-setup-gate__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 18px;
+}
+.guided-setup-gate__actions .guided-setup__field-error {
+  flex: 0 0 100%;
+  text-align: center;
+}
