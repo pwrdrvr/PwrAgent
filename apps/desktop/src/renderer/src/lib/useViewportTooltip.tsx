@@ -108,6 +108,19 @@ export function portalViewportTop(): number {
   return gutterFloor;
 }
 
+/**
+ * The plain tooltip showing in this window, if any.
+ *
+ * Every instance of the hook owns its own state, so two surfaces could each
+ * show one: a rail tab still hovered after a click kept its data-tooltip while
+ * keyboard focus raised a linked directory's rail tooltip beside it. Showing
+ * any plain tooltip hides this one first, so the window never shows two.
+ * Enterable cards (`interactive`) stay out of it: `hover-card-bridge.ts` owns
+ * their lifecycle, and a card's pointer bridge must not be cut short by an
+ * unrelated tooltip.
+ */
+let activePlainTooltip: { current: () => void } | null = null;
+
 export type TooltipPoint = { x: number; y: number };
 
 type TooltipState = {
@@ -311,9 +324,9 @@ export type ViewportTooltip = ReturnType<typeof useViewportTooltip>;
 /**
  * A surface's single tooltip, offered to everything inside it.
  *
- * Separate instances do not know about each other: one control left showing a
- * tooltip on focus is still showing it when a hover raises a second, so two
- * land on screen at once. A surface whose controls are partly its own and
+ * Separate instances share only the window's plain-tooltip slot, so a second
+ * instance closes the first rather than updating it in place. A surface whose
+ * controls are partly its own and
  * partly passed in by a caller (the lightbox pill, which takes extra copy
  * controls as a prop) cannot thread a prop to all of them, so it publishes
  * one here instead.
@@ -473,8 +486,15 @@ export function useViewportTooltip(options: {
     hoverDelayTimerRef.current = null;
   }, []);
 
+  // This instance's identity in `activePlainTooltip`: the ref object is stable
+  // for the hook's life, and its `current` is always the latest `hide`.
+  const hideRef = useRef<() => void>(() => {});
+
   const hide = useCallback((): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
+    if (activePlainTooltip === hideRef) {
+      activePlainTooltip = null;
+    }
     clearHoverDelay();
     setDelayPending(false);
     anchorGenerationRef.current += 1;
@@ -488,6 +508,19 @@ export function useViewportTooltip(options: {
     }
     setState(undefined);
   }, [clearHoverDelay, tooltipId]);
+  hideRef.current = hide;
+
+  /** Take the window's one plain-tooltip slot, hiding whoever held it. */
+  const claimPlainTooltipSlot = useCallback((): void => {
+    if (interactiveRef.current) {
+      return;
+    }
+    const previous = activePlainTooltip;
+    activePlainTooltip = hideRef;
+    if (previous && previous !== hideRef) {
+      previous.current();
+    }
+  }, []);
 
   /**
    * Wait out the motion, then re-baseline the anchor and re-anchor the tooltip
@@ -651,6 +684,7 @@ export function useViewportTooltip(options: {
       setState(undefined);
       return;
     }
+    claimPlainTooltipSlot();
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
     pointerBoundsRef.current = horizontalBounds;
@@ -662,7 +696,7 @@ export function useViewportTooltip(options: {
       targetLeft: rect.left,
       targetRight: rect.left + rect.width,
     });
-  }, [clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
+  }, [claimPlainTooltipSlot, clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
 
   const showAtPointer = useCallback(
     (target: HTMLElement, point: TooltipPoint, content: ReactNode): void => {
@@ -707,6 +741,9 @@ export function useViewportTooltip(options: {
   }, []);
 
   useEffect(() => () => {
+    if (activePlainTooltip === hideRef) {
+      activePlainTooltip = null;
+    }
     anchorGenerationRef.current += 1;
     if (pointerFrameRef.current !== null) {
       window.cancelAnimationFrame(pointerFrameRef.current);
