@@ -16,8 +16,8 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
-  // recovery guard, research, request-pricing, and sub-agent dismissal changes
-  // that followed it.
+  // recovery guard, research, request-pricing, sub-agent dismissal, and
+  // operator-request scope changes that followed it.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
@@ -30,6 +30,12 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.tbl_name !== "research_deliveries"
     && row.tbl_name !== "thread_sub_agent_failure_dismissals"
     && row.name !== "idx_thread_usage_lines_identity"
+    && row.name !== "idx_operator_open_questions_backend"
+    && row.name !== "idx_operator_open_questions_thread"
+    && row.name !== "idx_thread_todos_backend"
+    && row.name !== "idx_thread_todos_thread_backend"
+    && row.name !== "idx_thread_reviews_backend"
+    && row.name !== "idx_thread_reviews_thread_backend"
   ).map(row => row.name === "thread_usage_lines"
     ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
     : row) : rows;

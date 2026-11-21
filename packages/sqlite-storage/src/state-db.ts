@@ -720,6 +720,21 @@ CREATE TABLE IF NOT EXISTS operator_seen_items (
 );
 `;
 
+const OPERATOR_REQUEST_SCOPE_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_operator_open_questions_backend
+  ON operator_async_questions(backend, created_at) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_operator_open_questions_thread
+  ON operator_async_questions(thread_id, backend) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_thread_todos_backend
+  ON thread_todos(backend);
+CREATE INDEX IF NOT EXISTS idx_thread_todos_thread_backend
+  ON thread_todos(thread_id, backend);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_backend
+  ON thread_reviews(backend);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_thread_backend
+  ON thread_reviews(thread_id, backend);
+`;
+
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS messaging_activity_summary (
   platform         TEXT PRIMARY KEY,
@@ -2937,6 +2952,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     // other's table. Both are idempotent.
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
     db.exec(THREAD_REVIEW_SCHEMA);
+    db.exec(OPERATOR_REQUEST_SCHEMA);
+    db.exec(OPERATOR_REQUEST_SCOPE_INDEXES);
     ensureThreadReviewFindingStatusNames(db);
     db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
     db.exec(RESEARCH_SCHEMA);
