@@ -5688,8 +5688,8 @@ textarea,
    the scrollbar's column alone.
 
    The shift hangs on the class, not on the property's value. The dock
-   takes the class off to measure the list with its headers in their own
-   places, on every scroll frame. Changing an inherited custom property
+   takes the class off when placement needs the unshifted sticky boxes.
+   Changing an inherited custom property
    there restyles every row under the region (38ms a frame at 360 rows);
    a class with these four descendant selectors restyles the headers. */
 .selected-thread-dock-band {

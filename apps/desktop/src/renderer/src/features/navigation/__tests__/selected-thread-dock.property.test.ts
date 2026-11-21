@@ -130,6 +130,7 @@ describe("selectedThreadDockPlacement", () => {
  */
 describe("stuckBandTop", () => {
   const HEADER = 24;
+  const read = (extent: DockExtent): DockExtent => extent;
   // `.directory-row` pads 2px above its header.
   const PAD = 2;
   const project = fc.integer({ min: 0, max: 300 });
@@ -153,7 +154,7 @@ describe("stuckBandTop", () => {
             const top = Math.min(Math.max(natural, listTop), lowest);
             return { top, bottom: top + HEADER };
           });
-          expect(stuckBandTop(listTop, headers, [])).toBe(listTop + HEADER);
+          expect(stuckBandTop(listTop, headers, [], read)).toBe(listTop + HEADER);
         }
       },
     ));
@@ -165,7 +166,7 @@ describe("stuckBandTop", () => {
       fc.integer({ min: 5, max: 400 }),
       (listTop, below) => {
         const header = { top: listTop + below, bottom: listTop + below + HEADER };
-        expect(stuckBandTop(listTop, [header], [])).toBe(listTop);
+        expect(stuckBandTop(listTop, [header], [], read)).toBe(listTop);
       },
     ));
   });
@@ -182,8 +183,51 @@ describe("stuckBandTop", () => {
         const divider = { top: dividerTop, bottom: dividerTop + dividerHeight };
         // A divider scrolled out above the list is never the one stuck.
         const gone = { top: listTop - 80, bottom: listTop - 80 + dividerHeight };
-        expect(stuckBandTop(listTop, [header], [gone, divider]))
+        expect(stuckBandTop(listTop, [header], [gone, divider], read))
           .toBe(stuck ? listTop + HEADER + dividerHeight : listTop + HEADER);
+      },
+    ));
+  });
+
+  it("agrees with a linear scan of mixed-size projects using logarithmic probes", () => {
+    const section = fc.record({
+      header: fc.integer({ min: 24, max: 52 }),
+      body: fc.integer({ min: 0, max: 400 }),
+      hasDivider: fc.boolean(),
+    });
+    fc.assert(fc.property(
+      fc.array(section, { minLength: 24, maxLength: 48 }),
+      fc.integer({ min: 0, max: 20_000 }),
+      (sections, offset) => {
+        const listTop = 51.5;
+        let cursor = listTop - offset;
+        const headers: DockExtent[] = [];
+        const dividers: DockExtent[] = [];
+        for (const { header, body, hasDivider } of sections) {
+          const start = cursor + PAD;
+          const end = start + header + body + (hasDivider ? 30 : 0);
+          const headerTop = Math.min(Math.max(start, listTop), end - header);
+          headers.push({ top: headerTop, bottom: headerTop + header });
+          if (hasDivider) {
+            const top = Math.min(Math.max(start + header + 4, listTop + header), end - 26);
+            dividers.push({ top, bottom: top + 24 });
+          }
+          cursor = end;
+        }
+        const overlaps = (edge: number) => (extent: DockExtent) =>
+          extent.top <= edge + 4 && extent.bottom > edge;
+        const firstHeader = headers.find(overlaps(listTop));
+        const belowHeader = listTop + (firstHeader ? firstHeader.bottom - firstHeader.top : 0);
+        const expected = dividers.find(overlaps(belowHeader))?.bottom ?? belowHeader;
+        let probes = 0;
+        const measured = stuckBandTop(listTop, headers, dividers, (extent) => {
+          probes++;
+          return extent;
+        });
+        expect(measured).toBe(expected);
+        expect(probes).toBeLessThanOrEqual(
+          Math.ceil(Math.log2(headers.length + 1)) + Math.ceil(Math.log2(dividers.length + 1)),
+        );
       },
     ));
   });
