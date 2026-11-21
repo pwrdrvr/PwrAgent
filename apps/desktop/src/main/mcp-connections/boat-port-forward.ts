@@ -103,7 +103,10 @@ export function readBoatTunnelTarget(answer: Record<string, unknown>): BoatTunne
  * escape. Arguments that are not `-o` values (`-F`, `-i`) reach ssh as given.
  */
 export function sshOptionPath(file: string, platform: NodeJS.Platform = process.platform): string {
-  return platform === "win32" ? file.replaceAll("\\", "/") : file;
+  if (platform === "win32") return file.replaceAll("\\", "/");
+  // Inside the quotes this is wrapped in, a backslash or quote of the path's
+  // own must be escaped to reach ssh as itself.
+  return file.replace(/["\\]/g, "\\$&");
 }
 
 /** The whole `ssh` command line for one tunnel. */

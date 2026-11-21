@@ -312,6 +312,23 @@ describe("Boat port forwards", () => {
   });
 });
 
+describe("Boat tunnel option paths", () => {
+  it("hands POSIX ssh a path holding quotes, backslashes or spaces as itself", () => {
+    const part = fc.stringMatching(/^[A-Za-z0-9 ._"\\'-]{1,10}$/);
+    fc.assert(fc.property(fc.array(part, { minLength: 1, maxLength: 4 }), (parts) => {
+      const knownHostsPath = path.posix.join("/tmp", ...parts, "known_hosts");
+      const args = boatTunnelArgs({
+        sandboxId: "bx_1", remotePort: 3000, localPort: 40_000, platform: "linux",
+        target: { host: "203.0.113.10", port: 22, user: "user", hostKey: FAKE_HOST_KEY },
+        privateKeyPath: path.posix.join("/tmp", "key"), knownHostsPath,
+      });
+      for (const option of ["UserKnownHostsFile", "GlobalKnownHostsFile"]) {
+        expect(opensshOptionValue(optionValue(args, option)!)).toEqual([knownHostsPath]);
+      }
+    }), { numRuns: 500 });
+  });
+});
+
 /**
  * How OpenSSH reads an `-o` value: `argv_split` in its misc.c (9.x), which
  * Win32-OpenSSH shares. Whitespace splits unless quoted; a backslash escapes

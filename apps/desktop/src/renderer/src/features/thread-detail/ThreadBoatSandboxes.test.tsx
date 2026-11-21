@@ -105,6 +105,8 @@ describe("ThreadBoatSandboxes", () => {
               { ...STOPPED, stopsAt: now + 30 * 60_000 },
               // A passed deadline may have moved (an agent prompt is running).
               { id: "bx_3", name: "late-box", state: "running", stopsAt: now - 1_000 },
+              // Stopping: the deadline Boat still reports no longer applies.
+              { id: "bx_4", name: "going-box", state: "stopping", stopsAt: now + 30 * 60_000 },
             ],
           }),
         }}
@@ -115,6 +117,29 @@ describe("ThreadBoatSandboxes", () => {
     expect(await screen.findByText("running · small · $0.42 so far · stops in 42 min")).toBeTruthy();
     expect(screen.getByText("archived · under $0.01 so far")).toBeTruthy();
     expect(screen.getByText("running")).toBeTruthy();
+    expect(screen.getByText("stopping")).toBeTruthy();
+  });
+
+  it("measures a fresh read against the clock now, not at the last tick", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = Date.UTC(2026, 10, 21, 12);
+      vi.setSystemTime(start);
+      let stopsAt = start + 60 * 60_000;
+      const list = async () => ({ sandboxes: [{ ...RUNNING, stopsAt }] });
+      const view = (token: number) => (
+        <ThreadBoatSandboxes backend="codex" desktopApi={{ listThreadBoatSandboxes: list }} threadId="t-clock" token={token} />
+      );
+      const { rerender } = render(view(0));
+      expect(await screen.findByText(/stops in 1 h$/)).toBeTruthy();
+      // 29 s later, before any tick, a new read says 41.9 minutes are left.
+      vi.setSystemTime(start + 29_000);
+      stopsAt = start + 29_000 + 41.9 * 60_000;
+      rerender(view(1));
+      expect(await screen.findByText(/stops in 41 min$/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lists a sandbox's open tunnels under it and closes one through the thread", async () => {

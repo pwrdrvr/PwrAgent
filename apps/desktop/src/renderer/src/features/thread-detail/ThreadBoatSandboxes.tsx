@@ -8,6 +8,13 @@ import type { DesktopApi } from "../../lib/desktop-api";
 /** States in which Boat is no longer billing for a running machine. */
 const AT_REST = new Set(["archiving", "archived", "cancelled", "error", "stopped"]);
 
+/** Whether Boat's auto-stop deadline still applies: not stopped, nor on its way. */
+function counting(sandbox: BoatThreadSandbox): boolean {
+  return sandbox.stopsAt !== undefined
+    && sandbox.state !== "stopping"
+    && !(sandbox.state !== undefined && AT_REST.has(sandbox.state));
+}
+
 /**
  * The last list read per thread. Reopening the panel shows it at once and
  * reads again underneath, so the section does not arrive after the rest.
@@ -79,16 +86,17 @@ export function ThreadBoatSandboxes(props: {
   const [error, setError] = useState<string>();
   // Another thread's sandboxes are never shown under this one.
   const sandboxes = read?.key === key ? read.sandboxes : lastRead.get(key);
-  const [now, setNow] = useState(() => Date.now());
-  const counting = sandboxes?.some((sandbox) =>
-    sandbox.stopsAt !== undefined && !(sandbox.state && AT_REST.has(sandbox.state))) ?? false;
+  // Read on every render, so a fresh list is never measured against an old
+  // clock; the tick only asks for a render while a deadline is shown.
+  const [, setTick] = useState(0);
+  const now = Date.now();
+  const anyCounting = sandboxes?.some(counting) ?? false;
 
   useEffect(() => {
-    if (!counting) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), STOPS_IN_TICK_MS);
+    if (!anyCounting) return;
+    const timer = setInterval(() => setTick((tick) => tick + 1), STOPS_IN_TICK_MS);
     return () => clearInterval(timer);
-  }, [counting]);
+  }, [anyCounting]);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,7 +148,7 @@ export function ThreadBoatSandboxes(props: {
           const name = sandbox.name ?? sandbox.id;
           const cost = formatBoatSandboxCost(sandbox.dollars);
           const atRest = sandbox.state !== undefined && AT_REST.has(sandbox.state);
-          const stopsIn = atRest ? undefined : formatBoatSandboxStopsIn(sandbox.stopsAt, now);
+          const stopsIn = counting(sandbox) ? formatBoatSandboxStopsIn(sandbox.stopsAt, now) : undefined;
           const busy = busyId !== undefined;
           return (
             <li key={sandbox.id}>
