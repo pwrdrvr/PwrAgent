@@ -272,3 +272,28 @@ describe("messaging /review on an owner without review/start", () => {
     ));
   });
 });
+
+describe("messaging /review on a peer's thread", () => {
+  /** Rule: every /review form on a peer-bound conversation checks peer scope first. */
+  it("checks peer scope before the picker, a typed target, or a PR review", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(), fc.constantFrom<string[]>([], ["--custom", "Fixture"], ["--pr", "1"]),
+      async (canControlPeer, args) => {
+        const binding = { ...commandBinding, federatedThread: {
+          backend: commandBinding.backend, threadId: commandBinding.threadId,
+          target: { scope: "remote" as const, instanceId: "peer" },
+        } };
+        const f = commandHarness({
+          requirePermission: async () => true,
+          requireRemoteScopeForBinding: async () => { f.trace.push("peer scope"); return canControlPeer; },
+        });
+        const owner = new MessagingCommandHandlers({ ...f.context, store: {
+          findActiveBindingForChannel: async () => { f.trace.push("binding"); return binding; },
+        } });
+        await owner.handleCommand(commandEvent("review", args));
+        const effect = args.length === 0 ? "review-picker" : "review";
+        expect(f.trace).toEqual(canControlPeer ? ["binding", "peer scope", effect] : ["binding", "peer scope"]);
+      },
+    ));
+  });
+});

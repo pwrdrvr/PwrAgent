@@ -1,9 +1,10 @@
 import path from "node:path";
 import { findThreadForBinding } from "./messaging-callback-helpers";
 import { asPlainRecord, federationTargetForBinding } from "./messaging-backend-event-helpers";
-import { CLAUDE_CODE_REVIEW_LEVELS, claudeCodeReviewCommand, claudeCodeReviewRepository, DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, isClaudeCodeReviewLevel, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
+import { CLAUDE_CODE_REVIEW_LEVELS, claudeCodeReviewCommand, claudeCodeReviewRepository, defaultClaudeCodeReviewLevel, isClaudeCodeReviewLevel, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
 import { messagingReviewTargetForMode, resolveMessagingReviewRunMode } from "./messaging-review-claude-code";
 import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import {
   buildReviewBranchOptions,
@@ -78,7 +79,7 @@ export class MessagingReviewWorkflow {
       navigation,
       phase: "summary",
       target,
-      reviewerBackends: await this.listReviewerBackends(),
+      reviewerBackends: await this.listReviewerBackends(federationTargetForBinding(binding)),
       ...(selectedWorkspace
         ? {
             cwd: selectedWorkspace.cwd,
@@ -179,7 +180,10 @@ export class MessagingReviewWorkflow {
 
     const owner = reviewerBackends.find((entry) => entry.backend === params.binding.backend);
     const modeSupported = owner?.capabilities?.reviewRunMode === true;
-    const autoFixSupported = owner?.capabilities?.reviewAutoFix === true;
+    // A peer's review never auto-fixes from messaging (it submits "wait"), so
+    // the picker offers no toggle there rather than one that is ignored.
+    const autoFixSupported = owner?.capabilities?.reviewAutoFix === true
+      && !federationTargetForBinding(params.binding);
     const afterReview = params.afterReview ?? (autoFixSupported ? "auto-fix" : undefined);
     const autoFixUnavailable = !autoFixSupported && afterReview === "auto-fix"
       ? "This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review."
@@ -220,9 +224,10 @@ export class MessagingReviewWorkflow {
     });
     const claudeCodeReview = runMode === "claude-code-review";
     const target = messagingReviewTargetForMode(requestedTarget, runMode, defaultBaseBranch);
+    // Claude Code starts at the thread's own effort, as the review submits it.
     const codeReviewLevel = isClaudeCodeReviewLevel(params.codeReviewLevel)
       ? params.codeReviewLevel
-      : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+      : defaultClaudeCodeReviewLevel(turnSettingsForBinding(params.binding, params.navigation).reasoningEffort);
     const attachedPullRequests = thread?.prs ?? [];
     let codeReviewCommand: string | undefined;
     let codeReviewProblem: string | undefined;
@@ -1179,7 +1184,7 @@ export class MessagingReviewWorkflow {
         : {
             reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
           }),
-      reviewerBackends: await this.listReviewerBackends(),
+      reviewerBackends: await this.listReviewerBackends(federationTargetForBinding(binding)),
       modelMenuValue: review.modelMenuValue,
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
@@ -1266,8 +1271,8 @@ export class MessagingReviewWorkflow {
       cwd: pendingIntent.intent.review.cwd,
       runMode: pendingIntent.intent.review.runMode,
       afterReview: pendingIntent.intent.review.afterReview,
-      ...(claudeCodeReview
-        ? { reasoningEffort: pendingIntent.intent.review.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+      ...(claudeCodeReview && pendingIntent.intent.review.codeReviewLevel
+        ? { reasoningEffort: pendingIntent.intent.review.codeReviewLevel }
         : {}),
       reviewerLabel: reviewerBackends?.find(
         (candidate) => candidate.backend === reviewerBackend,
@@ -1308,9 +1313,8 @@ export class MessagingReviewWorkflow {
     }
 
     try {
-      const federationTarget = pullRequestCommand || requestedClaudeCodeReview
-        ? federationTargetForBinding(params.binding)
-        : undefined;
+      // A peer's thread is reviewed on the peer, whatever the target or mode.
+      const federationTarget = federationTargetForBinding(params.binding);
       const owner = await this.context.host().getBackendSummary(params.binding.backend, federationTarget);
       // A managed review skipped the review/start check above, not this one.
       if (managedReview && !owner?.available) {
@@ -1357,10 +1361,11 @@ export class MessagingReviewWorkflow {
       if (claudeCodeReview && !messagingSource) {
         throw new Error("Claude Code review needs a messaging connection that can preserve the requesting contact's permissions.");
       }
-      // The picker's effort, or high; never the thread's own model effort.
+      // The picker's effort, else the thread's own effort when /code-review
+      // takes it, else high.
       const codeReviewLevel = isClaudeCodeReviewLevel(params.reasoningEffort)
         ? params.reasoningEffort
-        : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+        : defaultClaudeCodeReviewLevel(settings.reasoningEffort);
       const reviewer = {
         backend: params.reviewBackend ?? params.binding.backend,
         ...(params.reviewerLabel ? { label: params.reviewerLabel } : {}),
@@ -1488,12 +1493,17 @@ export class MessagingReviewWorkflow {
    * nothing advertises `reviewRunner`, so an instance that predates reviewer
    * overrides never offers a choice it cannot honor.
    */
-  async listReviewerBackends(): Promise<
+  /**
+   * The providers that can review the bound thread, read from the instance
+   * that owns it: a peer's thread is reviewed by the peer's providers.
+   */
+  async listReviewerBackends(federationTarget?: FederationTarget): Promise<
     NonNullable<MessagingReviewIntent["review"]["reviewerBackends"]>
   > {
     try {
       const response = await this.context.backend.listBackends?.({
         includeUnavailable: false,
+        ...(federationTarget ? { federationTarget } : {}),
       });
       return (response?.backends ?? [])
         .filter((candidate) =>
@@ -1557,7 +1567,10 @@ export class MessagingReviewWorkflow {
       return false;
     }
     try {
-      const summary = await this.context.host().getBackendSummary(binding.backend);
+      const summary = await this.context.host().getBackendSummary(
+        binding.backend,
+        federationTargetForBinding(binding),
+      );
       return Boolean(summary?.available && summary.capabilities.startReview);
     } catch (error) {
       this.context.logger.debug?.("messaging review capability lookup failed", {

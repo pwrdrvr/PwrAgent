@@ -36,7 +36,7 @@ import type {
   ThreadSource as CodexThreadSource,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
-  DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+  defaultClaudeCodeReviewLevel,
   prefersClaudeCodeReview,
   type NamedReviewPullRequest,
 } from "../../shared/review-command";
@@ -435,7 +435,11 @@ export class ManagedReviewService {
       backend: params.backend, threadId: params.threadId,
     });
     const command = await prepareClaudeCodeReview({
-      request: params,
+      // A request without an effort reviews at the thread's own effort, so a
+      // medium thread is not reviewed at high.
+      request: params.reasoningEffort
+        ? params
+        : { ...params, reasoningEffort: defaultClaudeCodeReviewLevel(overlay?.reasoningEffort) },
       threadCwd: await this.host().resolveThreadEnvironmentCwd(params.backend, params.threadId, overlay),
       prs: overlay?.prs ?? [],
     });
@@ -2096,7 +2100,6 @@ export class ManagedReviewService {
           target,
           runMode,
           delivery: "inline",
-          ...(runMode === "claude-code-review" ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL } : {}),
           ...(origin?.causalMessagingSource ? { messagingSource: origin.causalMessagingSource } : {}),
           ...(reviewBackendDiffers ? { reviewBackend } : {}),
           ...(cwd ? { cwd } : {}),

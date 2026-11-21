@@ -447,14 +447,16 @@ export class MessagingCommandHandlers {
       await this.presentThreadCommandNeedsBinding(event);
       return;
     }
+    // A peer's thread is reviewed on the peer, and its picker shows the
+    // peer's workspaces, so every form needs peer scope first.
+    if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
+      event, binding, "review:remote-instance",
+    )) {
+      return;
+    }
     const argument = event.args.join(" ").trim();
     const pullRequestFlag = /^--pr(?:\s+|$)/.exec(argument);
     if (pullRequestFlag) {
-      if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
-        event, binding, "review:remote-instance",
-      )) {
-        return;
-      }
       await this.context.host().submitMessagingReview({
         binding,
         event,

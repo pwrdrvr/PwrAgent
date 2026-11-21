@@ -146,6 +146,37 @@ describe("messaging /review on a Claude thread", () => {
   });
 
   /**
+   * Rule: from messaging, a Claude Code review starts at the thread's own
+   * effort when /code-review takes it, in the picker and for a bare
+   * /code-review; any other effort falls back to high.
+   */
+  it("reviews at the thread's own effort", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("low", "medium", "high", "xhigh", "max", "ultra", undefined),
+      fc.boolean(),
+      async (threadEffort, bare) => {
+        const { fixture, close } = await claudeFixture();
+        fixture.thread.reasoningEffort = threadEffort;
+        const expected = threadEffort && threadEffort !== "ultra" ? threadEffort : "high";
+        try {
+          if (bare) {
+            await fixture.controller.handleInboundEvent({
+              ...fixture.event(), kind: "command", command: "code-review", args: [], rawText: "/code-review",
+            });
+          } else {
+            await fixture.command();
+            expect(fixture.review().review.codeReviewLevel).toBe(expected);
+            await fixture.click("review:summary:start");
+          }
+          expect(fixture.requests).toEqual([expect.objectContaining({ reasoningEffort: expected })]);
+        } finally {
+          await close();
+        }
+      },
+    ), { numRuns: 14 });
+  });
+
+  /**
    * Rule: a target the command cannot carry (a branch that reads as a PR
    * number) is refused at Start, with the picker kept, and nothing is sent.
    */

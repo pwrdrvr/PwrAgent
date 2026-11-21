@@ -291,7 +291,7 @@ import {
   claudeCodeReviewCommand,
   claudeCodeReviewRepository,
   type ClaudeCodeReviewLevel,
-  DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+  defaultClaudeCodeReviewLevel,
   formatReviewCommand,
   isBareClaudeCodeReviewCommand,
   parseReviewCommand,
@@ -6421,8 +6421,10 @@ function useComposerController(props: ComposerProps) {
    */
   const reviewPullRequestsTogetherRuns = (reviewerRunsSubAgent: boolean): boolean =>
     claudeCodeReviewMode || reviewerRunsSubAgent;
+  // A Claude Code review starts at the thread's own effort.
+  const defaultCodeReviewLevel = defaultClaudeCodeReviewLevel(props.thread?.reasoningEffort);
   const claudeCodeReviewLevel =
-    reviewConfig?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+    reviewConfig?.codeReviewLevel ?? defaultCodeReviewLevel;
   // A bare pull request number names the checkout's own repository's, and
   // only when it has exactly one remote repository, as the owner decides.
   const reviewCodeReviewRepository = claudeCodeReviewRepository(
@@ -8072,7 +8074,7 @@ function useComposerController(props: ComposerProps) {
       runMode: runModeDecision.explicitRunModeSupported
         ? runModeDecision.runMode : undefined,
       ...(runModeDecision.runMode === "claude-code-review"
-        ? { codeReviewLevel: config?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+        ? { codeReviewLevel: config?.codeReviewLevel ?? defaultCodeReviewLevel }
         : {}),
       // An owner that predates auto-fix gets no field, so it is never told a
       // choice it would ignore.
@@ -9061,7 +9063,7 @@ function useComposerController(props: ComposerProps) {
         ? claudeCodeReviewCommands({
             target: reviewCommand.target,
             separately: false,
-            level: reviewCommand.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+            level: reviewCommand.codeReviewLevel ?? defaultCodeReviewLevel,
             repository: reviewCodeReviewRepository,
           }).commands[0] ?? formatReviewCommand(reviewCommand.target)
         : formatReviewCommand(reviewCommand.target);

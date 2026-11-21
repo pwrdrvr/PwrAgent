@@ -8922,7 +8922,7 @@ describe("Composer", () => {
    * not review as Claude Code, it is Claude Code's own command and is sent.
    */
   describe("bare /code-review", () => {
-    const codeReviewComposer = (codeReviewCapable: boolean) => {
+    const codeReviewComposer = (codeReviewCapable: boolean, reasoningEffort?: string) => {
       const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: "thread-1", turnId: "turn-1" }));
       const claude = backendSummary("claude");
       claude.capabilities = { ...claude.capabilities, reviewRunMode: true, reviewAutoFix: true,
@@ -8938,6 +8938,7 @@ describe("Composer", () => {
         thread={{
           id: "thread-1", title: "Code review", titleSource: "explicit", source: "claude",
           executionMode: "default", inbox: { inInbox: false }, projectKey: "/repo/project",
+          ...(reasoningEffort ? { reasoningEffort } : {}),
           linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
         }}
       />);
@@ -8957,6 +8958,20 @@ describe("Composer", () => {
       expect(screen.getByText(/^\/code-review high$/)).toBeInTheDocument();
       expect(startTurn).not.toHaveBeenCalled();
     });
+
+    /**
+     * Rule: the review starts at the thread's own effort when /code-review
+     * takes it, so a medium thread is not reviewed at high; an effort the
+     * command has no level for falls back to high.
+     */
+    it.each([["medium", "medium"], ["max", "max"], ["ultra", "high"]])(
+      "starts a %s thread's review at %s",
+      async (threadEffort, level) => {
+        codeReviewComposer(true, threadEffort);
+        await send("/code-review");
+        expect(screen.getByText(`/code-review ${level}`)).toBeInTheDocument();
+      },
+    );
 
     it("opens the review panel when /code-review is picked from the command menu", async () => {
       const { startTurn } = codeReviewComposer(true);

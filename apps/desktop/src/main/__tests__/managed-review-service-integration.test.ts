@@ -676,9 +676,10 @@ describe("DesktopBackendRegistry", () => {
     const store = new ClaudeSessionStore(path.join(root, "sessions"));
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const overlayStore = createOverlayStoreMock();
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       pdfToolMcpServer: null,
       claudeBackendOptions: {
         store,
@@ -716,6 +717,17 @@ describe("DesktopBackendRegistry", () => {
       expect(JSON.stringify((await registry.readThread({ backend: "claude", threadId })).replay))
         .toContain("/code-review high");
       finish();
+      await vi.waitFor(() => expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined());
+
+      // Rule: a review sent without an effort runs at the thread's own effort,
+      // so a medium thread is not reviewed at high.
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "claude", threadId });
+      overlay!.reasoningEffort = "medium";
+      await registry.startReview({
+        backend: "claude", threadId, runMode: "claude-code-review", target: { type: "uncommittedChanges" },
+      });
+      expect(JSON.stringify((await registry.readThread({ backend: "claude", threadId })).replay))
+        .toContain("/code-review medium");
     } finally {
       finish();
       await registry.close();

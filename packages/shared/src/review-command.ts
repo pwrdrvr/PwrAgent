@@ -411,6 +411,16 @@ export function isBareClaudeCodeReviewCommand(input: string): boolean {
   return /^\/code-review$/i.test(input.trim());
 }
 
+/**
+ * The effort a Claude Code review starts at: the thread's own effort when
+ * `/code-review` takes it, so a medium thread reviews at medium. A thread on
+ * its model's default effort, or an effort the command has no level for,
+ * reviews at high.
+ */
+export function defaultClaudeCodeReviewLevel(threadEffort: string | undefined): ClaudeCodeReviewLevel {
+  return isClaudeCodeReviewLevel(threadEffort) ? threadEffort : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+}
+
 export function isClaudeCodeReviewLevel(value: unknown): value is ClaudeCodeReviewLevel {
   return typeof value === "string"
     && (CLAUDE_CODE_REVIEW_LEVELS as readonly string[]).includes(value);
