@@ -1,4 +1,7 @@
-import { SCHEDULED_ACTION_PROJECTION_SCHEMA } from "./scheduled-thread-action-projection-schema";
+import {
+  hasScheduledActionProjectionSchema,
+  SCHEDULED_ACTION_PROJECTION_SCHEMA,
+} from "./scheduled-thread-action-projection-schema";
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
@@ -2258,11 +2261,13 @@ export class StateDb {
           }
         }).immediate();
       }
-      if ((db.pragma("user_version", { simple: true }) as number) < 86) {
+      // A branch may already have claimed this version. Repair absent
+      // projection objects and rebuild their totals together under the lock.
+      if ((db.pragma("user_version", { simple: true }) as number) < 86
+        || !hasScheduledActionProjectionSchema(db)) {
         db.transaction(() => {
-          if ((db.pragma("user_version", { simple: true }) as number) >= 86) return;
-          db.exec(SCHEDULED_ACTION_PROJECTION_SCHEMA);
-          db.pragma("user_version = 86");
+          if (!hasScheduledActionProjectionSchema(db)) db.exec(SCHEDULED_ACTION_PROJECTION_SCHEMA);
+          if ((db.pragma("user_version", { simple: true }) as number) < 86) db.pragma("user_version = 86");
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
