@@ -205,18 +205,23 @@ describe("messaging /code-review", () => {
   it("starts a tracked Claude Code review only for a bare command on a supporting thread", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom<string[]>([], ["high"], ["12"], ["--fix"]),
-      fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
-      async (args, supported, remote, canReply, canControlPeer) => {
-        const binding = remote ? { ...commandBinding, federatedThread: {
-          backend: commandBinding.backend, threadId: commandBinding.threadId,
-          target: { scope: "remote" as const, instanceId: "peer" },
-        } } : commandBinding;
+      fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+      async (args, supported, remote, canReply, canControlPeer, addressed) => {
+        const binding = {
+          ...commandBinding,
+          targetKind: "agent_thread" as const,
+          ...(remote ? { federatedThread: {
+            backend: commandBinding.backend, threadId: commandBinding.threadId,
+            target: { scope: "remote" as const, instanceId: "peer" },
+          } } : {}),
+        };
         const submissions: unknown[] = [];
         const f = commandHarness({
           claudeCodeReviewSupportedForBinding: async () => { f.trace.push("supported"); return supported; },
           requirePermission: async (_event, permission) => { f.trace.push(permission); return canReply; },
           requireRemoteScopeForBinding: async () => { f.trace.push("peer scope"); return canControlPeer; },
           submitMessagingReview: async (params) => { f.trace.push("review"); submissions.push(params); },
+          shouldHandleAmbientSharedMessage: async () => { f.trace.push("ambient"); return addressed; },
         });
         const owner = new MessagingCommandHandlers({ ...f.context, store: {
           findActiveBindingForChannel: async () => { f.trace.push("binding"); return binding; },
@@ -224,12 +229,15 @@ describe("messaging /code-review", () => {
         await owner.handleCommand(commandEvent("code-review", args));
         const typed = `input:/code-review${args.length ? ` ${args.join(" ")}` : ""}`;
         const expected: string[] = [];
-        if (args.length > 0) {
-          expected.push("binding", typed);
-        } else if (!supported) {
-          expected.push("binding", "supported", "binding", typed);
+        // A shared conversation ignores a command not addressed to PwrAgent,
+        // whether it would start a review or go to the thread as typed.
+        if (args.length > 0 || !supported) {
+          expected.push("binding", ...(args.length > 0 ? [] : ["supported"]), "ambient");
+          if (addressed) expected.push(typed);
+        } else if (!addressed) {
+          expected.push("binding", "supported", "ambient");
         } else {
-          expected.push("binding", "supported", "message.reply");
+          expected.push("binding", "supported", "ambient", "message.reply");
           if (canReply) {
             if (remote) expected.push("peer scope");
             if (!remote || canControlPeer) expected.push("review");

@@ -127,10 +127,11 @@ export class MessagingCommandHandlers {
       await this.handleReviewCommand(event);
       return;
     }
-    if (!verb && await this.handleBareCodeReviewCommand(event)) {
+    const binding = await this.context.store.findActiveBindingForChannel(event.channel);
+    if (await this.handleBareCodeReviewCommand(event, binding)) {
       return;
     }
-    await this.routeUnknownCommandToBoundThread(event);
+    await this.routeUnknownCommandToBoundThread(event, binding);
   }
 
   /**
@@ -142,13 +143,21 @@ export class MessagingCommandHandlers {
    */
   private async handleBareCodeReviewCommand(
     event: MessagingInboundCommandEvent,
+    binding: MessagingBindingRecord | undefined,
   ): Promise<boolean> {
     if (!isBareClaudeCodeReviewCommand(`/${event.command.replace(/^\/+/, "")} ${event.args.join(" ")}`)) {
       return false;
     }
-    const binding = await this.context.store.findActiveBindingForChannel(event.channel);
     if (!binding || !await this.context.host().claudeCodeReviewSupportedForBinding(binding)) {
       return false;
+    }
+    // In a shared conversation, a command not addressed to PwrAgent is
+    // ignored here exactly as it is when it goes to the thread as typed.
+    if (
+      binding.targetKind === "agent_thread"
+      && !await this.context.host().shouldHandleAmbientSharedMessage({ ...event, kind: "text", text: event.rawText }, binding)
+    ) {
+      return true;
     }
     const permission = permissionForCommandVerb("review");
     if (permission && !await this.context.host().requirePermission(event, permission, "command:code-review")) {
@@ -373,8 +382,8 @@ export class MessagingCommandHandlers {
 
   private async routeUnknownCommandToBoundThread(
     event: MessagingInboundCommandEvent,
+    binding: MessagingBindingRecord | undefined,
   ): Promise<void> {
-    const binding = await this.context.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
       await this.presentThreadCommandNeedsBinding(event);
       return;

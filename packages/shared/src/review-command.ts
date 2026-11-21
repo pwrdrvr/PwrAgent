@@ -378,7 +378,7 @@ export const DEFAULT_CLAUDE_CODE_REVIEW_LEVEL: ClaudeCodeReviewLevel = "high";
 
 /** Claude Code is the default reviewer on a compatible Claude thread. */
 export function prefersClaudeCodeReview(params: {
-  ownerSummary?: BackendSummary;
+  ownerSummary?: Pick<BackendSummary, "capabilities">;
   requestedRunMode?: ReviewRunMode;
   reviewerChosen?: boolean;
   thread?: { source: AppServerBackendKind };
@@ -387,6 +387,18 @@ export function prefersClaudeCodeReview(params: {
     && params.ownerSummary?.capabilities.reviewClaudeCodeReview === true
     && (params.requestedRunMode === "claude-code-review"
       || (params.requestedRunMode === undefined && !params.reviewerChosen));
+}
+
+/**
+ * The repository `/code-review` may name a pull request of by bare number:
+ * the checkout's remote repository when it has exactly one, compared
+ * case-insensitively. Otherwise a pull request is named by its URL.
+ */
+export function claudeCodeReviewRepository(
+  remoteRepositories: readonly string[] | undefined,
+): string | undefined {
+  const remotes = new Set(remoteRepositories?.map((repository) => repository.trim().toLowerCase()) ?? []);
+  return remotes.size === 1 ? [...remotes][0] : undefined;
 }
 
 /**

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { findThreadForBinding } from "./messaging-callback-helpers";
 import { asPlainRecord, federationTargetForBinding } from "./messaging-backend-event-helpers";
-import { CLAUDE_CODE_REVIEW_LEVELS, claudeCodeReviewCommand, DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, isClaudeCodeReviewLevel, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
+import { CLAUDE_CODE_REVIEW_LEVELS, claudeCodeReviewCommand, claudeCodeReviewRepository, DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, isClaudeCodeReviewLevel, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
 import { messagingReviewTargetForMode, resolveMessagingReviewRunMode } from "./messaging-review-claude-code";
 import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
@@ -198,8 +198,11 @@ export class MessagingReviewWorkflow {
     // A Claude thread reviews as Claude Code's /code-review in its own
     // workspace unless the operator picks another mode or reviewer. Choosing
     // Claude Code drops a picked reviewer, so only the workspace rules it out.
-    const claudeCodeOwner = params.binding.backend === "claude"
-      && owner?.capabilities?.reviewClaudeCodeReview === true;
+    const claudeCodeOwner = prefersClaudeCodeReview({
+      ownerSummary: owner?.capabilities ? { capabilities: owner.capabilities } : undefined,
+      requestedRunMode: "claude-code-review",
+      thread: { source: params.binding.backend },
+    });
     const modeOptions: { label: string; value: ReviewRunMode; supported: boolean }[] = [
       { label: "Codex Sub Agent", value: "codex-sub-agent", supported: owner?.capabilities?.reviewCodexSubAgent === true && !managedReason },
       { label: "PwrAgent Sub Agent", value: "pwragent-sub-agent", supported: reviewerEntry?.capabilities?.reviewRunner === true },
@@ -221,10 +224,6 @@ export class MessagingReviewWorkflow {
       ? params.codeReviewLevel
       : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
     const attachedPullRequests = thread?.prs ?? [];
-    // The command preview names a PR by number only for the checkout's one
-    // remote repository, as the owner does when it builds the command.
-    const remoteRepositories = new Set(directory?.gitStatus?.remoteRepositories
-      ?.map((repository) => repository.trim().toLowerCase()) ?? []);
     let codeReviewCommand: string | undefined;
     let codeReviewProblem: string | undefined;
     if (claudeCodeReview) {
@@ -232,7 +231,8 @@ export class MessagingReviewWorkflow {
         codeReviewCommand = claudeCodeReviewCommand({
           target,
           level: codeReviewLevel,
-          repository: remoteRepositories.size === 1 ? [...remoteRepositories][0] : undefined,
+          // A PR is a bare number only for the checkout's one remote, as on the owner.
+          repository: claudeCodeReviewRepository(directory?.gitStatus?.remoteRepositories),
         });
       } catch (error) {
         codeReviewProblem = error instanceof Error ? error.message : String(error);
@@ -296,7 +296,7 @@ export class MessagingReviewWorkflow {
       if (runMode) summaryLines.push(`Mode: ${modeLabel}`);
       if (claudeCodeReview) {
         summaryLines.push(`Effort: ${codeReviewLevel}`);
-        summaryLines.push(codeReviewCommand ? `Command: ${codeReviewCommand}` : codeReviewProblem ?? "");
+        summaryLines.push(codeReviewCommand ? `Command: ${codeReviewCommand}` : codeReviewProblem!);
       }
       if (modeUnavailable) summaryLines.push(modeUnavailable);
       if (modeSupported && managedReason) summaryLines.push(managedReason);
@@ -1237,6 +1237,25 @@ export class MessagingReviewWorkflow {
     }
 
     const claudeCodeReview = pendingIntent.intent.review.runMode === "claude-code-review";
+    if (claudeCodeReview) {
+      // The summary already names the problem; the owner would refuse it too.
+      try {
+        claudeCodeReviewCommand({ target, level: pendingIntent.intent.review.codeReviewLevel });
+      } catch (error) {
+        await this.context.host().deliver(
+          buildErrorIntent({
+            id: this.context.host().newIntentId("review-invalid-target"),
+            createdAt: this.context.now(),
+            title: "Review not started",
+            body: error instanceof Error ? error.message : String(error),
+            recoverable: true,
+          }),
+          binding,
+          event,
+        );
+        return;
+      }
+    }
     const reviewer = claudeCodeReview ? undefined : pendingIntent.intent.review.reviewer;
     const reviewerBackends = pendingIntent.intent.review.reviewerBackends;
     const reviewerBackend = reviewer?.backend ?? binding.backend;
@@ -1293,6 +1312,11 @@ export class MessagingReviewWorkflow {
         ? federationTargetForBinding(params.binding)
         : undefined;
       const owner = await this.context.host().getBackendSummary(params.binding.backend, federationTarget);
+      // A managed review skipped the review/start check above, not this one.
+      if (managedReview && !owner?.available) {
+        await this.deliverReviewUnsupported(params.binding, params.event);
+        return;
+      }
       const navigation = await this.context.host().readBoundThreadConfiguration(params.binding);
       const target = pullRequestCommand
         ? parseReviewPullRequestArguments(params.pullRequestArgs, navigation.thread.prs ?? [])
@@ -1315,7 +1339,9 @@ export class MessagingReviewWorkflow {
       }
       if (runMode === "pwragent-sub-agent" && !params.reviewBackend
         && owner?.capabilities.reviewRunner !== true) {
-        throw new Error("PwrAgent Sub Agent is unavailable for this thread's provider.");
+        throw new Error(combined
+          ? "PwrAgent Sub Agent is unavailable for this thread's provider."
+          : "PwrAgent Sub Agent is unavailable for this thread's provider. Choose a Reviewer from another provider.");
       }
       const afterReview = combined || federationTarget
         ? (owner?.capabilities.reviewAutoFix === true ? "wait" : undefined)

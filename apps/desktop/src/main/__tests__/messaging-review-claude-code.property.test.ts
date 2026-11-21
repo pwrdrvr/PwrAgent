@@ -146,6 +146,46 @@ describe("messaging /review on a Claude thread", () => {
   });
 
   /**
+   * Rule: a target the command cannot carry (a branch that reads as a PR
+   * number) is refused at Start, with the picker kept, and nothing is sent.
+   */
+  it("refuses a branch /code-review would read as a pull request", async () => {
+    const { fixture, text, close } = await claudeFixture();
+    try {
+      await fixture.command();
+      await fixture.click("review:summary:target");
+      await fixture.click("review:target:branch");
+      await text("12");
+      expect(fixture.review().body).toContain("reads as a pull request number");
+      await fixture.click("review:summary:start");
+      expect(fixture.requests).toEqual([]);
+      expect(fixture.deliveries.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("pull request number") });
+      expect(await fixture.pending()).toBeDefined();
+    } finally {
+      await close();
+    }
+  });
+
+  /** Rule: a managed review is refused while the thread's provider is unavailable. */
+  it("refuses another provider's review while the owner is unavailable", async () => {
+    const { fixture, close } = await claudeFixture();
+    fixture.controls.runner = true;
+    try {
+      await fixture.command();
+      await fixture.click("review:summary:reviewer");
+      const codex = fixture.review().actions.find(action => action.fallbackText === "codex");
+      await fixture.click(codex!.id);
+      await fixture.click("review:reviewer:model:default");
+      fixture.controls.available = false;
+      await fixture.click("review:summary:start");
+      expect(fixture.requests).toEqual([]);
+      expect(fixture.deliveries.at(-1)).toMatchObject({ kind: "error", title: "Review unavailable" });
+    } finally {
+      await close();
+    }
+  });
+
+  /**
    * Rule: another provider's reviewer runs the review on the PwrAgent Sub
    * Agent even though a Claude owner has no review/start; choosing Claude
    * Code again drops that reviewer.

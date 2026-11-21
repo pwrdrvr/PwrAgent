@@ -289,6 +289,7 @@ import {
 } from "../../lib/skill-mentions";
 import {
   claudeCodeReviewCommand,
+  claudeCodeReviewRepository,
   type ClaudeCodeReviewLevel,
   DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
   formatReviewCommand,
@@ -6424,11 +6425,9 @@ function useComposerController(props: ComposerProps) {
     reviewConfig?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
   // A bare pull request number names the checkout's own repository's, and
   // only when it has exactly one remote repository, as the owner decides.
-  const reviewCodeReviewRemotes = new Set(reviewDirectory?.gitStatus?.remoteRepositories
-    ?.map((repository) => repository.trim().toLowerCase()) ?? []);
-  const reviewCodeReviewRepository = reviewCodeReviewRemotes.size === 1
-    ? [...reviewCodeReviewRemotes][0]
-    : undefined;
+  const reviewCodeReviewRepository = claudeCodeReviewRepository(
+    reviewDirectory?.gitStatus?.remoteRepositories,
+  );
   /**
    * Checked pull requests in the order they are reviewed: list order, or a
    * stack bottom first when they are reviewed together, which is the order
