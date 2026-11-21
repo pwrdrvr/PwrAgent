@@ -1362,8 +1362,11 @@ export function PluginsSettings(props: {
       ?.focus();
   }, [pluginStoreDialogRef, storeView]);
 
-  /** A revealed row to scroll up again once the Codex list below loads. */
-  const realignRevealedRowRef = useRef<HTMLElement | undefined>(undefined);
+  /**
+   * A revealed row to scroll up again once the Codex list below loads, and
+   * where the settings pane stood just after the reveal scrolled it.
+   */
+  const realignRevealedRowRef = useRef<{ row: HTMLElement; scrollTop: number | undefined }>(undefined);
 
   // Declared after the store's dialog hook, whose cleanup returns focus to
   // the Plugin store button when the store closes; this then moves it on to
@@ -1382,18 +1385,26 @@ export function PluginsSettings(props: {
     // The row's own next step when it marks one, else its first control.
     (row.querySelector<HTMLElement>("[data-reveal-focus]:not(:disabled)")
       ?? row.querySelector<HTMLElement>("button"))?.focus();
-    if (loading) realignRevealedRowRef.current = row;
+    if (loading) {
+      realignRevealedRowRef.current = {
+        row,
+        scrollTop: row.closest(".settings-content")?.scrollTop,
+      };
+    }
   }, [connections, loading, revealConnectionId, storeView]);
 
   // While the Codex section below still reads "Loading", the pane can be too
   // short to bring a low row up to the top, and the scroll above stops at
   // the bottom edge. Once that list fills in, finish the scroll, unless the
-  // operator has already moved focus out of the row.
+  // operator has already scrolled the pane or moved focus out of the row.
   useEffect(() => {
-    const row = realignRevealedRowRef.current;
-    if (loading || !row) return;
+    const pending = realignRevealedRowRef.current;
+    if (loading || !pending) return;
     realignRevealedRowRef.current = undefined;
-    if (row.isConnected && row.contains(document.activeElement)) scrollRowToTop(row);
+    const { row } = pending;
+    if (!row.isConnected || !row.contains(document.activeElement)) return;
+    if (row.closest(".settings-content")?.scrollTop !== pending.scrollTop) return;
+    scrollRowToTop(row);
   }, [loading]);
 
   // Sandboxer's store page closes onto its row once it works, as adding
