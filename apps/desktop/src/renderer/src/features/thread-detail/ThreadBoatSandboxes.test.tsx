@@ -52,6 +52,12 @@ describe("ThreadBoatSandboxes", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Delete dada-mama" }));
     expect(change).not.toHaveBeenCalled();
+    // The pressed button is gone, and focus is on the one that deletes
+    // nothing: a second Enter cannot confirm.
+    expect(screen.queryByRole("button", { name: "Delete dada-mama" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+    const [confirmButton, keepButton] = screen.getAllByRole("button");
+    expect([confirmButton?.textContent, keepButton?.textContent]).toEqual(["Delete it", "Keep"]);
     fireEvent.click(screen.getByRole("button", { name: "Keep" }));
     expect(change).not.toHaveBeenCalled();
 

@@ -108,16 +108,11 @@ export function ThreadBoatSandboxes(props: {
               {change ? (
                 <div className="mcp-access-panel__row-actions">
                   {confirmingId === sandbox.id ? (
+                    // Keep takes Delete's place and the focus, so a second
+                    // click or a second Enter in the same spot deletes nothing.
                     <>
                       <button
-                        className="button button--ghost"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => setConfirmingId(undefined)}
-                      >
-                        Keep
-                      </button>
-                      <button
+                        key="confirm"
                         aria-label={`Delete ${name} and its disk`}
                         className="button button--secondary"
                         type="button"
@@ -126,11 +121,22 @@ export function ThreadBoatSandboxes(props: {
                       >
                         Delete it
                       </button>
+                      <button
+                        key="keep"
+                        autoFocus
+                        className="button button--ghost"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setConfirmingId(undefined)}
+                      >
+                        Keep
+                      </button>
                     </>
                   ) : (
                     <>
                       {sandbox.state && AT_REST.has(sandbox.state) ? null : (
                         <button
+                          key="stop"
                           aria-label={`Stop ${name}`}
                           className="button button--ghost"
                           type="button"
@@ -141,6 +147,7 @@ export function ThreadBoatSandboxes(props: {
                         </button>
                       )}
                       <button
+                        key="delete"
                         aria-label={`Delete ${name}`}
                         className="button button--ghost"
                         type="button"
