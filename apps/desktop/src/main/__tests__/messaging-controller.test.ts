@@ -2350,24 +2350,31 @@ describe("MessagingController", () => {
       });
   });
 
-  it("publishes a usable browse surface before the last peer answers and updates that surface", async () => {
+  it("paints the browse once, after the last peer answers", async () => {
     const peer = createDeferred<void>();
     const navigation = buildNavigationSnapshot();
-    const harness = await createHarness(boundedPeerBrowseFixture(navigation, navigation, peer.promise, "Peer disconnected"));
+    const fixture = boundedPeerBrowseFixture(navigation, navigation, peer.promise, "Peer disconnected");
+    const peerRead = createDeferred<void>();
+    const readPage = fixture.getNavigationQueryPage;
+    const harness = await createHarness({ ...fixture, getNavigationQueryPage: async (request) => {
+      if (request.federationTarget?.scope === "remote") peerRead.resolve();
+      return readPage(request);
+    } });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
-    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
-    expect(harness.delivered[0]).toMatchObject({
-      kind: "thread_picker", prompt: expect.stringContaining("Still checking 1"),
-    });
-    peer.resolve();
-    await pending;
-    expect(harness.delivered).toHaveLength(2);
-    expect(harness.delivered[1]).toMatchObject({
-      kind: "thread_picker", delivery: { mode: "update" },
-      prompt: expect.stringContaining("Results are incomplete"),
-      browseSessionId: (harness.delivered[0] as { browseSessionId: string }).browseSessionId,
-    });
-    harness.controller.dispose();
+    try {
+      await peerRead.promise;
+      expect(harness.delivered).toHaveLength(0);
+      peer.resolve();
+      await pending;
+      expect(harness.delivered).toHaveLength(1);
+      expect(harness.delivered[0]).toMatchObject({
+        kind: "thread_picker", prompt: expect.stringContaining("Results are incomplete"),
+      });
+      expect(harness.delivered[0]!.prompt).not.toContain("Still checking");
+    } finally {
+      peer.resolve();
+      await pending.finally(() => harness.controller.dispose());
+    }
   });
 
   it.each([
@@ -2383,13 +2390,11 @@ describe("MessagingController", () => {
       key: "remote:project", path: "/remote/project", label: "Remote project", threadKeys: [],
     };
     const complete = { ...local, directories: [...local.directories, remoteDirectory] };
-    const firstDelivery = createDeferred<void>();
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
       ...boundedPeerBrowseFixture(local, complete, peer.promise),
       deliver: async (intent) => {
         delivered.push(intent);
-        firstDelivery.resolve();
         return {
           channel: "telegram",
           deliveredAt: 1000,
@@ -2400,25 +2405,18 @@ describe("MessagingController", () => {
     });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
     try {
-      // Wait for the owned delivery event, not a polling deadline racing disk IO.
-      await Promise.race([
-        firstDelivery.promise,
-        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
-      ]);
-      expect(delivered).toHaveLength(1);
-      const browseSessionId = (delivered[0] as { browseSessionId: string }).browseSessionId;
       peer.resolve();
       await pending;
-      expect(delivered[1]).toMatchObject({
-        browseSessionId, delivery: { mode: "update" },
-      });
+      // One paint, and it already carries the peer's directory selection.
+      expect(delivered).toHaveLength(1);
+      const browseSessionId = (delivered[0] as { browseSessionId: string }).browseSessionId;
       await expect(harness.store.getBrowseSession(browseSessionId, { now: 1000 })).resolves.toMatchObject({
         mode,
         selectedProject: {
           directoryKey: remoteDirectory.key, path: remoteDirectory.path, label: remoteDirectory.label,
         },
       });
-      expect(JSON.stringify(delivered[1])).not.toContain("Thread one");
+      expect(JSON.stringify(delivered[0])).not.toContain("Thread one");
     } finally {
       // Even a failed assertion must release and drain the command before
       // afterEach removes its store directory.
@@ -2436,13 +2434,18 @@ describe("MessagingController", () => {
         ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
       }],
     };
-    const firstDelivery = createDeferred<void>();
+    const peerRead = createDeferred<void>();
     const delivered: MessagingSurfaceIntent[] = [];
+    const fixture = boundedPeerBrowseFixture(navigation, complete, peer.promise);
+    const readPage = fixture.getNavigationQueryPage;
     const harness = await createHarness({
-      ...boundedPeerBrowseFixture(navigation, complete, peer.promise),
+      ...fixture,
+      getNavigationQueryPage: async (request) => {
+        if (request.federationTarget?.scope === "remote") peerRead.resolve();
+        return readPage(request);
+      },
       deliver: async (intent) => {
         delivered.push(intent);
-        firstDelivery.resolve();
         return {
           channel: "telegram",
           deliveredAt: 1000,
@@ -2453,13 +2456,9 @@ describe("MessagingController", () => {
     });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
     try {
-      // The initial delivery owns readiness; a polling deadline races the
-      // browse store's disk IO on Windows before this test can act.
-      await Promise.race([
-        firstDelivery.promise,
-        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
-      ]);
-      expect(delivered).toHaveLength(1);
+      // The browse paints nothing until every owner answers.
+      await peerRead.promise;
+      expect(delivered).toHaveLength(0);
       await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
       const afterAction = delivered.length;
       peer.resolve();
@@ -2473,7 +2472,7 @@ describe("MessagingController", () => {
     }
   });
 
-  it("budgets SQLite writes for initial and completed progressive browse publications", async () => {
+  it("budgets SQLite writes for a federated resume browse publication", async () => {
     const previous = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const { tempDir } = createTempStateDb("pwragent-browse-writes-");
@@ -2492,8 +2491,8 @@ describe("MessagingController", () => {
       });
       harness.controller.dispose();
       expectSqliteWriteBudget({
-        scenario: "messaging-progressive-browse",
-        note: "one explicit resume command: local publication plus one coalesced remote publication",
+        scenario: "messaging-federated-resume-browse",
+        note: "one explicit resume command: one publication after the local owner and one peer answer",
         writes,
       });
     } finally {
