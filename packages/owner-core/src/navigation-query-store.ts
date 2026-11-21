@@ -58,6 +58,7 @@ type NavigationQueryGeneration = {
   lastAccessedAt: number;
   materialization: NavigationQueryMaterialization;
   viewerRowOwners?: readonly string[];
+  directoryGitProof?: NavigationQueryPage["directoryGitProof"];
   retainedBytes: number;
   scopeKey: string;
   attentionViewId?: string;
@@ -103,6 +104,11 @@ function withPullRequestPositions(generation: NavigationQueryGeneration, rows: P
     observations.set(position, projection);
     retainedBytes += serializedBytes([position, projection]);
   }
+  let directoryGitProof = generation.directoryGitProof;
+  if (directoryGitProof && retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+    retainedBytes -= serializedBytes({ directoryGitProof }) - 1;
+    directoryGitProof = undefined;
+  }
   let viewerRowOwners = generation.viewerRowOwners;
   if (viewerRowOwners && retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
     // A later cursor page can discover PRs. Drop the optional field before
@@ -111,7 +117,7 @@ function withPullRequestPositions(generation: NavigationQueryGeneration, rows: P
     retainedBytes -= serializedBytes({ viewerRowOwners }) - 1;
     viewerRowOwners = undefined;
   }
-  return { ...generation, viewerRowOwners, pullRequests: observations, retainedBytes };
+  return { ...generation, directoryGitProof, viewerRowOwners, pullRequests: observations, retainedBytes };
 }
 
 type NavigationQueryCursor = {
@@ -273,8 +279,9 @@ function validateRequest(request: NavigationQueryRequest): void {
 }
 
 /** Hash the canonical JSON stream without allocating a whole-collection string. */
-export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization, viewerRowOwners?: readonly string[]): {
-  revision: string; retainedBytes: number; viewerRowOwners?: readonly string[];
+export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization, viewerRowOwners?: readonly string[],
+  directoryGitProof?: NavigationQueryPage["directoryGitProof"]): {
+  revision: string; retainedBytes: number; viewerRowOwners?: readonly string[]; directoryGitProof?: NavigationQueryPage["directoryGitProof"];
 } {
   const hash = createHash("sha256");
   let retainedBytes = 0;
@@ -302,15 +309,19 @@ export function fingerprintNavigationMaterialization(materialization: Navigation
       append("]");
     } else append(JSON.stringify(value));
   }
-  // Append the optional field last. Reserve the closing brace so rows at
-  // the exact limit keep their original revision in one streaming hash pass.
-  if (viewerRowOwners) {
-    const field = `,"viewerRowOwners":${JSON.stringify(viewerRowOwners)}`;
-    if (retainedBytes + Buffer.byteLength(field) + 1 <= NAVIGATION_QUERY_MAX_RETAINED_BYTES) append(field);
-    else viewerRowOwners = undefined;
-  }
+  // Reserve the closing brace. Hash and retain only the optional proofs that fit.
+  const admit = <T>(key: string, proof: T | undefined) => {
+    if (!proof) return undefined;
+    const field = `,"${key}":${JSON.stringify(proof)}`;
+    if (retainedBytes + Buffer.byteLength(field) + 1 > NAVIGATION_QUERY_MAX_RETAINED_BYTES) return undefined;
+    append(field);
+    return proof;
+  };
+  viewerRowOwners = admit("viewerRowOwners", viewerRowOwners);
+  directoryGitProof = admit("directoryGitProof", directoryGitProof);
   append("}");
-  return { revision: hash.digest("base64url"), retainedBytes, ...(viewerRowOwners ? { viewerRowOwners } : {}) };
+  return { revision: hash.digest("base64url"), retainedBytes,
+    ...(viewerRowOwners ? { viewerRowOwners } : {}), ...(directoryGitProof ? { directoryGitProof } : {}) };
 }
 
 function pageBase(params: {
@@ -433,15 +444,16 @@ export class NavigationQueryStore {
       }
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
-      const materialization = projectNavigationQuery({
+      const { directoryGitProof: gitProof, ...materialization } = projectNavigationQuery({
         index,
         request: params.request,
         attentionOrder,
+        includeDirectoryGitProof: true,
         deferPullRequests: Boolean(pullRequests) && !needsPullRequestMembership,
       });
       const owners = params.request.inventory === "viewer" && params.request.consumer === "main-sidebar"
         ? navigationQuerySnapshotRowOwners(index) : undefined;
-      const { revision, retainedBytes, viewerRowOwners } = fingerprintNavigationMaterialization(materialization, owners);
+      const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(materialization, owners, gitProof);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
       const current = currentId ? this.generations.get(currentId) : undefined;
@@ -455,6 +467,7 @@ export class NavigationQueryStore {
           lastAccessedAt: now,
           materialization,
           viewerRowOwners,
+          directoryGitProof,
           retainedBytes,
           scopeKey: params.scopeKey,
           attentionViewId: params.request.attentionView?.id,
@@ -793,20 +806,30 @@ export class NavigationQueryStore {
   }
 
   private finishPage(page: NavigationQueryPage, generation: NavigationQueryGeneration): void {
-    // Owner exclusion proofs are optional. Fit the same rows and cursor even
-    // when adding the proof would force another page or reject a large row.
-    if (generation.viewerRowOwners) {
-      page.viewerRowOwners = generation.viewerRowOwners;
-      if (serializedBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return;
-      delete page.viewerRowOwners;
+    // A range acknowledgment can pass here again after its cursor was built.
+    // Price the required rows once, then spend only spare bytes on proofs.
+    delete page.viewerRowOwners;
+    delete page.directoryGitProof;
+    const metadata = generation.materialization.metadataDependencies;
+    if (metadata?.workingStatePaths) delete page.metadataDependencies;
+    let bytes = serializedBytes(page);
+    if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+      throw new NavigationQueryError("navigation_item_too_large", "Navigation response exceeds the result budget.");
     }
-    const proof = generation.materialization.metadataDependencies;
-    if (proof?.workingStatePaths) {
-      page.metadataDependencies = proof;
-      if (serializedBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return;
-      delete page.metadataDependencies;
+    const fits = (field: object) => {
+      const size = serializedBytes(field) - 1;
+      if (bytes + size > NAVIGATION_QUERY_MAX_RESULT_BYTES) return false;
+      bytes += size;
+      return true;
+    };
+    const { viewerRowOwners, directoryGitProof } = generation;
+    if (viewerRowOwners && fits({ viewerRowOwners })) page.viewerRowOwners = viewerRowOwners;
+    if (metadata?.workingStatePaths && fits({ metadataDependencies: metadata })) page.metadataDependencies = metadata;
+    // An acknowledgment already names the exact revision of the prior rows
+    // and proofs. Keep potentially multi-directory metadata off idle replies.
+    if (!page.unchanged && !page.rangeUnchanged && directoryGitProof && fits({ directoryGitProof })) {
+      page.directoryGitProof = directoryGitProof;
     }
-    this.assertPageBudget(page);
   }
 
   private retainGeneration(
@@ -860,15 +883,6 @@ export class NavigationQueryStore {
       if (!this.generations.has(generationId)) {
         this.currentGenerationByScopeAndQuery.delete(key);
       }
-    }
-  }
-
-  private assertPageBudget(page: NavigationQueryPage): void {
-    if (serializedBytes(page) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
-      throw new NavigationQueryError(
-        "navigation_item_too_large",
-        "Navigation response exceeds the result budget.",
-      );
     }
   }
 }

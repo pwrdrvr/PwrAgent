@@ -67,6 +67,11 @@ selection independently resolves its local viewer mount and remote configuration
 - An unchanged response is valid only against the viewer's complete baseline
   for that exact query. A partial cold page, optimistic edit, or different lens
   cannot authorize unchanged. Volatile fetch/probe clocks are not row changes.
+- Directory Git notices can carry revisions for the checkout's repository identity and
+  sidebar descriptor. A complete immutable sidebar collection can name the revisions it
+  depends on across its full range, including secondary links. A settled same-owner
+  page can use that proof to exclude a notice. Missing proofs and reads in flight
+  keep the broader refresh. The generation and page budgets admit rows first.
 - Counts and pages identify their generation. Do not combine counts from one
   generation with rows from another and call the result complete.
 - The per-message application budget is 100 records / 256 KiB, including its

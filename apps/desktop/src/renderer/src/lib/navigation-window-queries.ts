@@ -12,10 +12,11 @@ import {
   navigationWorkingStatePath,
   readNavigationDirectoryScope,
 } from "@pwragent/shared/navigation-query-events";
-import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
+import { readDirectoryGitProof, readDirectoryGitRevisions, readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
+  NavigationDirectoryGitRevisions,
   NavigationIdentity,
   NavigationMetadataDependencies,
   NavigationQueryAnchor,
@@ -31,14 +32,14 @@ import {
   navigationFallbackAnchor, navigationIdentitiesEqual, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
-// Changes to one owner's threads. A PR status can affect a local thread
+// Changes to one owner's threads or checkouts. A PR status can affect a local thread
 // through its forge identity and therefore does not belong in this set.
 const OWNER_ROW_CHANGES = new Set([
   "thread/started", "thread/archived", "thread/unarchived", "thread/deleted", "thread/parent/set", "thread/parent/cleared",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered", "thread/subthreadsCollapsed/updated", "thread/subthreadOrder/updated",
   "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
   "thread/backgroundTasks/updated", "thread/turnQueue/updated", "navigation/thread/seen", "federation/peerStatus/changed",
-  "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+  "turn/started", "turn/completed", "turn/failed", "turn/cancelled", "navigation/directoryGitStatus/updated",
 ]);
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
@@ -102,7 +103,13 @@ type Resource = {
 /** One opening restores saved depth within one Load more click's bounds. Lists
  * opened together share it; the clock starts at the first read. */
 type ResumeBudget = { reads: number; until?: number };
-type OwnerPageProof = { dependencies?: NavigationMetadataDependencies; viewerRowOwners?: readonly string[]; bytes: number };
+type OwnerPageProof = {
+  dependencies?: NavigationMetadataDependencies;
+  viewerRowOwners?: readonly string[];
+  directoryGitProof?: NavigationQueryPage["directoryGitProof"];
+  gitBytes: number;
+  bytes: number;
+};
 type RetainableState = { state: NavigationPageState; ownerProof?: OwnerPageProof };
 
 function loadedRows(page: NavigationQueryPage | undefined): number {
@@ -296,20 +303,27 @@ export class NavigationWindowQueries {
     const remote = state.request.federationTarget?.scope === "remote";
     const metadataDependencies = remote && page.metadataDependencies?.workingStatePaths ? page.metadataDependencies : undefined;
     const viewerRowOwners = !remote && state.request.inventory === "viewer" ? page.viewerRowOwners : undefined;
-    if (!metadataDependencies && !viewerRowOwners) return { state };
+    const gitProof = page.directoryGitProof;
+    if (!metadataDependencies && !viewerRowOwners && !gitProof) return { state };
     const rows = { ...page };
+    if (gitProof) delete rows.directoryGitProof;
     if (metadataDependencies) delete rows.metadataDependencies;
     if (viewerRowOwners) delete rows.viewerRowOwners;
     // Removing a JSON field saves its name, value, and one separating comma.
-    const proofBytes = new TextEncoder().encode(JSON.stringify({ metadataDependencies, viewerRowOwners })).byteLength - 1;
+    const encoder = new TextEncoder();
+    const gitBytes = gitProof ? encoder.encode(JSON.stringify({ directoryGitProof: gitProof })).byteLength - 1 : 0;
+    const ownerBytes = metadataDependencies || viewerRowOwners
+      ? encoder.encode(JSON.stringify({ metadataDependencies, viewerRowOwners })).byteLength - 1 : 0;
+    const proofBytes = ownerBytes + gitBytes;
     const rowBytes = this.pageBytes(page) - proofBytes;
     if (rows.remoteOwner?.ownerContentBytes !== undefined) {
       rows.remoteOwner = { ...rows.remoteOwner, ownerContentBytes: rowBytes };
     }
     this.pageSizes.set(rows, rowBytes);
     const dependencies = metadataDependencies && readNavigationMetadataDependencies(metadataDependencies);
-    return { state: { ...state, page: rows }, ...(dependencies || viewerRowOwners
-      ? { ownerProof: { dependencies, viewerRowOwners, bytes: proofBytes } } : {}) };
+    const directoryGitProof = gitProof ? readDirectoryGitProof(gitProof) : undefined;
+    return { state: { ...state, page: rows }, ...(dependencies || viewerRowOwners || directoryGitProof
+      ? { ownerProof: { dependencies, viewerRowOwners, directoryGitProof, gitBytes, bytes: proofBytes } } : {}) };
   }
 
   private deleteOwnerProof(page: NavigationQueryPage | undefined): void {
@@ -325,7 +339,10 @@ export class NavigationWindowQueries {
     const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(previous);
     if (bytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
     if (state.page !== previous) this.deleteOwnerProof(previous);
-    const spare = this.trimRetained(bytes);
+    const spare = this.trimRetained(bytes, ownerProof ? ownerProof.bytes - ownerProof.gitBytes : 0);
+    if (ownerProof?.gitBytes && ownerProof.bytes > spare) {
+      ownerProof = this.withoutGitProof(ownerProof);
+    }
     if (state.page && ownerProof && ownerProof.bytes <= spare && !this.ownerPageProofs.has(state.page)) {
       this.ownerPageProofs.set(state.page, ownerProof);
       this.ownerProofBytes += ownerProof.bytes;
@@ -334,12 +351,30 @@ export class NavigationWindowQueries {
     resource.value = { ...resource.value, state, restoredFromCache: false };
   }
 
-  private trimRetained(activeBytes: number): number {
+  private withoutGitProof(proof: OwnerPageProof): OwnerPageProof | undefined {
+    return proof.dependencies || proof.viewerRowOwners
+      ? { dependencies: proof.dependencies, viewerRowOwners: proof.viewerRowOwners, gitBytes: 0, bytes: proof.bytes - proof.gitBytes }
+      : undefined;
+  }
+
+  private trimRetained(activeBytes: number, incomingOwnerBytes = 0): number {
     let bytes = activeBytes + [...this.retained.values()].reduce((total, entry) => total + entry.bytes, 0);
     for (const [key, entry] of this.retained) {
       if (bytes <= MAX_RETAINED_BYTES && this.retained.size <= 64) break;
       this.retained.delete(key);
       bytes -= entry.bytes;
+    }
+    // A Git proof spends spare capacity after the existing owner and off-page
+    // membership proofs, including one arriving with this read.
+    if (bytes + this.ownerProofBytes + incomingOwnerBytes > MAX_RETAINED_BYTES) {
+      for (const [page, proof] of this.ownerPageProofs) {
+        if (bytes + this.ownerProofBytes + incomingOwnerBytes <= MAX_RETAINED_BYTES) break;
+        if (!proof.gitBytes) continue;
+        this.ownerProofBytes -= proof.gitBytes;
+        const remaining = this.withoutGitProof(proof);
+        if (remaining) this.ownerPageProofs.set(page, remaining);
+        else this.ownerPageProofs.delete(page);
+      }
     }
     for (const page of this.ownerPageProofs.keys()) {
       if (bytes + this.ownerProofBytes <= MAX_RETAINED_BYTES) break;
@@ -498,10 +533,14 @@ export class NavigationWindowQueries {
     let count = 0;
     const batch = ++this.nextDiagnosticBatch;
     const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
+    const notification = event?.notification;
+    const gitRevisions = notification?.method === "navigation/directoryGitStatus/updated"
+      || (notification?.method === "navigation/invalidated" && notification.params?.sourceMethod === "navigation/directoryGitStatus/updated")
+      ? readDirectoryGitRevisions(notification.params?.directoryGitRevisions) : undefined;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
-      if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
+      if (event && !this.eventAffectsResource(resource, event, directoryScope, gitRevisions)) continue;
       if (correlatedPinPublication) resource.pinPublicationPending = true;
       count++;
       resource.diagnosticBatch = batch;
@@ -574,7 +613,7 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[]): boolean {
+  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[], gitRevisions?: NavigationDirectoryGitRevisions): boolean {
     const request = resource.value.state.request;
     const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string; prKey?: string;
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
@@ -591,11 +630,24 @@ export class NavigationWindowQueries {
     const sourceOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
     const viewerRowOwners = sourceOwner && page ? this.ownerPageProofs.get(page)?.viewerRowOwners : undefined;
     if (sourceOwner && request.federationTarget?.scope !== "remote" && request.inventory === "viewer"
-      && !resource.membershipUncertain && page?.coverage.state === "complete"
-      && viewerRowOwners && !viewerRowOwners.includes(sourceOwner)
-      && typeof method === "string" && OWNER_ROW_CHANGES.has(method)
-      && !(request.query.kind === "exact" && request.query.resolveFromOwners
-        && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner))) return false;
+      && !resource.membershipUncertain && page?.coverage.state === "complete" && viewerRowOwners) {
+      const resolvesPeer = request.query.kind === "exact" && request.query.resolveFromOwners
+        && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner);
+      if (!resolvesPeer && !viewerRowOwners.includes(sourceOwner) && typeof method === "string" && OWNER_ROW_CHANGES.has(method)) return false;
+      // A pinned row's directory identity comes from the published pin
+      // summary. A peer's Git notice refreshes its direct pages; a subsequent
+      // local pin-summary publication refreshes this delegated projection.
+      if (!resolvesPeer && gitRevisions && !resource.pending && !resource.value.state.stale) return false;
+    }
+    if (gitRevisions && typeof params?.directoryKey === "string" && params.directoryKey
+      && federationTargetsEqual(request.federationTarget, event.federationTarget)
+      && !resource.membershipUncertain && !resource.pending && !resource.value.state.stale && page?.coverage.state === "complete") {
+      const proof = this.ownerPageProofs.get(page)?.directoryGitProof;
+      if (proof) {
+        const revision = proof.directories.find(([key]) => key === params.directoryKey)?.[1];
+        return revision !== undefined && revision !== gitRevisions.repository && revision !== gitRevisions.descriptor;
+      }
+    }
     if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
       const workingState = method === "navigation/threadGitWorkingState/updated";
       // The index holds directory Git status and counts. Working-state probes
@@ -692,7 +744,8 @@ export class NavigationWindowQueries {
     if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
     if (resource.membershipUncertain || navigationInvalidationMayChangeMembership(method)) return true;
     if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
-      && page?.coverage.state === "complete" && page.complete) {
+      && !resource.pending && !resource.value.state.stale && page?.coverage.state === "complete" && page.complete
+      && page.entries.every(({ row }) => !row.checkoutProject && !row.linkedDirectoriesTruncated && !row.linkedDirectories.length)) {
       return page.selectionDirectory?.key === params.directoryKey || Boolean(page.directories?.some((directory) => directory.key === params.directoryKey));
     }
     const refs = [...request.query.identities, ...(page?.entries.map(({ row }) => row.ref) ?? [])];

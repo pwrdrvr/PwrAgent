@@ -82,6 +82,59 @@ it("does not list the local viewer for repeated births or reconnects from an unm
   } finally { unmount(); vi.useRealTimers(); }
 });
 
+it("keeps settled local directories mounted through local Git probes and notices from an absent peer", async () => {
+  const f = fixture();
+  const read = f.read.getMockImplementation()!;
+  const directories: NavigationDirectoryRow[] = Array.from({ length: 3 }, (_, i) => ({
+    key: `directory:/fixture/${i}`, kind: "directory", label: String(i), counts, launchpadPresent: false,
+    pinnedRootCount: 1, unpinnedRootCount: 1,
+  }));
+  const key = directories[0]!.key;
+  let branch = "main";
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await read(request, consumer);
+    return { ...page, viewerRowOwners: [], directories: request.query.kind === "directory-index"
+      ? directories.map((dir) => dir.key === key ? { ...dir, gitStatus: { currentBranch: branch } } : dir) : [] };
+  });
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const api: DesktopApi = { ...f.api, onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } };
+  const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  try {
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+    act(() => {
+      result.current.setBrowseMode("directories");
+      result.current.directoryDisclosure.setExpandedByKey(Object.fromEntries(directories.map(({ key }) => [key, true])));
+    });
+    await waitFor(() => {
+      const resources = [...result.current.pagedNavigation.resources.values()];
+      expect(resources.filter(({ state }) => state.request.query.kind === "directory")).toHaveLength(6);
+      expect(resources.every(({ loading, state }) => !loading && state.page)).toBe(true);
+    });
+    vi.useFakeTimers();
+    // Identical path strings on another machine name that owner's checkout.
+    for (const remote of [true, false]) {
+      f.read.mockClear();
+      f.release.mockClear();
+      for (const currentBranch of ["feature", "feature", "main"]) {
+        await act(async () => {
+          if (remote) emit({ backend: "codex", federationTarget: { scope: "remote", instanceId: "absent" },
+            notification: { method: "navigation/invalidated", params: { sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: key } } });
+          else {
+            branch = currentBranch;
+            emit({ backend: "codex", notification: { method: "navigation/directoryGitStatus/updated",
+              params: { directoryKey: key, gitStatus: { currentBranch }, fetchedAt: Date.now() } } });
+          }
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+        expect(result.current.directories.find((dir) => dir.key === key)?.gitStatus?.currentBranch).toBe(branch);
+      }
+      expect.soft(f.read.mock.calls.length, remote ? "absent peer" : "local patch").toBe(0);
+      expect(f.release).not.toHaveBeenCalled();
+    }
+  } finally { unmount(); vi.useRealTimers(); }
+});
+
 it("retains unchanged row projections while still publishing changed titles", async () => {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;

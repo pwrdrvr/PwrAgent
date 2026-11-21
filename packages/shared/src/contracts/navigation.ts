@@ -1592,12 +1592,21 @@ export type NavigationRowHomeProject = {
   forgeAutomation?: ProjectForgeAutomation;
 };
 
+/** Owner hashes of the current repository identity and compact directory descriptor. */
+export type NavigationDirectoryGitRevisions = { version: 1; repository: string; descriptor: string };
+/** Complete dependencies of the collection, including off-page rows. */
+export type NavigationDirectoryGitProof = {
+  readonly version: 1;
+  readonly directories: readonly (readonly [key: string, revision: string])[];
+};
+
 export type NavigationDirectoryGitStatusUpdatedNotification = {
   method: "navigation/directoryGitStatus/updated";
   params: {
     directoryKey: string;
     gitStatus: NavigationDirectoryGitStatus | null;
     fetchedAt: number;
+    directoryGitRevisions?: NavigationDirectoryGitRevisions;
   };
 };
 
@@ -2590,6 +2599,7 @@ export type NavigationQueryPage = {
   /** Peer owners of rows and parents in the complete viewer inventory.
    * A local mount publication or an uncertain baseline withdraws this proof. */
   viewerRowOwners?: readonly string[];
+  directoryGitProof?: NavigationDirectoryGitProof;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   /** Offset of this page in its immutable owner generation. Omitted means zero. */
