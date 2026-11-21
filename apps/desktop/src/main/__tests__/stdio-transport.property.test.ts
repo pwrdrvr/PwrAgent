@@ -6,7 +6,7 @@ import {
 } from "@pwrdrvr/agent-transport";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { codexAuthState } from "../codex-auth-state";
+import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { StdioJsonRpcTransport } from "../codex-app-server/stdio-transport";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
@@ -35,6 +35,171 @@ class FixtureChild extends EventEmitter {
     return true;
   }
 }
+
+async function connectOutboundFixture(authenticationRecovery = false) {
+  const home = "/fixture/codex-stdio-outbound";
+  const child = new FixtureChild();
+  const transport = new StdioJsonRpcTransport({
+    command: "fixture",
+    env: { CODEX_HOME: home },
+    resolveCommand: async ({ command }) => ({ command, source: "path" }),
+    authenticationRecovery,
+  });
+  spawnMock.mockReturnValue(child);
+  await transport.connect();
+  return { home, child, transport };
+}
+
+it("preserves outbound bytes, auth gates, and error precedence across connection states", async () => {
+  const signIn = CODEX_SIGN_IN_REQUIRED;
+  const recovery = "Only authentication verification is allowed during Codex recovery.";
+  const disconnected = "codex app server stdio not connected";
+  const matrix = [
+    // Writable frames keep their exact bytes. Responses bypass auth and are dropped on intentional close.
+    // A logged-out profile takes precedence over pipe and parse failures. Recovery inspects the
+    // message itself before checking the pipe, even when that inspection throws a native error.
+    //                                 open         blocked  closed/blocked   recovery    closed/recovery
+    ['{"id":1,"method":"turn/start"}',   "write",      signIn,  signIn,          recovery,    recovery],
+    ['{"method":"initialized"}',         "write",      signIn,  signIn,          "write",     disconnected],
+    ['{"id":1,"method":"initialize"}',   "write",      signIn,  signIn,          "write",     disconnected],
+    ['{"id":1,"method":"account/read"}', "write",      signIn,  signIn,          "write",     disconnected],
+    ['{"id":1,"method":"account/rateLimits/read"}', "write", signIn, signIn,      "write",     disconnected],
+    ['{"id":1,"result":{"text":"é🛰️","literal":"\\u0061"}}', "write", "write", "drop", "write", "drop"],
+    ['{"id":null,"error":null}',          "write",      "write", "drop",          "write",     "drop"],
+    ['{"id":1,"method":null,"result":0}', "write",      "write", "drop",          "write",     "drop"],
+    ['{"id":1,"method":"turn/start","result":0}', "write", signIn, signIn,       recovery,    recovery],
+    ['{"id":1}',                         "write",      signIn,  signIn,          recovery,    recovery],
+    ["[1]",                              "write",      signIn,  signIn,          recovery,    recovery],
+    ["null",                             "null id",    signIn,  signIn,          "null method", "null method"],
+    ['{"id":',                           SyntaxError,  signIn,  signIn,          SyntaxError, SyntaxError],
+  ] as const;
+  await fc.assert(fc.asyncProperty(
+    fc.constantFrom("", " ", "\t", " \t "), fc.constantFrom("", " ", "\t"),
+    async (prefix, suffix) => {
+      for (const state of [1, 2, 3, 4, 5] as const) {
+        const { child, home, transport } = await connectOutboundFixture(state >= 4);
+        try {
+          if (state >= 2) codexAuthState.reject(home);
+          if (state === 3 || state === 5) await transport.close();
+          for (const row of matrix) {
+            const frame = prefix + row[0] + suffix;
+            const expected = row[state];
+            const before = child.sent.length;
+            if (expected === "write" || expected === "drop") {
+              transport.send(frame);
+            } else if (expected === "null id" || expected === "null method") {
+              expect(() => transport.send(frame)).toThrow(new TypeError(
+                `Cannot read properties of null (reading '${expected === "null id" ? "id" : "method"}')`,
+              ));
+            } else {
+              expect(() => transport.send(frame)).toThrow(expected);
+            }
+            expect(child.sent.slice(before)).toEqual(expected === "write" ? [frame + "\n"] : []);
+          }
+        } finally {
+          await transport.close();
+          codexAuthState.verified(home);
+        }
+      }
+    },
+  ), { numRuns: 20 });
+});
+
+it.each(["close", "exit"] as const)("checks the pipe before malformed JSON after %s on a verified profile", async (end) => {
+  const { child, transport } = await connectOutboundFixture();
+  try {
+    if (end === "close") await transport.close();
+    else child.emit("close", 1, null);
+    for (const frame of ['{"id":', "null", '{"id":1,"method":"turn/start"}']) {
+      expect(() => transport.send(frame)).toThrow("codex app server stdio not connected");
+    }
+    const sendResponse = () => transport.send('{"id":1,"result":{}}');
+    if (end === "close") sendResponse();
+    else expect(sendResponse).toThrow("codex app server stdio not connected");
+    expect(child.sent).toEqual([]);
+  } finally {
+    await transport.close();
+  }
+});
+
+it("flushes only a matching ID with no method, independently of the auth response shape", async () => {
+  const { transport } = await connectOutboundFixture();
+  let flushed = false;
+  const ack = transport.waitForResponseFlush(1).then(() => { flushed = true; });
+  try {
+    transport.send('{"id":1,"method":null,"result":0}');
+    transport.send('{"id":"1","result":{}}');
+    transport.send('{"id":1,"method":"account/read"}');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(flushed).toBe(false);
+    transport.send('{"id":1}');
+    await ack;
+  } finally {
+    await transport.close();
+    await ack.catch(() => undefined);
+  }
+});
+
+it("uses the serialized outbound frame for bytes and request association after observer mutations", async () => {
+  const { child, home, transport } = await connectOutboundFixture();
+  const params = { nested: { text: "wire é🛰️" } };
+  const observed = once(child, "wrote");
+  const connection = new JsonRpcConnection(transport, 1_000, transport.wrapConnectionObserver({
+    onMessage: ({ direction, envelope }) => {
+      if (direction === "outbound") {
+        envelope.method = "mcpServer/oauth/login";
+        envelope.id = "mutated";
+        (envelope.params as typeof params).nested.text = "mutated";
+      }
+    },
+  }));
+  const request = connection.request("account/read", params);
+  const rejected = expect(request).rejects.toThrow("invalid_refresh_token");
+  try {
+    await observed;
+    expect(child.sent).toEqual(['{"jsonrpc":"2.0","id":"rpc-1","method":"account/read","params":{"nested":{"text":"wire é🛰️"}}}\n']);
+    child.stdout.write('{"id":"rpc-1","error":{"message":"invalid_refresh_token"}}\n');
+    await rejected;
+    expect(codexAuthState.isBlocked(home)).toBe(true);
+  } finally {
+    await connection.close();
+    await rejected.catch(() => undefined);
+    codexAuthState.verified(home);
+  }
+});
+
+it.each([1_024, 65_536, 131_072].flatMap((bytes) => [[bytes, 8], [bytes, 16]] as const))(
+  "parses each %i-byte turn/start frame once over %i connected sends", async (bytes, count) => {
+    const { child, transport } = await connectOutboundFixture();
+    const encode = (id: number, text: string) => JSON.stringify({
+      jsonrpc: "2.0", id, method: "turn/start", params: { input: [{ type: "text", text }] },
+    });
+    const payload = "x".repeat(bytes - encode(1_000, "").length);
+    let frame = "";
+    let parseAttempts = 0;
+    let parsedBytes = 0;
+    const parse = JSON.parse;
+    JSON.parse = (...args: Parameters<typeof JSON.parse>) => {
+      if (args[0] === frame) {
+        parseAttempts += 1;
+        parsedBytes += frame.length; // The fixture is ASCII.
+      }
+      return parse(...args);
+    };
+    try {
+      for (let index = 0; index < count; index++) {
+        frame = encode(1_000 + index, payload);
+        transport.send(frame);
+      }
+    } finally {
+      JSON.parse = parse;
+      await transport.close();
+    }
+    expect(child.sent).toHaveLength(count);
+    expect(parseAttempts).toBe(count);
+    expect(parsedBytes).toBe(count * bytes);
+  },
+);
 
 const methods = ["account/read", "model/list", "thread/read", "turn/start", "mcpServer/oauth/login"] as const;
 const authError = { code: -32603, message: "Your access token could not be refreshed. Please log out and sign in again." };
