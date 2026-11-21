@@ -363,7 +363,7 @@ export class MessagingBrowseWorkflow {
     };
     try {
       const page = await this.queryPool.read({ sessionId: session.id, query, owners,
-        omittedOwners: canReadRemote ? inventory.omitted : 0, pageSize: session.pageSize, pageIndex: session.pageIndex, onProgress: publish });
+        omittedOwners: canReadRemote ? inventory.omitted : 0, pageSize: session.pageSize, pageIndex: session.pageIndex });
       await publish(page);
     } catch (error) {
       if (stillCurrent()) throw error;
