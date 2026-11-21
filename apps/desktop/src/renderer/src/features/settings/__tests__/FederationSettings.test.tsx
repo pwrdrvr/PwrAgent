@@ -1248,6 +1248,44 @@ describe("FederationSettings", () => {
     vi.useRealTimers();
   });
 
+  it("states each edge credential's stored value under its box and asks before clearing them", async () => {
+    const onClearSecret = vi.fn(async () => true);
+    const snapshot = settingsSnapshot();
+    snapshot.federation.cloudflareClientCertificate = { configured: true, source: "keychain", writable: true };
+    render(
+      <FederationSettings
+        onClearSecret={onClearSecret}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={snapshot}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    const certificate = screen.getByLabelText("Client certificate");
+    expect(certificate).toHaveAccessibleDescription("Saved in keychain");
+    expect(certificate).toHaveAttribute("placeholder", "Paste a new value to replace it");
+    const secret = screen.getByLabelText("Access client secret");
+    expect(secret).toHaveAccessibleDescription("Not set");
+    expect(secret).toHaveAttribute("placeholder", "Paste the value here");
+    fireEvent.change(secret, { target: { value: "fixture-secret" } });
+    expect(secret).toHaveAccessibleDescription(
+      "Not saved yet. Saved in keychain when you save the edge policy.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear credentials" }));
+    expect(onClearSecret).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Keep Cloudflare credentials" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Keep Cloudflare credentials" }));
+    expect(screen.getByRole("button", { name: "Clear credentials" })).toHaveFocus();
+    expect(onClearSecret).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear credentials" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cloudflare credentials now" }));
+    await waitFor(() => expect(onClearSecret).toHaveBeenCalledTimes(4));
+  });
+
   it("stores Cloudflare client credentials before enabling edge policy", async () => {
     const onReplaceSecret = vi.fn(async () => true);
     const onWriteConfig = vi.fn(async () => true);
@@ -1268,10 +1306,10 @@ describe("FederationSettings", () => {
     expect(mtls).toHaveAttribute("aria-checked", "false");
     fireEvent.click(mtls);
     expect(mtls).toHaveAttribute("aria-checked", "true");
-    fireEvent.change(screen.getByPlaceholderText("PEM certificate"), {
+    fireEvent.change(screen.getByLabelText("Client certificate"), {
       target: { value: "certificate-pem" },
     });
-    fireEvent.change(screen.getByPlaceholderText("PEM private key"), {
+    fireEvent.change(screen.getByLabelText("Client private key"), {
       target: { value: "private-key-pem" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save edge policy" }));

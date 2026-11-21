@@ -11219,7 +11219,8 @@ describe("SettingsScreen", () => {
     expect(within(dialog).queryByLabelText("MCP server URL")).not.toBeInTheDocument();
     const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
     expect(secret).toHaveValue("");
-    expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
+    expect(secret).toHaveAttribute("placeholder", "Paste a new value to replace it");
+    expect(secret).toHaveAccessibleDescription("Saved in keychain");
     expect(within(dialog).getByText(/stops the 2 sessions/)).toBeInTheDocument();
     // Shown as one line, the way it was pasted, with the resolved program.
     const commandLine = within(dialog).getByLabelText(/^Command line/);

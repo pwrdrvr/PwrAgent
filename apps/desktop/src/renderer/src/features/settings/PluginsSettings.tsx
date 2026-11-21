@@ -97,6 +97,8 @@ import {
   type GithubConnectionDraft,
 } from "./GithubConnectionForm";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { FormSecretInput } from "./FormSecretInput";
+import { describeFormSecret, secretStoreState } from "./secret-field-state";
 import { sourceBadge } from "./settings-fields";
 import { shortenCodexHome } from "./shorten-codex-home";
 import { getHomeDir } from "../../lib/tildify-path";
@@ -1466,7 +1468,13 @@ export function PluginsSettings(props: {
             connectionId: draft.connectionId,
             displayName: draft.displayName,
             serverUrl: draft.serverUrl,
-            ...(draft.ipcBearerToken === undefined ? {} : { ipcBearerToken: draft.ipcBearerToken }),
+            // Blank keeps the stored token, as the line under the box says;
+            // only an explicit Remove ("") or a real token changes it. Main
+            // trims, so spaces alone would otherwise delete it.
+            ...(draft.ipcBearerToken === undefined
+              || (draft.ipcBearerToken !== "" && !draft.ipcBearerToken.trim())
+              ? {}
+              : { ipcBearerToken: draft.ipcBearerToken }),
           });
       closeConnectionEdit();
       // A failed sign-in describes the server it was attempted against.
@@ -1937,6 +1945,7 @@ export function PluginsSettings(props: {
         </label>
       </div>
       <GithubConnectionFields
+        commit="add the connection"
         cliUsedBy={githubConnections
           .filter((connection) => connection.github?.account === "gh_cli")
           .map((connection) => connection.displayName)}
@@ -2478,9 +2487,18 @@ export function PluginsSettings(props: {
                     {isMcpIpcUrl(connectionUrl) ? (
                       <label>
                         <span>Session bearer token (optional)</span>
-                        <input className="settings-input" type="password" autoComplete="off"
-                          disabled={Boolean(connectionPending)} value={ipcBearerToken}
-                          onChange={(event) => setIpcBearerToken(event.target.value)} />
+                        <FormSecretInput
+                          disabled={Boolean(connectionPending)}
+                          label="Session bearer token (optional)"
+                          value={ipcBearerToken}
+                          view={describeFormSecret(
+                            // A connection being added has nothing stored yet.
+                            secretStoreState(false),
+                            { dirty: ipcBearerToken.trim().length > 0 },
+                            "add the connection",
+                          )}
+                          onChange={setIpcBearerToken}
+                        />
                       </label>
                     ) : null}
                     {probe ? (
@@ -2569,6 +2587,7 @@ export function PluginsSettings(props: {
                       </label>
                     </div>
                     <LocalCommandFields
+                      commit="add the connection"
                       desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
                       draft={localDraft}
@@ -2792,12 +2811,28 @@ export function PluginsSettings(props: {
               )}
               {!connectionEdit.local && !connectionEdit.github && isMcpIpcUrl(connectionEdit.serverUrl) ? (
                 <label>
-                  <span>New session bearer token (leave blank to keep)</span>
-                  <input className="settings-input" type="password" autoComplete="off"
-                    disabled={Boolean(connectionPending)} value={connectionEdit.ipcBearerToken ?? ""}
-                    onChange={(event) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: event.target.value || undefined })} />
-                  <button type="button" className="button button--secondary" disabled={Boolean(connectionPending)}
-                    onClick={() => setConnectionEdit({ ...connectionEdit, ipcBearerToken: "" })}>Clear saved token</button>
+                  <span>Session bearer token</span>
+                  <FormSecretInput
+                    disabled={Boolean(connectionPending)}
+                    label="Session bearer token"
+                    valueName="session bearer token"
+                    removing={connectionEdit.ipcBearerToken === ""}
+                    value={connectionEdit.ipcBearerToken ?? ""}
+                    view={describeFormSecret(
+                      // The owner never says whether a token is stored, so
+                      // the words claim neither. A changed URL drops it.
+                      editDraftRepointsServer(connectionEdit) ? secretStoreState(false) : undefined,
+                      {
+                        dirty: Boolean(connectionEdit.ipcBearerToken?.trim()),
+                        removing: connectionEdit.ipcBearerToken === "",
+                      },
+                    )}
+                    onChange={(value) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: value || undefined })}
+                    onRemove={(remove) => setConnectionEdit({
+                      ...connectionEdit,
+                      ipcBearerToken: remove ? "" : undefined,
+                    })}
+                  />
                 </label>
               ) : null}
             </div>

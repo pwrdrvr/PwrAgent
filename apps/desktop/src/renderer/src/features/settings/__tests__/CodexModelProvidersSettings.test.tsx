@@ -228,6 +228,26 @@ describe("CodexModelProvidersSettings", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("marks a stored key for removal, says so under the box, and removes it on Save", async () => {
+    const { onSave, setCodexModelProviderApiKey } = renderSettings([refuseless]);
+    fireEvent.click(within(screen.getByRole("group", { name: "Codex model providers" })).getByRole("button", { name: "Edit" }));
+    const key = screen.getByLabelText("API key");
+    expect(key).toHaveAccessibleDescription("Saved in keychain");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved API key" }));
+    expect(key).toBeDisabled();
+    expect(key).toHaveAccessibleDescription("Not removed yet. Removed when you save and reconnect.");
+    // Keep undoes the mark; nothing was written either way.
+    fireEvent.click(screen.getByRole("button", { name: "Keep saved API key" }));
+    expect(key).toHaveAccessibleDescription("Saved in keychain");
+    expect(setCodexModelProviderApiKey).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved API key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(setCodexModelProviderApiKey).toHaveBeenCalledWith({ providerId: "refuseless" });
+  });
+
   it("edits a provider without changing its id and keeps its stored key", async () => {
     const { onSave, setCodexModelProviderApiKey } = renderSettings([refuseless]);
     const list = screen.getByRole("group", { name: "Codex model providers" });
