@@ -4,6 +4,7 @@ import { canRetryAfterShutdown, groupUnitRetries, isUnitRunComplete, planE2eRetr
 const test = (id, name, state = "failed") => ({ id, name, state });
 const report = (tests, overrides = {}) => ({
   complete: true,
+  shutdownComplete: true,
   unhandledErrors: 0,
   suites: [{ project: "desktop-main", file: "/repo/example.test.ts", errors: 0, tests }],
   ...overrides,
