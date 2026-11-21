@@ -248,13 +248,11 @@ describe("StdioJsonRpcTransport", () => {
       await transport.connect();
       expect(order).toEqual(["read", "spawn"]);
       expect(transport.getProcessInfo()).toEqual(expect.objectContaining({ executable }));
-      await transport.close();
-      expect(child.killCalled).toBe(true);
-      expect(transport.getProcessInfo()).toBeUndefined();
     } finally {
-      await transport.close();
-      terminate.mockRestore();
+      await transport.close().finally(() => terminate.mockRestore());
     }
+    expect(child.killCalled).toBe(true);
+    expect(transport.getProcessInfo()).toBeUndefined();
   });
 
   it("stops further requests after a rejected refresh token", async () => {

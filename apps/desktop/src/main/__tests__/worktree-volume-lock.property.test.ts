@@ -56,41 +56,41 @@ function record(repo: string, worktree: string): { locked: boolean; lockReason?:
  * lock someone else set still stops the removal.
  */
 describe("worktree volume locks", () => {
-  it("keeps cross-volume worktrees through a prune while unplugged, and never clears a foreign lock", async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.boolean(), fc.boolean(), async (separateVolume, foreignLock) => {
-        const { repo, worktree, container } = await fixture();
-        if (foreignLock) git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])("preserves worktrees through unplug and prune based on separate volume %s and foreign lock %s", async (separateVolume, foreignLock) => {
+    const { repo, worktree, container } = await fixture();
+    if (foreignLock) git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
 
-        const locked = await lockWorktreeOnSeparateVolume({
-          repoRoot: repo,
-          worktreePath: worktree,
-          git: async (args) => git(repo, args),
-          separateVolume: async () => separateVolume,
-        });
-        expect(locked).toBe(separateVolume && !foreignLock);
+    const locked = await lockWorktreeOnSeparateVolume({
+      repoRoot: repo,
+      worktreePath: worktree,
+      git: async (args) => git(repo, args),
+      separateVolume: async () => separateVolume,
+    });
+    expect(locked).toBe(separateVolume && !foreignLock);
 
-        // Unplug the drive: the whole container disappears, then prune runs.
-        const unplugged = `${container}-unplugged`;
-        await rename(container, unplugged);
-        git(repo, ["worktree", "prune"]);
-        expect(record(repo, worktree) !== undefined).toBe(separateVolume || foreignLock);
-        await rename(unplugged, container);
-        if (!record(repo, worktree)) return;
+    // Unplug the drive: the whole container disappears, then prune runs.
+    const unplugged = `${container}-unplugged`;
+    await rename(container, unplugged);
+    git(repo, ["worktree", "prune"]);
+    expect(record(repo, worktree) !== undefined).toBe(separateVolume || foreignLock);
+    await rename(unplugged, container);
+    if (!record(repo, worktree)) return;
 
-        const cleared = await unlockPwrAgentWorktreeLock({ worktreePath: worktree, git: async (args) => git(repo, args) });
-        expect(cleared).toBe(separateVolume && !foreignLock);
-        expect(record(repo, worktree)?.locked).toBe(foreignLock);
-        if (foreignLock) {
-          expect(record(repo, worktree)?.lockReason).toBe("operator hold");
-          expect(() => git(repo, ["worktree", "remove", "--force", worktree])).toThrow(/locked/);
-        } else {
-          git(repo, ["worktree", "remove", "--force", worktree]);
-          expect(existsSync(worktree)).toBe(false);
-        }
-      }),
-      { numRuns: 8 },
-    );
+    const cleared = await unlockPwrAgentWorktreeLock({ worktreePath: worktree, git: async (args) => git(repo, args) });
+    expect(cleared).toBe(separateVolume && !foreignLock);
+    expect(record(repo, worktree)?.locked).toBe(foreignLock);
+    if (foreignLock) {
+      expect(record(repo, worktree)?.lockReason).toBe("operator hold");
+      expect(() => git(repo, ["worktree", "remove", "--force", worktree])).toThrow(/locked/);
+    } else {
+      git(repo, ["worktree", "remove", "--force", worktree]);
+      expect(existsSync(worktree)).toBe(false);
+    }
   });
 
   // Exhaust the three possible lock holders with and without the checkout.

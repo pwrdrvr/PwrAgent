@@ -60,6 +60,8 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         chromiumTracePublisher: typeof chromiumTracePublisher;
       };
       const fs = require("node:fs/promises") as typeof import("node:fs/promises");
+      process.getBuiltinModule("node:v8").setFlagsFromString("--expose_gc");
+      const collectGarbage = process.getBuiltinModule("node:vm").runInNewContext("gc") as () => void;
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const target = new BrowserWindow({ width: 640, height: 480, webPreferences: { backgroundThrottling: false } });
       const warnings: string[] = [];
@@ -111,6 +113,11 @@ test("native rolling trace evicts old events and publishes only filtered timing 
           const owner = {};
           try {
             await trace.arm(owner);
+            // The capture must still export after V8 collects unreachable
+            // wrappers in the main process while the recorder is armed.
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            collectGarbage();
+            await new Promise<void>((resolve) => setImmediate(resolve));
             await target.webContents.executeJavaScript("performance.mark('early-overflow-marker')");
             for (let batch = 0; batch < 24; batch += 1) {
               await target.webContents.executeJavaScript(`
