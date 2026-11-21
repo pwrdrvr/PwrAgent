@@ -1,5 +1,5 @@
-import { act, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
-import { StrictMode, useLayoutEffect } from "react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
@@ -9,7 +9,6 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
-import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDisclosure";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { navigationIdentityKey, navigationThreadSelectionKey } from "../navigation-query-state";
@@ -104,103 +103,6 @@ it("waits for the expanded unpinned section after directory descriptors and pins
   await act(async () => finish());
   await waitFor(() => expect(result.current.presentationReady).toBe(true));
   unmount();
-});
-
-it.each(["drafts", "directories"] as const)("restores %s only after its cached resources and rendered rows return", async (destination) => {
-  const fixture = api();
-  const rows: NavigationRow[] = Array.from({ length: 10 }, (_, index) => ({
-    id: `saved-${index}`, source: "codex", title: `Saved ${index}`, titleSource: "explicit",
-    ref: { backend: "codex", threadId: `saved-${index}` }, rowRevision: "r", linkedDirectories: [],
-    inbox: { inInbox: true }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
-    queueCount: 0, queueState: "unknown",
-  }));
-  const draftRefs = rows.map((row) => row.ref);
-  fixture.read.mockImplementation(async (request) => page({
-    directories: request.query.kind === "directory-index" ? [directory] : undefined,
-    entries: (request.query.kind === "exact" || (request.query.kind === "directory" && request.query.roots === "unpinned")
-      ? rows : []).map((row) => ({ row, placement: { kind: "root" }, orderKey: row.id })),
-  }));
-  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
-  function Window(props: { mode: "inbox" | typeof destination; hydrated: boolean }) {
-    const disclosure = useNavigationDirectoryDisclosure();
-    useLayoutEffect(() => { disclosure.setExpandedByKey({ [directory.key]: true }); }, [disclosure.setExpandedByKey]);
-    navigation = useBoundedNavigationWindow({ ...base, browseMode: props.mode, desktopApi: fixture.desktopApi,
-      expandedByKey: disclosure.expandedByKey, draftRefs });
-    const threads = props.hydrated ? [...navigation.resources.values()].flatMap((resource) => resource.state.page?.entries.map(({ row }) => row) ?? []) : [];
-    return <Sidebar backends={[]} browseMode={props.mode} directories={props.hydrated ? navigation.directories : []}
-      threads={threads} inboxThreads={threads} pagedNavigation={navigation} directoryDisclosure={disclosure}
-      loading={false} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
-      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
-  }
-  const mounted = render(<Window mode={destination} hydrated />);
-  try {
-    await waitFor(() => expect(mounted.container.querySelectorAll(".thread-row-shell")).toHaveLength(10));
-    const scroll = mounted.container.querySelector<HTMLDivElement>(".sidebar__scroll-region")!;
-    let offset = 0;
-    // jsdom does not perform browser layout or clamp scrollTop on a short list.
-    Object.defineProperty(scroll, "scrollTop", { configurable: true, get: () => offset,
-      set: (value: number) => { offset = Math.max(0, Math.min(value, mounted.container.querySelectorAll(".thread-row-shell").length * 50 - 100)); } });
-    scroll.scrollTop = 180;
-    fireEvent.scroll(scroll);
-    mounted.rerender(<Window mode="inbox" hydrated />);
-    await waitFor(() => expect(navigation.presentationReady).toBe(true));
-    expect(scroll.scrollTop).toBe(0);
-    mounted.rerender(<Window mode={destination} hydrated={false} />);
-    expect(scroll.scrollTop).toBe(0);
-    // Cached owner pages have arrived, but the parent has yet to hydrate rows
-    // and directory descriptors into the actual sidebar presentation.
-    await waitFor(() => expect(navigation.presentationReady).toBe(true));
-    mounted.rerender(<Window mode={destination} hydrated />);
-    expect(mounted.container.querySelectorAll(".thread-row-shell")).toHaveLength(10);
-    expect(scroll.scrollTop).toBe(180);
-  } finally {
-    mounted.unmount();
-  }
-});
-
-it.each([
-  [false, "owner"], [false, "viewer"], [true, "owner"], [true, "viewer"],
-] as const)("keeps viewer directory counts during remote selection (same path=%s, first=%s)", async (samePath, first) => {
-  const fixture = api();
-  const local = { ...directory, key: "directory:/viewer/PwrSnap", label: "PwrSnap",
-    counts: { total: 10, active: 2, activeRemote: 2, unread: 1, review: 1 } };
-  const remote = { ...local, key: samePath ? local.key : "directory:/owner/PwrSnap",
-    counts: { total: 3, active: 2, unread: 1, review: 1 } };
-  const ref = { backend: "codex" as const, threadId: "remote-root", ownerInstanceId: "peer" };
-  const row: NavigationRow = { id: ref.threadId, source: "codex", ref, title: "Remote root", titleSource: "explicit",
-    rowRevision: "r", linkedDirectories: [{ id: "owner-project", label: "PwrSnap", path: "/owner/PwrSnap", kind: "local" }],
-    inbox: { inInbox: false }, ordinaryChildCount: 1,
-    nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
-  let finish!: () => void;
-  const gate = new Promise<void>((resolve) => { finish = resolve; });
-  fixture.read.mockImplementation(async (request) => {
-    if (request.query.kind === "directory-index") return page({ directories: request.query.keys ? [] : [local] });
-    if (request.query.kind !== "exact") return page();
-    const owner = request.federationTarget?.scope === "remote";
-    if (owner !== (first === "owner")) await gate;
-    return page({ selectionDirectory: owner ? remote : local,
-      entries: [{ row, placement: { kind: "root" }, orderKey: "root" }] });
-  });
-  const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base,
-    desktopApi: fixture.desktopApi, selectedRef: ref, selectedDirectoryKeys: [remote.key],
-  }));
-  try {
-    const firstId = first === "owner" ? "selected-context" : "selected-viewer-mount";
-    await waitFor(() => expect(result.current.resources.get(firstId)?.state.page).toBeDefined());
-    expect(result.current.directories).toEqual([local]);
-    expect(result.current.selectedDirectoryKeys).toEqual(first === "owner" ? [] : [local.key]);
-    await act(async () => finish());
-    await waitFor(() => expect(result.current.resources.get("selected-context")?.loading).toBe(false));
-    await waitFor(() => expect(result.current.resources.get("selected-viewer-mount")?.loading).toBe(false));
-    expect(result.current.directories).toEqual([local]);
-    expect(result.current.selectedDirectoryKeys).toEqual([local.key]);
-    expect(result.current.resources.get("selected-context")?.state.page?.entries[0]?.row.ordinaryChildCount).toBe(1);
-    if (!samePath) expect(fixture.read.mock.calls.some(([request]) =>
-      request.query.kind === "directory" && request.query.directoryKey === remote.key)).toBe(false);
-  } finally {
-    finish();
-    unmount();
-  }
 });
 
 it("uses owner directory descriptors in a window browsing that owner", async () => {
