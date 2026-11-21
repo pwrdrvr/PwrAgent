@@ -1,6 +1,7 @@
 import type {
   AppServerReadThreadRequest,
   AppServerThreadEntry,
+  AppServerThreadMessage,
   AppServerThreadReplay,
 } from "./contracts/normalized-app-server";
 
@@ -161,20 +162,10 @@ export function replayWithEntries(
   entries: AppServerThreadEntry[],
   pagination: AppServerThreadReplay["pagination"],
 ): AppServerThreadReplay {
-  const messages = entries.flatMap((entry) =>
-    entry.type === "message"
-      ? [
-          {
-            id: entry.id,
-            role: entry.role,
-            text: entry.text,
-            ...(entry.parts ? { parts: entry.parts } : {}),
-            ...(entry.origin ? { origin: entry.origin } : {}),
-            ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
-          },
-        ]
-      : [],
-  );
+  const messages = entries.flatMap((entry) => {
+    const message = replayMessage(entry);
+    return message ? [message] : [];
+  });
   const lastUserMessage = messages.findLast((message) => message.role === "user")?.text;
   const lastAssistantMessage = messages.findLast(
     (message) => message.role === "assistant",
@@ -187,6 +178,20 @@ export function replayWithEntries(
     lastUserMessage,
     lastAssistantMessage,
     pagination,
+  };
+}
+
+function replayMessage(entry: AppServerThreadEntry): AppServerThreadMessage | undefined {
+  if (entry.type !== "message") {
+    return undefined;
+  }
+  return {
+    id: entry.id,
+    role: entry.role,
+    text: entry.text,
+    ...(entry.parts ? { parts: entry.parts } : {}),
+    ...(entry.origin ? { origin: entry.origin } : {}),
+    ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
   };
 }
 
@@ -212,15 +217,21 @@ const FEDERATION_OMITTED_ENTRY_TEXT =
  */
 export type ThreadReplayCursorIdSpace = "entry-id" | "provider-cursor";
 
-export function fitThreadReplayWithinByteBudget(params: {
+type MeasureJsonBytes = (value: unknown) => number;
+
+type ReplayByteBudget = {
+  replay: AppServerThreadReplay;
+  maxBytes: number;
+  /** UTF-8 byte length of compact JSON for a replay or one of its fragments. */
+  measureJsonBytes: MeasureJsonBytes;
+};
+
+export function fitThreadReplayWithinByteBudget(params: ReplayByteBudget & {
   cursorIdSpace: ThreadReplayCursorIdSpace;
   /** Entries a later `before` can resolve. Defaults to every entry. */
   isCursorEntry?: (entry: AppServerThreadEntry) => boolean;
-  replay: AppServerThreadReplay;
-  maxBytes: number;
-  measureBytes: (replay: AppServerThreadReplay) => number;
 }): AppServerThreadReplay {
-  if (params.measureBytes(params.replay) <= params.maxBytes) {
+  if (params.measureJsonBytes(params.replay) <= params.maxBytes) {
     return params.replay;
   }
 
@@ -235,71 +246,134 @@ export function fitThreadReplayWithinByteBudget(params: {
     return compactReplayWithinByteBudget(params);
   }
 
-  // Every entry the trim removes from the front is one the reader can still
-  // ask for, because the cursor this mints names the new page start.
-  let entries = params.replay.entries;
-  while (entries.length > 1) {
-    entries = entries.slice(1);
-    const candidate = replayWithEntries(
-      params.replay,
-      entries,
-      mintEntryCursorPagination(entries, true, params.isCursorEntry),
-    );
-    if (params.measureBytes(candidate) <= params.maxBytes) {
-      return candidate;
-    }
+  return trimReplayWithinByteBudget(params, params.isCursorEntry);
+}
+
+function trimReplayWithinByteBudget(
+  { replay, maxBytes, measureJsonBytes }: ReplayByteBudget,
+  isCursorEntry: (entry: AppServerThreadEntry) => boolean = () => true,
+): AppServerThreadReplay {
+  const { entries } = replay;
+  const empty = replayWithEntries(replay, [], mintEntryCursorPagination([], false));
+  if (entries.length === 0) {
+    return empty;
   }
 
-  const oversizedEntry = entries[0];
-  if (oversizedEntry) {
-    const candidate = replayWithEntries(
-      params.replay,
-      [compactOversizedEntry(oversizedEntry)],
-      // Classify the entry as it arrived. Compaction rewrites an activity's
-      // summary, and a usage row matched by summary rather than by id would
-      // read as provider-owned afterwards — the overlay-id cursor this module
-      // exists to prevent.
-      mintEntryCursorPagination(
-        [oversizedEntry],
-        params.replay.pagination.hasPreviousPage || params.replay.entries.length > 1,
-        params.isCursorEntry,
-      ),
-    );
-    if (params.measureBytes(candidate) <= params.maxBytes) {
-      return candidate;
+  // Grow a suffix from the newest entry so each row and cursor is measured
+  // once. Keep the longest fitting suffix, since changing the first eligible
+  // cursor can make a longer suffix smaller. The original page (start 0) was
+  // already measured, with its own pagination and message projections.
+  const emptyRowsBytes = measureJsonBytes({ entries: [], messages: [] });
+  let pagination = empty.pagination;
+  let paginationBytes = measureJsonBytes(pagination);
+  let replayBytesWithoutPagination = measureJsonBytes(empty) - paginationBytes;
+  const messageRoles = new Set<AppServerThreadMessage["role"]>();
+  let start = entries.length;
+  let fittedPagination = pagination;
+  for (let index = entries.length - 1; index > 0; index -= 1) {
+    const entry = entries[index]!;
+    const isLastMessage = entry.type === "message" && !messageRoles.has(entry.role);
+    replayBytesWithoutPagination += measureEntryFragment(entry, isLastMessage, measureJsonBytes) - emptyRowsBytes;
+    if (index < entries.length - 1) {
+      replayBytesWithoutPagination += 1; // Entries array comma.
+    }
+    if (entry.type === "message") {
+      if (messageRoles.size > 0) {
+        replayBytesWithoutPagination += 1; // Messages array comma.
+      }
+      messageRoles.add(entry.role);
+    }
+    // The entries and last-message fields can only add bytes as the suffix
+    // grows. Once those alone exceed the budget, no cursor can make it fit.
+    if (replayBytesWithoutPagination > maxBytes) {
+      break;
+    }
+    if (isCursorEntry(entry)) {
+      pagination = mintEntryCursorPagination([entry], true);
+      paginationBytes = measureJsonBytes(pagination);
+    }
+    if (replayBytesWithoutPagination + paginationBytes <= maxBytes) {
+      start = index;
+      fittedPagination = pagination;
     }
   }
+  if (start < entries.length) {
+    return replayWithEntries(replay, entries.slice(start), fittedPagination);
+  }
 
-  return replayWithEntries(params.replay, [], mintEntryCursorPagination([], false));
+  const oversizedEntry = entries[entries.length - 1]!;
+  const candidate = replayWithEntries(
+    replay,
+    [compactOversizedEntry(oversizedEntry)],
+    // Compaction rewrites activity summaries that can identify overlay rows.
+    mintEntryCursorPagination(
+      [oversizedEntry],
+      replay.pagination.hasPreviousPage || entries.length > 1,
+      isCursorEntry,
+    ),
+  );
+  return measureJsonBytes(candidate) <= maxBytes ? candidate : empty;
 }
 
 /**
  * Fits a page whose boundaries belong to the backend.
  *
- * The entry set is what the backend's cursor is defined against, so it is kept
- * whole and the oversized entries inside it are replaced with the omitted-entry
- * marker, oldest first. The reader sees which rows were dropped and can still
- * page back from exactly where the backend said.
+ * Replace content oldest first, keeping every entry at its original boundary.
+ * Each replacement preserves the row's type and role, so array separators and
+ * the entries supplying the last-message fields stay fixed.
  */
-function compactReplayWithinByteBudget(params: {
-  replay: AppServerThreadReplay;
-  maxBytes: number;
-  measureBytes: (replay: AppServerThreadReplay) => number;
-}): AppServerThreadReplay {
-  const entries = [...params.replay.entries];
-  for (let index = 0; index < entries.length; index += 1) {
-    entries[index] = compactOversizedEntry(entries[index]!);
-    const candidate = replayWithEntries(
-      params.replay,
-      [...entries],
-      params.replay.pagination,
-    );
-    if (params.measureBytes(candidate) <= params.maxBytes) {
-      return candidate;
-    }
+function compactReplayWithinByteBudget(
+  { replay, maxBytes, measureJsonBytes }: ReplayByteBudget,
+): AppServerThreadReplay {
+  const { pagination } = replay;
+  const empty = replayWithEntries(replay, [], pagination);
+  if (replay.entries.length === 0) {
+    return empty;
   }
 
-  return replayWithEntries(params.replay, [], params.replay.pagination);
+  // Size the first candidate from its rebuilt projections and keep the row
+  // sizes for later omissions. The first row is already compacted here.
+  const entries = [...replay.entries];
+  entries[0] = compactOversizedEntry(entries[0]!);
+  const lastUserIndex = entries.findLastIndex((entry) => entry.type === "message" && entry.role === "user");
+  const lastAssistantIndex = entries.findLastIndex((entry) => entry.type === "message" && entry.role === "assistant");
+  const measureRow = (entry: AppServerThreadEntry, index: number) =>
+    measureEntryFragment(entry, index === lastUserIndex || index === lastAssistantIndex, measureJsonBytes);
+  const emptyRowsBytes = measureJsonBytes({ entries: [], messages: [] });
+  let bytes = measureJsonBytes(empty) + entries.length - 1; // Entries array commas.
+  let messageCount = 0;
+  const rowBytes = entries.map((entry, index) => {
+    const size = measureRow(entry, index);
+    bytes += size - emptyRowsBytes;
+    if (entry.type === "message") {
+      messageCount += 1;
+    }
+    return size;
+  });
+  bytes += Math.max(0, messageCount - 1); // Messages array commas.
+
+  for (let index = 1; bytes > maxBytes && index < entries.length; index += 1) {
+    const compacted = compactOversizedEntry(entries[index]!);
+    bytes += measureRow(compacted, index) - rowBytes[index]!;
+    entries[index] = compacted;
+  }
+  return bytes <= maxBytes ? replayWithEntries(replay, entries, pagination) : empty;
+}
+
+// Include precisely the copies of an entry that appear in the rebuilt replay.
+// The entry and message brackets are fixed, and callers account for commas.
+function measureEntryFragment(
+  entry: AppServerThreadEntry,
+  isLastMessage: boolean,
+  measureJsonBytes: MeasureJsonBytes,
+): number {
+  const message = replayMessage(entry);
+  return measureJsonBytes({
+    entries: [entry],
+    messages: message ? [message] : [],
+    lastUserMessage: isLastMessage && message?.role === "user" ? message.text : undefined,
+    lastAssistantMessage: isLastMessage && message?.role === "assistant" ? message.text : undefined,
+  });
 }
 
 function compactOversizedEntry(entry: AppServerThreadEntry): AppServerThreadEntry {

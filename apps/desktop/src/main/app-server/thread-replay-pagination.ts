@@ -68,7 +68,7 @@ export function fitNormalizedReplayWithinByteBudget(params: {
   cursorIdSpace: ThreadReplayCursorIdSpace;
   replay: AppServerThreadReplay;
   maxBytes: number;
-  measureBytes: (replay: AppServerThreadReplay) => number;
+  measureJsonBytes: (value: unknown) => number;
 }): AppServerThreadReplay {
   return fitThreadReplayWithinByteBudget({
     ...params,

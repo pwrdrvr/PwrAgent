@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
+  AppServerThreadMessageEntry,
   AppServerThreadReplay,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
@@ -157,10 +158,12 @@ describe("thread replay pagination cursor id space", () => {
 });
 
 describe("thread replay federation byte budget", () => {
+  const measureJsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+
   it("mints a provider cursor when the trim leaves an overlay row leading", () => {
     const replay = buildReplay([
-      turnEntry("turn-1", "user", "Question one"),
-      turnEntry("turn-1", "assistant", "Answer one", "final"),
+      { ...turnEntry("turn-1", "user", "Question one"), text: "q".repeat(1024) },
+      { ...turnEntry("turn-1", "assistant", "Answer one", "final"), text: "a".repeat(1024) },
       usageEntry("turn-1"),
       turnEntry("turn-2", "user", "Question two"),
     ]);
@@ -168,9 +171,8 @@ describe("thread replay federation byte budget", () => {
     const trimmed = fitNormalizedReplayWithinByteBudget({
       cursorIdSpace: "entry-id",
       replay,
-      maxBytes: 0,
-      measureBytes: (candidate) =>
-        candidate.entries[0]?.id === "live-turn-usage-turn-1" ? 0 : 1,
+      maxBytes: 650,
+      measureJsonBytes,
     });
 
     expect(trimmed.entries.map((entry) => entry.id)).toEqual([
@@ -187,7 +189,7 @@ describe("thread replay federation byte budget", () => {
   it("compacts in place rather than move a natively paginated page's boundary", () => {
     const replay: AppServerThreadReplay = {
       ...buildReplay([
-        turnEntry("turn-1", "user", "Question one"),
+        { ...turnEntry("turn-1", "user", "Question one"), text: "q".repeat(1024) },
         turnEntry("turn-2", "user", "Question two"),
       ]),
       pagination: {
@@ -200,12 +202,8 @@ describe("thread replay federation byte budget", () => {
     const fitted = fitNormalizedReplayWithinByteBudget({
       cursorIdSpace: "provider-cursor",
       replay,
-      maxBytes: 0,
-      measureBytes: (candidate) =>
-        candidate.entries[0]?.type === "message"
-        && candidate.entries[0].text.startsWith("Content omitted")
-          ? 0
-          : 1,
+      maxBytes: 800,
+      measureJsonBytes,
     });
 
     // The backend's cursor is defined against this entry set, so the set is
@@ -218,6 +216,7 @@ describe("thread replay federation byte budget", () => {
     expect(fitted.entries[0]).toMatchObject({
       text: expect.stringContaining("exceeded the federation frame limit"),
     });
+    expect(fitted.entries[1]).toBe(replay.entries[1]);
     expect(fitted.pagination).toEqual({
       supportsPagination: true,
       hasPreviousPage: true,
@@ -227,15 +226,15 @@ describe("thread replay federation byte budget", () => {
 
   it("reports no previous page when only overlay rows remain to name", () => {
     const replay = buildReplay([
-      turnEntry("turn-1", "user", "Question one"),
+      { ...turnEntry("turn-1", "user", "Question one"), text: "q".repeat(1024) },
       usageEntry("turn-1"),
     ]);
 
     const trimmed = fitNormalizedReplayWithinByteBudget({
       cursorIdSpace: "entry-id",
       replay,
-      maxBytes: 0,
-      measureBytes: (candidate) => (candidate.entries.length > 1 ? 1 : 0),
+      maxBytes: 400,
+      measureJsonBytes,
     });
 
     // The renderer gates its load-older control on `hasPreviousPage` alone but
@@ -256,11 +255,11 @@ describe("thread replay federation byte budget", () => {
     // classifying the compacted row would read it as provider-owned and mint
     // an overlay id as the cursor.
     const replay = buildReplay([
-      turnEntry("turn-1", "user", "Question one"),
+      { ...turnEntry("turn-1", "user", "Question one"), text: "q".repeat(1024) },
       {
         type: "activity",
         id: "monitor-usage-1",
-        summary: "Monitor usage: 100 uncached in · 20 out",
+        summary: `Monitor usage: ${"x".repeat(1024)}`,
         status: "completed",
         details: [],
       },
@@ -269,12 +268,8 @@ describe("thread replay federation byte budget", () => {
     const trimmed = fitNormalizedReplayWithinByteBudget({
       cursorIdSpace: "entry-id",
       replay,
-      maxBytes: 0,
-      measureBytes: (candidate) =>
-        candidate.entries[0]?.type === "activity"
-        && candidate.entries[0].summary.startsWith("Content omitted")
-          ? 0
-          : 1,
+      maxBytes: 400,
+      measureJsonBytes,
     });
 
     expect(trimmed.entries.map((entry) => entry.id)).toEqual([
@@ -288,7 +283,7 @@ describe("thread replay federation byte budget", () => {
 
   it("keeps trimming past overlay rows to retain real content", () => {
     const replay = buildReplay([
-      turnEntry("turn-1", "user", "Question one"),
+      { ...turnEntry("turn-1", "user", "Question one"), text: "q".repeat(1024) },
       usageEntry("turn-1"),
       turnEntry("turn-2", "user", "Question two"),
     ]);
@@ -299,8 +294,8 @@ describe("thread replay federation byte budget", () => {
     const trimmed = fitNormalizedReplayWithinByteBudget({
       cursorIdSpace: "entry-id",
       replay,
-      maxBytes: 0,
-      measureBytes: (candidate) => (candidate.entries.length > 2 ? 1 : 0),
+      maxBytes: 650,
+      measureJsonBytes,
     });
 
     expect(trimmed.entries.map((entry) => entry.id)).toEqual([
@@ -341,7 +336,7 @@ function turnEntry(
   role: "assistant" | "user",
   text: string,
   phase?: "commentary" | "final",
-): AppServerThreadEntry {
+): AppServerThreadMessageEntry {
   return {
     type: "message",
     id: `${turnId}-${role}-${text}`,
