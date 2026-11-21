@@ -169,16 +169,64 @@ async function connectOwnerDriver(child: ChildProcess, trace?: TraceOwnerPhase) 
   };
 }
 
-async function removeOwnerFixture(root: string, owner?: Awaited<ReturnType<typeof connectOwnerDriver>>) {
+async function runWithOwnerCleanup(run: () => Promise<void>, cleanup: () => Promise<void>) {
+  let failure: { error: unknown } | undefined;
+  try {
+    await run();
+  } catch (error) {
+    failure = { error };
+    throw error;
+  } finally {
+    await cleanup().catch((error: unknown) => {
+      // An explicit close may already have reported the same cached error.
+      if (failure && failure.error !== error) {
+        throw new AggregateError(
+          [failure.error, error],
+          `${String(failure.error)}\nOwner cleanup also failed: ${String(error)}`,
+          { cause: failure.error },
+        );
+      }
+      throw error;
+    });
+  }
+}
+
+type OwnerFixtureDiagnostics = { logTail?: string };
+
+function readOwnerLogTail(root: string): string | undefined {
+  try {
+    const file = fs.openSync(path.join(root, "profiles/t/logs", resolveMainLogFileNameForProfile("t")), "r");
+    try {
+      const size = fs.fstatSync(file).size;
+      const tail = Buffer.alloc(Math.min(size, 6000));
+      const read = fs.readSync(file, tail, 0, tail.length, size - tail.length);
+      return tail.toString("utf8", 0, read);
+    } finally { fs.closeSync(file); }
+  } catch {
+    return undefined;
+  }
+}
+
+async function removeOwnerFixture(root: string, owner?: Awaited<ReturnType<typeof connectOwnerDriver>>, diagnostics?: OwnerFixtureDiagnostics) {
   try { await owner?.close(); }
-  finally { fs.rmSync(root, { recursive: true, force: true }); }
+  finally {
+    // The joined owner can no longer append to the fixture log.
+    if (diagnostics) diagnostics.logTail = readOwnerLogTail(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 async function expectLostOwnerRepliesToReject(requestCount: number, exitCode: number) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pa-owner-ipc-"));
   const driver = path.join(root, "driver.cjs");
+  const logDirectory = path.join(root, "profiles/t/logs");
+  const logFile = path.join(logDirectory, resolveMainLogFileNameForProfile("t"));
+  const logPrefix = "x".repeat(6200);
+  fs.mkdirSync(logDirectory, { recursive: true });
+  fs.writeFileSync(logFile, logPrefix);
   fs.writeFileSync(driver, `
     let remaining = Number(process.argv[2]);
+    process.stdin.once("end", () => require("node:fs").appendFileSync(${JSON.stringify(logFile)}, "owner exiting"));
     process.stdin.resume();
     process.on("message", request => {
       if (request.method === "echo") {
@@ -197,25 +245,35 @@ async function expectLostOwnerRepliesToReject(requestCount: number, exitCode: nu
   try {
     const owner = await connectOwnerDriver(child);
     expect(await owner.call("echo", "ready")).toBe("ready");
-    const replies = Array.from({ length: requestCount }, () => owner.call("listThreads", {}).then(
-      () => "resolved",
-      (error: Error) => error.message,
-    ));
+    const calls = Array.from({ length: requestCount }, () => owner.call("listThreads", {}));
+    const replies = Promise.allSettled(calls);
+    const diagnostics: OwnerFixtureDiagnostics = {};
+    const outcome = runWithOwnerCleanup(
+      async () => { await Promise.all(calls); },
+      () => removeOwnerFixture(root, owner, diagnostics),
+    ).catch((error: unknown) => error);
     // The child disconnects only after receiving all the requests. Its stdin
     // remains open so IPC loss and process exit are separate observations.
     await disconnected;
-    expect(await Promise.race([Promise.all(replies), nextTurn()])).toEqual(
-      Array.from({ length: requestCount }, () => expect.stringMatching(/listThreads.*IPC disconnected/)),
+    expect(await Promise.race([replies, nextTurn()])).toMatchObject(
+      Array.from({ length: requestCount }, (_, index) => ({
+        status: "rejected",
+        reason: { message: `Owner request listThreads (${index + 2}) failed: IPC disconnected` },
+      })),
     );
-    const cleanup = removeOwnerFixture(root, owner).then(
-      () => "cleaned up",
-      (error: Error) => error.message,
-    );
-    expect(await Promise.race([cleanup, nextTurn()])).toBe("pending");
+    expect(await Promise.race([outcome, nextTurn()])).toBe("pending");
     expect(fs.existsSync(root)).toBe(true);
     child.stdin?.end();
-    expect(await cleanup).toEqual(exitCode ? expect.stringContaining(`code ${exitCode}`) : "cleaned up");
+    const failure = await outcome;
     expect(fs.existsSync(root)).toBe(false);
+    expect(failure).toMatchObject({ message: expect.stringContaining("Owner request listThreads (2) failed: IPC disconnected") });
+    if (exitCode !== 0) {
+      expect(failure).toMatchObject({ errors: [
+        { message: "Owner request listThreads (2) failed: IPC disconnected" },
+        { message: expect.stringContaining(`code ${exitCode}`) },
+      ] });
+    }
+    expect(diagnostics.logTail).toBe((logPrefix + "owner exiting").slice(-6000));
   } finally {
     child.stdin?.end();
     await exited;
@@ -241,7 +299,7 @@ it("fresh desktop and Node roots preserve one profile's native identities, title
     for (const name of ["workspace", "fixture"]) fs.mkdirSync(path.join(root, name));
     let host: Awaited<ReturnType<typeof openOwner>> | undefined;
     type Ref = { backend: "codex"; threadId: string };
-    try {
+    await runWithOwnerCleanup(async () => {
       host = await openOwner(root, "desktop");
       const parent = await host.call<Ref>("startThread", { backend: "codex", cwd: path.join(root, "workspace") });
       const child = await host.call<Ref>("startThread", { backend: "codex", cwd: path.join(root, "workspace") });
@@ -267,7 +325,7 @@ it("fresh desktop and Node roots preserve one profile's native identities, title
         expect(after.thread, JSON.stringify({ info: await host.call("getThreadInfo", child), cached: await host.call("getCachedThreadSummary", child) })).toMatchObject({ title: next });
         await host.close(); host = undefined;
       }
-    } finally { await removeOwnerFixture(root, host); }
+    }, () => removeOwnerFixture(root, host));
   }), { numRuns: 3 });
 }, 120_000);
 
@@ -275,12 +333,12 @@ it("a refused headless startup cannot rewrite a live owner's profile configurati
   const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-owner-")));
   for (const name of ["workspace", "fixture"]) fs.mkdirSync(path.join(root, name));
   let owner: Awaited<ReturnType<typeof openOwner>> | undefined;
-  try {
+  await runWithOwnerCleanup(async () => {
     owner = await openOwner(root, "desktop");
     const file = path.join(root, "profiles/t/config.toml"), before = fs.readFileSync(file);
     await expect(openOwner(root, "headless", { command: "/fixture/different-codex" })).rejects.toThrow(/lease is held/);
     expect(fs.readFileSync(file)).toEqual(before);
-  } finally { await removeOwnerFixture(root, owner); }
+  }, () => removeOwnerFixture(root, owner));
 }, 120_000);
 
 it("the Outpost spawn home stays equal to the explicit preflight home despite saved desktop mappings", async () => {
@@ -288,56 +346,43 @@ it("the Outpost spawn home stays equal to the explicit preflight home despite sa
   for (const name of ["workspace", "fixture", "dedicated", "profiles/t"]) fs.mkdirSync(path.join(root, name), { recursive: true });
   fs.writeFileSync(path.join(root, "profiles/t/config.toml"), '[models.codex]\nprofile = "work"\n');
   let owner: Awaited<ReturnType<typeof openOwner>> | undefined;
-  try {
+  await runWithOwnerCleanup(async () => {
     owner = await openOwner(root, "headless", { home: path.join(root, "dedicated") });
     expect((await owner.call<NodeJS.ProcessEnv>("resolveCodexSpawnEnvAsync", undefined)).CODEX_HOME).toBe(path.join(root, "dedicated"));
     expect(fs.readFileSync(path.join(root, "profiles/t/config.toml"), "utf8")).toContain('profile = "work"');
-  } finally { await removeOwnerFixture(root, owner); }
+  }, () => removeOwnerFixture(root, owner));
 }, 120_000);
 
 // The persisted owner is the oracle: reads by a host without these providers
 // must leave every stored byte intact, including provenance and observation time.
-it("desktop → Codex-only headless → desktop preserves unsupported providers byte-for-byte", async ({ onTestFailed, onTestFinished }) => {
+it("desktop → Codex-only headless → desktop preserves unsupported providers byte-for-byte", async ({ onTestFinished }) => {
   const startedAt = performance.now();
   const phases: Array<[number, string]> = [];
+  const diagnostics: OwnerFixtureDiagnostics = {};
   let activeRoot: string | undefined;
   let sample = 0;
   const trace: TraceOwnerPhase = phase => {
     phases.push([Math.round(performance.now() - startedAt), phase]);
     if (phases.length > 512) phases.shift();
   };
-  let failed = false;
-  onTestFailed(() => {
-    failed = true;
-    trace("test:failed");
+  onTestFinished(({ task }) => {
+    const failed = task.result?.state === "fail";
+    if (!failed && process.env.PWRAGENT_HEADLESS_PROFILE_ORACLE_TRACE !== "1") return;
+    if (failed) trace("test:failed");
     console.error("headless-profile-oracle-trace", JSON.stringify({ phases }));
-    // The owner writes its shutdown barrier's phase outcomes to the profile
-    // log. Read only the disposable fixture's tail before it can be removed.
-    if (activeRoot) {
-      try {
-        const file = fs.openSync(path.join(activeRoot, "profiles/t/logs", resolveMainLogFileNameForProfile("t")), "r");
-        try {
-          const size = fs.fstatSync(file).size;
-          const tail = Buffer.alloc(Math.min(size, 6000));
-          const read = fs.readSync(file, tail, 0, tail.length, size - tail.length);
-          console.error("headless-profile-oracle-owner-log", tail.toString("utf8", 0, read));
-        } finally { fs.closeSync(file); }
-      } catch (error) {
-        console.error("headless-profile-oracle-owner-log unavailable", (error as NodeJS.ErrnoException).code);
-      }
+    if (failed) {
+      // A timeout can reach this hook before the active owner has joined.
+      const logTail = diagnostics.logTail ?? (activeRoot ? readOwnerLogTail(activeRoot) : undefined);
+      if (logTail !== undefined) console.error("headless-profile-oracle-owner-log", logTail);
     }
   });
-  if (process.env.PWRAGENT_HEADLESS_PROFILE_ORACLE_TRACE === "1") {
-    onTestFinished(() => {
-      if (!failed) console.error("headless-profile-oracle-trace", JSON.stringify({ phases }));
-    });
-  }
 
   // Each example builds and starts three owners. Report the first failure
   // and its seed before shrinking can spend the Vitest deadline.
   await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
     const example = ++sample;
     trace(`${example} setup:start`);
+    diagnostics.logTail = undefined;
     const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-unsupported-")));
     activeRoot = root;
     for (const name of ["workspace", "fixture", "profiles/t/state/claude"]) fs.mkdirSync(path.join(root, name), { recursive: true });
@@ -373,7 +418,7 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
       } finally { db.close(); }
     };
     let host: Awaited<ReturnType<typeof openOwner>> | undefined;
-    try {
+    await runWithOwnerCleanup(async () => {
       const expected = snapshot();
       trace(`${example} setup:done`);
       for (const [index, kind] of (["desktop", "headless", "desktop"] as const).entries()) {
@@ -393,14 +438,14 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
         expect(snapshot(), `${kind} shutdown changed unsupported provider state`).toBe(expected);
         ownerTrace("stopped-snapshot:done");
       }
-    } catch (error) {
-      trace(`${example} failed: ${String(error).slice(0, 900)}`);
-      throw error;
-    } finally {
+    }, async () => {
       trace(`${example} cleanup:start`);
-      await removeOwnerFixture(root, host);
+      await removeOwnerFixture(root, host, diagnostics);
       activeRoot = undefined;
       trace(`${example} cleanup:done`);
-    }
+    }).catch((error: unknown) => {
+      trace(`${example} failed: ${String(error).slice(0, 900)}`);
+      throw error;
+    });
   }), { numRuns: 3, endOnFailure: true });
 }, 120_000);
