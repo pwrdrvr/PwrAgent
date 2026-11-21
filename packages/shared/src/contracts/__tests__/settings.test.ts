@@ -126,10 +126,6 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
-        liveTranscriptEventFiltering: {
-          value: false,
-          source: "default",
-        },
         threadPricingSummary: {
           value: true,
           source: "default",

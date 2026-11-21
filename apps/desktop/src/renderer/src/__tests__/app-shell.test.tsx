@@ -2752,10 +2752,6 @@ describe("App", () => {
           value: false,
           source: "default",
         },
-        liveTranscriptEventFiltering: {
-          value: false,
-          source: "default",
-        },
         tokenMiserEnabled: {
           value: false,
           source: "default",

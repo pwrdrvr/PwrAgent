@@ -55,7 +55,7 @@ describe("recent remote threads", () => {
     expect(rendered.result.current).not.toContainEqual(otherOwner);
   });
 
-  it.each([false, true])("keeps inactive transcript updates and reopens without a read (filtering=%s)", async (liveTranscriptEventFiltering) => {
+  it("keeps inactive transcript updates and reopens without a read", async () => {
     const threads = [remoteThread("A"), remoteThread("B")];
     const readThread = vi.fn(async ({ threadId }: { threadId: string }) => snapshot(threadId));
     const setFederationEventSubscriptions = vi.fn(async ({ subscriptions }) => ({ subscriptions }));
@@ -66,7 +66,7 @@ describe("recent remote threads", () => {
     const rendered = renderHook(({ thread }) => {
       const retainedRemoteThreads = useRecentRemoteThreads({ selectedThread: thread, threads });
       useFederationThreadEventSubscriptions({ desktopApi, enabled: true, selectedThread: thread, threads, retainedRemoteThreads });
-      return useThreadSessionState({ desktopApi, thread, retainedRemoteThreads, liveTranscriptEventFiltering });
+      return useThreadSessionState({ desktopApi, thread, retainedRemoteThreads });
     }, { initialProps: { thread: threads[0]! } });
     await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("A"));
     rendered.rerender({ thread: threads[1]! });
