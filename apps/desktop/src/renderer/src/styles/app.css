@@ -26173,6 +26173,12 @@ a.button {
   user-select: all;
 }
 
+.settings-boat-actions {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .settings-boat-key {
   display: flex;
   gap: 8px;

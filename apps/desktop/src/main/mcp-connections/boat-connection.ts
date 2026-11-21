@@ -190,7 +190,20 @@ export class BoatConnection {
     });
     server.setRequestHandler(types.ListToolsRequestSchema, async () => ({ tools: [...tools.list()] }));
     server.setRequestHandler(types.CallToolRequestSchema, async (request, extra) =>
-      await tools.call(request.params.name, request.params.arguments, extra.signal));
+      await tools.call(request.params.name, request.params.arguments, extra.signal, async (message) => {
+        // A form with no fields: the person approves or declines. It reaches
+        // them through the tool call that asked, or not at all.
+        try {
+          const answer = await server.elicitInput(
+            { message, requestedSchema: { type: "object", properties: {} } },
+            { signal: extra.signal },
+          );
+          return answer.action === "accept" ? "approved" : "declined";
+        } catch (error) {
+          if (extra.signal.aborted) throw error;
+          return "unavailable";
+        }
+      }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     return clientTransport;

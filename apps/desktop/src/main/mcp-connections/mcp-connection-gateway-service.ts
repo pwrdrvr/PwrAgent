@@ -2560,7 +2560,7 @@ export class McpConnectionGatewayService {
   }
 
   async close(): Promise<void> {
-    await this.boatSignIn.cancel();
+    await this.boatSignIn.cancel({ wait: true });
     this.grants.clear();
     this.relayGrantEpochs.clear();
     this.threadRegistrations.clear();

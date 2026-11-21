@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  BOAT_KEY_ACTIONS,
   BOAT_SANDBOX_TYPES,
   BOAT_SANDBOX_TYPE_LABELS,
   DEFAULT_BOAT_SANDBOX_POLICY,
@@ -320,6 +321,10 @@ export function BoatSetupDetail(props: {
         Create a key in Boat, then paste it here. PwrAgent stores it encrypted on
         this computer and makes every Boat request itself. Agents get sandbox
         tools, never the key.
+      </p>
+      <p className="settings-mcp-row__state">
+        The key needs these actions, and no others:{" "}
+        <code className="settings-boat-actions">{BOAT_KEY_ACTIONS.join(", ")}</code>
       </p>
     </>
   );

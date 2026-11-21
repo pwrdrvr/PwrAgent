@@ -34,6 +34,8 @@ function harness(script: {
   const calls: Array<{ args: string[]; home: string }> = [];
   const homes: string[] = [];
   const removed: string[] = [];
+  /** CLI steps and home removals, in the order they happened. */
+  const order: string[] = [];
   const opened: string[] = [];
   const stored: string[] = [];
   let settled!: () => void;
@@ -41,6 +43,7 @@ function harness(script: {
   const changes: Array<ReturnType<BoatSignIn["progress"]>> = [];
   const run: BoatCliRun = async (_cli, args, options) => {
     calls.push({ args: [...args], home: options.home });
+    order.push(args.join(" "));
     if (args[0] === "login" && args.includes("--wait")) {
       return await (script.wait ?? (async () => "{}"))(options.signal);
     }
@@ -60,6 +63,7 @@ function harness(script: {
     },
     removeHome: async (home) => {
       removed.push(home);
+      order.push(`remove ${home}`);
     },
     openExternal: async (url) => {
       opened.push(url);
@@ -74,7 +78,7 @@ function harness(script: {
     },
     now: () => NOW,
   });
-  return { calls, changes, homes, idle, opened, removed, signIn, stored };
+  return { calls, changes, homes, idle, opened, order, removed, signIn, stored };
 }
 
 describe("BoatSignIn", () => {
@@ -176,10 +180,8 @@ describe("BoatSignIn", () => {
       }),
     });
     await h.signIn.start("github");
-    await h.signIn.cancel();
-    await h.idle;
+    await h.signIn.cancel({ wait: true });
     // The aborted wait unwinds on its own; it must not report a failure.
-    await vi.waitFor(() => expect(h.removed.length).toBeGreaterThanOrEqual(2));
     expect(h.signIn.progress()).toBeUndefined();
     expect(h.stored).toEqual([]);
     expect(h.removed).toContain(h.homes[0]);
@@ -196,8 +198,23 @@ describe("BoatSignIn", () => {
     });
     holder.signIn = h.signIn;
     await h.signIn.start("github");
-    await vi.waitFor(() => expect(h.calls.at(-1)?.args).toEqual(["logout"]));
+    await vi.waitFor(() => expect(h.removed).toEqual(h.homes));
     expect(h.stored).toEqual([]);
+    expect(h.signIn.progress()).toBeUndefined();
+    // The session is revoked while its token still exists: the home goes last.
+    expect(h.order.slice(-2)).toEqual(["logout", `remove ${h.homes[0]}`]);
+    expect(h.removed).toHaveLength(1);
+  });
+
+  it("asks Boat to end a session that may have been approved as the wait was cancelled", async () => {
+    const h = harness({
+      wait: async (signal) => await new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    });
+    await h.signIn.start("github");
+    await h.signIn.cancel({ wait: true });
+    expect(h.order.slice(-2)).toEqual(["logout", `remove ${h.homes[0]}`]);
     expect(h.signIn.progress()).toBeUndefined();
   });
 

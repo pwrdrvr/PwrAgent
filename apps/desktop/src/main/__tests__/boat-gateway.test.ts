@@ -83,6 +83,8 @@ function fakeBoat(acceptedKey = KEY) {
  */
 function requiredAction(method: string, segments: readonly string[]): string {
   if (segments[0] === "limits") return "account.read";
+  // Boat documents `snapshot.read` for reading; a save is taken to be a write.
+  if (segments[0] === "saved-snapshots") return method === "GET" ? "snapshot.read" : "snapshot.write";
   if (segments.length === 1) return method === "POST" ? "sandbox.create" : "sandbox.read";
   if (segments.length === 2) {
     return method === "DELETE" ? "sandbox.delete" : method === "PATCH" ? "sandbox.update" : "sandbox.read";
@@ -128,7 +130,10 @@ function toolArguments(name: string, sandboxId: string): Record<string, unknown>
   switch (name) {
     case "create_sandbox":
     case "list_sandboxes":
+    case "list_snapshots":
     case "account_status": return {};
+    case "save_snapshot": return { sandboxId, name: "deps" };
+    case "get_snapshot": return { name: "deps" };
     case "exec": return { sandboxId, command: "true" };
     case "command_status":
     case "kill_command": return { sandboxId, processId: 1 };
@@ -293,7 +298,9 @@ describe("Boat through the MCP gateway", () => {
     }
 
     expect(boat.refused).toEqual([]);
-    expect(failed).toEqual([]);
+    // A save needs the operator's approval, and this harness has nobody to
+    // ask: it read the snapshot list from Boat, then stopped.
+    expect(failed).toEqual(["save_snapshot"]);
   });
 
   it("asks for a new sign-in once Boat refuses the stored key a sandbox", async () => {

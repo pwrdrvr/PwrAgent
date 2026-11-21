@@ -237,6 +237,34 @@ export type BoatAccountSummary = {
   blockedReason?: string;
 };
 
+/**
+ * What a Boat API key needs for PwrAgent, and all the key sign-in mints may do: one action per kind of request the Boat tools
+ * make, and nothing else. Boat's `full-sandbox` preset is not enough: it
+ * leaves out create, resume, fork and delete. No SSH, desktop stream, agent
+ * prompt, environment or account write is granted.
+ *
+ * `sandbox.delete` rather than `sandbox.delete-own`: a key from a later
+ * sign-in must still delete what an earlier key created, or cleanup after a
+ * pull request closes would leave those sandboxes billing. PwrAgent, the
+ * key's only holder, limits each thread to the sandboxes it created.
+ */
+export const BOAT_KEY_ACTIONS = [
+  "sandbox.create",
+  "sandbox.read",
+  "sandbox.update",
+  "sandbox.stop",
+  "sandbox.resume",
+  "sandbox.fork",
+  "sandbox.delete",
+  "exec",
+  "file.read",
+  "file.write",
+  "host",
+  "snapshot.read",
+  "snapshot.write",
+  "account.read",
+] as const;
+
 /** How the operator proves who they are on Boat's sign-in page. */
 export const BOAT_SIGN_IN_METHODS = ["github", "google"] as const;
 export type BoatSignInMethod = (typeof BOAT_SIGN_IN_METHODS)[number];

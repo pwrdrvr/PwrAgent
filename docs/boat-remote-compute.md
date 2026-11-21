@@ -85,9 +85,20 @@ stated as properties in `boat-tools.property.test.ts`.
 - **Credentials stay out.** While `boat_keep_credentials_out` is on (the
   default), create, resume, and fork send `noEnv: true`, so the account's
   GitHub token, secrets, and model keys never enter a sandbox.
-- **Caps are refusals.** A size above `boat_max_type` or an auto-stop above
-  `boat_max_ttl_minutes` is refused with the limit named. It is not clamped
-  and does not prompt.
+- **Above a cap, the operator is asked.** A size above `boat_max_type` or an
+  auto-stop above `boat_max_ttl_minutes` puts one question to the operator,
+  naming each value and its limit. Approval covers that one request and
+  changes no setting. Declined, or with nobody to ask (a caller that cannot
+  show a prompt), the request is refused with the limit named. It is never
+  clamped. No auto-stop is set further out than a week, approved or not.
+- **Named snapshots are the operator's.** `save_snapshot` saves a thread's
+  own sandbox under a name so later sandboxes start warm
+  (`create_sandbox` with `fromSnapshot`). It always asks first, saying that
+  the snapshot outlives the thread, whether it replaces one, and what Boat
+  charges beyond the plan's included count. PwrAgent keeps no record of
+  named snapshots and never deletes one: they are a project's start-up
+  images, kept on purpose. `fromSnapshot` takes a snapshot name only, never
+  a share code, which would start someone else's machine image.
 - **Named fields only.** Each request is built from the fields a tool
   declares; unknown arguments never reach Boat.
 - **A fork copies a finished snapshot.** While a stopped sandbox is `stopping`
@@ -98,9 +109,14 @@ stated as properties in `boat-tools.property.test.ts`.
   it was copied. Seen with a real account on 2026-11-20.
 
 A fresh sandbox reports `idle`, not `ready`, and accepts commands in both
-states; the tool instructions say so. Named snapshots are not offered: Boat
-refuses them on a trial plan (`trial_saved_snapshots_not_allowed`), and a
-stopped sandbox already keeps its disk for resume and fork.
+states; the tool instructions say so. Boat refuses to save a named snapshot
+on a trial plan (`trial_saved_snapshots_not_allowed`); the tool passes that
+on. `account_status` and `list_snapshots` report how many the plan includes.
+
+The question reaches the operator as an MCP form elicitation from PwrAgent's
+in-process Boat server, routed by the gateway to the one tool call that
+caused it (`mcp-upstream-elicitation.ts`). It is an upstream form, not a
+host tool approval, so no access mode or approval policy answers it.
 - **Cleanup is narrow.** PwrAgent's own cleanup session can stop and delete a
   thread's sandboxes and nothing else.
 
