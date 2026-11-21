@@ -106,21 +106,16 @@ export type StdioJsonRpcTransportOptions = {
 
 export { compareCodexCliVersions };
 
-function isJsonRpcResponseEnvelope(message: string): boolean {
-  try {
-    const envelope = JSON.parse(message) as unknown;
-    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
-      return false;
-    }
-    const record = envelope as Record<string, unknown>;
-    return (
-      record.id !== undefined &&
-      typeof record.method !== "string" &&
-      ("result" in record || "error" in record)
-    );
-  } catch {
+function isJsonRpcResponseEnvelope(envelope: unknown): boolean {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
     return false;
   }
+  const record = envelope as Record<string, unknown>;
+  return (
+    record.id !== undefined &&
+    typeof record.method !== "string" &&
+    ("result" in record || "error" in record)
+  );
 }
 
 export class StdioJsonRpcTransport implements JsonRpcTransport {
@@ -534,11 +529,23 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   }
 
   send(message: string): void {
-    if (this.codexHome && !isJsonRpcResponseEnvelope(message)) {
+    let envelope;
+    let parseFailure: { error: unknown } | undefined;
+    if (this.codexHome || this.closeRequested || this.childProcess?.stdin) {
+      try {
+        envelope = JSON.parse(message);
+      } catch (error) {
+        // Preserve precedence: auth and pipe checks can take priority over malformed JSON.
+        parseFailure = { error };
+      }
+    }
+    const isResponse = isJsonRpcResponseEnvelope(envelope);
+    if (this.codexHome && !isResponse) {
       if (!this.options.authenticationRecovery) {
         codexAuthState.assertAvailable(this.codexHome);
       } else {
-        const method = JSON.parse(message).method;
+        if (parseFailure) throw parseFailure.error;
+        const method = envelope.method;
         if (!["initialize", "initialized", "account/read", "account/rateLimits/read"].includes(method)) {
           throw new Error("Only authentication verification is allowed during Codex recovery.");
         }
@@ -546,7 +553,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     }
     const child = this.childProcess;
     if (this.closeRequested) {
-      if (isJsonRpcResponseEnvelope(message)) {
+      if (isResponse) {
         if (!this.droppedSendAfterCloseLogged) {
           this.droppedSendAfterCloseLogged = true;
           codexTransportLog.info("dropped app-server send after close");
@@ -558,7 +565,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child?.stdin) {
       throw new Error("codex app server stdio not connected");
     }
-    const envelope = JSON.parse(message);
+    if (parseFailure) throw parseFailure.error;
     if (envelope.id !== undefined && typeof envelope.method === "string") {
       // Timed-out requests may never receive a response. Eviction fails closed:
       // an uncorrelated response cannot invalidate profile authentication.
