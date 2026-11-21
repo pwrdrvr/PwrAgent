@@ -4533,6 +4533,8 @@ export class DesktopBackendRegistry {
           backend: "codex",
           filter: params.filter,
           archived: params.archived,
+          completeInventory: params.limit === undefined && params.maxPages === undefined
+            && !this.isIncompleteThreadList(threads),
           threads,
         });
       }

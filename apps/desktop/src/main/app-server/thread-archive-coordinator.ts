@@ -2580,6 +2580,7 @@ export class ThreadArchiveCoordinator {
   scheduleThreadListArchiveStateCleanup(params: {
     archived?: boolean;
     backend: AppServerBackendKind;
+    completeInventory: boolean;
     filter?: string;
     threads: AppServerThreadSummary[];
   }): void {
@@ -2594,6 +2595,7 @@ export class ThreadArchiveCoordinator {
   private async handleThreadListArchiveState(params: {
     archived?: boolean;
     backend: AppServerBackendKind;
+    completeInventory: boolean;
     filter?: string;
     threads: AppServerThreadSummary[];
   }): Promise<void> {
@@ -2616,26 +2618,30 @@ export class ThreadArchiveCoordinator {
       return;
     }
 
-    const nextActiveThreadIds = new Set(params.threads.map((thread) => thread.id));
     const previousActiveThreadIds = this.activeThreadIdsByBackend.get(params.backend);
-    if (previousActiveThreadIds && (
-      previousActiveThreadIds.size !== nextActiveThreadIds.size
-      || [...previousActiveThreadIds].some((id) => !nextActiveThreadIds.has(id))
-    )) {
-      // Observing our completed archive removes an owner; it cannot make
-      // removal unsafe. New active identities still invalidate admission.
-      const addedActiveThread = [...nextActiveThreadIds].some((id) => !previousActiveThreadIds.has(id));
-      if (addedActiveThread) {
-        for (const thread of params.threads) {
-          if (!previousActiveThreadIds.has(thread.id)) this.recordArchiveWorkspaceChange(buildThreadIdentityKey(params.backend, thread.id), archiveWorkspacePaths(thread));
-        }
+    // A partial listing can reveal a new or restored owner. Keep every
+    // previously observed owner until a complete listing proves its absence.
+    const nextActiveThreadIds = params.completeInventory ? new Set<string>() : previousActiveThreadIds;
+    if (!nextActiveThreadIds) return;
+    let addedActiveThread = false;
+    for (const thread of params.threads) {
+      if (previousActiveThreadIds && !previousActiveThreadIds.has(thread.id)) {
+        addedActiveThread = true;
+        this.recordArchiveWorkspaceChange(buildThreadIdentityKey(params.backend, thread.id), archiveWorkspacePaths(thread));
       }
+      nextActiveThreadIds.add(thread.id);
+    }
+    const missingThreadIds = new Set<string>();
+    if (params.completeInventory && previousActiveThreadIds) {
+      for (const id of previousActiveThreadIds) {
+        if (!nextActiveThreadIds.has(id)) missingThreadIds.add(id);
+      }
+    }
+    if (addedActiveThread || missingThreadIds.size > 0) {
       this.invalidateArchiveCleanupReads(params.backend, undefined, false);
     }
+    if (!params.completeInventory) return;
     this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
-    const missingThreadIds = new Set(
-      [...previousActiveThreadIds ?? []].filter((id) => !nextActiveThreadIds.has(id)),
-    );
     const store = this.resolveMessagingArchiveCleanupStore();
     if (store) {
       try {
