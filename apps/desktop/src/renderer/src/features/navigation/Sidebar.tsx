@@ -21,7 +21,6 @@ import {
   type ProjectHeaderCardHandle,
 } from "./ProjectHeaderCard";
 import { useMousePress } from "../../lib/useMousePress";
-import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { LENS_KEYBINDING_ACTIONS } from "./useLensHotkeys";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
@@ -1062,7 +1061,6 @@ function SidebarContent(props: SidebarProps) {
   const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-  const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
   // A starting thread renders where its thread will land, and a sub-thread
   // being written renders in the same slot. Drafts holds only threads with
   // unsent replies, which a new thread never is, so neither lands there.
@@ -1145,14 +1143,8 @@ function SidebarContent(props: SidebarProps) {
   ) : props.error && !props.loaded ? (
     <p className="sidebar-error">{props.error}</p>
   ) : null;
-  const lensScroll = useLensScrollRestoration(
-    JSON.stringify([federationTarget, props.browseMode]),
-    !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
-      && [...props.pagedNavigation.resources.values()].every(({ state }) =>
-        (state.page?.entries.every((entry) => presentedByKey.has(navigationThreadSelectionKey(entry.row.ref))) ?? true)
-        && (props.browseMode !== "directories"
-          || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
-  );
+  // The lens region. It only clips; the lane inside it scrolls.
+  const scrollRegionRef = useRef<HTMLDivElement>(null);
   // The project index: every project in the order Directories draws them,
   // pinned first. It stays in every lens, so the list keeps one width when
   // the lens changes; only Directories is in project order to follow.
@@ -3752,7 +3744,7 @@ function SidebarContent(props: SidebarProps) {
           {projectIndexShown && onProjectIndexWidthChange ? (
             <ProjectIndex
               projects={projectIndexEntries}
-              scrollRegionRef={lensScroll.ref}
+              scrollRegionRef={scrollRegionRef}
               scrollRegionId={scrollRegionId}
               spy={props.browseMode === "directories" && !listStatus}
               width={props.projectIndexWidth ?? null}
@@ -3765,10 +3757,9 @@ function SidebarContent(props: SidebarProps) {
             />
           ) : null}
           <div
-            ref={lensScroll.ref}
+            ref={scrollRegionRef}
             id={scrollRegionId}
             className="sidebar__scroll-region"
-            onScroll={lensScroll.onScroll}
             onClickCapture={hoverStableSnapshot.onClickCapture}
             onPointerCancel={hoverStableSnapshot.onPointerCancel}
             onPointerLeave={hoverStableSnapshot.onPointerLeave}
@@ -3933,7 +3924,7 @@ function SidebarContent(props: SidebarProps) {
             )}
             {listStatus ? null : (
               <SelectedThreadDock
-                regionRef={lensScroll.ref}
+                regionRef={scrollRegionRef}
                 thread={dockedThread}
                 threadKey={dockedThread ? selectedItemKey : undefined}
                 status={dockedThread ? getThreadRowStatus(dockedThread, props.thinkingThreadKeys) : undefined}
