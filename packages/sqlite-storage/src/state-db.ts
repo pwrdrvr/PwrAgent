@@ -521,6 +521,10 @@ CREATE INDEX IF NOT EXISTS idx_automation_runs_execution_thread_valid
   );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_owner_thread
   ON automation_runs(backend, thread_id);
+-- Turn lookups rank only the rows matching the key. Leave updated_at out of
+-- the index so a pricing payload update does not dirty its pages.
+CREATE INDEX IF NOT EXISTS idx_automation_runs_backend_turn
+  ON automation_runs(backend, backend_turn_id) WHERE backend_turn_id IS NOT NULL;
 -- NOTE: idx_automation_runs_source_event is created in the v23 migration
 -- (ensureAutomationRunSourceEventKey), NOT here. ensureCurrentSchema runs
 -- before migrations, and on an existing DB the source_event_key column does

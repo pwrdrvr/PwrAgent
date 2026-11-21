@@ -1170,8 +1170,8 @@ export class DesktopAutomationService {
     if (!Array.isArray(lines)) return;
     const turnLines = lines.filter((line): line is Record<string, unknown> & { turnId: string } =>
       line.scope === "turn" && typeof line.turnId === "string");
-    // The event carries the thread's whole ledger. Resolve every turn in one
-    // query rather than two table scans per line.
+    // The event carries the thread's whole ledger. Resolve its turn ids in
+    // one batched lookup.
     const store = this.options.store;
     const runs = typeof store.findRunsByBackendTurnIds === "function"
       ? store.findRunsByBackendTurnIds({

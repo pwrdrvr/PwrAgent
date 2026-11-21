@@ -8,6 +8,7 @@ import {
   SQLITE_AUTO_VACUUM_INCREMENTAL,
   StateDb,
 } from "../state/state-db";
+import { AutomationStore } from "../storage/automation-store";
 import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
 
 const tempRoots: string[] = [];
@@ -67,6 +68,51 @@ describe("state migration", () => {
       ).toEqual([{ name: "automation_runs" }, { name: "automations" }]);
     } finally {
       stateDb.close();
+    }
+  });
+
+  it("installs the turn lookup index once on an existing automation history", () => {
+    const dbPath = createTempDbPath();
+    const initial = StateDb.open(dbPath);
+    const readRows = (db: StateDb) => db.raw.prepare("SELECT rowid, * FROM automation_runs ORDER BY rowid").all();
+    const schemaVersion = (db: StateDb) => db.raw.pragma("schema_version", { simple: true }) as number;
+    let rows: unknown[];
+    let before: number;
+    try {
+      const store = new AutomationStore(initial);
+      store.createAutomation({
+        id: "migration-automation",
+        backend: "codex",
+        threadId: "migration-thread",
+        name: "Migration fixture",
+        taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+        now: 0,
+      });
+      store.createRun({ id: "migration-run", automationId: "migration-automation", trigger: "manual", now: 0 });
+      store.markRunStarted({ runId: "migration-run", backendTurnId: "migration-turn", now: 1 });
+      store.markRunTerminal({ runId: "migration-run", status: "completed", now: 2 });
+      initial.raw.exec("DROP INDEX idx_automation_runs_backend_turn");
+      rows = readRows(initial);
+      expect(rows).toHaveLength(1);
+      before = schemaVersion(initial);
+    } finally {
+      initial.close();
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const reopened = StateDb.open(dbPath);
+      try {
+        expect(schemaVersion(reopened)).toBe(before + 1);
+        expect(reopened.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+        expect(readRows(reopened)).toEqual(rows);
+        expect(new AutomationStore(reopened).findRunByBackendTurnId({
+          backend: "codex",
+          backendTurnId: "migration-turn",
+        })).toMatchObject({ id: "migration-run", status: "completed" });
+      } finally {
+        reopened.close();
+      }
     }
   });
 
