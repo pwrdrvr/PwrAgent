@@ -877,7 +877,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listThreadBoatSandboxes?: (
     request: ListThreadBoatSandboxesRequest,
   ) => Promise<ListThreadBoatSandboxesResponse>;
-  /** Stops or deletes one of them, and answers the list as it then stands. */
+  /** Stops or deletes one, or closes a tunnel into one; answers the list as it then stands. */
   changeThreadBoatSandbox?: (
     request: ChangeThreadBoatSandboxRequest,
   ) => Promise<ListThreadBoatSandboxesResponse>;

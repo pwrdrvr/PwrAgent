@@ -149,12 +149,25 @@ the store calls the `thread-sandbox-record-created` and
 ## The thread's sandboxes in the MCP access panel
 
 `ThreadBoatSandboxes` lists what a thread on this machine created, with state,
-size and what Boat has billed so far, and offers Stop and a two-step Delete.
+size, what Boat has billed so far and, while it runs, the time left before it
+stops by itself. It offers Stop and a two-step Delete. Under each sandbox it
+lists the tunnels open into it from this computer, as the local URL and the
+sandbox port, each with Close.
+
+The time left comes from Boat's `archiveAfter`, the deadline itself
+(null when auto-stop is off). `ttlSeconds` is only the length as last set on
+create, resume, fork or extend, so the row never derives a figure from it. Boat
+counts from create or the last resume, and moves the deadline on while an agent
+prompt runs, so a deadline already passed shows no figure. A stopped sandbox
+shows none either.
+
 The window calls `listThreadBoatSandboxes` and `changeThreadBoatSandbox` on the
-gateway service, which run `list_sandboxes`, `stop_sandbox` and
-`delete_sandbox` through `BoatTools` with the thread's own scope. The window
-therefore reaches exactly what the thread's agent reaches, and a sandbox id
-from another thread is refused before Boat is asked. A thread with no recorded
+gateway service, which run `list_sandboxes`, `stop_sandbox`, `delete_sandbox`
+and `close_port_forward` through `BoatTools` with the thread's own scope. The
+open tunnels come from `BoatConnection.portForwards` for the thread's own
+sandboxes. The window therefore reaches exactly what the thread's agent
+reaches, and a sandbox id from another thread is refused before Boat is asked
+or a tunnel is touched. A thread with no recorded
 sandboxes is answered without a request to Boat. A remote thread shows no
 section: the key and the bill belong to its owner.
 
@@ -176,14 +189,31 @@ Rules, each held by `boat-port-forward.property.test.ts`:
 - The listener binds `127.0.0.1`. No argument changes the bind address, adds
   a reverse or dynamic forward, or picks the local port.
 - The server must present the host key Boat returned (`StrictHostKeyChecking`
-  with a known-hosts file holding that one key). An answer without a host key
-  opens no tunnel. The user's ssh config, agent and known hosts are not read.
+  with a known-hosts file holding that one key, used as both the user and the
+  global database). An answer without a host key opens no tunnel. The user's
+  ssh config, agent and known hosts are not read.
 - What Boat returns for host and user is checked against a pattern before it
   reaches the command line.
 - A tunnel closes when the sandbox is stopped, resumed or deleted (by an
   agent, the panel, or PR cleanup), when `ssh` exits, when the last MCP
   session that asked for it ends, when the key is removed, and when the app
   quits. Its key directory is removed with it.
+
+On Windows the tunnel runs the system's Win32-OpenSSH
+(`%SystemRoot%\System32\OpenSSH`) when it is installed, and only otherwise
+the `ssh` on PATH: Git for Windows can put its MSYS build first, as it does on
+GitHub's windows-latest (`OpenSSH_10.6p1`). The system client was checked on
+Windows Server 2022 (`OpenSSH_for_Windows_9.5p2`) on 2026-11-21, and
+`boat-port-forward.system.test.ts` checks it in the Windows CI lane. That
+client refuses a private key
+other users can read; the key `ssh-keygen` writes into the temporary directory
+carries only the owner's, SYSTEM's and Administrators' access, which it
+accepts. ssh splits an `-o` value itself and reads `\\` as an escaped
+backslash, so a path in one is passed with forward slashes on Windows, and both
+`UserKnownHostsFile` and `GlobalKnownHostsFile` name the pinned file: ssh
+documents no way to switch the global database off, and the null device
+(`\\.\nul`) did not survive that parse. `-F` and `-i` are arguments of their
+own and are passed as given.
 
 Nothing is written to SQLite for a tunnel: it does not survive a restart.
 

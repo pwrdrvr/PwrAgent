@@ -34114,11 +34114,37 @@ a.transcript-message__messaging-origin:focus-visible {
   list-style: none;
 }
 
-.mcp-access-panel__sandboxes li {
+.mcp-access-panel__sandboxes > li {
+  display: grid;
+  gap: 5px;
+}
+
+/* A sandbox's name and actions, with its open tunnels listed beneath. */
+.mcp-access-panel__sandbox,
+.mcp-access-panel__forwards li {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.mcp-access-panel__forwards {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--border-subtle);
+  list-style: none;
+}
+
+.mcp-access-panel__forward-url {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
 }
 
 .mcp-access-panel__sandboxes .mcp-access-panel__row-body {

@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -93,6 +94,21 @@ export function readBoatTunnelTarget(answer: Record<string, unknown>): BoatTunne
   return { host, port, user, hostKey: `${hostKey[1]} ${hostKey[2]}` };
 }
 
+/**
+ * A path as the value of an `-o` option. ssh splits that value itself and
+ * reads a backslash before a quote, a space or another backslash as an
+ * escape: on Windows Server 2022 (OpenSSH_for_Windows_9.5p2) a
+ * `GlobalKnownHostsFile` of `\\.\nul` arrived as `\.\nul`. Win32-OpenSSH
+ * takes a forward slash as a separator, and no version reads one as an
+ * escape. Arguments that are not `-o` values (`-F`, `-i`) reach ssh as given.
+ */
+export function sshOptionPath(file: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return file.replaceAll("\\", "/");
+  // Inside the quotes this is wrapped in, a backslash or quote of the path's
+  // own must be escaped to reach ssh as itself.
+  return file.replace(/["\\]/g, "\\$&");
+}
+
 /** The whole `ssh` command line for one tunnel. */
 export function boatTunnelArgs(input: {
   sandboxId: string;
@@ -101,19 +117,26 @@ export function boatTunnelArgs(input: {
   target: BoatTunnelTarget;
   privateKeyPath: string;
   knownHostsPath: string;
+  /** Whose ssh reads it; this machine's unless a test says otherwise. */
+  platform?: NodeJS.Platform;
 }): string[] {
+  const platform = input.platform ?? process.platform;
+  // Quoted: a temporary directory may hold a space (a Windows user name).
+  const knownHosts = `"${sshOptionPath(input.knownHostsPath, platform)}"`;
   return [
     "-N", "-T",
     // Not the user's config: no host alias, proxy or extra forward of theirs.
-    "-F", os.devNull,
+    "-F", platform === "win32" ? "\\\\.\\nul" : "/dev/null",
     "-i", input.privateKeyPath,
     "-p", String(input.target.port),
     "-o", "IdentitiesOnly=yes",
     "-o", "IdentityAgent=none",
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=yes",
-    "-o", `UserKnownHostsFile="${input.knownHostsPath}"`,
-    "-o", `GlobalKnownHostsFile=${os.devNull}`,
+    // Both known-hosts databases are the pinned file: ssh documents no way to
+    // switch the global one off, and the machine's own may vouch for others.
+    "-o", `UserKnownHostsFile=${knownHosts}`,
+    "-o", `GlobalKnownHostsFile=${knownHosts}`,
     "-o", `HostKeyAlias=${input.sandboxId}`,
     "-o", "ExitOnForwardFailure=yes",
     "-o", "GatewayPorts=no",
@@ -281,6 +304,23 @@ function lastLine(stderr: string): string {
   return line ? line.slice(0, 300) : "ssh exited without saying why.";
 }
 
+/**
+ * The OpenSSH program to run. On Windows that is the system's Win32-OpenSSH
+ * when it is installed, whatever else is on PATH: Git for Windows can put its
+ * MSYS build (`OpenSSH_10.6p1`, seen on GitHub's windows-latest) first, and
+ * the tunnel's arguments and key permissions were checked against the
+ * system's (`OpenSSH_for_Windows_9.5p2`, Windows Server 2022).
+ */
+export function openSshCommand(
+  name: "ssh" | "ssh-keygen",
+  platform: NodeJS.Platform = process.platform,
+  exists: (file: string) => boolean = existsSync,
+): string {
+  if (platform !== "win32") return name;
+  const system = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "OpenSSH", `${name}.exe`);
+  return exists(system) ? system : name;
+}
+
 /** The real machine: `ssh-keygen`, `ssh`, and a temporary directory. */
 export function systemTunnelRuntime(): BoatTunnelRuntime {
   return {
@@ -288,7 +328,7 @@ export function systemTunnelRuntime(): BoatTunnelRuntime {
       const privateKeyPath = path.join(directory, "key");
       await new Promise<void>((resolve, reject) => {
         execFile(
-          "ssh-keygen",
+          openSshCommand("ssh-keygen"),
           ["-q", "-t", "ed25519", "-N", "", "-C", "pwragent-forward", "-f", privateKeyPath],
           { windowsHide: true },
           (error) => {
@@ -311,7 +351,7 @@ export function systemTunnelRuntime(): BoatTunnelRuntime {
       });
     }),
     spawn: (args) => {
-      const child = spawn("ssh", [...args], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      const child = spawn(openSshCommand("ssh"), [...args], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
       let stderr = "";
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => {

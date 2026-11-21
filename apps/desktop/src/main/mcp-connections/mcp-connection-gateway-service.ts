@@ -76,6 +76,7 @@ import {
   SANDBOXER_MCP_CONNECTION_ID,
   BOAT_MCP_CONNECTION_ID,
   isBoatSignInMethod,
+  isBoatSandboxPort,
   isBoatThreadSandboxAction,
   type BoatLinkTarget,
   type BoatThreadSandbox,
@@ -1588,12 +1589,23 @@ export class McpConnectionGatewayService {
     const result = await this.boat.callTool(scope, "list_sandboxes", {});
     if (result.isError) throw new Error(boatToolText(result));
     const listed = (result.structuredContent as { sandboxes?: unknown } | undefined)?.sandboxes;
-    return { sandboxes: (Array.isArray(listed) ? listed : []).flatMap(boatThreadSandbox) };
+    // Read after the list: it may have dropped a sandbox Boat no longer has.
+    const forwards = this.boat.portForwards(scope.ownedSandboxIds());
+    return {
+      sandboxes: (Array.isArray(listed) ? listed : []).flatMap(boatThreadSandbox).map((sandbox) => {
+        const open = forwards
+          .filter((forward) => forward.sandboxId === sandbox.id)
+          .sort((a, b) => a.port - b.port)
+          .map((forward) => ({ port: forward.port, url: forward.url }));
+        return open.length ? { ...sandbox, forwards: open } : sandbox;
+      }),
+    };
   }
 
   /**
-   * Stops or deletes one of a thread's sandboxes for the operator. Only a
-   * sandbox that thread created is reachable, as for the thread's agent.
+   * Stops or deletes one of a thread's sandboxes, or closes a tunnel into
+   * one, for the operator. Only a sandbox that thread created is reachable,
+   * as for the thread's agent.
    */
   async changeThreadBoatSandbox(request: ChangeThreadBoatSandboxRequest): Promise<ListThreadBoatSandboxesResponse> {
     const ownership = await this.ensureOwnerBroker();
@@ -1604,10 +1616,17 @@ export class McpConnectionGatewayService {
     }
     const scope = this.boatThreadScope({ threadId: request.threadId, backend: request.backend }, "thread");
     const wasOwned = scope.ownedSandboxIds().has(request.sandboxId);
+    if (request.action === "close_forward" && !isBoatSandboxPort(request.port)) {
+      throw new Error("Name the sandbox port whose tunnel to close.");
+    }
     const result = await this.boat.callTool(
       scope,
-      request.action === "delete" ? "delete_sandbox" : "stop_sandbox",
-      { sandboxId: request.sandboxId },
+      request.action === "delete"
+        ? "delete_sandbox"
+        : request.action === "close_forward" ? "close_port_forward" : "stop_sandbox",
+      request.action === "close_forward"
+        ? { sandboxId: request.sandboxId, port: request.port }
+        : { sandboxId: request.sandboxId },
     );
     // Already gone from Boat is what a delete wanted: the tool has dropped
     // it from the thread, and the list that comes back no longer shows it.
@@ -4816,10 +4835,19 @@ export class McpConnectionGatewayService {
       }
       const thread = { backend: values.backend, threadId: values.threadId };
       if (operation === "broker/boat-thread-sandboxes") return await this.listThreadBoatSandboxes(thread);
-      if (typeof values.sandboxId !== "string" || !isBoatThreadSandboxAction(values.action)) {
+      if (
+        typeof values.sandboxId !== "string"
+        || !isBoatThreadSandboxAction(values.action)
+        || (values.action === "close_forward" && !isBoatSandboxPort(values.port))
+      ) {
         throw new Error("Invalid Boat thread sandbox request.");
       }
-      return await this.changeThreadBoatSandbox({ ...thread, sandboxId: values.sandboxId, action: values.action });
+      return await this.changeThreadBoatSandbox({
+        ...thread,
+        sandboxId: values.sandboxId,
+        action: values.action,
+        ...(values.action === "close_forward" ? { port: values.port as number } : {}),
+      });
     }
     if (operation === "broker/set-boat-cleanup-on-pr-close") {
       if (typeof values.enabled !== "boolean") throw new Error("Invalid Boat cleanup on PR close request.");
@@ -5695,6 +5723,8 @@ function boatThreadSandbox(value: unknown): BoatThreadSandbox[] {
   const sandbox = value as Record<string, unknown>;
   if (typeof sandbox.id !== "string" || !sandbox.id) return [];
   const dollars = (sandbox.cost as { dollars?: unknown } | undefined)?.dollars;
+  // Boat's deadline; `ttlSeconds` is only the length it was set to.
+  const stopsAt = typeof sandbox.archiveAfter === "string" ? Date.parse(sandbox.archiveAfter) : Number.NaN;
   return [{
     id: sandbox.id,
     ...(typeof sandbox.name === "string" && sandbox.name ? { name: sandbox.name.slice(0, 200) } : {}),
@@ -5702,5 +5732,6 @@ function boatThreadSandbox(value: unknown): BoatThreadSandbox[] {
     ...(typeof sandbox.type === "string" ? { type: sandbox.type.slice(0, 40) } : {}),
     ...(typeof dollars === "number" && Number.isFinite(dollars) ? { dollars } : {}),
     ...(typeof sandbox.ttlSeconds === "number" ? { ttlSeconds: sandbox.ttlSeconds } : {}),
+    ...(Number.isFinite(stopsAt) ? { stopsAt } : {}),
   }];
 }
