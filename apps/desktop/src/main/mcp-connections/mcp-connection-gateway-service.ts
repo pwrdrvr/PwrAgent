@@ -1603,12 +1603,16 @@ export class McpConnectionGatewayService {
       );
     }
     const scope = this.boatThreadScope({ threadId: request.threadId, backend: request.backend }, "thread");
+    const wasOwned = scope.ownedSandboxIds().has(request.sandboxId);
     const result = await this.boat.callTool(
       scope,
       request.action === "delete" ? "delete_sandbox" : "stop_sandbox",
       { sandboxId: request.sandboxId },
     );
-    if (result.isError) throw new Error(boatToolText(result));
+    // Already gone from Boat is what a delete wanted: the tool has dropped
+    // it from the thread, and the list that comes back no longer shows it.
+    const gone = request.action === "delete" && wasOwned && !scope.ownedSandboxIds().has(request.sandboxId);
+    if (result.isError && !gone) throw new Error(boatToolText(result));
     return await this.listThreadBoatSandboxes(request);
   }
 

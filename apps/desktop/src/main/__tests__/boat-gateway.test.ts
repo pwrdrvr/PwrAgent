@@ -352,6 +352,35 @@ describe("Boat through the MCP gateway", () => {
     expect(boat.sent.some((request) => request.url.includes("bx_1") && request.method !== "GET")).toBe(false);
   });
 
+  it("answers a window's delete of a sandbox Boat no longer has with the list, not an error", async () => {
+    const real = fakeBoat();
+    const boat = {
+      sent: real.sent,
+      fetchFn: async (input: string | URL, init?: RequestInit): Promise<Response> => {
+        // Deleted in Boat's dashboard: it is not there to read or delete.
+        if (String(input).endsWith("/sandboxes/bx_0") && init?.method !== "POST") {
+          real.sent.push({ method: init?.method ?? "GET", url: String(input), authorization: null });
+          return new Response(
+            JSON.stringify({ ok: false, code: "not_found", error: "no such sandbox" }),
+            { status: 404, headers: { "content-type": "application/json" } },
+          );
+        }
+        return await real.fetchFn(input, init);
+      },
+    };
+    const { call, registry, rows, service } = harness(boat);
+    registry.setEnabled(BOAT, true);
+    await service.connectBoat(KEY);
+    await call("thread-a", "create_sandbox", {});
+    const thread = { backend: "codex", threadId: "thread-a" };
+
+    await expect(service.changeThreadBoatSandbox({ ...thread, sandboxId: "bx_0", action: "delete" }))
+      .resolves.toEqual({ sandboxes: [] });
+    expect(rows.find((row) => row.sandboxId === "bx_0")?.status).toBe("deleted");
+    // Stopping what is not there is still an error.
+    await expect(service.changeThreadBoatSandbox({ ...thread, sandboxId: "bx_0", action: "stop" })).rejects.toThrow();
+  });
+
   it("asks for a new sign-in once Boat refuses the stored key a sandbox", async () => {
     const { call, registry, service, stored } = harness(scopedBoat(FULL_SANDBOX_PRESET));
     registry.setEnabled(BOAT, true);

@@ -19,7 +19,9 @@ const POLICY = normalizeBoatSandboxPolicy({});
 
 type SshAnswer = Record<string, unknown>;
 
-function world(sshAnswer: () => SshAnswer = () => ({ machineIp: "203.0.113.10", sshUser: "user", hostKey: FAKE_HOST_KEY })) {
+function world(
+  sshAnswer: () => SshAnswer | Promise<SshAnswer> = () => ({ machineIp: "203.0.113.10", sshUser: "user", hostKey: FAKE_HOST_KEY }),
+) {
   const machine = fakeTunnelRuntime();
   const manager = new BoatPortForwards(machine.runtime);
   const sent: BoatApiRequest[] = [];
@@ -36,7 +38,7 @@ function world(sshAnswer: () => SshAnswer = () => ({ machineIp: "203.0.113.10", 
         return { ok: true, sandbox: { id: created, state: "ready" } };
       }
       if (!sandboxes.has(id)) throw new BoatApiError("sandbox not found", "not_found", 404);
-      if (action === "sshkey") return { ok: true, ...sshAnswer() };
+      if (action === "sshkey") return { ok: true, ...await sshAnswer() };
       if (request.method === "DELETE") sandboxes.delete(id);
       return { ok: true, status: "ok", sandbox: { id, state: "ready" } };
     },
@@ -230,6 +232,30 @@ describe("Boat port forwards", () => {
     expect(second.structuredContent).toEqual(first.structuredContent);
     expect(machine.tunnels).toHaveLength(1);
     expect(sent.filter((request) => request.path[2] === "sshkey")).toHaveLength(1);
+  });
+
+  it.each(["session", "sandbox"] as const)("closes a tunnel still starting when its %s ends", async (what) => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { machine, manager, thread } = world(async () => {
+      await held;
+      return { machineIp: "203.0.113.10", sshUser: "user", hostKey: FAKE_HOST_KEY };
+    });
+    const owner = thread();
+    const session = owner.session();
+    const sandboxId = await create(session.tools);
+    const opening = session.tools.call("forward_port", { sandboxId, port: 3000 });
+    // Boat has the key and has not answered: the tunnel is on its way up.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const closing = what === "session"
+      ? manager.closeForSession(session.name)
+      : owner.session().tools.call("stop_sandbox", { sandboxId });
+    release();
+    await Promise.all([opening, closing]);
+    expect(machine.tunnels.filter((tunnel) => tunnel.alive)).toEqual([]);
+    expect(machine.directories.size).toBe(0);
   });
 
   it("says why ssh gave up, and leaves no key behind", async () => {

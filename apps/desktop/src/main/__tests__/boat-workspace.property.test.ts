@@ -13,6 +13,7 @@ import {
   isEnvFilePath,
   listWorkspaceFiles,
   packWorkspace,
+  PULL_LIMIT_BYTES,
   type BoatWorkspaceGit,
 } from "../mcp-connections/boat-workspace";
 import { isolatedGitKeys, runIsolatedGit } from "./helpers/isolated-git";
@@ -142,10 +143,10 @@ async function repository(files: Record<string, string>): Promise<string> {
 
 describe("Boat workspace push", () => {
   it("knows a .env file by name, at any depth and in any case", () => {
-    for (const file of [".env", ".env.local", "apps/web/.env.production", ".ENV", "a\\.Env.test", ".env/inside.txt"]) {
+    for (const file of [".env", ".env.local", "apps/web/.env.production", ".ENV", "a\\.Env.test", ".env/inside.txt", ".envrc", "svc/.envrc"]) {
       expect(isEnvFilePath(file), file).toBe(true);
     }
-    for (const file of [".envrc", "env.txt", "x.env", "src/environment.ts", ".environment"]) {
+    for (const file of ["env.txt", "x.env", "src/environment.ts", ".environment", ".envrc.example"]) {
       expect(isEnvFilePath(file), file).toBe(false);
     }
   });
@@ -181,7 +182,7 @@ describe("Boat workspace push", () => {
         await listTar({ file: packed.archive, onReadEntry: (entry) => void archived.push(entry.path.replace(/^\.\//, "")) });
 
         // The model, from how each file was made and never from Git's answer.
-        const env = (name: string) => name.toLowerCase() === ".env" || name.toLowerCase().startsWith(".env.");
+        const env = (name: string) => name === ".env" || name === ".envrc" || name.startsWith(".env.");
         const ignored = (entry: (typeof specs)[number]) =>
           entry.directory === "ignored-dir/" || entry.name.endsWith(".log") || (ignoreEnv && entry.name.startsWith(".env"));
         const expected = [
@@ -360,6 +361,24 @@ describe.runIf(posix)("Boat workspace pull", () => {
       expect(fs.existsSync(path.join(root, ".git/hooks/pre-commit"))).toBe(false);
       expect(fs.existsSync(outside)).toBe(false);
     }
+  }, 60_000);
+
+  it("refuses a patch over the limit on the size the sandbox reports, before fetching it", async () => {
+    const root = await repository({ "a.txt": "one\n" });
+    const { box, sent, tools, transfers } = world([root]);
+    const realGit = (await execFile("bash", ["-c", "command -v git"])).stdout.trim();
+    await tools.call("create_sandbox", {});
+    await tools.call("push_workspace", { sandboxId: "bx_0", remotePath: "/home/user/app" });
+    fs.mkdirSync(path.join(box, "bin"), { recursive: true });
+    // A sandbox whose changes are huge: `wc -c` answers past the limit.
+    fs.writeFileSync(path.join(box, "bin/wc"), `#!/bin/sh\ncat >/dev/null\necho ${PULL_LIMIT_BYTES + 1}\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(box, "bin/git"), `#!/bin/sh\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const before = { requests: sent.length, transfers: transfers.length, files: snapshot(root) };
+    const result = await tools.call("pull_changes", { sandboxId: "bx_0", remotePath: "/home/user/app" });
+    expect(result).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("larger than") }] });
+    expect(sent.slice(before.requests).map((request) => request.path.at(-1))).toEqual(["commands"]);
+    expect(transfers.length).toBe(before.transfers);
+    expect(snapshot(root)).toEqual(before.files);
   }, 60_000);
 
   it("says so when the sandbox directory was not pushed by PwrAgent", async () => {

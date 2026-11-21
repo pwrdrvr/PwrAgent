@@ -204,7 +204,7 @@ export const BOAT_TOOLS: readonly Tool[] = [
     title: { type: "string", maxLength: NAME_LIMIT },
     localhost: { type: "boolean", description: "True when the service listens on 127.0.0.1 only." },
   }, ["sandboxId", "port"]),
-  tool("push_workspace", "Copy this thread's working directory from the operator's computer into a sandbox, so the code under work can build and run there. Sends the files Git tracks or does not ignore; files named .env or .env.* are never sent. The sandbox copy is a fresh Git repository, with no history or remotes. Refused when remotePath already holds files, unless replace is true.", {
+  tool("push_workspace", "Copy this thread's working directory from the operator's computer into a sandbox, so the code under work can build and run there. Sends the files Git tracks or does not ignore; files named .env, .env.* or .envrc are never sent. The sandbox copy is a fresh Git repository, with no history or remotes. Refused when remotePath already holds files, unless replace is true.", {
     sandboxId: sandboxIdProperty,
     directory: { type: "string", description: "One of this thread's directories, as an absolute path. Omit for its working directory." },
     remotePath: { type: "string", description: "Where it goes in the sandbox, under /home/user or /tmp. Omit for /home/user/<directory name>." },
@@ -478,8 +478,16 @@ export class BoatTools {
             throw new Refusal(`${remotePath} was not put there by push_workspace, so there is no starting point to compare it to.`);
           }
           if (!diffed.ok) throw new Refusal(`The sandbox could not list its changes at ${remotePath}: ${diffed.said}`);
-          if (Number(diffed.stdout.trim().split(/\s+/).at(-1)) === 0) {
+          const patchBytes = Number(diffed.stdout.trim().split(/\s+/).at(-1));
+          if (patchBytes === 0) {
             return { sandboxId, directory: root, remotePath, files: [], note: "The sandbox copy has no changes since the last push or pull." };
+          }
+          // Refused on the size the sandbox reported, before any of it is fetched.
+          if (!Number.isFinite(patchBytes) || patchBytes > PULL_LIMIT_BYTES) {
+            throw new Refusal(
+              `The sandbox's changes at ${remotePath} are larger than the ${PULL_LIMIT_BYTES / (1024 * 1024)} MiB a pull brings back. Nothing was changed. `
+              + "Build output is the usual cause: add it to .gitignore in the sandbox copy, then pull again.",
+            );
           }
           const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-boat-pull-"));
           try {
@@ -753,7 +761,7 @@ export class BoatTools {
    */
   private async adopt(
     sandbox: unknown,
-    send: (request: Omit<BoatApiRequest, "signal">) => Promise<Record<string, unknown>>,
+    send: Send,
   ): Promise<Record<string, unknown>> {
     const described = describeSandbox(sandbox);
     const sandboxId = described.id;
@@ -784,7 +792,7 @@ export class BoatTools {
    */
   private async saved(
     sandboxId: string,
-    send: (request: Omit<BoatApiRequest, "signal">) => Promise<Record<string, unknown>>,
+    send: Send,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const sleep = this.context.sleep ?? (async (ms: number, aborted?: AbortSignal) => {
@@ -809,7 +817,6 @@ export class BoatTools {
   }
 }
 
-/** A sandbox without who owns the account: no creator, team or address. */
 type Send = (request: Omit<BoatApiRequest, "signal">) => Promise<Record<string, unknown>>;
 
 const SCRIPT_TIMEOUT_SECONDS = 600;
@@ -845,6 +852,7 @@ function signedUrl(answer: Record<string, unknown>): string {
   return url;
 }
 
+/** A sandbox without who owns the account: no creator, team or address. */
 function describeSandbox(sandbox: unknown): Record<string, unknown> {
   if (!sandbox || typeof sandbox !== "object") return {};
   const described = pick(sandbox as Record<string, unknown>, [

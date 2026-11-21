@@ -201,8 +201,8 @@ Push:
   resolver that reports MCP roots. Any other path is refused before a file is
   read.
 - The file list is `git ls-files --cached --others --exclude-standard`: what
-  Git tracks, plus untracked files no ignore rule covers. A file named `.env`
-  or `.env.*` at any depth is left out even when it is tracked, and the answer
+  Git tracks, plus untracked files no ignore rule covers. A file named `.env`,
+  `.env.*` or `.envrc` at any depth is left out even when it is tracked, and the answer
   counts how many were.
 - The files go as one gzip tar (at most 200 MiB) to a signed upload URL from
   `POST /sandboxes/{id}/files/upload-url`. The Boat key is not sent to that

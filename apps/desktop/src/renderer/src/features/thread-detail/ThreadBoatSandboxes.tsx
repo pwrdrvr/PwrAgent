@@ -13,6 +13,17 @@ const AT_REST = new Set(["archiving", "archived", "cancelled", "error", "stopped
  * reads again underneath, so the section does not arrive after the rest.
  */
 const lastRead = new Map<string, BoatThreadSandbox[]>();
+const LAST_READ_LIMIT = 50;
+
+function remember(key: string, sandboxes: BoatThreadSandbox[]): void {
+  // Re-inserted so the oldest key is the least recently read.
+  lastRead.delete(key);
+  lastRead.set(key, sandboxes);
+  for (const stale of lastRead.keys()) {
+    if (lastRead.size <= LAST_READ_LIMIT) break;
+    lastRead.delete(stale);
+  }
+}
 
 export function formatBoatSandboxCost(dollars: number | undefined): string | undefined {
   if (dollars === undefined) return undefined;
@@ -54,7 +65,7 @@ export function ThreadBoatSandboxes(props: {
       try {
         const response = await list({ backend, threadId });
         if (cancelled) return;
-        lastRead.set(key, response.sandboxes);
+        remember(key, response.sandboxes);
         setRead({ key, sandboxes: response.sandboxes });
       } catch {
         // A failed read says nothing about now; the earlier list is dropped
@@ -78,7 +89,7 @@ export function ThreadBoatSandboxes(props: {
     setConfirmingId(undefined);
     void change({ backend, threadId, sandboxId, action })
       .then((response) => {
-        lastRead.set(key, response.sandboxes);
+        remember(key, response.sandboxes);
         setRead({ key, sandboxes: response.sandboxes });
       })
       .catch((cause: unknown) => {

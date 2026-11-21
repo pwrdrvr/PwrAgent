@@ -11,7 +11,7 @@ import { create as createTar } from "tar";
  * Rules held here, whatever the caller passes:
  * - only a directory of the thread is read or written;
  * - a push sends what Git tracks or does not ignore, and never a file named
- *   `.env` or `.env.*`, tracked or not;
+ *   `.env`, `.env.*` or `.envrc`, tracked or not;
  * - a pull changes local files only when every change applies to the files
  *   as they are now. Otherwise it changes nothing and says which files
  *   stood in the way. It never discards an uncommitted local change.
@@ -49,11 +49,14 @@ const FILE_LIMIT = 100_000;
 const REMOTE_PATH_PATTERN = /^\/(?:home\/user|tmp)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 const REPORT_LIMIT = 200;
 
-/** A `.env` file by name, at any depth: `.env`, `.env.local`, `.env.production`. */
+/**
+ * A file that holds a shell's secrets by convention, at any depth: `.env`,
+ * `.env.local`, `.env.production`, and direnv's `.envrc`.
+ */
 export function isEnvFilePath(file: string): boolean {
   return file.split(/[\\/]/).some((segment) => {
     const name = segment.toLowerCase();
-    return name === ".env" || name.startsWith(".env.");
+    return name === ".env" || name === ".envrc" || name.startsWith(".env.");
   });
 }
 

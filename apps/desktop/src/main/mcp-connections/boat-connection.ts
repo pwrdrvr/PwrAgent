@@ -268,13 +268,27 @@ export class BoatConnection {
         download: async (url, file, limitBytes, signal) => {
           const response = await fetchFn(url, { method: "GET", redirect: "error", ...(signal ? { signal } : {}) });
           if (!response.ok) throw new BoatWorkspaceError(`Boat did not return the changes (HTTP ${response.status}).`);
-          const bytes = Buffer.from(await response.arrayBuffer());
-          if (bytes.length > limitBytes) {
-            throw new BoatWorkspaceError(
-              `The sandbox's changes are ${Math.ceil(bytes.length / (1024 * 1024))} MiB, more than a pull brings back. Nothing was changed.`,
-            );
+          const tooLarge = (): BoatWorkspaceError => new BoatWorkspaceError(
+            `The sandbox's changes are more than the ${limitBytes / (1024 * 1024)} MiB a pull brings back. Nothing was changed.`,
+          );
+          // The declared length first, then the bytes as they arrive: never
+          // more than the limit in memory, whatever the server says.
+          if (Number(response.headers.get("content-length")) > limitBytes) {
+            await response.body?.cancel().catch(() => undefined);
+            throw tooLarge();
           }
-          await fs.writeFile(file, bytes, { mode: 0o600 });
+          const chunks: Uint8Array[] = [];
+          let received = 0;
+          const reader = response.body?.getReader();
+          for (let part = await reader?.read(); part && !part.done; part = await reader?.read()) {
+            received += part.value.byteLength;
+            if (received > limitBytes) {
+              await reader?.cancel().catch(() => undefined);
+              throw tooLarge();
+            }
+            chunks.push(part.value);
+          }
+          await fs.writeFile(file, Buffer.concat(chunks), { mode: 0o600 });
         },
       },
     };

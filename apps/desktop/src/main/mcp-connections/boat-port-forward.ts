@@ -169,6 +169,7 @@ export class BoatPortForwards {
 
   /** Every tunnel into a sandbox that is stopping, resuming or going away. */
   async closeForSandbox(sandboxId: string): Promise<void> {
+    await this.started((key) => key.startsWith(`${sandboxId}:`));
     await Promise.all([...this.entries.values()]
       .filter((entry) => entry.sandboxId === sandboxId)
       .map(async (entry) => await this.end(entry)));
@@ -176,14 +177,24 @@ export class BoatPortForwards {
 
   /** A session ended: its tunnels close unless another session also holds them. */
   async closeForSession(session: string): Promise<void> {
+    await this.started(() => true);
     await Promise.all([...this.entries.values()].map(async (entry) => {
       if (entry.sessions.delete(session) && entry.sessions.size === 0) await this.end(entry);
     }));
   }
 
   async closeAll(): Promise<void> {
-    await Promise.allSettled([...this.starting.values()]);
+    await this.started(() => true);
     await Promise.all([...this.entries.values()].map(async (entry) => await this.end(entry)));
+  }
+
+  /**
+   * Waits for tunnels still starting, so a close also ends one that was on
+   * its way up. Each `open` waiting on the same start resumes first and adds
+   * its session before the close looks.
+   */
+  private async started(match: (key: string) => boolean): Promise<void> {
+    await Promise.allSettled([...this.starting].filter(([key]) => match(key)).map(([, start]) => start));
   }
 
   private async start(
