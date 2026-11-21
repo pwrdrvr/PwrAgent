@@ -9061,10 +9061,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async listPendingPrTerminalWatchObservations(params: {
     backend?: ThreadOverlayState["backend"]; threadId?: string;
   } = {}): Promise<PrTerminalWatchObservation[]> {
-    const rows = this.stateDb.raw.prepare(`SELECT payload FROM pr_status_watches
-      WHERE status IN ('pending_terminal', 'notifying_terminal')
-        AND (? IS NULL OR (backend = ? AND thread_id = ?))`)
-      .all(params.backend ?? null, params.backend ?? null, params.threadId ?? null) as Array<{ payload: string }>;
+    const backend = params.backend ?? null;
+    // The four-state predicate admits the partial retry index. Keep saved
+    // observations in row order, including across threads at startup.
+    const rows = (backend === null
+      ? this.stateDb.raw.prepare(`SELECT payload FROM pr_status_watches
+          WHERE status IN ('pending_terminal', 'notifying_terminal')
+            AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+          ORDER BY rowid`).all()
+      : this.stateDb.raw.prepare(`SELECT payload FROM pr_status_watches
+          WHERE status IN ('pending_terminal', 'notifying_terminal')
+            AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+            AND backend = ? AND thread_id = ?
+          ORDER BY rowid`).all(backend, params.threadId ?? null)) as Array<{ payload: string }>;
     const observations = new Map<string, PrTerminalWatchObservation>();
     for (const row of rows) {
       const { terminalObservation } = JSON.parse(row.payload) as { terminalObservation: PrTerminalWatchObservation };
@@ -9193,7 +9202,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
              FROM pr_status_watches
              WHERE head_sha = '' AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
                AND (? = 0 OR status IN ('watching', 'dispatching'))
-               AND backend = ? AND thread_id = ?`,
+               AND backend = ? AND thread_id = ?
+             ORDER BY pr_key`,
           )
           .all(params.unobservedOnly ? 1 : 0, params.backend, params.threadId)
       : this.stateDb.raw
@@ -9201,7 +9211,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             `SELECT DISTINCT pr_key
              FROM pr_status_watches
              WHERE head_sha = '' AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
-               AND (? = 0 OR status IN ('watching', 'dispatching'))`,
+               AND (? = 0 OR status IN ('watching', 'dispatching'))
+             ORDER BY pr_key`,
           )
           .all(params.unobservedOnly ? 1 : 0)) as Array<{ pr_key: string }>;
     return rows.map((row) => row.pr_key);

@@ -18,7 +18,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
   // recovery guard, research, request-pricing, sub-agent dismissal,
   // operator-request scope, pricing summary, gate pricing, usage completion,
-  // and automation turn indexes, plus pricing summary deltas and scheduled
+  // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
   // action projections.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
@@ -46,6 +46,8 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_gate_usage_turn"
     && row.name !== "idx_thread_usage_lines_completion_turn"
     && row.name !== "idx_automation_runs_backend_turn"
+    && row.name !== "idx_pr_status_watches_retry"
+    && row.name !== "idx_pr_status_watches_history"
     && row.name !== "thread_pricing_summary_delta_insert"
     && row.name !== "thread_pricing_summary_delta_update"
     && row.name !== "thread_pricing_summary_delta_delete"
@@ -143,6 +145,7 @@ const upgrades = [
   { version: 77, sql: "DROP INDEX idx_thread_todos_dependency; ALTER TABLE thread_todos DROP COLUMN dependency_id" },
   { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
   { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing" },
+  { version: CURRENT_STATE_DB_USER_VERSION, sql: "DROP INDEX idx_pr_status_watches_retry; DROP INDEX idx_pr_status_watches_history" },
 ] as const;
 
 describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {
