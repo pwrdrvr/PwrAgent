@@ -3398,7 +3398,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * Stored running totals and a reference-price provenance flag. No usage
    * rows are materialized and no repricing repair runs on this read.
-   * Split the family membership checks so each uses its own sparse index.
+   * Pin the sparse index for each family membership check. ANALYZE can favor
+   * an index containing all metered lines when reference prices are clustered.
    * Keep the catalog predicate literal to match the partial indexes.
    */
   async readThreadPricingSummaries(threads: ReadonlyArray<{
@@ -3407,14 +3408,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }>): Promise<ThreadPricingSummary[]> {
     const statement = this.stateDb.raw.prepare(
       `SELECT summary.*, EXISTS (
-         SELECT 1 FROM thread_usage_lines AS line
+         SELECT 1 FROM thread_usage_lines AS line INDEXED BY idx_thread_usage_lines_assumed_thread
          WHERE line.backend = summary.backend
            AND line.thread_id = summary.thread_id
            AND line.provider = summary.provider AND line.currency = summary.currency
            AND line.status != 'superseded' AND line.price_status = 'priced'
            AND line.pricing_catalog_id = 'openrouter-assumed'
          UNION ALL
-         SELECT 1 FROM thread_usage_lines AS line
+         SELECT 1 FROM thread_usage_lines AS line INDEXED BY idx_thread_usage_lines_assumed_parent
          WHERE line.backend = summary.backend
            AND line.parent_thread_id = summary.thread_id
            AND line.provider = summary.provider AND line.currency = summary.currency

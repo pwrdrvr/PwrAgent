@@ -9,7 +9,7 @@ import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./
 const root = { backend: "codex", threadId: "root" } as const;
 const assumed = OPENROUTER_ASSUMED_PRICING_CATALOG_ID;
 
-function pricingFixture(db: ReturnType<typeof openInMemoryStateDb>, unrelated: number, sameThread: number) {
+function pricingFixture(db: StateDb, unrelated: number, sameThread: number, skewed = false) {
   db.raw.transaction(() => {
     const insert = db.raw.prepare(`INSERT INTO thread_usage_lines (
       usage_line_id, backend, thread_id, parent_thread_id, provider, currency, pricing_catalog_id,
@@ -38,11 +38,18 @@ function pricingFixture(db: ReturnType<typeof openInMemoryStateDb>, unrelated: n
     add("unpriced-assumed", { catalog: assumed, priceStatus: "unpriced" });
     for (let i = 0; i < unrelated; i++) {
       const id = `outside-${i}`;
-      add(id, { thread: id });
+      add(id, { thread: id, ...(skewed ? { parent: `${id}-parent` } : {}) });
     }
     for (let i = 0; i < sameThread; i++) {
       const direct = i % 2 === 0;
       add(`history-${i}`, direct ? {} : { thread: "worker", parent: "root" });
+    }
+    if (skewed) {
+      // Spread metered lines across unrelated families and concentrate
+      // reference prices in one outside family before ANALYZE samples them.
+      for (let i = 0; i < 1_000; i++) {
+        add(`reference-${i}`, { thread: "outside", parent: "outside-root", catalog: assumed });
+      }
     }
     // Store the running totals represented by the persisted, non-superseded lines.
     db.raw.exec(`INSERT INTO thread_pricing_summaries (
@@ -92,12 +99,12 @@ function expectSummarySeek(plan: string) {
 it.each(
   [false, true].flatMap((analyzed) =>
     ([[1_000, 0], [2_000, 0], [50_000, 0], [1_000, 50_000]] as const).map(([unrelated, sameThread]) =>
-      ({ analyzed, unrelated, sameThread }))),
-)("bounds pricing reads with $unrelated unrelated and $sameThread family rows (ANALYZE=$analyzed)",
-  async ({ analyzed, unrelated, sameThread }) => {
+      ({ analyzed, unrelated, sameThread, skewed: analyzed && sameThread > 0 }))),
+)("bounds pricing reads with $unrelated unrelated and $sameThread family rows (ANALYZE=$analyzed, skewed=$skewed)",
+  async ({ analyzed, unrelated, sameThread, skewed }) => {
     const db = openInMemoryStateDb();
     try {
-      pricingFixture(db, unrelated, sameThread);
+      pricingFixture(db, unrelated, sameThread, skewed);
       if (analyzed) db.raw.exec("ANALYZE");
       const store = new SqliteOverlayStore(db);
       const observation = observeReads(db);
