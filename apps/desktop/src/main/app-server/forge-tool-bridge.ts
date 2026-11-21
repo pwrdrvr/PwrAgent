@@ -1375,38 +1375,45 @@ export class ForgeToolBridge {
   async canonicalizeNavigationThreadPullRequests(
     threads: NavigationSnapshot["threads"],
     demand?: PrMetadataDemand,
+    verifyAttachments = true,
   ): Promise<NavigationSnapshot["threads"]> {
     const primaryRepository = this.threadPrimaryGitRepositoryReader;
     if (primaryRepository) threads = threads.map((thread) => ({
       ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
     }));
     const canonicalizer = this.threadPullRequestCanonicalizer;
-    if (!canonicalizer) {
-      return threads;
-    }
+    if (!canonicalizer) return threads;
     try {
-      return await Promise.all(
-        threads.map(async (thread) => {
-          if (!thread.prs?.length) {
-            return thread;
-          }
-          return { ...thread, prs: await (demand ? canonicalizer(thread.prs, demand) : canonicalizer(thread.prs)) };
-        }),
-      );
+      return await Promise.all(threads.map(async (thread) => !thread.prs?.length ? thread : {
+        ...thread, prs: await (demand || !verifyAttachments
+          ? canonicalizer(thread.prs, demand, verifyAttachments) : canonicalizer(thread.prs)),
+      }));
     } catch (error) {
       demand?.signal?.throwIfAborted();
-      // Canonicalizing reads the durable `pr_status_cache`. If that read
-      // fails, serving the snapshot with the overlay's own PR rows is a
-      // far better outcome than failing the snapshot: the client gets
-      // possibly-stale chips instead of an error, and for a federation
-      // viewer an error means a disconnected window rather than one
-      // slightly wrong row.
-      backendRegistryLog.warn("pr status canonicalization failed", {
-        error: error instanceof Error ? error.message : String(error),
-        threadCount: threads.length,
-      });
+      this.logNavigationPrProjectionFailure(error);
       return threads;
     }
+  }
+
+  async canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
+    demand?: PrMetadataDemand): Promise<typeof prs> {
+    const canonicalizer = this.threadPullRequestCanonicalizer;
+    if (!canonicalizer) return prs;
+    try {
+      return await canonicalizer(prs, demand);
+    } catch (error) {
+      demand?.signal?.throwIfAborted();
+      this.logNavigationPrProjectionFailure(error);
+      return prs;
+    }
+  }
+
+  private logNavigationPrProjectionFailure(error: unknown): void {
+    // The overlay's stored rows keep navigation available when its status
+    // registry cannot be read. A viewer can refresh again when it recovers.
+    backendRegistryLog.warn("pr status canonicalization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   async projectCanonicalPullRequests(

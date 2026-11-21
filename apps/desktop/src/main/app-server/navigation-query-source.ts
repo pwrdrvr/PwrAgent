@@ -1,5 +1,5 @@
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
@@ -20,8 +20,19 @@ import {
 } from "./navigation-directory-set-announcer";
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
+import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 
 const indexReads = new NavigationIndexReadPool(1_000);
+
+export function readNavigationPagePullRequests(batches: PrSummary[][], options: {
+  kind: NavigationQueryRequest["query"]["kind"];
+  signal?: AbortSignal;
+  registry?: DesktopBackendRegistry;
+}): Promise<PrSummary[][]> {
+  const registry = options.registry ?? getDesktopBackendRegistry();
+  const priority = options.kind === "star-map" ? PR_METADATA_PRIORITY.background : PR_METADATA_PRIORITY.page;
+  return Promise.all(batches.map((prs) => registry.canonicalizeNavigationPullRequests(prs, { signal: options.signal, priority: () => priority })));
+}
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
 const sourceIds = new WeakMap<object, number>();
 let nextSourceId = 0;
@@ -240,7 +251,7 @@ async function buildLocalNavigationQueryIndex(params: {
   );
   params.signal?.throwIfAborted();
   const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
-    watchedThreads,
+    watchedThreads, undefined, false,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {

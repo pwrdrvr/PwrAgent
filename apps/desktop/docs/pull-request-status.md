@@ -46,8 +46,18 @@ for a viewer means a disconnected window).
 
 Compact navigation rows carry a preview of up to 16 PRs and the full count
 when attachments exceed that preview. The preview retains the lead and the
-PRs whose readiness determines the two rollup indicators. The sidebar's PR
-disclosure and row menu request the owner's complete list through the paged
+PRs whose readiness determines the two rollup indicators. The shared
+membership index projects stored statuses in memory. The owner validates
+automatic attachments for a page before calculating its preview, attachment
+count, and wire bytes. Directory index and group planning reads use
+membership alone. A continuation keeps the same row offsets and reuses PR
+projections it already observed. A retained-range acknowledgment checks the
+observations for that range within the page work budget. Owner polling and
+Auto-fix validate their complete attachment inventory independently. Star Map
+facets and filtering use validated PR membership across their inventory.
+Selected detail and bounded pages take priority over those inventory checks.
+
+The sidebar's PR disclosure and row menu request the owner's complete list through the paged
 selected-detail collection, with one restart on an expired cursor. The owner
 canonicalizes the overlay attachments before serving those pages. The
 disclosure reconciles status events that arrive while pages are loading.

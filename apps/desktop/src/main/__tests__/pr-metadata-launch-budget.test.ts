@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import * as git from "../app-server/git-executable";
 import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
+import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import {
   clearGitHubRemoteCache,
   parseForgeRemote,
@@ -144,22 +145,24 @@ describe("PR metadata launch budgets", () => {
     expect(starts).toEqual(Array.from({ length: 8 }, (_, index) => cwd(index)));
     const controller = new AbortController();
     const cancelled = resolveGitHubRepoForDirectory(cwd(41), {
-      demand: { foreground: () => true, signal: controller.signal },
+      demand: { priority: () => PR_METADATA_PRIORITY.selected, signal: controller.signal },
     }).catch((error: unknown) => error);
     const cancelledShared = resolveGitHubRepoForDirectory(cwd(39), {
-      demand: { foreground: () => true, signal: controller.signal },
+      demand: { priority: () => PR_METADATA_PRIORITY.selected, signal: controller.signal },
     }).catch((error: unknown) => error);
-    const selectedRead = resolveGitHubRepoForDirectory(cwd(40), { demand: { foreground: () => true } });
+    const pageRead = resolveGitHubRepoForDirectory(cwd(38), { demand: { priority: () => PR_METADATA_PRIORITY.page } });
+    const selectedRead = resolveGitHubRepoForDirectory(cwd(40), { demand: { priority: () => PR_METADATA_PRIORITY.selected } });
     await Promise.resolve();
     // Both owners of checkout 40 should share its commands. Checkout 41 has
     // only the consumer that aborts, so none of its queued work should start.
     controller.abort();
     release();
-    const resolved = await Promise.all([...scan, selectedRead]);
+    const resolved = await Promise.all([...scan, selectedRead, pageRead]);
     expect(resolved.every((repo) => repo?.repo === "project")).toBe(true);
     expect(await cancelled).toBe(controller.signal.reason);
     expect(await cancelledShared).toBe(controller.signal.reason);
     expect(starts[8]).toBe(cwd(40));
+    expect(starts.indexOf(cwd(38))).toBeLessThan(starts.indexOf(cwd(39)));
     expect(starts.lastIndexOf(cwd(40))).toBeLessThan(starts.indexOf(cwd(39)));
     expect(selected).toEqual(["remote", "remote get-url --all origin"]);
     expect(starts).not.toContain(cwd(41));

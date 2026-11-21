@@ -420,7 +420,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, readNavigationPagePullRequests } from "../app-server/navigation-query-source";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -2033,6 +2033,7 @@ class DesktopAppServerService {
         ? { ...page, remoteOwner: { ...page.remoteOwner!, directoryThreadsCollapsed } } : page;
     }
     return await getDesktopNavigationQueryStore().readPage({
+      loadPullRequests: (batches) => readNavigationPagePullRequests(batches, { kind: request.query.kind, signal: rpcOptions?.signal }),
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
         await awaitStartupProviderCoverage({ query: request.query,
@@ -3564,6 +3565,9 @@ class DesktopAppServerService {
     const abort = new AbortController();
     this.ownerNavigationMetadataAbort = abort;
     const read = (async () => {
+      // Registry event dispatch is synchronous. Let the shared index's
+      // listener fence the old snapshot before this consumer joins a read.
+      await Promise.resolve();
       while (this.ownerNavigationActive) {
         const version = this.ownerNavigationMetadataVersion;
         const isCurrent = () => this.ownerNavigationActive && this.ownerNavigationMetadataVersion === version;
@@ -3576,8 +3580,10 @@ class DesktopAppServerService {
         }
         await Promise.all([this.loadPrStatusRegistry(), this.threadPullRequestLookup.loadPrLookupRegistry()]);
         if (!isCurrent()) continue;
-        this.seedPrStatusRegistryFromThreads(index.threads);
-        const canonical = this.applyCanonicalPrStatuses(index.threads);
+        const verified = await getDesktopBackendRegistry().canonicalizeNavigationThreadPullRequests(index.threads, { signal: abort.signal });
+        if (!isCurrent()) continue;
+        this.seedPrStatusRegistryFromThreads(verified);
+        const canonical = this.applyCanonicalPrStatuses(verified);
         const complete = !index.coverage || index.coverage.state === "complete";
         await this.rememberThreadPrAttachments(canonical.threads, { replace: complete, isCurrent });
         if (!isCurrent()) continue;
@@ -5236,9 +5242,11 @@ class DesktopAppServerService {
   async canonicalizeStoredPullRequests(
     prs: PrSummary[],
     demand?: PrMetadataDemand,
+    verifyAttachments = true,
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs), demand);
+    const canonical = this.canonicalizePrs(prs);
+    return verifyAttachments ? await this.filterStoredDiscoveredPrs(canonical, demand) : canonical;
   }
 
   private mergePrHistory(
@@ -6541,8 +6549,9 @@ class DesktopAppServerService {
     }
     await this.loadPrStatusRegistry();
     await this.threadPullRequestLookup.loadPrLookupRegistry();
-    this.seedPrStatusRegistryFromThreads(index.threads);
-    const canonical = this.applyCanonicalPrStatuses(index.threads);
+    const verified = await getDesktopBackendRegistry().canonicalizeNavigationThreadPullRequests(index.threads);
+    this.seedPrStatusRegistryFromThreads(verified);
+    const canonical = this.applyCanonicalPrStatuses(verified);
     await this.rememberThreadPrAttachments(canonical.threads, { replace: true });
     const eligibleThreads = canonical.threads.filter((thread) => {
       const attachment = this.attachedPrsByThreadKey.get(

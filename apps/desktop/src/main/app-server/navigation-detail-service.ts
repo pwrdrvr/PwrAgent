@@ -35,7 +35,7 @@ import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-repository";
-import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
@@ -320,7 +320,7 @@ export class NavigationDetailService {
     // Codex can omit that timestamp or retain one after an unarchive. Keep the
     // history available without authorizing the archived thread's composer.
     const identity = this.registry.getThreadInfo(request.ref)?.archived === true ? "archived" : "present";
-    const prDemand: PrMetadataDemand = { foreground: () => true, signal: options.signal };
+    const prDemand: PrMetadataDemand = { priority: () => PR_METADATA_PRIORITY.selected, signal: options.signal };
     if (request.collection) {
       const name = request.collection.name;
       if (name !== "prs" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");

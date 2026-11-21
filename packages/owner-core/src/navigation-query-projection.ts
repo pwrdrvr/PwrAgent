@@ -65,6 +65,8 @@ export type NavigationQueryMaterialization = {
   directories: NavigationDirectoryRow[];
   collectionKind?: "directories";
   entries: NavigationQueryEntry[];
+  /** Owner-only attachment input, indexed by entry position. Charged to cursor backing. */
+  deferredPullRequests?: Array<PrSummary[] | undefined>;
   modelGroups?: NavigationModelInventoryRow[];
   queryKey: string;
 };
@@ -440,6 +442,14 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
     .map((index) => prs[index]!);
 }
 
+export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
+  const preview = previewPullRequests(prs);
+  return {
+    ...(preview?.length ? { prs: preview } : {}),
+    ...(prs && prs.length > MAX_ROW_NESTED_RECORDS ? { prsTruncated: true, prCount: prs.length } : {}),
+  };
+}
+
 function projectNavigationRow(params: {
   childCount: number;
   viewerChildCount?: number;
@@ -448,6 +458,7 @@ function projectNavigationRow(params: {
   thread: NavigationThreadSummary & { nativeSubAgentCount?: number };
   homeProject?: NavigationRowHomeProject;
   checkoutProject?: NavigationDirectorySummary;
+  omitPullRequests?: boolean;
 }): NavigationRow {
   const { thread } = params;
   const linkedDirectories = limitRecords(thread.federation
@@ -456,8 +467,6 @@ function projectNavigationRow(params: {
     ? thread.linkedDirectories
     : withRepositoryIdentities(thread.linkedDirectories, params.repositories));
   const reactions = limitRecords(thread.reactions);
-  const prs = previewPullRequests(thread.prs);
-  const prsTruncated = (thread.prs?.length ?? 0) > MAX_ROW_NESTED_RECORDS;
   const messagingBindings = limitRecords(thread.messagingBindings);
   const prCiWatches = limitRecords(thread.prCiWatches);
   const nativeSubAgentCount = thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0;
@@ -539,8 +548,7 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(prs?.length ? { prs } : {}),
-    ...(prsTruncated ? { prsTruncated: true, prCount: thread.prs!.length } : {}),
+    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }
       : {}),
@@ -1321,6 +1329,7 @@ export function projectNavigationQuery(params: {
   request: NavigationQueryRequest;
   attentionOrder?: NavigationAttentionOrder;
   onIndexWork?: NavigationProjectionWork;
+  deferPullRequests?: boolean;
 }): NavigationQueryMaterialization {
   const query = params.request.query;
   if (query.kind === "model-inventory") {
@@ -1422,7 +1431,14 @@ export function projectNavigationQuery(params: {
       sortSubthreadSummaries(parents.get(key)!, children).forEach((thread, order) => siblingOrders.set(threadKey(thread), order));
     }
   }
+  let deferredPullRequests: NavigationQueryMaterialization["deferredPullRequests"];
+  const membershipOnly = query.kind === "group-members" || query.kind === "directory-index" || query.kind === "star-map-geometry";
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
+    const defer = params.deferPullRequests && !thread.federation && Boolean(thread.prs?.length);
+    if (defer && !membershipOnly) {
+      deferredPullRequests ??= [];
+      deferredPullRequests[index] = thread.prs;
+    }
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
       ? undefined
@@ -1440,6 +1456,7 @@ export function projectNavigationQuery(params: {
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
         homeProject: homeProjects?.get(thread),
         checkoutProject: checkoutProjectForThread(thread, checkoutProjects),
+        omitPullRequests: (params.deferPullRequests && membershipOnly) || defer,
       }),
       orderKey: rowOrderKey(index),
       ...(siblingOrders.has(threadKey(thread)) ? { siblingOrder: siblingOrders.get(threadKey(thread))! } : {}),
@@ -1507,6 +1524,7 @@ export function projectNavigationQuery(params: {
         parentCandidates,
       }) : [],
     entries,
+    ...(deferredPullRequests ? { deferredPullRequests } : {}),
     queryKey: navigationQueryKey(params.request),
   };
 }

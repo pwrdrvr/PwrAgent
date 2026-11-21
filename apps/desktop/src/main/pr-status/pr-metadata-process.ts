@@ -4,10 +4,11 @@ import { runGitCommand } from "../app-server/git-executable";
 // All PR consumers share these slots, including Git ref reads and SSH config
 // expansion. The command's own timeout starts only after it gets a slot.
 const MAX_ACTIVE_PROCESSES = 8;
+export const PR_METADATA_PRIORITY = { background: 0, page: 1, selected: 2 };
 
 export type PrMetadataDemand = {
   signal?: AbortSignal;
-  foreground?: () => boolean;
+  priority?: () => number;
 };
 
 type ProcessJob = { demand?: PrMetadataDemand; run: () => Promise<void> };
@@ -21,12 +22,15 @@ async function* processJobs(): AsyncGenerator<ProcessJob> {
       await new Promise<void>((resolve) => { wake = resolve; });
       continue;
     }
+    let priority = next.demand?.priority?.() ?? PR_METADATA_PRIORITY.background;
     for (const job of waiting) {
       // Priority can change when a selected thread joins a queued lookup.
-      if (job.demand?.foreground?.()) {
+      const candidate = job.demand?.priority?.() ?? PR_METADATA_PRIORITY.background;
+      if (candidate > priority) {
         next = job;
-        break;
+        priority = candidate;
       }
+      if (priority === PR_METADATA_PRIORITY.selected) break;
     }
     waiting.delete(next);
     yield next;
@@ -90,9 +94,10 @@ export class SharedPrMetadataRead<T> {
   constructor(run: (demand: PrMetadataDemand) => Promise<T>) {
     this.result = Promise.resolve().then(() => run({
       signal: this.signal,
-      foreground: () => {
-        for (const reader of this.readers) if (reader.foreground?.()) return true;
-        return false;
+      priority: () => {
+        let priority = PR_METADATA_PRIORITY.background;
+        for (const reader of this.readers) priority = Math.max(priority, reader.priority?.() ?? PR_METADATA_PRIORITY.background);
+        return priority;
       },
     }));
   }

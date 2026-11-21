@@ -49,3 +49,34 @@ it.each([{ active: 6, archived: 43 }, { active: 12, archived: 86 }])(
 it("follows every provider cursor to completion rather than imposing a universal one-RPC navigation budget", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 6 }), fc.integer({ min: 1, max: 8 }), listing), { numRuns: 25 });
 });
+
+it.each([43, 86])("shares %i archived pages between metadata refresh and archive membership", async (size) => {
+  vi.useFakeTimers();
+  const client = new CodexAppServerClient({ directoryResolver: async () => [] });
+  client["ensureInitialized"] = async () => {};
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const request = vi.fn(async (_method: string, params: { archived: boolean; cursor?: string }) => {
+    if (!params.archived) return { data: [{ id: "live", preview: "live", source: "cli" }], nextCursor: null };
+    const page = params.cursor ? Number(params.cursor) : 1;
+    if (page === 1) await held;
+    return { data: [{ id: `archive-${page}`, preview: `archive ${page}`, source: "cli" }],
+      nextCursor: page < size ? String(page + 1) : null };
+  });
+  Object.defineProperty(client, "connection", { value: { request } });
+  try {
+    expect((await client.listThreads({ enrichDirectories: false })).map((row) => row.id)).toEqual(["live"]);
+    // The active listing queued a metadata walk. Start it before the cleanup
+    // consumer asks for its own complete view of the same provider generation.
+    await vi.runOnlyPendingTimersAsync();
+    const membership = client.listThreads({ archived: true, enrichDirectories: false }, { callerReason: "archive-cleanup" });
+    await Promise.resolve();
+    release();
+    expect(new Set((await membership).map((row) => row.id))).toEqual(new Set(Array.from({ length: size }, (_, i) => `archive-${i + 1}`)));
+    expect(request.mock.calls.filter(([, params]) => params.archived)).toHaveLength(size);
+  } finally {
+    release();
+    await client.close();
+    vi.useRealTimers();
+  }
+});

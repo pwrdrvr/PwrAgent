@@ -477,6 +477,12 @@ Viewer-pin projection independently reuses its existing at-most-8-MiB result for
 one second, with database-version and transaction guards; peer status is still
 stamped by the viewer for each response. These caches add no recurring writes.
 
+The Codex display-metadata refresh and messaging archive-membership lookup
+share one physical archived thread-list walk when their provider generation,
+filter, and limits match. Restore and archive fences separate their reads
+across mutations. The checkout-removal admission still owns its own inventory
+and workspace safety checks.
+
 `navigation-project-scan-budget.test.ts` exercises 1, 5, and 15 sequential project
 queries over 1,200 threads and 50 viewer pins, using real SQLite projections.
 The 15-project uncached control makes 15 physical index builds and 15 pin scans;

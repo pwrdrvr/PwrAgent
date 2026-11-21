@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
+import type { NavigationQueryPage, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
@@ -10,6 +10,7 @@ import {
   explainMissingNavigationAnchor,
   navigationQueryKey,
   projectNavigationQuery,
+  projectNavigationPullRequests,
   navigationQuerySnapshotToken,
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
@@ -58,7 +59,39 @@ type NavigationQueryGeneration = {
   retainedBytes: number;
   scopeKey: string;
   attentionViewId?: string;
+  /** Raw membership and attachments, independent of read-time PR projection. */
+  sourceRevision?: string;
+  pullRequests?: Map<number, ReturnType<typeof projectNavigationPullRequests>>;
 };
+
+type PullRequestLoader = (batches: PrSummary[][]) => Promise<PrSummary[][]>;
+
+function pullRequestPositions(generation: NavigationQueryGeneration, start: number, count: number): number[] {
+  const rows = generation.materialization.deferredPullRequests;
+  const result: number[] = [];
+  if (rows) for (let index = start; index < Math.min(rows.length, start + count); index++) {
+    if (rows[index]) result.push(index);
+  }
+  return result;
+}
+
+async function readPullRequestPositions(generation: NavigationQueryGeneration, positions: number[], load: PullRequestLoader) {
+  if (!positions.length) return [];
+  const inputs = generation.materialization.deferredPullRequests!;
+  const results = await load(positions.map((position) => inputs[position]!));
+  return positions.map((position, index) => [position, projectNavigationPullRequests(results[index])] as const);
+}
+
+function rememberPullRequestPositions(generation: NavigationQueryGeneration, rows: Awaited<ReturnType<typeof readPullRequestPositions>>): void {
+  const observations = generation.pullRequests ??= new Map();
+  for (const [position, projection] of rows) {
+    // Overlapping continuation readers can finish in either order. The first
+    // observation owns this row for the lifetime of the cursor generation.
+    if (observations.has(position)) continue;
+    observations.set(position, projection);
+    generation.retainedBytes += serializedBytes([position, projection]);
+  }
+}
 
 type NavigationQueryCursor = {
   generation: string;
@@ -298,6 +331,7 @@ export class NavigationQueryStore {
 
   async readPage(params: {
     loadIndex: () => Promise<NavigationQueryIndex>;
+    loadPullRequests?: PullRequestLoader;
     request: NavigationQueryRequest;
     scopeKey: string;
   }): Promise<NavigationQueryPage> {
@@ -351,7 +385,20 @@ export class NavigationQueryStore {
       // An index that does not say when its listing began is taken to have
       // begun with this read.
       const readStartedAt = currentNavigationObservation();
-      const index = await params.loadIndex();
+      let index = await params.loadIndex();
+      const loadPullRequests = params.loadPullRequests;
+      // Star Map filters and facets depend on PR state before selecting rows.
+      // Give that resource a verified inventory for its own read.
+      const needsPullRequestMembership = params.request.query.kind === "star-map";
+      if (needsPullRequestMembership && loadPullRequests) {
+        const attached = index.threads.filter((thread) => !thread.federation && thread.prs?.length);
+        if (attached.length) {
+          const verified = await loadPullRequests(attached.map((thread) => thread.prs!));
+          const byThread = new Map(attached.map((thread, i) => [thread, verified[i]!]));
+          index = { ...index, threads: index.threads.map((thread) => byThread.has(thread)
+            ? { ...thread, prs: byThread.get(thread) } : thread) };
+        }
+      }
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       anchorIndex = index;
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
@@ -359,12 +406,13 @@ export class NavigationQueryStore {
         index,
         request: params.request,
         attentionOrder,
+        deferPullRequests: Boolean(loadPullRequests) && !needsPullRequestMembership,
       });
       const { revision, retainedBytes } = fingerprintNavigationMaterialization(materialization);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
       const current = currentId ? this.generations.get(currentId) : undefined;
-      if (current?.completeRevision === revision) {
+      if (current?.completeRevision === revision && !materialization.deferredPullRequests) {
         generation = current;
       } else {
         generation = {
@@ -381,6 +429,18 @@ export class NavigationQueryStore {
           throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
         }
         newCurrentKey = currentKey;
+      }
+      if (materialization.deferredPullRequests) {
+        generation.sourceRevision = revision;
+        const pageOffset = params.request.anchor ? this.anchorOffset(generation, params.request, index) : 0;
+        const reused = await this.preparePullRequestGeneration({
+          generation, current, request: params.request, pageOffset, load: loadPullRequests!,
+        });
+        if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
+        if (reused) {
+          generation = reused;
+          if (this.generations.has(reused.generation)) newCurrentKey = undefined;
+        }
       }
       if (
         params.request.completeBaselineRevision
@@ -419,25 +479,23 @@ export class NavigationQueryStore {
       return page;
     }
 
-    if (params.request.anchor) {
-      const anchor = params.request.anchor;
-      offset = anchor.kind === "directory"
-        ? generation.materialization.directories.findIndex((directory) => directory.key === anchor.key)
-        : generation.materialization.entries.findIndex(({ row }) => row.ref.backend === anchor.ref.backend
-          && row.ref.threadId === anchor.ref.threadId && row.ref.ownerInstanceId === anchor.ref.ownerInstanceId);
-      if (offset < 0) {
-        // The reason reaches the main log through Electron's handler error
-        // line and a peer through its relayed message; it is code vocabulary.
-        const reason = anchorIndex ? explainMissingNavigationAnchor({ index: anchorIndex, request: params.request }) : "filtered";
-        throw new NavigationQueryError("navigation_anchor_missing", `The visible navigation anchor is no longer in this query (reason: ${reason}). Choose another item or restart this list explicitly.`);
+    if (params.request.anchor) offset = this.anchorOffset(generation, params.request, anchorIndex);
+    const pageSize = params.request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
+    if (params.request.cursor && generation.materialization.deferredPullRequests) {
+      if (!params.loadPullRequests) throw new NavigationQueryError("navigation_invalid_request", "Navigation cursor needs its owner's attachment projection.");
+      const positions = pullRequestPositions(generation, offset, pageSize).filter((position) => !generation.pullRequests?.has(position));
+      const projected = await readPullRequestPositions(generation, positions, params.loadPullRequests);
+      if (!this.generations.has(generation.generation)) {
+        throw new NavigationQueryError("navigation_cursor_expired", "Navigation cursor expired during attachment projection; rebaseline around the visible anchor.");
       }
+      rememberPullRequestPositions(generation, projected);
     }
     generation.lastAccessedAt = now;
     const page = this.buildPage({
       generation,
       offset,
       ownerEpoch: this.ownerEpoch,
-      pageSize: params.request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS,
+      pageSize,
     });
     // Only an issued cursor needs retained authority. Complete exact reads and
     // one-page lists must not consume the active pagination generation budget.
@@ -445,7 +503,53 @@ export class NavigationQueryStore {
       this.retainGeneration(generation);
       this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
     }
+    if (params.request.cursor && generation.pullRequests && this.generations.has(generation.generation)) this.retainGeneration(generation);
     return page;
+  }
+
+  private anchorOffset(generation: NavigationQueryGeneration, request: NavigationQueryRequest, index?: NavigationQueryIndex): number {
+    const anchor = request.anchor!;
+    const offset = anchor.kind === "directory"
+      ? generation.materialization.directories.findIndex((directory) => directory.key === anchor.key)
+      : generation.materialization.entries.findIndex(({ row }) => row.ref.backend === anchor.ref.backend
+        && row.ref.threadId === anchor.ref.threadId && row.ref.ownerInstanceId === anchor.ref.ownerInstanceId);
+    if (offset >= 0) return offset;
+    const reason = index ? explainMissingNavigationAnchor({ index, request }) : "filtered";
+    throw new NavigationQueryError("navigation_anchor_missing", `The visible navigation anchor is no longer in this query (reason: ${reason}). Choose another item or restart this list explicitly.`);
+  }
+
+  private async preparePullRequestGeneration(params: {
+    generation: NavigationQueryGeneration;
+    current?: NavigationQueryGeneration;
+    request: NavigationQueryRequest;
+    pageOffset: number;
+    load: PullRequestLoader;
+  }): Promise<NavigationQueryGeneration | undefined> {
+    const { current, generation, request, pageOffset, load } = params;
+    const pagePositions = pullRequestPositions(generation, pageOffset, request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS);
+    if (current?.sourceRevision === generation.sourceRevision && current?.pullRequests) {
+      const range = request.retainedRange;
+      const proof = range?.ownerEpoch === this.ownerEpoch && range.revision === current.completeRevision
+        ? pullRequestPositions(generation, range.start, range.count)
+        : request.completeBaselineRevision === current.completeRevision
+          ? pullRequestPositions(generation, 0, generation.materialization.entries.length) : pagePositions;
+      // A revision can acknowledge prior observations only. Never turn an
+      // arbitrary retained range into permission to validate the inventory.
+      if (proof.length <= NAVIGATION_QUERY_MAX_PAGE_ROWS && proof.every((position) => current.pullRequests!.has(position))) {
+        const fresh = await readPullRequestPositions(generation, proof, load);
+        if (fresh.every(([position, prs]) => JSON.stringify(prs) === JSON.stringify(current.pullRequests!.get(position)))) {
+          return current;
+        }
+      }
+    }
+    const projected = await readPullRequestPositions(generation, pagePositions, load);
+    rememberPullRequestPositions(generation, projected);
+    const allObserved = pullRequestPositions(generation, 0, generation.materialization.entries.length).length === projected.length;
+    // Small complete results can match a baseline without retaining a cursor
+    // owner. A partial observation gets its own revision and frozen offsets.
+    generation.completeRevision = createHash("sha256").update(generation.sourceRevision!)
+      .update(allObserved ? JSON.stringify(projected) : generation.generation).digest("base64url");
+    return undefined;
   }
 
   /** Window teardown releases order lifetime; page expiry deliberately does not. */
@@ -588,7 +692,9 @@ export class NavigationQueryStore {
         && nextOffset - params.offset < params.pageSize;
       nextOffset += 1
     ) {
-      const item = collection[nextOffset]!;
+      const entry = collectionKind === "entries" ? materialization.entries[nextOffset] : undefined;
+      const prs = params.generation.pullRequests?.get(nextOffset);
+      const item = entry && prs ? { ...entry, row: { ...entry.row, ...prs } } : collection[nextOffset]!;
       const candidate = collectionKind === "models"
         ? { ...page, modelGroups: [...(page.modelGroups ?? []), item] }
         : collectionKind === "directories"
@@ -654,7 +760,13 @@ export class NavigationQueryStore {
   private retainGeneration(
     generation: NavigationQueryGeneration,
   ): NavigationQueryGeneration {
+    // Continuations can fill in previously unread PR rows. Re-admit their
+    // enlarged backing without charging the same generation twice.
+    this.generations.delete(generation.generation);
     if (generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+      for (const [key, id] of this.currentGenerationByScopeAndQuery) {
+        if (id === generation.generation) this.currentGenerationByScopeAndQuery.delete(key);
+      }
       throw new NavigationQueryError(
         "navigation_busy",
         "Navigation query exceeds the process retained-memory budget.",
