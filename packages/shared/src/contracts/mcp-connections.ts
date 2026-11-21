@@ -306,6 +306,24 @@ export function boatStartBlockFromLimits(limits: Record<string, unknown>): BoatS
   return "other";
 }
 
+/**
+ * The account a `GET /limits` answer describes. `checkedAt` is when PwrAgent
+ * read it, when known.
+ */
+export function boatAccountFromLimits(limits: Record<string, unknown>, checkedAt?: number): BoatAccountSummary {
+  const account: BoatAccountSummary = checkedAt === undefined ? {} : { checkedAt };
+  if (typeof limits.accessTier === "string" && limits.accessTier) account.plan = limits.accessTier.slice(0, 40);
+  if (typeof limits.activeSandboxes === "number") account.activeSandboxes = limits.activeSandboxes;
+  if (typeof limits.maxActiveSandboxes === "number") account.maxActiveSandboxes = limits.maxActiveSandboxes;
+  if (typeof limits.canStart === "boolean") account.canStart = limits.canStart;
+  if (typeof limits.startBlockedReason === "string" && limits.startBlockedReason) {
+    account.blockedReason = limits.startBlockedReason.slice(0, 200);
+  }
+  const block = boatStartBlockFromLimits(limits);
+  if (block) account.startBlock = block;
+  return account;
+}
+
 const BOAT_START_BLOCK_HEADLINES: Readonly<Record<BoatStartBlock, string>> = {
   concurrent_limit: "At limit",
   trial_compute_used: "Trial used",

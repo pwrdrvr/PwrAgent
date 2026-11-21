@@ -6,13 +6,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   BOAT_SANDBOX_TYPES,
+  boatAccountFromLimits,
   boatSandboxTypeRank,
   boatStartBlockForCode,
-  boatStartBlockFromLimits,
   describeBoatStartBlock,
   isBoatSandboxType,
   redactBoatApiKeys,
-  type BoatAccountSummary,
   type BoatSandboxPolicy,
   type BoatSandboxType,
 } from "@pwragent/shared/contracts/mcp-connections";
@@ -650,8 +649,8 @@ export class BoatTools {
           // Extra, and needs an action an older key may lack.
           send({ method: "GET", path: ["saved-snapshots"] }).then(describeSnapshots, () => undefined),
         ]);
-        const startBlock = boatStartBlockFromLimits(answer);
-        const account = limitsAccount(answer, startBlock, typeof answer.startBlockedReason === "string" ? answer.startBlockedReason : undefined);
+        const account = boatAccountFromLimits(answer);
+        const startBlock = account.startBlock;
         return {
           ...pick(answer, ["canStart", "startBlockedReason", "activeSandboxes", "maxActiveSandboxes"]),
           ...(startBlock ? { startBlock, detail: describeBoatStartBlock(account) } : {}),
@@ -677,10 +676,14 @@ export class BoatTools {
       if (!(error instanceof BoatApiError) || (error.status !== 402 && error.status !== 429)) throw error;
       const block = boatStartBlockForCode(error.code);
       if (!block) throw error;
-      // What is running now, account-wide. A key that cannot read limits
-      // still gets the refusal, without the counts.
+      // What is running now, account-wide: for the message, and so the
+      // connection's status carries current counts with the refusal. A key
+      // that cannot read limits still gets the refusal, without the counts.
       const limits = await send({ method: "GET", path: ["limits"] }).catch(() => undefined);
-      const account = limitsAccount(limits ?? {}, block, error.code);
+      const account = {
+        ...(limits ? boatAccountFromLimits(limits) : {}),
+        canStart: false, startBlock: block, blockedReason: error.code,
+      };
       const retry = error.retryAfterSeconds ? ` Boat says to retry after ${Math.ceil(error.retryAfterSeconds)} s.` : "";
       if (block !== "concurrent_limit") {
         throw new Refusal(`Boat did not start a sandbox. ${describeBoatStartBlock(account)}${retry}`);
@@ -710,9 +713,15 @@ export class BoatTools {
         : DEFAULT_ACTIVE_STATES,
     );
     const ids = [...this.context.ownedSandboxIds()].slice(0, LIST_LIMIT);
-    const described = await Promise.all(ids.map(async (sandboxId) =>
-      await send({ method: "GET", path: ["sandboxes", sandboxId] })
-        .then((answer) => describeSandbox(answer.sandbox), () => undefined)));
+    const described = await Promise.all(ids.map(async (sandboxId) => {
+      try {
+        return describeSandbox((await send({ method: "GET", path: ["sandboxes", sandboxId] })).sandbox);
+      } catch (error) {
+        // Gone from Boat, as list_sandboxes treats it.
+        if (error instanceof BoatApiError && error.kind === "not_found") this.context.forgetOwned(sandboxId);
+        return undefined;
+      }
+    }));
     return described.flatMap((sandbox) =>
       sandbox && typeof sandbox.state === "string" && active.has(sandbox.state) && typeof sandbox.id === "string"
         ? [pick(sandbox, ["id", "name", "state", "type"])]
@@ -934,20 +943,6 @@ function describeSandbox(sandbox: unknown): Record<string, unknown> {
     described.cost = pick(cost as Record<string, unknown>, ["since", "seconds", "dollars"]);
   }
   return described;
-}
-
-/** The counts a `GET /limits` answer gives, with why a start is blocked. */
-function limitsAccount(
-  limits: Record<string, unknown>,
-  startBlock: BoatAccountSummary["startBlock"],
-  reason: string | undefined,
-): BoatAccountSummary {
-  const account: BoatAccountSummary = { canStart: startBlock === undefined };
-  if (startBlock) account.startBlock = startBlock;
-  if (reason) account.blockedReason = reason.slice(0, 200);
-  if (typeof limits.activeSandboxes === "number") account.activeSandboxes = limits.activeSandboxes;
-  if (typeof limits.maxActiveSandboxes === "number") account.maxActiveSandboxes = limits.maxActiveSandboxes;
-  return account;
 }
 
 function snapshotName(value: unknown, argument: string): string {

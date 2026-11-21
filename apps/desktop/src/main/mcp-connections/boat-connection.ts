@@ -7,8 +7,8 @@ import { runGitCommand } from "../app-server/git-executable";
 import {
   BOAT_LINKS,
   BOAT_MCP_CONNECTION_ID,
+  boatAccountFromLimits,
   boatStartBlockForCode,
-  boatStartBlockFromLimits,
   describeBoatStartBlock,
   normalizeBoatApiKey,
   type BoatAccountSummary,
@@ -87,6 +87,8 @@ export class BoatConnection {
   private cached?: { at: number; generation: number; value: BoatStatus };
   private pending?: { generation: number; promise: Promise<BoatStatus> };
   private generation = 0;
+  /** The last refused start, and the generation it was refused in. */
+  private refusal?: { generation: number; block: BoatStartBlock; code?: string; hiddenFromLimits: boolean };
   /** Set when Boat refuses the stored key, until a new key is saved. */
   private rejected = false;
   /**
@@ -194,11 +196,20 @@ export class BoatConnection {
    */
   private learn(event: BoatAccountEvent): void {
     switch (event.kind) {
-      case "limits":
+      case "limits": {
         // Read before a sandbox change settled: the next read asks again.
         if (event.since !== this.generation || this.rejected || this.cannotCreate) return;
-        this.store(readyStatus(accountSummary(event.limits, this.now())));
+        let account = boatAccountFromLimits(event.limits, this.now());
+        // A refusal `/limits` may not show (a start-rate window, an
+        // organization's cap on one member) stands until a sandbox changes:
+        // Boat's counts are taken, its "can start" is not.
+        const refusal = this.refusal;
+        if (refusal?.generation === this.generation && refusal.hiddenFromLimits && account.canStart !== false) {
+          account = refusedAccount(account, refusal.block, refusal.code, account.checkedAt ?? this.now());
+        }
+        this.store(readyStatus(account));
         return;
+      }
       case "sandboxes_changed": {
         this.generation += 1;
         // Readers that show the last answer re-read; the next read asks Boat.
@@ -206,10 +217,19 @@ export class BoatConnection {
         return;
       }
       case "start_refused": {
-        // Known at once, without asking Boat again. A read already in flight
-        // may have been answered before the slot filled, so it is overtaken.
-        if (this.rejected || this.cannotCreate) return;
+        // Known at once, without asking Boat again. Not when a sandbox
+        // change settled while the start was in flight: Boat may have
+        // refused it before a slot came free.
+        if (event.since !== this.generation || this.rejected || this.cannotCreate) return;
+        // A read already in flight may have been answered before the slot
+        // filled, so it is overtaken.
         this.generation += 1;
+        this.refusal = {
+          generation: this.generation,
+          block: event.block,
+          ...(event.code ? { code: event.code } : {}),
+          hiddenFromLimits: event.code === "rate_limited" || event.code === "member_limit_reached",
+        };
         const previous = this.cached?.value.boatAccount;
         this.store(readyStatus(refusedAccount(previous, event.block, event.code, this.now())));
         return;
@@ -411,7 +431,7 @@ export class BoatConnection {
     if (this.cannotCreate) return CANNOT_CREATE;
     try {
       const limits = await this.api.requestWithKey(key, { method: "GET", path: ["limits"] });
-      return readyStatus(accountSummary(limits, this.now()));
+      return readyStatus(boatAccountFromLimits(limits, this.now()));
     } catch (error) {
       if (error instanceof BoatApiError && error.kind === "rejected") {
         this.rejected = true;
@@ -425,10 +445,12 @@ export class BoatConnection {
       }
       if (error instanceof BoatApiError && error.kind === "limited") {
         // The key works; the account is at a limit. Threads keep list and stop.
+        // A code PwrAgent does not sort is shown in Boat's own words.
+        const block = boatStartBlockForCode(error.code);
         return readyStatus(refusedAccount(
           this.cached?.value.boatAccount,
-          boatStartBlockForCode(error.code) ?? "other",
-          error.code,
+          block ?? "other",
+          block ? error.code : error.message,
           this.now(),
         ));
       }
@@ -495,16 +517,3 @@ function refusedAccount(
   return account;
 }
 
-function accountSummary(limits: Record<string, unknown>, checkedAt: number): BoatAccountSummary {
-  const account: BoatAccountSummary = { checkedAt };
-  if (typeof limits.accessTier === "string" && limits.accessTier) account.plan = limits.accessTier.slice(0, 40);
-  if (typeof limits.activeSandboxes === "number") account.activeSandboxes = limits.activeSandboxes;
-  if (typeof limits.maxActiveSandboxes === "number") account.maxActiveSandboxes = limits.maxActiveSandboxes;
-  if (typeof limits.canStart === "boolean") account.canStart = limits.canStart;
-  if (typeof limits.startBlockedReason === "string" && limits.startBlockedReason) {
-    account.blockedReason = limits.startBlockedReason.slice(0, 200);
-  }
-  const block = boatStartBlockFromLimits(limits);
-  if (block) account.startBlock = block;
-  return account;
-}

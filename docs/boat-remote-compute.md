@@ -145,7 +145,11 @@ polls. It changes on events and on demand:
   the reason, without asking Boat again. `limit_reached` also sets the running
   count to at least the cap.
 - **Any `GET /limits` answer is kept**, including the one `account_status`
-  makes, unless a sandbox change overtook it.
+  makes, unless a sandbox change overtook it. One exception: a
+  `rate_limited` or `member_limit_reached` refusal, which `/limits` may not
+  show, stands against a `/limits` that says "can start" until the next
+  sandbox change, the 60-second expiry, or Refresh status. Boat's counts are
+  still taken from that answer.
 - **Otherwise it is kept for 60 seconds**, and Refresh status in Settings
   reads it again. A change made outside PwrAgent shows after that, or at the
   next refusal.

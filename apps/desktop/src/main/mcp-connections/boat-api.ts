@@ -65,15 +65,17 @@ export type BoatApiRequest = {
  *   the account's running count may differ from the last one read. Settled
  *   includes a failure: a timed-out request may still have taken effect.
  * - `start_refused`: Boat refused a create, resume or fork for the account's
- *   limits or billing. It changed nothing at Boat.
+ *   limits or billing. It changed nothing at Boat. `since` is as for
+ *   `limits`: a refusal Boat decided before a sandbox change settled says
+ *   nothing about the account after it.
  */
 export type BoatAccountEvent =
   | { kind: "limits"; limits: Record<string, unknown>; since: number }
   | { kind: "sandboxes_changed" }
-  | { kind: "start_refused"; block: BoatStartBlock; code?: string };
+  | { kind: "start_refused"; block: BoatStartBlock; code?: string; since: number };
 
 /** What a request does to the account's running sandboxes. */
-export function boatLifecycleRequest(request: Pick<BoatApiRequest, "method" | "path">): "start" | "end" | undefined {
+function boatLifecycleRequest(request: Pick<BoatApiRequest, "method" | "path">): "start" | "end" | undefined {
   const [root, , action, ...rest] = request.path;
   if (root !== "sandboxes" || rest.length > 0) return undefined;
   if (request.method === "POST" && request.path.length === 1) return "start";
@@ -146,7 +148,10 @@ export class BoatApi {
         : undefined;
       if (block) {
         refused = true;
-        this.options.onAccountEvent?.({ kind: "start_refused", block, ...(error instanceof BoatApiError && error.code ? { code: error.code } : {}) });
+        this.options.onAccountEvent?.({
+          kind: "start_refused", block, since,
+          ...(error instanceof BoatApiError && error.code ? { code: error.code } : {}),
+        });
       }
       throw error;
     } finally {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
@@ -24,6 +25,13 @@ const KEY = "boat_live_0123456789abcdefSECRET";
 const TRIAL_CAP_SECONDS = 25 * 3600;
 
 type Box = { id: string; state: "ready" | "archived"; external: boolean };
+
+/**
+ * The call a request belongs to, and the fake's state once that call's own
+ * requests had changed it. Another call's request in flight at the same
+ * moment is not this call's to have seen.
+ */
+const calls = new AsyncLocalStorage<{ seq: number }>();
 
 /** Boat, as far as starts are concerned. */
 class FakeBoat {
@@ -142,7 +150,11 @@ class FakeBoat {
         response = answer(200, { ok: true, sandbox: describe(box) });
       }
     }
-    if (method !== "GET") this.record();
+    if (method !== "GET") {
+      this.record();
+      const call = calls.getStore();
+      if (call) call.seq = this.seq;
+    }
     return await this.deliver(response);
   };
 }
@@ -340,8 +352,9 @@ describe("whether Boat can start a sandbox", () => {
           const { connection, owned, scope } = harness(boat);
           await drain(scheduler, connection.readStatus());
           const mine = scope("thread-a");
-          // Boat's state once every change PwrAgent has seen finish: a read
-          // that starts later must answer with that state or a newer one.
+          // Boat's state once every change PwrAgent has seen finish took
+          // effect: a read that starts later must answer with that state or
+          // a newer one.
           let finished = boat.seq;
           const stale: string[] = [];
           const read = async (refresh: boolean) => {
@@ -365,15 +378,18 @@ describe("whether Boat can start a sandbox", () => {
                 return await read(true);
               case "account_status":
                 return await connection.callTool(mine, "account_status", {});
-              case "create":
-                await connection.callTool(mine, "create_sandbox", {});
-                finished = Math.max(finished, boat.seq);
+              case "create": {
+                const call = { seq: finished };
+                await calls.run(call, async () => await connection.callTool(mine, "create_sandbox", {}));
+                finished = Math.max(finished, call.seq);
                 return undefined;
+              }
               default: {
                 const ids = [...(owned.get("thread-a") ?? [])];
                 if (ids.length === 0) return undefined;
-                await connection.callTool(mine, `${action}_sandbox`, { sandboxId: ids[0]! });
-                finished = Math.max(finished, boat.seq);
+                const call = { seq: finished };
+                await calls.run(call, async () => await connection.callTool(mine, `${action}_sandbox`, { sandboxId: ids[0]! }));
+                finished = Math.max(finished, call.seq);
                 return undefined;
               }
             }
@@ -459,6 +475,87 @@ describe("a refused start", () => {
     expect(boatSandboxStartAvailability(connection.cachedStatus())).toMatchObject({
       canStart: false, reason: "trial_compute_used",
     });
+  });
+
+  it("is not learned when a slot came free while it was in flight", async () => {
+    // A key that cannot read limits, so nothing repairs a wrong refusal.
+    const boat = new FakeBoat(1, false);
+    const gate: { hold?: Promise<void> } = {};
+    const fetchFn = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+      if (String(input).endsWith("/limits")) {
+        return new Response(JSON.stringify({ ok: false, code: "api_key_action_forbidden", error: "no" }), { status: 403 });
+      }
+      const response = await boat.fetchFn(input, init);
+      if (gate.hold && String(input).endsWith("/sandboxes") && init?.method === "POST") await gate.hold;
+      return response;
+    };
+    const connection = new BoatConnection({
+      secrets: { read: async () => ({ BOAT_API_KEY: KEY }), write: async () => undefined },
+      fetchFn,
+      policy: () => DEFAULT_BOAT_SANDBOX_POLICY,
+      openExternal: async () => undefined,
+      now: () => 1_000_000,
+    });
+    const owned = new Set<string>();
+    const scope: BoatSessionScope = {
+      role: "thread",
+      ownedSandboxIds: () => owned,
+      recordOwned: ({ sandboxId }) => owned.add(sandboxId),
+      forgetOwned: (sandboxId) => owned.delete(sandboxId),
+    };
+    await connection.readStatus();
+    await connection.callTool(scope, "create_sandbox", {});
+
+    // Boat refuses the second create while the first runs; the answer is
+    // still on its way when the first is stopped.
+    let release = () => undefined as void;
+    gate.hold = new Promise<void>((resolve) => { release = resolve; });
+    const second = connection.callTool(scope, "create_sandbox", {});
+    await new Promise((resolve) => setImmediate(resolve));
+    await connection.callTool(scope, "stop_sandbox", { sandboxId: "bx_0" });
+    release();
+    await expect(second).resolves.toMatchObject({ isError: true });
+
+    expect(boat.canStart()).toBe(true);
+    expect(boatSandboxStartAvailability(await connection.readStatus()).canStart).not.toBe(false);
+  });
+
+  it("stands against a /limits that cannot show it, until a sandbox changes", async () => {
+    // An organization caps this member at one sandbox; the account has room.
+    const boat = new FakeBoat(5, true);
+    const fetchFn = async (input: string | URL, init?: RequestInit): Promise<Response> =>
+      String(input).endsWith("/sandboxes") && init?.method === "POST" && boat.active() >= 1
+        ? new Response(JSON.stringify({ ok: false, code: "member_limit_reached", error: "capped" }), { status: 429 })
+        : await boat.fetchFn(input, init);
+    const connection = new BoatConnection({
+      secrets: { read: async () => ({ BOAT_API_KEY: KEY }), write: async () => undefined },
+      fetchFn,
+      policy: () => DEFAULT_BOAT_SANDBOX_POLICY,
+      openExternal: async () => undefined,
+      now: () => 1_000_000,
+    });
+    const owned = new Set<string>();
+    const scope: BoatSessionScope = {
+      role: "thread",
+      ownedSandboxIds: () => owned,
+      recordOwned: ({ sandboxId }) => owned.add(sandboxId),
+      forgetOwned: (sandboxId) => owned.delete(sandboxId),
+    };
+    await connection.callTool(scope, "create_sandbox", {});
+    const refused = await connection.callTool(scope, "create_sandbox", {});
+    expect(JSON.stringify(refused.content)).toContain("organization caps how many sandboxes you run at once");
+
+    // The refusal read /limits for the counts, and /limits says the account
+    // can start: the refusal still stands, with Boat's counts.
+    expect(connection.cachedStatus().boatAccount).toMatchObject({
+      canStart: false, startBlock: "concurrent_limit", blockedReason: "member_limit_reached",
+      activeSandboxes: 1, maxActiveSandboxes: 5,
+    });
+    await connection.callTool(scope, "account_status", {});
+    expect(connection.cachedStatus().boatAccount).toMatchObject({ canStart: false });
+
+    await connection.callTool(scope, "stop_sandbox", { sandboxId: "bx_0" });
+    await expect(connection.readStatus()).resolves.toMatchObject({ boatAccount: { canStart: true, activeSandboxes: 0 } });
   });
 
   it("at the running limit names this thread's running sandboxes and never another thread's", async () => {
