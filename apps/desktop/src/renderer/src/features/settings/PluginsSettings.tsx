@@ -173,6 +173,8 @@ const STORE_TILE_TEXT = {
 
 /** How long a row the store pointed at keeps its highlight. */
 const REVEAL_HIGHLIGHT_MS = 2_400;
+/** Space left between a revealed row and its section's pinned header. */
+const REVEAL_SCROLL_GAP_PX = 12;
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -1361,7 +1363,13 @@ export function PluginsSettings(props: {
     setRevealConnectionId(undefined);
     if (!row) return;
     setHighlightConnectionId(revealConnectionId);
-    row.scrollIntoView?.({ block: "nearest" });
+    // The row lands at the top of the pane, below its section's pinned
+    // header, so its whole drawer reads down from there. `nearest` stopped
+    // as soon as the row's bottom edge entered view.
+    const header = row.closest(".settings-panel")
+      ?.querySelector<HTMLElement>(":scope > .settings-section__header-button");
+    row.style.scrollMarginTop = `${(header?.getBoundingClientRect().height ?? 0) + REVEAL_SCROLL_GAP_PX}px`;
+    row.scrollIntoView?.({ block: "start" });
     // The row's own next step when it marks one, else its first control.
     (row.querySelector<HTMLElement>("[data-reveal-focus]:not(:disabled)")
       ?? row.querySelector<HTMLElement>("button"))?.focus();
