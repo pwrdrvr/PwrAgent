@@ -5,21 +5,13 @@ import {
   type FederationHealthStatus,
 } from "@pwragent/shared/contracts/federation";
 
-type DisplayPeer = { label: string; profileName?: string; shortLabel?: string; revokedAt?: number };
-
-/** The machine name shown on UI controls, with its distinguishing profile. */
-export function federationDisplayLabel(peer: DisplayPeer, peers: readonly DisplayPeer[]): string {
-  return formatFederationPeerShortDisplayLabel(peer, peers);
-}
-
 export function federationLocalDisplayLabel(health: FederationHealthStatus | undefined): string {
   if (!health?.localLabel) return "This machine";
-  const local = {
+  return formatFederationPeerShortDisplayLabel({
     label: health.localLabel,
     profileName: health.localProfileName,
     shortLabel: health.localShortLabel,
-  };
-  return federationDisplayLabel(local, [...health.peers, local]);
+  });
 }
 
 type FederationInstanceNames = { label: string; fullLabel: string };
@@ -42,10 +34,9 @@ export function FederationDisplayLabelsProvider(props: {
     const local = health.localLabel
       ? { label: health.localLabel, profileName: health.localProfileName, shortLabel: health.localShortLabel }
       : undefined;
-    const peers = [...health.peers, ...(local ? [local] : [])];
-    const names = (peer: DisplayPeer): FederationInstanceNames => ({
-      label: federationDisplayLabel(peer, peers),
-      fullLabel: formatFederationPeerDisplayLabel(peer, peers),
+    const names = (peer: Parameters<typeof formatFederationPeerShortDisplayLabel>[0]): FederationInstanceNames => ({
+      label: formatFederationPeerShortDisplayLabel(peer),
+      fullLabel: formatFederationPeerDisplayLabel(peer),
     });
     return new Map([
       ...(local && health.instanceId ? [[health.instanceId, names(local)] as const] : []),

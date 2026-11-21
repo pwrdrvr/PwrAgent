@@ -34,11 +34,11 @@ describe("federation machine names", () => {
 
   it("shows the same local and remote short names on the composer chip and machine choices", () => {
     render(<LaunchpadMachineChip control={{
-      local: { label: "Studio-Mac-Mini-M4 / default", shortLabel: federationLocalDisplayLabel(health) },
+      local: { label: "Studio-Mac-Mini-M4", shortLabel: federationLocalDisplayLabel(health) },
       targets: buildFederationThreadTargets(health), localHasProject: true, planRetarget: async () => undefined,
     }} onRetarget={() => undefined} />);
     const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
-    expect(chip).toHaveTextContent("M4 Mini / default");
+    expect(chip).toHaveTextContent(/^M4 Mini$/);
     fireEvent.click(chip);
     expect(screen.getByRole("option", { name: /M5 Max/ })).toBeInTheDocument();
     // An offline peer is not a choice at all.
@@ -65,9 +65,9 @@ describe("federation machine names", () => {
     expect(screen.getByLabelText("Runs on M5 Max (Studio-MBP-M5-Max)")).toHaveTextContent("M5 Max");
     expect(screen.getByTitle("Studio-MBP-M5-Max · max")).toBeInTheDocument();
     // This instance resolves too: a mention can name the machine it is on.
-    expect(screen.getByLabelText("Runs on M4 Mini / default (Studio-Mac-Mini-M4 / default)"))
-      .toHaveTextContent("M4 Mini / default");
-    expect(screen.getByTitle("Studio-Mac-Mini-M4 / default · mini")).toBeInTheDocument();
+    expect(screen.getByLabelText("Runs on M4 Mini (Studio-Mac-Mini-M4)"))
+      .toHaveTextContent("M4 Mini");
+    expect(screen.getByTitle("Studio-Mac-Mini-M4 · mini")).toBeInTheDocument();
   });
 
   it("uses the remote viewer owner's short name while retaining its offline state and default choice", () => {

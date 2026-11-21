@@ -91,8 +91,8 @@ async function expectPickerOwnerLabels(visible: PickerPeer[], expectedLabels: Re
   });
   const peers = visible.map((peer) => ({
     target: { scope: "remote" as const, instanceId: peer.id },
-    label: formatFederationPeerDisplayLabel(peer, visible),
-    shortLabel: peer.shortLabel ? formatFederationPeerShortDisplayLabel(peer, visible) : undefined,
+    label: formatFederationPeerDisplayLabel(peer),
+    shortLabel: peer.shortLabel ? formatFederationPeerShortDisplayLabel(peer) : undefined,
     capabilities: ["messaging_route"] satisfies FederationCapability[],
   }));
   const federation = { connectedPeerTargets: () => peers } satisfies Pick<DesktopMessagingFederationBridge, "connectedPeerTargets">;
@@ -130,7 +130,7 @@ function expectProfileLabels(shortName: string, projects: boolean) {
     { id: "dev-instance", label: "Studio-MBP-M5-Max", profileName: "dev", shortLabel: shortName },
     { id: "older-instance", label: "Mac Mini", profileName: "default" },
   ], {
-    "main-instance": `${shortName} / default`,
+    "main-instance": shortName,
     "dev-instance": `${shortName} / dev`,
     "older-instance": "Mac Mini",
   }, projects);
@@ -142,7 +142,7 @@ it.each([false, true])("uses compact owner names in /resume actions and text (pr
   }), { numRuns: 30 });
 });
 
-it("shows [A / default] for a remote default profile when the machine also has a dev profile", async () => {
+it("shows [A] for a remote default profile and [A / dev] for its sibling", async () => {
   await expectProfileLabels("A", false);
 });
 

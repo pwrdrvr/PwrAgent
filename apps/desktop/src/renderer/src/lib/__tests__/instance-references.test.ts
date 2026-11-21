@@ -27,7 +27,7 @@ const health: FederationHealthStatus = {
 describe("Federation @ references", () => {
   it("keeps local and remote profiles distinct and includes offline enrolled peers", () => {
     expect(listInstanceReferences(health).map(({ label, path }) => ({ label, path }))).toEqual([
-      { label: "Studio / default", path: "pwragent://instance/local-default" },
+      { label: "Studio", path: "pwragent://instance/local-default" },
       { label: "Studio / dev", path: "pwragent://instance/studio-dev" },
       { label: "DESKTOP-LAB / dev", path: "pwragent://instance/windows-dev" },
     ]);
@@ -50,13 +50,12 @@ describe("Federation @ references", () => {
       ],
     };
     expect(listInstanceReferences(named).map(({ label, shortLabel }) => ({ label, shortLabel }))).toEqual([
-      // A lone default profile drops its suffix, as on every other face.
-      { label: "Lab-Mac-Mini-2 / default", shortLabel: "Mini 2" },
-      { label: "Lab-Mac-Mini-1 / default", shortLabel: "Mini 1 / default" },
+      { label: "Lab-Mac-Mini-2", shortLabel: "Mini 2" },
+      { label: "Lab-Mac-Mini-1", shortLabel: "Mini 1" },
       { label: "Lab-Mac-Mini-1 / dev", shortLabel: "Mini 1 / dev" },
-      { label: "DESKTOP-LAB / default", shortLabel: undefined },
+      { label: "DESKTOP-LAB", shortLabel: undefined },
     ]);
-    for (const [query, instanceId] of [["mini 2", "mini-2"], ["Mini 1/dev", "mini-1-dev"], ["lab-mac-mini-1", "mini-1"]]) {
+    for (const [query, instanceId] of [["mini 2", "mini-2"], ["Mini 1/dev", "mini-1-dev"], ["Mini 1/default", "mini-1"], ["lab-mac-mini-1", "mini-1"]]) {
       expect(filterAtReferenceCandidates([], listInstanceReferences(named), query))
         .toContainEqual(expect.objectContaining({ instanceId }));
     }
@@ -65,6 +64,11 @@ describe("Federation @ references", () => {
   it.each(["desk", "DEV", "windows-lab", "windows-dev", "DESKTOP-LAB/dev"])("searches machines, profiles, hostnames and IDs with %s", (query) => {
     expect(filterAtReferenceCandidates([], listInstanceReferences(health), query))
       .toContainEqual(expect.objectContaining({ instanceId: "windows-dev" }));
+  });
+
+  it("still finds the default instance by its profile-qualified host name", () => {
+    expect(filterAtReferenceCandidates([], listInstanceReferences(health), "Studio/default"))
+      .toContainEqual(expect.objectContaining({ instanceId: "local-default", label: "Studio" }));
   });
 
   it("reserves space for instances even with ten matching projects", () => {

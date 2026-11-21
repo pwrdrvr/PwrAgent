@@ -22343,7 +22343,8 @@ describe("Composer", () => {
     const input = screen.getByLabelText("Reply");
     fireEvent.change(input, { target: { value: "Hand off to @mac" } });
     const option = await screen.findByRole("option", { name: /Mini 1 \/ dev/ });
-    expect(screen.getByRole("option", { name: /Mini 1 \/ default/ })).toBeInTheDocument();
+    const defaultOption = screen.getByRole("option", { name: /^Mini 1Federation/ });
+    expect(defaultOption).toHaveAttribute("title", "Lab-Mac-Mini-1 · connected");
     expect(option.textContent).not.toContain("Lab-Mac-Mini-1");
     expect(option).toHaveAttribute("title", "Lab-Mac-Mini-1 / dev · disconnected");
     // The 160px name column suits a folder beside its path; an instance's

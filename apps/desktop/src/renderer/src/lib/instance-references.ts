@@ -1,13 +1,16 @@
 import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
-import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
+import {
+  formatFederationPeerDisplayLabel,
+  formatFederationPeerShortDisplayLabel,
+  type FederationHealthStatus,
+} from "@pwragent/shared/contracts/federation";
 import { filterDirectoryReferenceCandidates, type ReferenceDirectory } from "./directory-references";
-import { federationDisplayLabel } from "./federation-display-label";
 
 export type InstanceReference = {
   kind: "instance";
   key: string;
   instanceId: string;
-  /** Full machine and profile, for tooltips and search. */
+  /** Full machine label and any non-default profile, for tooltips and search. */
   label: string;
   /**
    * The federation short name, with any distinguishing profile. The picker
@@ -50,11 +53,6 @@ export function listInstanceReferences(health?: FederationHealthStatus): Instanc
   if (!health?.enabled) return [];
   const instances: InstanceReference[] = [];
   const seen = new Set<string>();
-  // The local instance counts, so a peer on this machine keeps its profile.
-  const visible = [
-    ...health.peers,
-    ...(health.localLabel ? [{ label: health.localLabel, profileName: health.localProfileName }] : []),
-  ];
   const add = (id: string, label: string, profileName: string | undefined,
     status: string, icon?: CelestialIconId, hostname?: string, shortLabel?: string): void => {
     if (!id || seen.has(id)) return;
@@ -63,9 +61,9 @@ export function listInstanceReferences(health?: FederationHealthStatus): Instanc
       kind: "instance",
       key: `instance:${id}`,
       instanceId: id,
-      label: profileName ? `${label} / ${profileName}` : label,
+      label: formatFederationPeerDisplayLabel({ label, profileName }),
       ...(shortLabel
-        ? { shortLabel: federationDisplayLabel({ label, profileName, shortLabel }, visible) }
+        ? { shortLabel: formatFederationPeerShortDisplayLabel({ label, profileName, shortLabel }) }
         : {}),
       path: buildInstanceReferenceUrl(id),
       profileName,
@@ -98,14 +96,18 @@ export function filterAtReferenceCandidates(
   // A ranked page may match paths abbreviated relative to the owner's home.
   const directoryMatches = ownerRankedDirectoryQuery === normalized
     ? directories : filterDirectoryReferenceCandidates(directories, query);
-  const names = (instance: InstanceReference): string[] =>
-    [instance.label, instance.shortLabel ?? ""].filter(Boolean);
+  const searchNames = (instance: InstanceReference): string[] => {
+    const labels = [instance.label, instance.shortLabel].filter((label): label is string => Boolean(label));
+    return instance.profileName === "default"
+      ? labels.flatMap((label) => [label, `${label} / default`])
+      : labels;
+  };
   const startsWith = (instance: InstanceReference): number =>
-    Number(names(instance).some((name) => name.toLowerCase().startsWith(normalized)));
+    Number(searchNames(instance).some((name) => name.toLowerCase().startsWith(normalized)));
   const shown = (instance: InstanceReference): string => instance.shortLabel ?? instance.label;
   const matches = instances.filter((instance) =>
     [
-      ...names(instance).flatMap((name) => [name, name.replace(/\s*\/\s*/g, "/")]),
+      ...searchNames(instance).flatMap((name) => [name, name.replace(/\s*\/\s*/g, "/")]),
       instance.instanceId,
       instance.hostname ?? "",
     ].some((value) => value.toLowerCase().includes(normalized)),

@@ -6,7 +6,7 @@ import {
 } from "@pwragent/shared/contracts/usage-activity";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { type DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
-import { type FederationTarget } from "@pwragent/shared/contracts/federation";
+import { formatFederationPeerDisplayLabelParts, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
@@ -31,6 +31,13 @@ const sourceId = (target: FederationTarget) => target.scope === "local" ? "local
 
 /** `label` is the full name; the toggle draws `shortLabel` when the machine has one. */
 type Source = { label: string; shortLabel?: string; target: FederationTarget; status?: string };
+
+function usageInstanceLabels(peer: Parameters<typeof formatFederationPeerDisplayLabelParts>[0]): Pick<Source, "label" | "shortLabel"> {
+  const { label, shortLabel, profileName } = formatFederationPeerDisplayLabelParts(peer);
+  const suffix = profileName ? ` (${profileName})` : "";
+  return { label: `${label}${suffix}`, ...(shortLabel ? { shortLabel: `${shortLabel}${suffix}` } : {}) };
+}
+
 type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
 type Snapshot = {
@@ -55,8 +62,8 @@ const isOnline = (source: Source) => source.target.scope === "local" || source.s
  * one the operator picked, else this instance's account with the provider the
  * window was opened for (Codex's by default).
  */
-function focusAccount(accounts: LimitAccount[], preferred: string | undefined, localLabel: string, provider: string) {
-  const local = (account: LimitAccount) => account.owners.includes(localLabel);
+function focusAccount(accounts: LimitAccount[], preferred: string | undefined, provider: string) {
+  const local = (account: LimitAccount) => account.ownerKeys.includes("local");
   return accounts.find((account) => account.key === preferred)
     ?? accounts.find((account) => account.provider === provider && local(account))
     ?? accounts.find((account) => account.provider === provider)
@@ -158,16 +165,13 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     if (!desktopApi?.readFederationActivity) return;
     void desktopApi.readFederationActivity({ includeHistory: false }).then((value) => {
       if (!mounted.current) return;
-      const localShort = value.health.localLabel ? value.health.localShortLabel : undefined;
-      setSources([{ label: value.health.localLabel ?? "This instance",
-        ...(localShort ? { shortLabel: localShort } : {}), target: { scope: "local" } },
-        ...value.health.peers.filter((peer) => peer.id !== value.health.instanceId).map((peer) => {
-          const profile = peer.profileName ? ` (${peer.profileName})` : "";
-          return {
-            label: `${peer.label}${profile}`, ...(peer.shortLabel ? { shortLabel: `${peer.shortLabel}${profile}` } : {}),
-            status: peer.status, target: { scope: "remote" as const, instanceId: peer.id },
-          };
-        })]);
+      const { health } = value;
+      const local = usageInstanceLabels({ label: health.localLabel ?? "This instance",
+        shortLabel: health.localLabel ? health.localShortLabel : undefined, profileName: health.localProfileName });
+      setSources([{ ...local, target: { scope: "local" } },
+        ...health.peers.filter((peer) => peer.id !== health.instanceId).map((peer) => ({
+          ...usageInstanceLabels(peer), status: peer.status, target: { scope: "remote" as const, instanceId: peer.id },
+        }))]);
     }).catch(() => { /* Reads still cover this instance. */ })
       .finally(() => { if (mounted.current) setPeersReady(true); });
   }, [desktopApi]);
@@ -267,7 +271,6 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const limitPreset = preset === "reset" || preset === "five";
   const queryKey = JSON.stringify([enabledSources.map((source) => sourceId(source.target)), preset,
     preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter, focusProvider] : null]);
-  const localLabel = sources[0].label;
   const scopedLimits = (accounts: LimitAccount[]) => accountFilter
     ? accounts.filter((account) => limitUsageAccountKey(account) === accountFilter) : accounts;
 
@@ -284,7 +287,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   };
   const accountsOf = (results: SourceResult[]) => buildLimitAccounts(results.filter((source) => source.data).map((source) => ({
     // An older owner reports Codex alone, in the single-reading fields.
-    owner: source.label, current: source.data!.limitObservations ?? source.data!.limitObservation,
+    owner: source.label, target: source.target, current: source.data!.limitObservations ?? source.data!.limitObservation,
     history: [...source.data!.limitHistory ?? [], ...source.data!.providerLimitHistory ?? []],
   })));
 
@@ -296,7 +299,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     const today = new Date(end); today.setHours(0, 0, 0, 0);
     // A limit preset starts where the account's window began. Until limits are
     // known, read the longest such window and narrow once they arrive.
-    const known = limitStart(preset, focusAccount(scopedLimits(snapshot?.accounts ?? []), focusKey, localLabel, focusProvider));
+    const known = limitStart(preset, focusAccount(scopedLimits(snapshot?.accounts ?? []), focusKey, focusProvider));
     let start = preset === "custom" ? new Date(from).getTime()
       : preset === "today" ? today.getTime()
       : preset === "day" ? end - DAY
@@ -316,7 +319,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     let results = await readAll(enabledSources, start, end);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
-    const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, localLabel, focusProvider));
+    const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, focusProvider));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
       if (Math.abs(bounded - start) > 60_000) {
@@ -431,7 +434,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
   ].filter(Boolean);
   const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
-  const focus = snapshot ? focusAccount(limitAccounts, focusKey, localLabel, focusProvider) : undefined;
+  const focus = snapshot ? focusAccount(limitAccounts, focusKey, focusProvider) : undefined;
   // An account without a 5-hour limit reads the last 5 hours, and the line is
   // its longest limit, resets and all: the window is not that limit's.
   const fiveHour = fiveHourSeries(focus);

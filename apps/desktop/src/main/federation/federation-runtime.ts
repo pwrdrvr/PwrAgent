@@ -241,7 +241,7 @@ import {
   isFederationInstanceId,
   isFederationEventClass,
   formatFederationPeerDisplayLabel,
-  formatFederationPeerShortDisplayLabel,
+  formatFederationPeerTargetLabels,
   isRemoteFederationTarget,
   type FederationRemoteTarget,
   type FederationTarget,
@@ -1852,30 +1852,16 @@ export class DesktopFederationRuntime {
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
-    // Compose display labels against the full visible set so two
-    // profiles of the same machine ("Mac-Mini-M4 / default",
-    // "Mac-Mini-M4 / dev") stay tellable apart in window titles and
-    // the Remote Instances menu.
-    const visible = this.visiblePeers();
-    return visible
-      .filter((peer) => peer.status === "connected")
-      .map((peer) => {
-        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
-        return {
-          target: { scope: "remote", instanceId: peer.id },
-          label: formatFederationPeerDisplayLabel(peer, visible),
-          ...(shortLabel
-            ? {
-                shortLabel: formatFederationPeerShortDisplayLabel(
-                  { ...peer, shortLabel },
-                  visible,
-                ),
-              }
-            : {}),
-          capabilities: [...peer.capabilities],
-          navigationQueryProtocol: peer.navigationQueryProtocol,
-        };
-      });
+    const peers = this.visiblePeers().filter((peer) => peer.status === "connected");
+    return peers.map((peer) => {
+      const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+      return {
+        target: { scope: "remote", instanceId: peer.id },
+        ...formatFederationPeerTargetLabels({ ...peer, shortLabel }, peers),
+        capabilities: [...peer.capabilities],
+        navigationQueryProtocol: peer.navigationQueryProtocol,
+      };
+    });
   }
 
   assertRemoteNavigationQueryProtocol(
@@ -2619,7 +2605,7 @@ export class DesktopFederationRuntime {
       tombstonedThreadCount += counts.revoked;
       const peer = visible.find((candidate) => candidate.id === instanceId);
       instanceLabels.push(
-        peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId,
+        peer ? formatFederationPeerDisplayLabel(peer) : instanceId,
       );
     }
     return { pinnedThreadCount, tombstonedThreadCount, instanceLabels };
@@ -3078,7 +3064,7 @@ export class DesktopFederationRuntime {
     }
     return peer
       ? {
-          label: formatFederationPeerDisplayLabel(peer, visible),
+          label: formatFederationPeerDisplayLabel(peer),
           celestialIcon:
             this.celestialIconFor(instanceId) ?? peer.celestialIcon,
         }
@@ -3626,9 +3612,8 @@ export class DesktopFederationRuntime {
         if (isAppStateInitialized()) {
           for (const peer of this.store().listPeers({ includeRevoked: true })) peersById.set(peer.id, peer);
         }
-        const peers = [...peersById.values()];
         const peer = peersById.get(target.instanceId);
-        return peer ? `${formatFederationPeerDisplayLabel(peer, peers)} (${target.instanceId})` : target.instanceId;
+        return peer ? `${formatFederationPeerDisplayLabel(peer)} (${target.instanceId})` : target.instanceId;
       }
       const label = this.readRuntimeConfig().instanceLabel || defaultInstanceLabel();
       const instanceId = this.localInstanceId
@@ -3650,7 +3635,7 @@ export class DesktopFederationRuntime {
       const peer = visible.find((candidate) => candidate.id === instanceId)
         ?? this.remotePeerDirectory.get(instanceId as FederationInstanceId)
         ?? this.store().getPeer(instanceId as FederationInstanceId);
-      return peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId;
+      return peer ? formatFederationPeerDisplayLabel(peer) : instanceId;
     } catch {
       return instanceId;
     }
@@ -3753,7 +3738,7 @@ export class DesktopFederationRuntime {
     // Same composed label as connectedPeerTargets so search chips and
     // thread rows agree with the window title on multi-profile peers.
     const instanceLabel = peer
-      ? formatFederationPeerDisplayLabel(peer, visible)
+      ? formatFederationPeerDisplayLabel(peer)
       : target.instanceId;
     const capabilities = this.viewerCapabilitiesFor(
       target.instanceId,
@@ -3778,7 +3763,7 @@ export class DesktopFederationRuntime {
       const ownerLabel = ownerInstanceId === target.instanceId
         ? instanceLabel
         : ownerPeer
-          ? formatFederationPeerDisplayLabel(ownerPeer, visible)
+          ? formatFederationPeerDisplayLabel(ownerPeer)
           : thread.federation?.instanceLabel ?? ownerInstanceId;
       const ref = buildFederatedThreadRef({
         backend: thread.source,
@@ -3932,7 +3917,7 @@ export class DesktopFederationRuntime {
           return peer
             ? {
                 status: peer.status,
-                label: formatFederationPeerDisplayLabel(peer, visible),
+                label: formatFederationPeerDisplayLabel(peer),
                 celestialIcon: peer.celestialIcon,
                 capabilities: this.viewerCapabilitiesFor(instanceId, peer),
               }
@@ -4183,7 +4168,7 @@ export class DesktopFederationRuntime {
     const visible = this.visiblePeers();
     return await searchFederatedContent({ request, local, signal, onProgress,
       peers: visible.filter((peer) => peer.status === "connected" && peer.capabilities.includes("thread_detail"))
-        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer, visible),
+        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer),
           backend: this.remoteBackend({ scope: "remote", instanceId: peer.id }) })),
     });
   }
@@ -4204,9 +4189,7 @@ export class DesktopFederationRuntime {
           )
           .map((peer) => ({
             instanceId: peer.id,
-            // Composed against the full visible set so multi-profile
-            // machines keep distinct labels in search chips.
-            label: formatFederationPeerDisplayLabel(peer, visible),
+            label: formatFederationPeerDisplayLabel(peer),
             status: peer.status,
             backend: this.remoteBackend({
               scope: "remote",

@@ -537,13 +537,13 @@ describe("Activity report controls", () => {
     const sky = await openSky();
     const bodies = within(sky).getAllByRole("button").slice(0, 3);
     expect(bodies.map((body) => body.getAttribute("aria-label"))).toEqual([
-      "Open Studio / default Direct on the Star Map",
+      "Open Studio Direct on the Star Map",
       "Open Studio / dev on the Star Map",
       "Open Build VM on the Star Map",
     ]);
     // The profile is its own element, so the host's ellipsis cannot reach it.
     expect(bodies.map((body) => body.querySelector(".federation-sky__profile")?.textContent))
-      .toEqual(["default", "dev", undefined]);
+      .toEqual([undefined, "dev", undefined]);
     // The gateway is reached directly; the relayed peer gets no "Relay" tag.
     expect(bodies.map((body) => body.querySelector(".federation-chip__tag")?.textContent))
       .toEqual(["Direct", undefined, undefined]);
@@ -569,7 +569,7 @@ describe("Activity report controls", () => {
       .toEqual(["MBP-M2-Max", "M5 Max", "M5 Max"]);
     expect(bodies.map((body) => body.getAttribute("aria-label"))).toEqual([
       "Open MBP-M2-Max on the Star Map",
-      "Open M5 Max / default (Studio-MBP-M5-Max) on the Star Map",
+      "Open M5 Max (Studio-MBP-M5-Max) on the Star Map",
       "Open M5 Max / dev (Studio-MBP-M5-Max) on the Star Map",
     ]);
     fireEvent.focus(bodies[2]);
