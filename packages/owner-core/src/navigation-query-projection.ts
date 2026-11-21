@@ -76,6 +76,8 @@ export type NavigationQueryIndex = {
   localInstanceId?: string;
   coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
+  /** Saved worktree registrations folded into their primary project, for owner removal. */
+  worktreeProjectAliases?: Record<string, string[]>;
   threads: NavigationThreadSummary[];
   inputRequestThreadKeys?: ReadonlySet<string>;
   /** The observation clock value taken when this index's listing began. */

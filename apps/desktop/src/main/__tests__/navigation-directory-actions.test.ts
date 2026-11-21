@@ -72,6 +72,21 @@ it("removes an empty owner registration and pin atomically", async () => {
     note: "Owner membership check and removal: one transaction deletes registration and clears pin; 100 removals/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes" });
 });
 
+it("removes folded worktree registrations in the same commit as their empty project", async () => {
+  const alias = "directory:/elsewhere/linked-checkout";
+  await mocks.store!.upsertDirectoryLaunchpad({ directoryKey: alias, directoryKind: "directory", directoryLabel: "linked-checkout",
+    directoryPath: "/elsewhere/linked-checkout", backend: "codex", workMode: "local", executionMode: "default",
+    prompt: "Old worktree draft", createdAt: 1, updatedAt: 1, registeredAt: 1 });
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], worktreeProjectAliases: { [key]: [alias] } });
+
+  const { writes } = await measureSqliteWrites(() => removeLocalNavigationDirectory({ directoryKey: key }));
+
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeUndefined();
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: alias })).toBeUndefined();
+  expectSqliteWriteBudget({ scenario: "navigation-remove-project-worktree-registration", writes,
+    note: "Removing an empty project also removes its legacy worktree registration in the same commit. At 100 removals/day and 8 KiB/commit, this is about 0.8 MB/day." });
+});
+
 it("rejects a membership check invalidated during the owner read", async () => {
   mocks.loadIndex.mockImplementation(async () => {
     for (const listener of mocks.listeners) listener({ backend: "codex", notification: { method: "directory/pin/removed", params: { directoryKey: key } } });

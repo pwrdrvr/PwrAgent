@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
@@ -117,13 +117,21 @@ function inferRepositoryFromGitdir(gitdirPath: string): {
 
 async function readGitMetadataEvidence(
   currentPath: string,
+  rootOnly = false,
 ): Promise<GitMetadataEvidence> {
-  const dotGitPath = await findDotGitPath(currentPath);
+  const dotGitPath = rootOnly ? path.join(currentPath, ".git") : await findDotGitPath(currentPath);
   if (!dotGitPath) {
     return { dotGitKind: "missing" };
   }
 
   try {
+    if (rootOnly) {
+      const info = await stat(dotGitPath);
+      if (info.isDirectory()) return { dotGitKind: "directory", dotGitPath };
+      if (!info.isFile() || info.size > GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES) {
+        return { dotGitKind: "unreadable", dotGitPath };
+      }
+    }
     const dotGitContent = await readFile(dotGitPath, "utf8");
     const gitdirMatch = dotGitContent.match(/^gitdir:\s*(.+?)\s*$/m);
     const gitdirPath = gitdirMatch
@@ -157,8 +165,9 @@ async function readGitMetadataEvidence(
 
 async function buildLinkedDirectoryFromGitMetadata(
   currentPath: string,
+  rootOnly = false,
 ): Promise<{ evidence: GitMetadataEvidence; directory?: LinkedDirectorySummary }> {
-  const evidence = await readGitMetadataEvidence(currentPath);
+  const evidence = await readGitMetadataEvidence(currentPath, rootOnly);
   if (!evidence.inferredRepositoryPath) {
     return { evidence };
   }
@@ -179,20 +188,16 @@ async function buildLinkedDirectoryFromGitMetadata(
 
 /**
  * Resolve a tool-managed worktree directory to its repository checkout by
- * following the worktree's `.git` gitdir link. Filesystem-only — this NEVER
- * spawns `git`. Returns a repo-rooted linked directory (`path` = repository,
- * `worktreePath` = the worktree) when `cwd` is a git worktree, or `undefined`
- * when it is a plain checkout (its `.git` is a real directory, not a gitdir
- * link), a vanished worktree, or otherwise unreadable. The repo↔worktree
- * relationship is immutable for a given worktree path, so callers can cache
- * the result indefinitely and only re-resolve when `cwd` itself changes.
+ * following the worktree's `.git` gitdir link. Returns a repo-rooted linked
+ * directory (`path` = repository, `worktreePath` = worktree) for a linked
+ * checkout and undefined when the metadata does not identify its repository.
+ * Project rows use the exact root, without walking up a non-repository path.
  */
 export async function resolveWorktreeRepositoryDirectory(
   cwd: string,
+  rootOnly = false,
 ): Promise<LinkedDirectorySummary | undefined> {
-  const { directory } = await buildLinkedDirectoryFromGitMetadata(
-    path.resolve(cwd),
-  );
+  const { directory } = await buildLinkedDirectoryFromGitMetadata(path.resolve(cwd), rootOnly);
   return directory;
 }
 

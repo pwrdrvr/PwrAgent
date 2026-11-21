@@ -15,6 +15,7 @@ import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bi
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
+import { resolveNavigationWorktreeProjects } from "./navigation-worktree-projects";
 import {
   directorySetMayHaveChanged,
   NavigationDirectorySetAnnouncer,
@@ -270,12 +271,13 @@ async function buildLocalNavigationQueryIndex(params: {
   params.signal?.throwIfAborted();
   const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
   params.signal?.throwIfAborted();
-  const directories: NavigationDirectorySummary[] = index.directories.map(
+  const withGitStatus: NavigationDirectorySummary[] = index.directories.map(
     (directory) => ({
       ...directory,
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,
     }),
   );
+  const projects = await resolveNavigationWorktreeProjects(withGitStatus, params.signal);
   // Startup refresh status says only whether live listings have begun: it
   // records one attempt, and a Claude or ACP discovery failure in it says
   // nothing about rows PwrAgent stores itself. Completeness belongs to the
@@ -287,7 +289,7 @@ async function buildLocalNavigationQueryIndex(params: {
       : registry.isIncompleteThreadList?.(listedThreads)
         ? { state: "degraded", failedProviders: 1 }
         : { state: "complete" };
-  return { directories, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
+  return { ...projects, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
     coverage,
   };
 }

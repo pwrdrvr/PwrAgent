@@ -1,7 +1,12 @@
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
@@ -35,9 +40,11 @@ vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStor
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { runGitCommand } from "../app-server/git-executable";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
+import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 
 function createSource(coverage: "complete" | "checking" | "degraded" = "complete") {
   let finish!: () => void;
@@ -72,6 +79,53 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     },
   };
 }
+
+it("publishes the repository once when a same-named worktree has a saved project registration", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-project-index-")));
+  const previous = mocks.store.readNavigationQueryIndex.getMockImplementation();
+  try {
+    const repo = canonicalizeNavigationPath(path.join(root, "Project"));
+    const worktree = canonicalizeNavigationPath(path.join(root, ".codex", "worktrees", "task", "Project"));
+    await mkdir(repo);
+    await runGitCommand(repo, ["init"]);
+    await runGitCommand(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture"]);
+    await runGitCommand(repo, ["worktree", "add", "--detach", worktree]);
+    const repositoryKey = "github.com/example/project";
+    const launchpad = (checkout: string, backend: NavigationLaunchpadDraft["backend"]): NavigationLaunchpadDraft => ({
+      directoryKey: `directory:${checkout}`, directoryKind: "directory", directoryPath: checkout, directoryLabel: "Project",
+      backend, executionMode: "default", workMode: "local", prompt: "", registeredAt: 1, createdAt: 1, updatedAt: 1,
+    });
+    const thread: NavigationThreadSummary = {
+      id: "worktree-thread", source: "codex", title: "Worktree thread", titleSource: "derived", projectKey: worktree,
+      linkedDirectories: [{ id: worktree, path: worktree, label: "Project", kind: "worktree" }], inbox: { inInbox: false },
+    };
+    for (const parentRegistered of [true, false]) {
+      const source = createSource();
+      source.listThreads.mockResolvedValue([thread]);
+      mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({
+        threads,
+        directories: buildDirectorySummaries({ threads, launchpadsByKey: {
+          [`directory:${worktree}`]: launchpad(worktree, "codex"),
+          ...(parentRegistered ? { [`directory:${repo}`]: launchpad(repo, "claude") } : {}),
+        } }).map((directory) => ({ ...directory, repositoryKey })),
+      }));
+
+      const index = await source.read();
+      expect(index.worktreeProjectAliases).toEqual({ [`directory:${repo}`]: [`directory:${worktree}`] });
+      const projects = projectNavigationQuery({ index, request: {
+        protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index" },
+      } }).directories!.filter((row) => row.kind === "directory");
+      expect(projects.map((row) => row.path)).toEqual([repo]);
+      expect(findPeerCounterpartDirectory({ kind: "directory", label: "Project", repositoryKey }, projects))
+        .toMatchObject({ key: `directory:${repo}`, counts: { total: 1 } });
+      if (parentRegistered) expect(projects[0]?.launchpadBackend).toBe("claude");
+    }
+  } finally {
+    mocks.store.readNavigationQueryIndex.mockImplementation(previous!);
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 describe("owner index source event admission", () => {
   it.each([96, 192].flatMap((size) => [false, true].map((mounted) => ({ size, mounted }))))(

@@ -461,6 +461,7 @@ import {
   loadLocalNavigationQueryIndex,
   navigationPullRequestProjection,
 } from "../app-server/navigation-query-source";
+import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   FederationReplacementReceiver,
@@ -7792,8 +7793,9 @@ function localBackendOperations(): FederationBackendOperations {
       const index = store.readNavigationQueryIndex({
         backend: "all", threads, workspaceRoots: resolveScratchProjectsRoots(),
       });
+      const { directories } = await resolveNavigationWorktreeProjects(index.directories, rpcOptions?.signal);
       return projectFederationProjectPage({ backend: "all", fetchedAt: Date.now(),
-        directories: index.directories, launchpadDefaults: await store.getLaunchpadDefaults(),
+        directories, launchpadDefaults: await store.getLaunchpadDefaults(),
       }, request);
     },
     async lookupArchivedThreads(request, rpcOptions) {

@@ -10162,13 +10162,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return next;
   }
 
-  async removeDirectoryRegistration(params: { directoryKey: string }): Promise<void> {
+  async removeDirectoryRegistration(params: { directoryKey: string; worktreeKeys?: readonly string[] }): Promise<void> {
     this.stateDb.raw.transaction(() => {
-      this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?")
-        .run(params.directoryKey);
-      const current = this.getDirectoryOverlay(params.directoryKey);
-      if (current?.pinnedRank) {
-        this.putDirectoryOverlay(params.directoryKey, { ...current, pinnedRank: undefined });
+      const remove = this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?");
+      for (const key of [params.directoryKey, ...params.worktreeKeys ?? []]) {
+        remove.run(key);
+        const current = this.getDirectoryOverlay(key);
+        if (current?.pinnedRank) {
+          this.putDirectoryOverlay(key, { ...current, pinnedRank: undefined });
+        }
       }
     })();
     this.notifyDirectoryLaunchpadsChanged();
