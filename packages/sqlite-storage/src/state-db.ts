@@ -40,7 +40,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 82;
+export const CURRENT_STATE_DB_USER_VERSION = 83;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1193,10 +1193,6 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
   ON thread_usage_lines(provider, backend, thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_parent
   ON thread_usage_lines(provider, backend, parent_thread_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
-  ON thread_usage_lines(provider, backend, thread_id, turn_id);
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
-  ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
   ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
   WHERE status != 'superseded';
@@ -2208,6 +2204,16 @@ export class StateDb {
           db.pragma("user_version = 82");
         }).immediate();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 83) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 83) return;
+          // Replace two existing indexes to limit the ongoing ledger write cost.
+          db.exec(`DROP INDEX IF EXISTS idx_thread_usage_lines_turn;
+                   DROP INDEX IF EXISTS idx_thread_usage_lines_source;`);
+          ensureThreadUsageGatePricingIndexes(db);
+          db.pragma("user_version = 83");
+        }).immediate();
+      }
       db.exec(OWNER_JOB_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
@@ -2932,6 +2938,9 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     // profiles first finish identity migrations, then create it in v82.
     if ((db.pragma("user_version", { simple: true }) as number) >= 82) {
       ensureThreadSearchIdentityIndexes(db);
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) >= 83) {
+      ensureThreadUsageGatePricingIndexes(db);
     }
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     ensureThreadToolIncidentExplorerSchema(db);
@@ -3691,6 +3700,24 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
   ON thread_usage_lines(provider, backend, currency, parent_thread_id)
   WHERE status != 'superseded';
+`);
+}
+
+function ensureThreadUsageGatePricingIndexes(db: BetterSqlite3.Database): void {
+  db.exec(`
+-- Reorder the turn index so gate reads can seek without a provider. Writes
+-- with all four equality constraints still seek the same keys.
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
+  ON thread_usage_lines(backend, thread_id, turn_id, provider);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
+  ON thread_usage_lines(backend, thread_id, source_item_id)
+  WHERE status != 'superseded' AND source_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gate_child_source
+  ON thread_usage_lines(backend, parent_thread_id, source_item_id)
+  WHERE status != 'superseded' AND parent_thread_id IS NOT NULL AND source_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gate_usage_turn
+  ON thread_usage_lines(backend, thread_id, usage_turn_id)
+  WHERE status != 'superseded' AND usage_turn_id IS NOT NULL;
 `);
 }
 
