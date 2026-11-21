@@ -140,11 +140,56 @@ describe("SelectedThreadDock", () => {
     expect(dock()).toBeNull();
   });
 
-  it("docks at the top, under the stuck project header, when the row left upward", () => {
-    renderDock(mountList(-300));
+  it("docks at the list's top edge, above the stuck project header, when the row left upward", () => {
+    const region = mountList(-300);
+    renderDock(region);
     expect(dock()?.dataset.edge).toBe("top");
-    // The stuck header is 30px tall; the region starts at the lane's top.
-    expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("30px");
+    // At the list's own edge, whatever is stuck there: a header or divider
+    // arriving or leaving under it cannot move it.
+    expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("0px");
+    // The stuck headers move down by the card plus its plate.
+    expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("58px");
+    expect(region.querySelector(".selected-thread-dock-band")).not.toBeNull();
+  });
+
+  it("gives the headers their place back when it leaves the top", () => {
+    const region = mountList(-300);
+    const view = renderDock(region);
+    place(region.querySelector("[data-row='open']")!, 900, 60);
+    view.rerender(dockElement(region, "open", {}));
+    expect(dock()?.dataset.edge).toBe("bottom");
+    expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("");
+    expect(region.querySelector(".selected-thread-dock-band")).toBeNull();
+    view.unmount();
+    expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("");
+  });
+
+  // Showing the top dock moves the stuck header down, which covers more of
+  // the row; hiding it moves the header up, which uncovers more. A rule that
+  // read only one of those layouts could show, hide and show again forever.
+  it("settles for every row position: the dock and the header it moves never alternate", () => {
+    for (let rowTop = 60; rowTop <= 260; rowTop += 1) {
+      const region = mountList(rowTop);
+      const header = region.querySelector<HTMLElement>("[data-header='pwrgit']")!;
+      // The header sticks to the list's top, as far down as the reserve says.
+      vi.spyOn(header, "getBoundingClientRect").mockImplementation(() => {
+        const top = 100 + (Number.parseFloat(region.style.getPropertyValue("--selected-thread-dock-reserve")) || 0);
+        return { x: 0, y: top, top, bottom: top + 30, left: 0, right: 300, width: 300, height: 30, toJSON: () => ({}) } as DOMRect;
+      });
+      const view = renderDock(region);
+      const seen: (string | undefined)[] = [];
+      for (let pass = 0; pass < 6; pass += 1) {
+        view.rerender(dockElement(region, "open", {}));
+        seen.push(dock()?.dataset.edge);
+      }
+      expect(new Set(seen).size, `row at ${rowTop}: ${seen.join(",")}`).toBe(1);
+      // Never neither: with no dock, the row shows under the header.
+      if (!seen[0]) {
+        expect(rowTop + 60 - Math.max(rowTop, 130)).toBeGreaterThanOrEqual(39);
+      }
+      view.unmount();
+      region.remove();
+    }
   });
 
   it("docks at the bottom when the row is further down", () => {
@@ -282,14 +327,14 @@ describe("SelectedThreadDock", () => {
       expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
     });
 
-    it("sits under the stuck header of the project being read when its own has scrolled past", () => {
+    it("sits above the stuck header of the project being read when its own has scrolled past", () => {
       const region = mountList(900, { hidden: true });
       place(region.querySelector("[data-header='pwragent']")!, -300, 30);
       place(region.querySelector("[data-directory-key='pwragent']")!, -300, 30);
       renderDock(region, "open", { directoryKeys: ["pwragent"] });
       expect(dock()?.dataset.edge).toBe("top");
-      // PwrGit's header is stuck at the top, 30px tall.
-      expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("30px");
+      // Above PwrGit's header, which is stuck at the top.
+      expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("0px");
     });
 
     it("stands in for its project when no parent has a row", () => {
