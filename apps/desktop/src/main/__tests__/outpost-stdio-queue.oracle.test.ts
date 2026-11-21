@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import { canonicalDurableTurnRequest } from "@pwragent/shared/durable-turn-request";
 import type { ListBackendsResponse } from "@pwragent/shared/contracts/backend";
@@ -16,22 +17,18 @@ import { StateDb } from "../state/state-db";
 
 const PROVIDER_REFRESH_CAPABILITIES = [...OUTPOST_VIEWER_CAPABILITIES, "event_subscriptions" as const];
 
-async function readBackendsAfterProviderRefresh(
-  owner: OutpostDaemon,
-  signal: AbortSignal,
-  beforeRefresh?: (snapshot: ListBackendsResponse) => void,
-): Promise<ListBackendsResponse> {
-  // Subscribe before reading the owner's refresh outcome so a viewer catches
-  // the event while startup is in flight and can read the outcome if it missed it.
-  owner.subscribe(["transcript"]);
-  const read = () => owner.client.listBackends({ includeUnavailable: true });
-  const snapshot = await read();
-  if (snapshot.providerRefresh?.state === "ready" || snapshot.providerRefresh?.state === "degraded") return snapshot;
-  beforeRefresh?.(snapshot);
-  await owner.waitForEvent("navigation/providerThreads/refreshed", event => event.backend === "codex", signal);
-  const refreshed = await read();
-  expect(["ready", "degraded"]).toContain(refreshed.providerRefresh?.state);
-  return refreshed;
+async function readBackendsWithSettledCodex(owner: OutpostDaemon, providerId: string, signal: AbortSignal): Promise<ListBackendsResponse> {
+  // Admission needs only Codex and its catalog. The startup refresh event
+  // also waits on other backends.
+  for (;;) {
+    signal.throwIfAborted();
+    const snapshot = await owner.client.listBackends();
+    signal.throwIfAborted();
+    const codex = snapshot.backends.find(backend => backend.kind === "codex");
+    const provider = codex?.codexModelProviders?.find(candidate => candidate.id === providerId);
+    if (codex?.available && provider && provider.status !== "pending") return snapshot;
+    await delay(50, undefined, { signal });
+  }
 }
 
 function prepareProxyProfile(config: string): string {
@@ -56,7 +53,7 @@ describe.skipIf(process.platform === "win32")("the E2E Outpost's real Codex prot
   });
   afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-  it("admits remote launches only through the configured provider when OpenAI is off", async ({ signal }) => {
+  it("admits remote launches only through the configured provider when OpenAI is off", async ({ signal, onTestFinished }) => {
     const root = prepareProxyProfile(`
 [[models.codex.providers]]
 id = "empty-proxy"
@@ -77,6 +74,15 @@ base_url = "http://127.0.0.1:1/v1"
 discover_models = false
 models = ["proxy-model"]
 `);
+    let starting: Promise<OutpostDaemon> | undefined;
+    onTestFinished(async () => {
+      try {
+        const host = await starting?.catch(() => undefined);
+        await host?.close();
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
     const data = path.join(root, "f");
     fs.mkdirSync(data);
     const oldThread = { backend: "codex" as const, threadId: "historical-openai" };
@@ -86,68 +92,60 @@ models = ["proxy-model"]
         name: "Existing OpenAI conversation", turns: [{ id: "old-turn", status: "completed", items: [] }] },
     }));
     fs.writeFileSync(path.join(data, "helper-title.json"), JSON.stringify({ title: "Unwanted helper" }));
-    const host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
-      capabilities: PROVIDER_REFRESH_CAPABILITIES,
-      env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } }).catch(error => {
-      fs.rmSync(root, { recursive: true, force: true });
-      throw error;
-    });
-    try {
-      const calls = (): { method?: string; params?: { threadId?: string; model?: string; modelProvider?: string; ephemeral?: boolean } }[] =>
-        fs.readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-      const draft: NavigationLaunchpadDraft = { backend: "codex", directoryKey: "proxy-project", directoryPath: host.workspace,
-        directoryKind: "directory", directoryLabel: "Proxy project", executionMode: "default", workMode: "local", prompt: "",
-        createdAt: 1, updatedAt: 1 };
-      const input = [{ type: "text" as const, text: "Run through the proxy" }];
-      const launch = (model?: string) => host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey,
-        launchpad: { ...draft, model }, input });
-      const { backends } = await readBackendsAfterProviderRefresh(host, signal);
-      const codex = backends.find(backend => backend.kind === "codex");
-      expect(codex?.available).toBe(true);
-      expect(codex?.codexModelProviders).toContainEqual(expect.objectContaining({ id: "listed-proxy", status: "unavailable" }));
-      // The static catalog is the oracle for what the owner can offer or run.
-      expect(buildProviderPickerEntries(backends).map(entry => [entry.value, entry.models.map(model => model.id)]))
-        .toEqual([["codex-provider:empty-proxy", []], ["codex-provider:listed-proxy", ["@listed-proxy/listed-model"]],
-          ["codex-provider:proxy", ["@proxy/proxy-model"]]]);
-      expect((await host.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
-        .toMatchObject({ backend: "codex", codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
-      const effectCalls = () => calls().filter(call => ["model/list", "thread/start", "turn/start"].includes(call.method ?? ""));
-      for (const model of ["fixture-model", "gpt-5.5", "@openai/gpt-5.5"]) {
-        await expect(launch(model)).rejects.toThrow(/OpenAI.*disabled/i);
-        expect(effectCalls()).toEqual([]);
-      }
-      await expect(host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey, launchpad: draft, input,
-        collaborationMode: { mode: "plan", settings: { model: oldModel } } })).rejects.toThrow(/OpenAI.*disabled/i);
-      await expect(host.client.startTurn({ ...oldThread, input })).rejects.toThrow(/OpenAI.*disabled/i);
-      const durable: SubmitDurableTurnRequest = {
-        clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
-        request: { ...oldThread, model: oldModel, input },
-      };
-      durable.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, durable)).digest("hex");
-      await expect(host.client.submitTurnRequest(durable)).rejects.toThrow(/OpenAI.*disabled/i);
-      expect(await host.client.getTurnRequest({ ...oldThread, id: durable.clientRequest.id })).toBeNull();
-      expect((await host.client.resolveThread(oldThread)).thread).toMatchObject({ model: oldModel, title: "Existing OpenAI conversation" });
+    starting = startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
+      env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } });
+    const host = await starting;
+    const calls = (): { method?: string; params?: { threadId?: string; model?: string; modelProvider?: string; ephemeral?: boolean } }[] =>
+      fs.readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const draft: NavigationLaunchpadDraft = { backend: "codex", directoryKey: "proxy-project", directoryPath: host.workspace,
+      directoryKind: "directory", directoryLabel: "Proxy project", executionMode: "default", workMode: "local", prompt: "",
+      createdAt: 1, updatedAt: 1 };
+    const input = [{ type: "text" as const, text: "Run through the proxy" }];
+    const launch = (model?: string) => host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey,
+      launchpad: { ...draft, model }, input });
+    const { backends } = await readBackendsWithSettledCodex(host, "listed-proxy", signal);
+    const codex = backends.find(backend => backend.kind === "codex");
+    expect(codex?.available).toBe(true);
+    expect(codex?.codexModelProviders).toContainEqual(expect.objectContaining({ id: "listed-proxy", status: "unavailable" }));
+    // The static catalog is the oracle for what the owner can offer or run.
+    expect(buildProviderPickerEntries(backends).map(entry => [entry.value, entry.models.map(model => model.id)]))
+      .toEqual([["codex-provider:empty-proxy", []], ["codex-provider:listed-proxy", ["@listed-proxy/listed-model"]],
+        ["codex-provider:proxy", ["@proxy/proxy-model"]]]);
+    expect((await host.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
+      .toMatchObject({ backend: "codex", codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
+    const effectCalls = () => calls().filter(call => ["model/list", "thread/start", "turn/start"].includes(call.method ?? ""));
+    for (const model of ["fixture-model", "gpt-5.5", "@openai/gpt-5.5"]) {
+      await expect(launch(model)).rejects.toThrow(/OpenAI.*disabled/i);
       expect(effectCalls()).toEqual([]);
-      const created = await launch();
-      expect(created).toMatchObject({ backend: "codex", turnId: expect.any(String) });
-      expect(created.turnStartFailure).toBeUndefined();
-      expect(effectCalls()).toEqual([
-        expect.objectContaining({ method: "thread/start", params: expect.objectContaining({ model: "proxy-model", modelProvider: "proxy" }) }),
-        expect.objectContaining({ method: "turn/start", params: expect.objectContaining({ threadId: created.threadId, model: "proxy-model" }) }),
-      ]);
-      await expect(host.client.startTurn({ backend: "codex", threadId: created.threadId, input, model: oldModel }))
-        .rejects.toThrow(/OpenAI.*disabled/i);
-      // Admission compares the provider of the thread that would be created
-      // with the collaboration model, before creating any provider work.
-      for (const model of [undefined, "@proxy/proxy-model"]) {
-        await expect(host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey, launchpad: { ...draft, model }, input,
-          collaborationMode: { mode: "plan", settings: { model: "@listed-proxy/listed-model" } } })).rejects.toThrow(/collaboration model.*proxy/i);
-      }
-      expect(effectCalls()).toHaveLength(2);
-    } finally {
-      await host.close();
-      fs.rmSync(root, { recursive: true, force: true });
     }
+    await expect(host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey, launchpad: draft, input,
+      collaborationMode: { mode: "plan", settings: { model: oldModel } } })).rejects.toThrow(/OpenAI.*disabled/i);
+    await expect(host.client.startTurn({ ...oldThread, input })).rejects.toThrow(/OpenAI.*disabled/i);
+    const durable: SubmitDurableTurnRequest = {
+      clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+      request: { ...oldThread, model: oldModel, input },
+    };
+    durable.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, durable)).digest("hex");
+    await expect(host.client.submitTurnRequest(durable)).rejects.toThrow(/OpenAI.*disabled/i);
+    expect(await host.client.getTurnRequest({ ...oldThread, id: durable.clientRequest.id })).toBeNull();
+    expect((await host.client.resolveThread(oldThread)).thread).toMatchObject({ model: oldModel, title: "Existing OpenAI conversation" });
+    expect(effectCalls()).toEqual([]);
+    const created = await launch();
+    expect(created).toMatchObject({ backend: "codex", turnId: expect.any(String) });
+    expect(created.turnStartFailure).toBeUndefined();
+    expect(effectCalls()).toEqual([
+      expect.objectContaining({ method: "thread/start", params: expect.objectContaining({ model: "proxy-model", modelProvider: "proxy" }) }),
+      expect.objectContaining({ method: "turn/start", params: expect.objectContaining({ threadId: created.threadId, model: "proxy-model" }) }),
+    ]);
+    await expect(host.client.startTurn({ backend: "codex", threadId: created.threadId, input, model: oldModel }))
+      .rejects.toThrow(/OpenAI.*disabled/i);
+    // Admission compares the provider of the thread that would be created
+    // with the collaboration model, before creating any provider work.
+    for (const model of [undefined, "@proxy/proxy-model"]) {
+      await expect(host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey, launchpad: { ...draft, model }, input,
+        collaborationMode: { mode: "plan", settings: { model: "@listed-proxy/listed-model" } } })).rejects.toThrow(/collaboration model.*proxy/i);
+    }
+    expect(effectCalls()).toHaveLength(2);
   });
 
   it("uses the proxy preset when reading and sending stored OpenAI launchpads without saving it over their defaults", async () => {
@@ -205,7 +203,7 @@ execution_mode = "default"
     }
   });
 
-  it("uses a listed model for an omitted-model launch when discovery fails", async ({ signal }) => {
+  it("uses a listed model for an omitted-model launch when discovery fails", async ({ signal, onTestFinished }) => {
     const discovery = Promise.withResolvers<void>();
     const endpoint = createServer(async (request, response) => {
       if (request.method !== "GET" || request.url !== "/v1/models") {
@@ -216,44 +214,54 @@ execution_mode = "default"
       response.writeHead(503).end();
     });
     let root: string | undefined;
-    let host: OutpostDaemon | undefined;
-    try {
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") throw new Error("Discovery fixture did not bind a loopback port");
-      root = prepareProxyProfile(`
+    let starting: Promise<OutpostDaemon> | undefined;
+    onTestFinished(async () => {
+      discovery.resolve();
+      try {
+        const host = await starting?.catch(() => undefined);
+        await host?.close();
+      } finally {
+        await new Promise<void>(resolve => endpoint.close(() => resolve()));
+        if (root) fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+    endpoint.listen(0, "127.0.0.1");
+    await once(endpoint, "listening", { signal });
+    signal.throwIfAborted();
+    const address = endpoint.address();
+    if (!address || typeof address === "string") throw new Error("Discovery fixture did not bind a loopback port");
+    root = prepareProxyProfile(`
 [[models.codex.providers]]
 id = "proxy"
 name = "Proxy"
 base_url = "http://127.0.0.1:${address.port}/v1"
 models = ["proxy-model"]
 `);
-      const owner = host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
-        capabilities: PROVIDER_REFRESH_CAPABILITIES,
-        env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } });
-      // The test endpoint holds the catalog read open until the viewer has
-      // seen pending. The owner must publish the failure before signaling the
-      // refresh, and still offer the operator's listed model.
-      const { backends } = await readBackendsAfterProviderRefresh(owner, signal, ({ backends }) => {
-        expect(backends.find(backend => backend.kind === "codex")?.codexModelProviders)
-          .toContainEqual(expect.objectContaining({ id: "proxy", status: "pending" }));
-        discovery.resolve();
-      });
-      const codex = backends.find(backend => backend.kind === "codex");
-      expect(codex?.available).toBe(true);
-      expect(codex?.codexModelProviders)
-        .toContainEqual(expect.objectContaining({ id: "proxy", status: "unavailable", error: "HTTP 503" }));
-      expect.soft((await owner.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
-        .toMatchObject({ codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
-      await expect(owner.client.startThread({ backend: "codex", cwd: owner.workspace }))
-        .resolves.toMatchObject({ backend: "codex", threadId: expect.any(String) });
-    } finally {
-      discovery.resolve();
-      await host?.close();
-      await new Promise<void>(resolve => endpoint.close(() => resolve()));
-      if (root) fs.rmSync(root, { recursive: true, force: true });
-    }
+    starting = startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
+      capabilities: PROVIDER_REFRESH_CAPABILITIES,
+      env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } });
+    const owner = await starting;
+    signal.throwIfAborted();
+    // The test endpoint holds the catalog read open until the viewer has
+    // seen pending. The owner must publish the failure before signaling the
+    // refresh, and still offer the operator's listed model.
+    owner.subscribe(["transcript"]);
+    const before = await owner.client.listBackends({ includeUnavailable: true });
+    signal.throwIfAborted();
+    expect(before.backends.find(backend => backend.kind === "codex")?.codexModelProviders)
+      .toContainEqual(expect.objectContaining({ id: "proxy", status: "pending" }));
+    discovery.resolve();
+    await owner.waitForEvent("navigation/providerThreads/refreshed", event => event.backend === "codex", signal);
+    const { backends, providerRefresh } = await owner.client.listBackends();
+    expect(["ready", "degraded"]).toContain(providerRefresh?.state);
+    const codex = backends.find(backend => backend.kind === "codex");
+    expect(codex?.available).toBe(true);
+    expect(codex?.codexModelProviders)
+      .toContainEqual(expect.objectContaining({ id: "proxy", status: "unavailable", error: "HTTP 503" }));
+    expect.soft((await owner.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
+      .toMatchObject({ codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
+    await expect(owner.client.startThread({ backend: "codex", cwd: owner.workspace }))
+      .resolves.toMatchObject({ backend: "codex", threadId: expect.any(String) });
   });
 
   it("refuses an omitted model when the proxy-only owner has no configured catalog", async () => {
