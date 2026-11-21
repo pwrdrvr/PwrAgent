@@ -88,9 +88,9 @@ function overlayRoundTrip(olderBytes: number, newerTexts: string[], limit: numbe
   const provider = [message("older-provider", "x".repeat(olderBytes)), ...newerTexts.map((text, i) => message(`newer-provider:${i}`, text))];
   const overlay: AppServerThreadEntry = { type: "activity", id: "live-turn-usage-older", summary: "Turn usage: 1 in", details: [], status: "completed" };
   const entries = [provider[0]!, overlay, ...provider.slice(1)];
-  const bytes = (value: AppServerThreadReplay) => Buffer.byteLength(JSON.stringify(value), "utf8");
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
   const first = fitNormalizedReplayWithinByteBudget({ cursorIdSpace: "entry-id", replay: replay(entries),
-    maxBytes: bytes(replay(entries.slice(1))) + 100, measureBytes: bytes });
+    maxBytes: bytes(replay(entries.slice(1))) + 100, measureJsonBytes: bytes });
   // This is the #1919 pipeline: the transport trims a replay after overlay
   // injection; the next read resolves its cursor in the raw provider replay.
   const ids = new Set(provider.map((entry) => entry.id));
@@ -118,11 +118,11 @@ it("round-trips trimmed provider history when an injected usage row leads the ne
 function nativeCursorRoundTrip(payloadBytes: number, count: number) {
   const source = replay(Array.from({ length: count }, (_, i) => message(`provider:${i}`, "x".repeat(payloadBytes))));
   source.pagination = { supportsPagination: true, hasPreviousPage: true, previousCursor: "opaque-provider-cursor" };
-  const bytes = (value: AppServerThreadReplay) => Buffer.byteLength(JSON.stringify(value), "utf8");
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
   // One byte under the full page forces compaction but leaves room for every
   // entry's compacted representation. Impossible byte budgets promise no rows.
   const fitted = fitNormalizedReplayWithinByteBudget({ cursorIdSpace: "provider-cursor", replay: source,
-    maxBytes: bytes(source) - 1, measureBytes: bytes });
+    maxBytes: bytes(source) - 1, measureJsonBytes: bytes });
   expect(fitted.pagination).toEqual(source.pagination);
   expect(fitted.entries.map((entry) => entry.id)).toEqual(source.entries.map((entry) => entry.id));
 }

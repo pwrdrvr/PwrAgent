@@ -1301,6 +1301,10 @@ export function registerFederationBackendHandlers(params: {
       const pagedReplay = alreadyPaged
         ? response.replay
         : pageNormalizedReplay(response.replay, request);
+      // Count the response wrapper once. Replacing its JSON null with the
+      // replay adds exactly the replay's serialized size minus four bytes.
+      const responseWrapperBytes =
+        Buffer.byteLength(JSON.stringify({ ...response, replay: null }), "utf8") - 4;
       const replay = fitNormalizedReplayWithinByteBudget({
         // `response.backend` rather than `request.backend`: the request field
         // is optional and the remote forwarding path passes it through
@@ -1310,12 +1314,8 @@ export function registerFederationBackendHandlers(params: {
           ? threadReplayCursorIdSpace(response.backend)
           : "entry-id",
         replay: pagedReplay,
-        maxBytes: FEDERATION_RESPONSE_BYTE_BUDGET,
-        measureBytes: (candidate) =>
-          Buffer.byteLength(
-            JSON.stringify({ ...response, replay: candidate }),
-            "utf8",
-          ),
+        maxBytes: FEDERATION_RESPONSE_BYTE_BUDGET - responseWrapperBytes,
+        measureJsonBytes: (value) => Buffer.byteLength(JSON.stringify(value), "utf8"),
       });
       return projectFederationThreadRead(conditionalThreadRead({ ...response, replay }, request.knownRevision));
     },
