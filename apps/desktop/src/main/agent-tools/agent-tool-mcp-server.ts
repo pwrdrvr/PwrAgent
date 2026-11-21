@@ -52,13 +52,13 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
       ? " For own PR CI/merge, follow prAutomation.guidance; use watch_thread_pull_request and end the turn."
       : "")
     + (has("manage_thread_dependencies")
-      ? " Other local threads/PRs: manage_thread_dependencies (Continue After), mode all for multiple PRs."
+      ? " Use manage_thread_dependencies (Continue After) for other local threads/PRs, with mode all for multiple PRs. Use ci_run with the run URL for standalone GitHub Actions and GitLab CI waits, including release CI. Use local_file for an existing local watcher that publishes a result marker."
       : "")
     + (has("schedule_follow_up")
       ? " A wait that is only a time: schedule_follow_up."
       : "")
     + (has("create_monitor_delegation")
-      ? " Other long jobs: create_monitor_delegation."
+      ? " Use create_monitor_delegation for an explicit Job Monitor request or work without a built-in wait."
       : "")
     + (has("watch_thread_pull_request") || has("manage_thread_dependencies") || has("create_monitor_delegation")
       ? " Register the wait and end the turn; do not poll PRs in monitors, shells, or sleep loops."

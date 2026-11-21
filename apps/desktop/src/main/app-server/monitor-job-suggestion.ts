@@ -66,14 +66,20 @@ type MonitorJobHeuristicState = {
   reviewStarted: boolean;
 };
 
+const DEPENDENCY_WAIT_GUIDANCE =
+  "Use manage_thread_dependencies with ci_run and the run URL for a standalone GitHub Actions run or GitLab pipeline, including main-branch release CI. "
+  + "Use local_file for an existing local watcher that publishes a result marker and leave that watcher running. "
+  + "Use the same tool for another thread's turn completion or PR prerequisite. ";
+
 export const MONITOR_JOB_SUGGESTION =
   "PwrAgent System - Monitor Job Suggestion: You appear to be repeatedly checking a long-running task. "
-  + "Consider using create_monitor_delegation to avoid repeatedly waking this parent model and paying for its accumulated context. "
+  + "For an attached PR, first check PwrAgent's PR automation guidance and use watch_thread_pull_request when applicable. "
+  + DEPENDENCY_WAIT_GUIDANCE
+  + "Use schedule_follow_up when only a time determines the next check. "
+  + "For work without a built-in wait, consider using create_monitor_delegation to avoid repeatedly waking this parent model and paying for its accumulated context. "
   + "Give the monitor the target, check interval, completion conditions, and problems to watch for. "
   + "For a cloud task, include the selected MCP connectionId, sandbox/process IDs, durable paths, and exact read-only status tools (Sandboxer command_status/read_file, never exec). The worker uses search_mcp_tools/call_mcp_tool for those selected connections; verify that the needed tools are discoverable before delegating. "
   + "It will stop and report back when the task finishes or a specified problem occurs. "
-  + "For an attached PR, first check PwrAgent's PR automation guidance and use watch_thread_pull_request when applicable. "
-  + "For another thread's turn completion or PR prerequisite, use manage_thread_dependencies instead of polling or creating a monitor; it can wait before the PR exists. "
   + "After the monitor, PR watch, or dependency starts, end this turn if no unrelated work remains. "
   + "A monitor cannot inherit a parent-local session or cell ID; give it durable process, log, or status identifiers. "
   + "This is an automatic reminder, sent at most once this turn.";
@@ -86,10 +92,13 @@ export const CLAUDE_MONITOR_JOB_SUGGESTION =
   "PwrAgent System - Monitor Job Suggestion: This command waits on CI or polls a long-running task. "
   + "Each Monitor event or background-task notification wakes this model with its whole context. "
   + "For this thread's PR, call PwrAgent's watch_thread_pull_request instead; it wakes this thread once, on success or failure. "
-  + "For any other long wait, call create_monitor_delegation; a lightweight monitor polls and reports back. For cloud work, first verify read-only status tools through search_mcp_tools (Sandboxer command_status/read_file, never exec), then include the selected connectionId and durable cloud identifiers in the task. "
+  + DEPENDENCY_WAIT_GUIDANCE
+  + "Use schedule_follow_up when only a time determines the next check. "
+  + "For work without a built-in wait, call create_monitor_delegation. For cloud work, first verify read-only status tools through search_mcp_tools (Sandboxer command_status/read_file, never exec), then include the selected connectionId and durable cloud identifiers in the task. "
   + `Load them with ToolSearch: select:mcp__${PWRAGENT_TOOL_NAMESPACE}__watch_thread_pull_request,`
+  + `mcp__${PWRAGENT_TOOL_NAMESPACE}__manage_thread_dependencies,mcp__${PWRAGENT_TOOL_NAMESPACE}__schedule_follow_up,`
   + `mcp__${PWRAGENT_TOOL_NAMESPACE}__create_monitor_delegation. `
-  + "Then stop the watcher you started (TaskStop) and end this turn if no unrelated work remains. "
+  + "Once the wait is registered, stop any redundant polling with TaskStop. Keep the watcher that produces a registered local_file marker. End this turn if no unrelated work remains. "
   + "This is an automatic reminder, sent at most once this turn.";
 
 /**

@@ -3,6 +3,7 @@ import fc from "fast-check";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { buildPwrAgentToolSearchDefinition, searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
+import { CLAUDE_MONITOR_JOB_SUGGESTION, MONITOR_JOB_SUGGESTION } from "../app-server/monitor-job-suggestion";
 
 const catalog: DynamicToolSpec[] = [{
   type: "namespace",
@@ -26,6 +27,53 @@ function syntheticCatalog(sizes: number[]): DynamicToolSpec[] {
 }
 
 describe("PwrAgent tool search relevance and delivery properties", () => {
+  it.each([MONITOR_JOB_SUGGESTION, CLAUDE_MONITOR_JOB_SUGGESTION])(
+    "presents built-in waits before offering a Job Monitor in polling guidance %#",
+    (suggestion) => {
+      const registration = suggestion.indexOf("manage_thread_dependencies");
+      const delegation = suggestion.indexOf("create_monitor_delegation");
+      expect(registration).toBeGreaterThanOrEqual(0);
+      expect(delegation).toBeGreaterThan(registration);
+      expect(suggestion.slice(registration, delegation)).toContain("ci_run");
+      expect(suggestion.slice(registration, delegation)).toContain("local_file");
+    },
+  );
+
+  it("discovers the durable CI wait first and preserves explicit Job Monitor requests", () => {
+    // A run's event determines when to wake. The oracle is the tool that can
+    // register that event, even when the caller only loads one definition.
+    fc.assert(fc.property(
+      fc.constantFrom("wait for", "watch", "monitor", "notify me when"),
+      fc.constantFrom(
+        "GitHub Actions run ID",
+        "GitLab pipeline",
+        "standalone CI run",
+        "release CI run",
+        "https://github.com/pwrdrvr/PwrGit/actions/runs/",
+        "https://gitlab.com/example/release/-/pipelines/",
+      ),
+      fc.integer({ min: 1, max: 5 }),
+      fc.integer({ min: 1 }),
+      (intent, target, limit, id) => {
+        const run = target.endsWith("/") ? `${target}${id}` : `${target} ${id}`;
+        expect(searchPwrAgentTools(catalog, `${intent} ${run}`, limit)[0]?.name)
+          .toBe("manage_thread_dependencies");
+        expect(searchPwrAgentTools(catalog, `start a Job Monitor to ${intent} ${run}`, limit)[0]?.name)
+          .toBe("create_monitor_delegation");
+        expect(searchPwrAgentTools(catalog, `create_monitor_delegation ${intent} ${run}`, limit)[0]?.name)
+          .toBe("create_monitor_delegation");
+      },
+    ));
+  });
+
+  it("keeps one-time reads and attached PR watches discoverable", () => {
+    fc.assert(fc.property(fc.integer({ min: 1 }), (id) => {
+      expect(searchPwrAgentTools(catalog, `get CI run ${id} jobs`, 1)[0]?.name).toBe("get_ci_run");
+      expect(searchPwrAgentTools(catalog, "watch attached pull request checks", 1)[0]?.name)
+        .toBe("watch_thread_pull_request");
+    }));
+  });
+
   // The thread-search schema owns model filtering. Mentioning that criterion
   // must not turn a request for threads into runtime-model enumeration.
   it("keeps thread search discoverable when models are search criteria", () => {

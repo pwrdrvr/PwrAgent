@@ -519,9 +519,11 @@ both Linux packages, then the release-notes job verifies and writes the
 matching `CHANGELOG.md` content. The release is not complete at either signing
 approval gate: after approval, continue watching through npm publication and
 `Verify desktop and Outpost release completion`, then verify the GitHub Release
-body and retained npm receipt. If a
-monitor or handoff stops at an approval gate, resume after approval rather than
-treating the release as done.
+body and retained npm receipt. In PwrAgent, register a
+[`ci_run` dependency](thread-dependencies.md#ci-runs-without-a-pr) on the
+workflow run URL. After reporting a gate, register another wait for the
+remaining gates, failures, and the finish. Restrict approval notifications to
+environments you have yet to report.
 Every CI-published release is born as a GitHub `Pre-release`, including a
 suffix-free stable tag such as `v1.0.0`. Promotion to Latest is a separate
 operator action taken after the assets, updater metadata, and smoke checks are

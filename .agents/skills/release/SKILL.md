@@ -307,13 +307,20 @@ An advancing release branch does not invalidate a retry.
 
 ## Monitor And Verify
 
-Find the run for the release tag and watch it. If it takes a while to appear,
-sleep for 5-10 minutes before deciding it failed to start.
+Find the workflow run for the release tag and verify its tag and commit. If
+it takes a while to appear, allow 5–10 minutes before deciding it failed to start.
 
 ```bash
 gh run list --workflow release.yml --limit 10
-gh run watch <run-id>
 ```
+
+In PwrAgent, register a Continue After wait with
+`manage_thread_dependencies`. Set `action: "create"`, and supply one
+`when: "ci_run"` condition with the thread's backend, `threadId: ""`,
+and the workflow run URL in `ciRun.url`. Put the release tag, expected
+commit, and verification steps in the continuation. Confirm registration
+and end the turn. When working outside PwrAgent, use `gh run watch <run-id>`.
+If PwrAgent refuses registration, report the reason to the operator.
 
 The `Sign, notarize, publish` job pauses for `apple-signing` Environment
 approval. Treat that pause as expected. Before approving, verify the workflow
@@ -335,10 +342,12 @@ fail closed. Do not overwrite/unpublish, move tags, change trust or use a token
 fallback as recovery. Follow the runbook for operator action or a new paired
 version. GitHub and npm have no cross-service atomic transaction.
 
-If monitoring is delegated and the monitor stops at the approval gate, resume
-monitoring after approval. Do not end the release turn as "done" at the
-approval gate; the workflow still has to publish and verify release notes after
-assets are uploaded.
+A CI dependency wakes once. After reporting an approval gate, register a
+new `ci_run` wait for failures, the finish, and any remaining approval gates.
+Use `ciRun.environments` to target gates you have yet to report. After the
+last gate, set `ciRun.on` to `["job_failed", "finished"]`. The release is
+still in progress while approvals, publication, or receipt verification are
+pending.
 
 On failure, inspect logs yourself:
 

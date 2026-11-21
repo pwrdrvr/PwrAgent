@@ -126,7 +126,10 @@ describe("PwrAgent task monitor agent tools", () => {
       "Never pass the parent's own model or effort",
     );
     expect(createMonitorTool?.description).toContain(
-      "Do not create a polling monitor for these waits",
+      "A request to watch or wait for CI uses the applicable CI wait below",
+    );
+    expect(createMonitorTool?.description).toContain(
+      "when the operator explicitly requests one",
     );
     expect(createMonitorTool?.description).toContain(
       "manage_thread_dependencies (Continue After)",
