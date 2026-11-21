@@ -18,6 +18,13 @@ import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shar
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import {
+  CalendarPlusIcon,
+  DraftIcon,
+  FolderIcon,
+  HistoryIcon,
+  ServerIcon,
+} from "../../../icons";
+import {
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
@@ -888,7 +895,8 @@ describe("ThreadContextPanel", () => {
     // The rendered order is the accessibility oracle, including optional tabs.
     const tabs = screen.getAllByRole("tab");
     for (const [index, tab] of tabs.entries()) {
-      tab.focus();
+      // Focus shows the tab's tooltip, a state update.
+      act(() => tab.focus());
       fireEvent.keyDown(tab, { key: "ArrowDown" });
       expect(document.activeElement).toBe(tabs[(index + 1) % tabs.length]);
       fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
@@ -898,6 +906,66 @@ describe("ThreadContextPanel", () => {
     expect(document.activeElement).toBe(tabs.at(-1));
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it("explains every rail tab in the rail's tooltip", () => {
+    renderPanel({ pinned: true });
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.length).toBeGreaterThan(5);
+    for (const tab of tabs) {
+      const name = tab.getAttribute("aria-label")!;
+      // A native `title` would draw a second, unclamped tooltip.
+      expect(tab).not.toHaveAttribute("title");
+      expect(tab).toHaveAccessibleDescription(/\S/);
+      fireEvent.focus(tab);
+      const tooltips = screen.getAllByRole("tooltip");
+      expect(tooltips).toHaveLength(1);
+      expect(tooltips[0]!.textContent).toMatch(
+        new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — \\S`),
+      );
+      fireEvent.blur(tab);
+    }
+  });
+
+  it("replaces a tab's tooltip with a panel control's instead of showing both", () => {
+    renderPanel({
+      activeTab: "projects",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          { id: "local-dir", kind: "local", label: "PwrAgent", path: "/Users/fixture-user/github/PwrAgent" },
+        ],
+      },
+    });
+    // The pointer stays on a tab after clicking it, so its tooltip is still
+    // up when focus moves into the panel.
+    fireEvent.focus(screen.getByRole("tab", { name: "Linked projects" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Linked projects — ");
+    fireEvent.focus(screen.getByLabelText("Path for PwrAgent"));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/fixture-user/github/PwrAgent");
+  });
+
+  it("draws every rail tab with its own glyph, none shared with the lens switch or machines", () => {
+    renderPanel({ pinned: true });
+    const glyph = (svg: Element | null): string => svg?.innerHTML ?? "";
+    const tabGlyphs = screen.getAllByRole("tab").map((tab) => glyph(tab.querySelector("svg")));
+    expect(new Set(tabGlyphs).size).toBe(tabGlyphs.length);
+    // Glyphs that already mean something else: the Updated, Created, Drafts,
+    // and Directories lenses, and a machine.
+    const { container } = render(
+      <>
+        <HistoryIcon />
+        <CalendarPlusIcon />
+        <DraftIcon />
+        <FolderIcon />
+        <ServerIcon />
+      </>,
+    );
+    for (const svg of Array.from(container.querySelectorAll("svg"))) {
+      expect(tabGlyphs).not.toContain(glyph(svg));
+    }
   });
 
   it("shows the Pricing tab by default", () => {

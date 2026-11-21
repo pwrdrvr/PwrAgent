@@ -31,18 +31,18 @@ import { isThreadPendingWakeLive } from "@pwragent/shared/contracts/thread-pendi
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
+  ActivityIcon,
   AutomationsIcon,
-  ConnectionsIcon,
   DecisionsIcon,
   EditsIcon,
+  GaugeIcon,
   InfoIcon,
-  HistoryIcon,
   HourglassIcon,
   PauseIcon,
+  PlugIcon,
   PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
-  ServerIcon,
   SubAgentsIcon,
   ResearchIcon,
   TerminalIcon,
@@ -97,27 +97,36 @@ const noop = (): void => {};
 type ContextTab = {
   id: ContextTabId;
   label: string;
+  /** What the panel holds, after the name in the tab's tooltip. The rail is
+   *  icon-only, so this line is the only place the tab explains itself. */
+  hint: string;
   Icon: ComponentType<IconProps>;
   /** Anchored to the bottom of the tab rail (below the spacer). */
   bottom?: boolean;
 };
 
 const CONTEXT_TABS: ContextTab[] = [
-  { id: "connections", label: "Connections", Icon: ConnectionsIcon },
-  { id: "info", label: "Thread info", Icon: InfoIcon },
-  { id: "todos", label: "To-dos", Icon: TodoIcon },
-  { id: "research", label: "Research", Icon: ResearchIcon },
-  { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
-  { id: "edits", label: "Edits", Icon: EditsIcon },
-  { id: "pricing", label: "Pricing", Icon: PricingIcon },
-  { id: "decisions", label: "Decisions", Icon: DecisionsIcon },
-  { id: "actions", label: "Actions", Icon: TerminalIcon },
-  { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
-  { id: "automations", label: "Automations", Icon: AutomationsIcon },
-  { id: "pr-activity", label: "PR activity", Icon: HistoryIcon },
-  { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
-  { id: "projects", label: "Linked projects", Icon: ProjectsIcon },
-  { id: "providers", label: "AI provider info", Icon: ServerIcon, bottom: true },
+  { id: "connections", label: "Connections", hint: "PwrGit, PwrSnap, and Sandboxer", Icon: PlugIcon },
+  { id: "info", label: "Thread info", hint: "status, IDs, and where it runs", Icon: InfoIcon },
+  { id: "todos", label: "To-dos", hint: "cards raised for this thread", Icon: TodoIcon },
+  { id: "research", label: "Research", hint: "this thread's research runs", Icon: ResearchIcon },
+  { id: "waiting", label: "Waiting for", hint: "wakes, watches, and follow-ups", Icon: HourglassIcon },
+  { id: "edits", label: "Edits", hint: "files this thread changed", Icon: EditsIcon },
+  { id: "pricing", label: "Pricing", hint: "token usage and cost", Icon: PricingIcon },
+  { id: "decisions", label: "Decisions", hint: "decision batches this thread ran", Icon: DecisionsIcon },
+  { id: "actions", label: "Actions", hint: "agent commands running in the background", Icon: TerminalIcon },
+  { id: "subagents", label: "Sub-agents", hint: "agents this thread spawned", Icon: SubAgentsIcon },
+  { id: "automations", label: "Automations", hint: "scheduled runs for this thread", Icon: AutomationsIcon },
+  { id: "pr-activity", label: "PR activity", hint: "what Auto-fix did on this thread's PRs", Icon: ActivityIcon },
+  { id: "prs", label: "Pull requests", hint: "attached PRs and their watches", Icon: PullRequestIcon },
+  { id: "projects", label: "Linked projects", hint: "directories this thread works in", Icon: ProjectsIcon },
+  {
+    id: "providers",
+    label: "AI provider info",
+    hint: "accounts, rate limits, and usage pace",
+    Icon: GaugeIcon,
+    bottom: true,
+  },
 ];
 
 type ThreadContextPanelProps = {
@@ -783,11 +792,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           : tab.label;
     const label = suspended ? `${baseLabel} · agent follow-ups suspended` : baseLabel;
     const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
+    const tooltipText = `${label} — ${tab.hint}`;
     return (
       <button
         key={tab.id}
         id={`context-rail-tab-${tab.id}`}
         aria-label={label}
+        aria-describedby={`context-rail-tab-${tab.id}-hint`}
         aria-selected={isActive && open}
         aria-controls={open ? "context-rail-panel" : undefined}
         className={`context-rail__tab${isActive ? " is-active" : ""}${
@@ -795,12 +806,21 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }`}
         role="tab"
         tabIndex={isActive ? 0 : -1}
-        title={label}
         type="button"
+        // The rail's one tooltip, shared with its panels' controls: a tab's
+        // explanation is replaced, never joined, when a panel control raises
+        // its own. A second tooltip system here left both on screen.
+        onMouseEnter={(event) => railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
+        onMouseLeave={railTooltip.hide}
+        onFocus={(event) => railTooltip.show(event.currentTarget, tooltipText)}
+        onBlur={railTooltip.hide}
         onClick={() => selectTab(tab.id)}
         onAnimationEnd={landing ? () => setLandedRingPlayed(connectionsLanding) : undefined}
       >
         <TabIcon size={18} aria-hidden="true" />
+        {/* The tooltip is sighted-only; this carries its explanation to
+            assistive tech without changing the tab's accessible name. */}
+        <span id={`context-rail-tab-${tab.id}-hint`} hidden>{tab.hint}</span>
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
         {todoBadge ? (
           <span
