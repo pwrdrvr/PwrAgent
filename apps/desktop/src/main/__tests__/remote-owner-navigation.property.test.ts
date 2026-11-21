@@ -11,6 +11,7 @@ import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { createNavigationQuerySnapshot, navigationDirectoryGitRevisions, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
+import { attachRemoteThreadsToLocalDirectories } from "../app-server/navigation-viewer-pins";
 import { DesktopDirectoryGitStatus } from "../app-server/desktop-directory-git-status";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
@@ -311,6 +312,95 @@ it.each([3, 6])("reads only changed sidebar projections for directory Git metada
     expect(descriptors).toHaveLength(6);
     expect(descriptors.every((dir) => dir.gitStatus?.currentBranch === "main")).toBe(true);
   } finally { held?.resolve(); window.dispose(); }
+});
+
+it("keeps a settled partial directory index's exclusions across range acknowledgments", async () => {
+  const store = new NavigationQueryStore();
+  const index = createNavigationQuerySnapshot(population(2));
+  const loadIndex = vi.fn(async () => index);
+  const read = vi.fn(async (sent: NavigationQueryRequest) => store.readPage({
+    request: navigationRequestForOwner(sent, target), scopeKey: "viewer", loadIndex,
+  }));
+  const window = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const unrelated: AgentEvent = { backend: "codex", federationTarget: target, notification: { method: "navigation/invalidated",
+    params: { directoryKey: directoryKey(2), sourceMethod: "navigation/directoryGitStatus/updated",
+      directoryGitRevisions: navigationDirectoryGitRevisions({ currentBranch: "feature" }) } } };
+  try {
+    window.setDemand(new Map([["index", request({ kind: "directory-index" }, 1)]]));
+    await until(() => idle(window));
+    for (let i = 0; i < 2; i++) {
+      const before = read.mock.calls.length;
+      window.invalidate(undefined, [target], unrelated);
+      await window.refresh(undefined, [target], true);
+      expect(read.mock.calls.length).toBe(before);
+      await window.refresh("index");
+      const ack = await read.mock.results.at(-1)!.value;
+      expect(ack.rangeUnchanged).toEqual({ start: 0, count: 1 });
+      expect(ack.directoryGitProof).toBeUndefined();
+    }
+  } finally { window.dispose(); }
+});
+
+it("places a mounted pin under the same repository as the fresh owner row after an origin change", async () => {
+  const raw = population(1);
+  const path = "/owner/checkout";
+  const key = directoryKey(0);
+  const paths = ["old", "new"];
+  const local = paths.map((repo) => ({ ...raw.directories[0]!, key: `directory:/viewer/${repo}`, path: `/viewer/${repo}`,
+    label: repo, threadKeys: [], gitStatus: { originRepository: repo } }));
+  raw.threads[0]!.linkedDirectories = [{ id: "checkout", path, kind: "local", label: "checkout" }];
+  const snapshot = (origin: string) => createNavigationQuerySnapshot({ ...raw, directories: [{ ...raw.directories[0]!,
+    path, checkoutPaths: [path], gitStatus: { originRepository: origin } }] });
+  let index = snapshot("old");
+  const store = new NavigationQueryStore();
+  const backend = { getNavigationQueryPage: async (sent: NavigationQueryRequest) => {
+    const page = await store.readPage({ request: sent, scopeKey: "peer", loadIndex: async () => index });
+    return expandNavigationRemoteOwner({ ...page, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+  } } as FederationBackendOperations;
+  const refreshed = vi.fn();
+  const fetchPinnedSnapshot = vi.fn<NonNullable<ConstructorParameters<typeof RemoteThreadSummaryCache>[0]["fetchPinnedSnapshot"]>>(
+    (_owner, keys, options, baseline) => readFederationPinnedSnapshot(backend, keys, options, baseline));
+  const cache = new RemoteThreadSummaryCache({ peers: () => [{ target, label: "Owner", capabilities }], peerStatus: () => ({ status: "connected" }),
+    hasNavigationSubscription: () => true, fetchPinnedSnapshot, fetchSnapshot: async () => { throw new Error("Unexpected legacy snapshot"); },
+    fetchArchivedThreads: async () => [], onPinnedSummariesRefreshed: refreshed });
+  const wire = connect(() => {}, cache);
+  const pin = { ref: buildFederatedThreadRef({ backend: "codex", instanceId: target.instanceId, threadId: raw.threads[0]!.id }),
+    instanceLabel: "Owner", addedAt: 1 };
+  const home = (rows: typeof raw.threads) => attachRemoteThreadsToLocalDirectories(local, rows).find((dir) => dir.threadKeys.length)?.key;
+  const publish = (origin: string, branch: string) => {
+    const gitStatus = { originRepository: origin, currentBranch: branch };
+    wire.emit({ backend: "codex", notification: { method: "navigation/directoryGitStatus/updated", params: {
+      directoryKey: key, gitStatus, directoryGitRevisions: navigationDirectoryGitRevisions(gitStatus), fetchedAt: 1 } } });
+  };
+  try {
+    await cache.resolvePinnedThreads([pin]);
+    await until(() => refreshed.mock.calls.length > 0);
+    expect(home((await cache.resolvePinnedThreads([pin])).threads)).toBe(local[0]!.key);
+    fetchPinnedSnapshot.mockClear();
+    refreshed.mockClear();
+    publish("old", "feature");
+    expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+    index = snapshot("new");
+    publish("new", "feature");
+    await until(() => refreshed.mock.calls.length > 0);
+    const fresh = await readFederationPinnedSnapshot(backend, [buildThreadIdentityKey("codex", pin.ref.threadId)]);
+    expect(home(fresh.threads)).toBe(local[1]!.key);
+    expect(home((await cache.resolvePinnedThreads([pin])).threads)).toBe(home(fresh.threads));
+    publish("new", "main");
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+
+    // A failed owner read leaves the viewer serving a fallback. Even a
+    // notice matching the last successful revision must retry that read.
+    refreshed.mockClear();
+    fetchPinnedSnapshot.mockRejectedValueOnce(new Error("fixture owner unavailable"));
+    cache.invalidate(target.instanceId);
+    await until(() => refreshed.mock.calls.length > 0);
+    refreshed.mockClear();
+    publish("new", "main");
+    await until(() => refreshed.mock.calls.length > 0);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(3);
+    expect(home((await cache.resolvePinnedThreads([pin])).threads)).toBe(home(fresh.threads));
+  } finally { cache.dispose(); }
 });
 
 it("keeps a large owner row on its original page when the optional proof does not fit", async () => {

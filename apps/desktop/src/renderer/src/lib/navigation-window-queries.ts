@@ -1043,7 +1043,15 @@ export class NavigationWindowQueries {
           page = await readAround({ ...started.request, anchor: recoveryAnchor });
         }
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
-        let next = this.retainableState(applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor }));
+        const priorState = resource.value.state;
+        let next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+        // applyNavigationPage validated the retained query, epoch, revision
+        // and range. Transfer only a proof still admitted for those rows.
+        if (page.rangeUnchanged && priorState.page && !next.ownerProof?.directoryGitProof) {
+          const prior = this.ownerPageProofs.get(priorState.page);
+          if (prior?.directoryGitProof) next.ownerProof = { ...next.ownerProof, directoryGitProof: prior.directoryGitProof,
+            gitBytes: prior.gitBytes, bytes: (next.ownerProof?.bytes ?? 0) + prior.gitBytes };
+        }
         assertRetained(next.state);
         if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
           && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {

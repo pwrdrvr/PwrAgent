@@ -1357,7 +1357,7 @@ function projectionMetadataDependencies(params: {
   const { kind } = request.query;
   if (index.coverage?.state !== "complete") return undefined;
   const viewer = request.inventory === "viewer";
-  const ownerSidebar = request.inventory === "owner" && request.consumer === "main-sidebar";
+  const ownerSidebar = !viewer && request.consumer === "main-sidebar";
   if (kind !== "directory" && kind !== "exact"
     && !(viewer && kind === "directory-index") && !(ownerSidebar && kind === "children")) return undefined;
   if (!viewer && !ownerSidebar) return undefined;
@@ -1440,6 +1440,7 @@ export function projectNavigationQuery(params: {
   includeDirectoryGitProof?: boolean;
 }): NavigationQueryMaterialization & { directoryGitProof?: NavigationDirectoryGitProof } {
   const query = params.request.query;
+  const inventory = params.request.inventory ?? "owner";
   if (query.kind === "model-inventory") {
     const owned = params.index.threads.filter((thread) => isStarMapOwnerThread(thread)
       && (!params.request.backend || params.request.backend === "all" || params.request.backend === thread.source));
@@ -1517,7 +1518,7 @@ export function projectNavigationQuery(params: {
   // native parent's complete order as a scalar, without exporting its full
   // subthreadOrder collection or depending on viewer pin summaries.
   const siblingOrders = new Map<string, number>();
-  if (params.request.inventory === "owner" && query.kind === "exact") {
+  if (inventory === "owner" && query.kind === "exact") {
     const parents = new Map<string, NavigationThreadSummary>();
     for (const thread of selectedThreads) {
       const parent = parentIdentity(thread, parentCandidates);
@@ -1598,9 +1599,10 @@ export function projectNavigationQuery(params: {
   // authored row set alone cannot exclude a change to that placement.
   const directoryGitProof = params.includeDirectoryGitProof && snapshot && params.index.coverage?.state === "complete"
     && params.request.consumer === "main-sidebar"
-    && (params.request.inventory === "owner" || (params.request.inventory === "viewer" && snapshot.rowOwners?.length === 0
+    && (inventory === "owner" || (snapshot.rowOwners?.length === 0
       && !(query.kind === "exact" && query.resolveFromOwners)))
-    && (query.kind === "directory" || query.kind === "children" || query.kind === "exact" || query.kind === "lens" || indexedDirectories)
+    && (query.kind === "directory" || query.kind === "children" || query.kind === "exact" || query.kind === "lens"
+      || (inventory === "owner" && query.kind === "group-members") || indexedDirectories)
     ? collectionDirectoryGitProof({ selected: indexedDirectories ? [] : selectedThreads,
         descriptors: indexedDirectories ?? (descriptor ? [descriptor] : []), index: params.index, projection: prepared })
     : undefined;

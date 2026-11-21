@@ -1013,6 +1013,41 @@ it("streams the same UTF-8 revision and backing count as canonical materializati
   });
 });
 
+it("uses one directory baseline for omitted and explicit owner inventory", async () => {
+  const index = createNavigationQuerySnapshot({ ...snapshot([thread("1")]), coverage: { state: "complete" } });
+  const store = new NavigationQueryStore();
+  const read = (patch: Partial<NavigationQueryRequest>) => store.readPage({ request: request({ query: { kind: "directory-index" }, ...patch }),
+    scopeKey: "owner", loadIndex: async () => index });
+  const explicit = await read({ inventory: "owner" });
+  expect(explicit.directoryGitProof).toBeDefined();
+  const implicit = await read({});
+  expect([implicit.queryKey, implicit.countsRevision, implicit.directoryGitProof])
+    .toEqual([explicit.queryKey, explicit.countsRevision, explicit.directoryGitProof]);
+  expect((await read({ completeBaselineRevision: explicit.countsRevision })).unchanged).toBe(true);
+});
+
+it("keeps both owner cursors when only Git proofs exceed the shared generation budget", async () => {
+  const query = request({ inventory: "owner", pageSize: 1 });
+  const threads = Array.from({ length: 80 }, (_, i) => thread(String(i + 1), ""));
+  const raw = { threads, directories: [], coverage: { state: "complete" as const } };
+  const size = () => Buffer.byteLength(JSON.stringify(projectNavigationQuery({ request: query, index: raw })));
+  const room = 16 * 1024 * 1024 - size();
+  for (const [i, row] of threads.entries()) row.title = "x".repeat(Math.floor(room / threads.length) + Number(i < room % threads.length));
+  expect(size()).toBe(16 * 1024 * 1024);
+  const index = createNavigationQuerySnapshot(raw);
+  const store = new NavigationQueryStore();
+  const read = (scopeKey: string, cursor?: string) => store.readPage({ request: { ...query, cursor }, scopeKey, loadIndex: async () => index });
+  const first = await read("first");
+  const second = await read("second");
+  for (const [scope, page] of [["first", first], ["second", second]] as const) {
+    expect(page.nextCursor).toBeTruthy();
+    const next = await read(scope, page.nextCursor);
+    expect(next.entries[0]?.row.id).toBe("79");
+    expect(next.countsRevision).toBe(page.countsRevision);
+    expect(next.directoryGitProof).toBeUndefined();
+  }
+});
+
 it("keeps directory Git dependencies immutable across an owner cursor", async () => {
   const key = "directory:/fixture";
   const data = snapshot([thread("1"), thread("2")]);

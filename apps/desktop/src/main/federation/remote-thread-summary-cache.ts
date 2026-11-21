@@ -1,3 +1,4 @@
+import { readDirectoryGitRevisions } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type {
@@ -171,6 +172,7 @@ export class RemoteThreadSummaryCache {
     string,
     {
       fetchedAt: number;
+      allMountedRowsObserved?: boolean;
       descendants?: boolean;
       selection: FederationThreadSelection;
       threads: NavigationThreadSummary[];
@@ -313,12 +315,21 @@ export class RemoteThreadSummaryCache {
   invalidate(instanceId?: string, event?: AgentEvent): void {
     if (instanceId && event) {
       const params = event.notification.params as {
-        sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown;
+        sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; directoryGitRevisions?: unknown;
       };
       const sourceMethod = event.notification.method === "navigation/invalidated"
         ? params?.sourceMethod : event.notification.method;
-      // Directory Git chips are not part of pinned thread rows or membership.
-      if (sourceMethod === "navigation/directoryGitStatus/updated") return;
+      if (sourceMethod === "navigation/directoryGitStatus/updated") {
+        if (!this.hasMountedDemand(instanceId)) return;
+        const repository = readDirectoryGitRevisions(params?.directoryGitRevisions)?.repository;
+        const batches = this.pinnedReadStates.get(instanceId);
+        // A settled group-members read covers secondary links and every
+        // descendant. Missing rows, failed reads and older owners must retry.
+        if (repository && typeof params.directoryKey === "string" && params.directoryKey && batches?.size
+          && this.cache.get(instanceId)?.allMountedRowsObserved && !this.inFlight.has(instanceId)
+          && [...batches.values()].every(({ directoryGitProof }) => directoryGitProof && !directoryGitProof.directories.some(
+            ([key, revision]) => key === params.directoryKey && revision !== repository))) return;
+      }
       // A project's Forge Automation rides on its threads' rows, for the
       // placeholder row standing for the project. Re-read only when a held
       // row is in that project. An owner that names no project on the event
@@ -381,6 +392,7 @@ export class RemoteThreadSummaryCache {
       // Retain the last owner observation while revalidating. Falling back to the
       // saved pin here would briefly disagree with the already-rendered owner row.
       snapshot.fetchedAt = Number.NEGATIVE_INFINITY;
+      snapshot.allMountedRowsObserved = false;
     } else {
       this.cache.delete(instanceId);
     }
@@ -1031,7 +1043,9 @@ export class RemoteThreadSummaryCache {
     if (this.pinnedRefreshes.has(instanceId)) return;
     this.pinnedRefreshes.add(instanceId);
     const generation = this.generationFor(instanceId);
-    const previous = this.cache.get(instanceId)?.threads;
+    const cached = this.cache.get(instanceId);
+    if (cached) cached.allMountedRowsObserved = false;
+    const previous = cached?.threads;
     const failedBefore = this.refreshFailures.has(instanceId);
     // Watched threads ride the same read. Only pins are proved archived:
     // a watched thread the owner no longer lists simply leaves the lens.
@@ -1057,6 +1071,10 @@ export class RemoteThreadSummaryCache {
           || JSON.stringify(previous) !== JSON.stringify(threads);
         const returned = new Set(threads.filter((thread) => isThreadOwnedByPeer(thread, instanceId))
           .map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+        const accepted = this.cache.get(instanceId);
+        if (accepted?.descendants && accepted.threads === threads) {
+          accepted.allMountedRowsObserved = refs.every((ref) => returned.has(buildThreadIdentityKey(ref.backend, ref.threadId)));
+        }
         const missing = pins.map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId))
           .filter((key) => !returned.has(key) && !this.provenArchived.get(instanceId)?.has(key)).sort();
         const missingSignature = JSON.stringify(missing);
@@ -1343,8 +1361,9 @@ export class RemoteThreadSummaryCache {
     const promise = (async () => {
       const rpcOptions = deadlineAt !== undefined ? { deadlineAt }
         : descendants ? { deadlineAt: Date.now() + REMOTE_SNAPSHOT_PEER_TIMEOUT_MS } : undefined;
-      const pinState = this.pinnedReadStates.get(target.instanceId) ?? new Map();
-      if (descendants) this.pinnedReadStates.set(target.instanceId, pinState);
+      // A late, fenced response must never replace the proofs for a newer
+      // accepted pin snapshot. Stage batch baselines alongside this read.
+      const pinState = descendants ? new Map(this.pinnedReadStates.get(target.instanceId)) : undefined;
       const snapshot = await this.awaitPeerSnapshot(
         descendants && selection.kind === "threads"
           ? this.options.fetchPinnedSnapshot!(target, selection.threads.map((thread) =>
@@ -1364,6 +1383,7 @@ export class RemoteThreadSummaryCache {
         );
       }
       const threads = snapshot.threads;
+      if (pinState && this.hasMountedDemand(target.instanceId)) this.pinnedReadStates.set(target.instanceId, pinState);
       if (interestKey === "pins") {
         const previous = this.cache.get(target.instanceId)?.threads;
         // Cache commitment precedes archive verification and publication. Keep

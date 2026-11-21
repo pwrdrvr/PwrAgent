@@ -853,6 +853,18 @@ export class NavigationQueryStore {
     const evictable = [...this.generations.values()].sort((left, right) =>
       Number(currentIds.has(left.generation)) - Number(currentIds.has(right.generation))
       || left.lastAccessedAt - right.lastAccessedAt);
+    // Proofs already sent belong to the immutable revision. A continuation
+    // can omit their backing without expiring either owner's cursor.
+    if (retainedBytes + generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+      for (const candidate of [...evictable, generation]) {
+        if (!candidate.directoryGitProof) continue;
+        const freed = serializedBytes({ directoryGitProof: candidate.directoryGitProof }) - 1;
+        candidate.directoryGitProof = undefined;
+        candidate.retainedBytes -= freed;
+        if (candidate !== generation) retainedBytes -= freed;
+        if (retainedBytes + generation.retainedBytes <= NAVIGATION_QUERY_MAX_RETAINED_BYTES) break;
+      }
+    }
     while (
       this.generations.size >= NAVIGATION_QUERY_MAX_GENERATIONS
       || retainedBytes + generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES
