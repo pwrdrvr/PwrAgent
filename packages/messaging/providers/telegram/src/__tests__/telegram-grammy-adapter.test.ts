@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { InputFile } from "grammy";
 import {
   adaptGrammyBot,
@@ -1490,6 +1491,107 @@ describe("TelegramAdapter callback persistence", () => {
       text: "topic request",
     });
   });
+
+  it("requires a thread ID before dispatching any update marked as a topic message", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 2, max: 2_000_000 }),
+      fc.constantFrom("command", "callback"),
+      fc.constantFrom("general", "topic", "missing"),
+      async (id, kind, route) => {
+        const answerCallbackQuery = vi.fn(async () => true);
+        const sendMessage = vi.fn(fakeTelegramApi().sendMessage);
+        const warn = vi.fn();
+        const listener = vi.fn(async (_event: MessagingInboundEvent) => {});
+        const adapter = new TelegramAdapter({
+          api: { ...fakeTelegramApi(), answerCallbackQuery, sendMessage },
+          config: {
+            channel: "telegram",
+            botToken: "token",
+            authorizedActorIds: [{ id: "42", displayName: "" }],
+            authorizedSupergroupIds: [{ id: "-100123", displayName: "Ops" }],
+          },
+          logger: { debug: vi.fn(), warn },
+          pollOnStart: false,
+        });
+        await adapter.start(listener);
+        const actor = { id: 42 };
+        const message = {
+          chat: { id: -100123, type: "supergroup" as const, is_forum: true as const },
+          from: actor,
+          message_id: id + 1,
+          text: "/resume@TestBot",
+          ...(route === "general" ? {} : { is_topic_message: true as const }),
+          ...(route === "topic" ? { message_thread_id: id } : {}),
+        };
+        await adapter.handleUpdate(kind === "command"
+          ? { update_id: id, message }
+          : {
+              update_id: id,
+              callback_query: { id: String(id), data: "tg:012345678901234567", from: actor, message },
+            });
+
+        if (route === "missing") {
+          expect(listener).not.toHaveBeenCalled();
+          expect(warn).toHaveBeenCalledWith("telegram inbound ignored: topic ID is missing", {
+            updateId: id,
+            messageId: id + 1,
+          });
+          if (kind === "callback") {
+            expect(answerCallbackQuery).toHaveBeenCalledWith({
+              callback_query_id: String(id),
+              text: "Telegram did not identify this topic. Reopen it and try again.",
+            });
+          }
+        } else {
+          expect(listener).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            kind,
+            channel: expect.objectContaining({
+              conversation: expect.objectContaining(route === "topic"
+                ? { kind: "topic", id: String(id), parentId: "-100123" }
+                : { kind: "channel", id: "-100123" }),
+            }),
+          }));
+        }
+        expect(sendMessage).not.toHaveBeenCalled();
+      },
+    ));
+  });
+
+  it("silently drops chatter with a missing topic ID if the actor or group is unauthorized", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 2, max: 2_000_000 }),
+      fc.constantFrom("actor", "group", "both"),
+      async (id, unauthorized) => {
+        const warn = vi.fn();
+        const listener = vi.fn(async () => {});
+        const adapter = new TelegramAdapter({
+          api: fakeTelegramApi(),
+          config: {
+            channel: "telegram",
+            botToken: "token",
+            authorizedActorIds: [{ id: "42", displayName: "" }],
+            authorizedSupergroupIds: [{ id: "-100123", displayName: "Ops" }],
+          },
+          logger: { debug: vi.fn(), warn },
+          pollOnStart: false,
+        });
+        await adapter.start(listener);
+        await adapter.handleUpdate({
+          update_id: id,
+          message: {
+            chat: { id: unauthorized === "actor" ? -100123 : -100124, type: "supergroup", is_forum: true },
+            from: { id: unauthorized === "group" ? 42 : 43 },
+            is_topic_message: true,
+            message_id: id + 1,
+            text: "ordinary conversation",
+          },
+        });
+
+        expect(listener).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+      },
+    ));
+  });
 });
 
 describe("TelegramAdapter source-relative delivery", () => {
@@ -1558,6 +1660,26 @@ describe("TelegramAdapter source-relative delivery", () => {
       message_thread_id: 77,
     });
     expect(sent[0]?.text).toContain("Investigated alert");
+  });
+
+  it.each([
+    ["Bad Request: message thread not found", "Telegram could not find the target topic."],
+    ["Bad Request: TOPIC_DELETED", "Telegram could not find the target topic."],
+    ["Bad Request: TOPIC_CLOSED", "The target Telegram topic is closed."],
+  ])("reports %s without sending outside the topic", async (description, errorMessage) => {
+    const sendMessage = vi.fn().mockRejectedValue(new Error(description));
+    const adapter = new TelegramAdapter({
+      api: { ...fakeTelegramApi(), sendMessage },
+      config: { channel: "telegram", botToken: "token", authorizedActorIds: [] },
+    });
+
+    const result = await adapter.deliver(topicReplyIntent("source_thread"));
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      chat_id: -100123,
+      message_thread_id: 77,
+    }));
+    expect(result).toMatchObject({ outcome: "failed", errorMessage });
   });
 
   it("replies at the supergroup level (no topic) for source_channel", async () => {

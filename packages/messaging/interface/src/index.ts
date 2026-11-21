@@ -1452,6 +1452,8 @@ export type MessagingDeliveryResult = {
     routingState?: MessagingAdapterState;
   };
   errorMessage?: string;
+  /** A failed delivery may identify a destination that no longer exists. */
+  failureReason?: "target_not_found";
   /**
    * Structured provider rate-limit feedback for this delivery attempt.
    * When present, the desktop controller should feed it back through
