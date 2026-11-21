@@ -35,12 +35,15 @@ export type ThreadHandoffGitReference = {
 };
 
 export type ThreadHandoffPrepareRequest = {
+  /** Portable export contract; absent on older senders. */
+  historyMode?: string;
   repository?: string;
   git?: ThreadHandoffGitReference;
 };
 
 export type ThreadHandoffPrepareResult = {
   version: 2;
+  historyMode: "legacy";
   platform: string;
   git?: { head: string };
 };
@@ -48,6 +51,7 @@ export type ThreadHandoffPrepareResult = {
 /** PwrAgent-owned envelope. The Codex payload is opaque, never parsed. */
 export type ThreadHandoffPackage = {
   version: 2;
+  historyMode: "legacy";
   handoffId: string;
   sourceThreadId: string;
   title?: string;
@@ -62,6 +66,8 @@ export type ThreadHandoffPackage = {
 };
 
 export type ThreadHandoffExport = {
+  /** Missing metadata is not proof that a single rollout is portable. */
+  historyMode?: string;
   rolloutBase64: string;
   replay: AppServerThreadReplay;
   cwd?: string;
