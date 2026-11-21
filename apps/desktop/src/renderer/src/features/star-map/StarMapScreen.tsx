@@ -2884,12 +2884,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [peers],
   );
 
-  /**
-   * Display labels for every body on the map, local included. Two profiles
-   * on one machine share a hostname label, so the shared formatter appends
-   * "/ <profile>" whenever a label is ambiguous - the local instance has to
-   * be part of that set or it cannot be told apart from its own sibling.
-   */
+  // Full display labels for every body on the map, including the local instance.
   const displayLabelById = useMemo(() => {
     const localSummary = {
       id: localInstanceId,
@@ -2898,19 +2893,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         || "This instance",
       profileName: health?.localProfileName,
     };
-    const all = [
-      localSummary,
-      ...peers.map((peer) => ({
-        id: peer.id,
-        label: peer.label,
-        profileName: peer.profileName,
-        revokedAt: peer.revokedAt,
-      })),
-    ];
     return new Map(
-      all.map((entry) => [
+      [localSummary, ...peers].map((entry) => [
         entry.id,
-        formatFederationPeerDisplayLabel(entry, all),
+        formatFederationPeerDisplayLabel(entry),
       ]),
     );
   }, [health, localInstanceId, peers, props.localInstanceLabel]);
@@ -2927,20 +2913,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       profileName: health?.localProfileName,
       shortLabel: health?.localShortLabel,
     };
-    const all = [
-      localSummary,
-      ...peers.map((peer) => ({
-        id: peer.id,
-        label: peer.label,
-        profileName: peer.profileName,
-        shortLabel: peer.shortLabel,
-        revokedAt: peer.revokedAt,
-      })),
-    ];
     return new Map(
-      all.map((entry) => [
+      [localSummary, ...peers].map((entry) => [
         entry.id,
-        formatFederationPeerDisplayLabelParts(entry, all),
+        formatFederationPeerDisplayLabelParts(entry),
       ]),
     );
   }, [health, localInstanceId, peers, props.localInstanceLabel]);

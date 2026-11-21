@@ -18,7 +18,7 @@ export type FederationInstanceChipModel = {
   host: string;
   /** The full machine label, present only when `host` is a short name standing in for it. */
   fullHost?: string;
-  /** Present only when another profile on the same machine needs telling apart. */
+  /** Present for a non-default profile. */
   profileName?: string;
   icon?: CelestialIconId;
   /** Undefined for an instance the directory knows but nothing reaches. */
@@ -41,7 +41,7 @@ export function federationInstanceChips(health: FederationHealthStatus): Federat
     .map((peer) => {
       const connection = connections.find((candidate) => candidate.peerId === peer.id);
       const online = serving && (Boolean(connection) || peer.status === "connected");
-      const parts = formatFederationPeerDisplayLabelParts(peer, health.peers);
+      const parts = formatFederationPeerDisplayLabelParts(peer);
       return {
         instanceId: peer.id,
         label: parts.profileName ? `${parts.label} / ${parts.profileName}` : parts.label,

@@ -41,7 +41,7 @@ describe("buildFederationThreadTargets", () => {
       peer({ id: "win", label: "DESKTOP-BUILD-PC", shortLabel: "Win PC", profileName: "dev" }),
     ]));
     expect(targets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ instanceId: "max-default", label: "Studio-MBP-M5-Max / default", shortLabel: "M5 Max / default" }),
+      expect.objectContaining({ instanceId: "max-default", label: "Studio-MBP-M5-Max", shortLabel: "M5 Max" }),
       expect.objectContaining({ instanceId: "max-dev", label: "Studio-MBP-M5-Max / dev", shortLabel: "M5 Max / dev", availability: "offline" }),
       expect.objectContaining({ instanceId: "win", label: "DESKTOP-BUILD-PC / dev", shortLabel: "Win PC / dev" }),
     ]));
@@ -167,7 +167,7 @@ describe("buildFederationThreadTargets", () => {
     expect(reversed.map((target) => target.instanceId)).toEqual(["a", "b"]);
   });
 
-  it("keeps the profile suffix when a peer shares this machine's label", () => {
+  it("shows the bare host for a default peer sharing the local machine's label", () => {
     const targets = buildFederationThreadTargets(
       health([peer({ id: "a", label: "Studio Mac", profileName: "default" })], {
         localLabel: "Studio Mac",
@@ -175,6 +175,6 @@ describe("buildFederationThreadTargets", () => {
       }),
     );
 
-    expect(targets[0]?.label).toBe("Studio Mac / default");
+    expect(targets[0]?.label).toBe("Studio Mac");
   });
 });

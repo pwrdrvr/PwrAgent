@@ -6,7 +6,7 @@ import {
 } from "@pwragent/shared/contracts/usage-activity";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { type DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
-import { type FederationTarget } from "@pwragent/shared/contracts/federation";
+import { formatFederationPeerDisplayLabelParts, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
@@ -162,7 +162,8 @@ export function UsageActivity({ desktopApi, initialProvider }: {
       setSources([{ label: value.health.localLabel ?? "This instance",
         ...(localShort ? { shortLabel: localShort } : {}), target: { scope: "local" } },
         ...value.health.peers.filter((peer) => peer.id !== value.health.instanceId).map((peer) => {
-          const profile = peer.profileName ? ` (${peer.profileName})` : "";
+          const { profileName } = formatFederationPeerDisplayLabelParts(peer);
+          const profile = profileName ? ` (${profileName})` : "";
           return {
             label: `${peer.label}${profile}`, ...(peer.shortLabel ? { shortLabel: `${peer.shortLabel}${profile}` } : {}),
             status: peer.status, target: { scope: "remote" as const, instanceId: peer.id },

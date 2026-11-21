@@ -91,20 +91,19 @@ describe("mergeFederationInstanceShortNames", () => {
 });
 
 describe("formatFederationPeerDisplayLabelParts with a short name", () => {
-  it("passes the short name through and still decides the profile on full labels", () => {
+  it("passes the short name through for both default and named profiles", () => {
     const peers = [
       { label: "Studio-MBP-M5-Max", profileName: "default", shortLabel: "M5 Max" },
       { label: "Studio-MBP-M5-Max", profileName: "dev", shortLabel: "M5 Max" },
-      { label: "Mac-Mini-M4", profileName: "default", shortLabel: "M4 Mini" },
     ];
-    expect(formatFederationPeerDisplayLabelParts(peers[1], peers)).toEqual({
+    expect(formatFederationPeerDisplayLabelParts(peers[1])).toEqual({
       label: "Studio-MBP-M5-Max",
       profileName: "dev",
       shortLabel: "M5 Max",
     });
-    expect(formatFederationPeerDisplayLabelParts(peers[2], peers)).toEqual({
-      label: "Mac-Mini-M4",
-      shortLabel: "M4 Mini",
+    expect(formatFederationPeerDisplayLabelParts(peers[0])).toEqual({
+      label: "Studio-MBP-M5-Max",
+      shortLabel: "M5 Max",
     });
   });
 });

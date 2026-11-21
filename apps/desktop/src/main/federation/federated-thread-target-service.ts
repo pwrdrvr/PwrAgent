@@ -89,7 +89,7 @@ export async function resolveFederatedThreadTarget(params: {
         (candidate) => candidate.id === targetInstanceId,
       );
       const instanceLabel = knownPeer
-        ? formatFederationPeerDisplayLabel(knownPeer, health.peers)
+        ? formatFederationPeerDisplayLabel(knownPeer)
         : rememberedTargets[0]?.instanceLabel ?? targetInstanceId;
       const status = knownPeer?.status ?? "not enrolled";
       throw new FederatedThreadTargetError(

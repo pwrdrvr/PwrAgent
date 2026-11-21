@@ -279,7 +279,7 @@ async function listFederationInstances(
   const local = await localInstanceDescriptor(health, collectHostInfo);
   const peers = health.peers.map((peer): FederationInstanceDescriptor => ({
     instanceId: peer.id,
-    label: formatFederationPeerDisplayLabel(peer, health.peers),
+    label: formatFederationPeerDisplayLabel(peer),
     isLocal: false,
     status: peer.status,
     capabilities: [...peer.capabilities],
@@ -1065,7 +1065,7 @@ async function resolveInstance(
       ok: false,
       response: failure(
         "peer_unavailable",
-        `Federation instance ${formatFederationPeerDisplayLabel(peer, health.peers)} is ${peer.status}.`,
+        `Federation instance ${formatFederationPeerDisplayLabel(peer)} is ${peer.status}.`,
       ),
     };
   }
@@ -1073,7 +1073,7 @@ async function resolveInstance(
     ok: true,
     instance: {
       instanceId,
-      label: formatFederationPeerDisplayLabel(peer, health.peers),
+      label: formatFederationPeerDisplayLabel(peer),
       isLocal: false,
       target: { scope: "remote", instanceId },
     },

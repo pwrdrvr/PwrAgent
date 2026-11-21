@@ -16,7 +16,7 @@ export function FederationConnections({ health, collapsible = false }: {
     {connections.map((connection) => {
       const peer = health.peers.find((candidate) => candidate.id === connection.peerId);
       return <li key={`${connection.direction}:${connection.peerId}`}>
-        <span>{peer ? formatFederationPeerDisplayLabel(peer, health.peers) : connection.peerId}</span>
+        <span>{peer ? formatFederationPeerDisplayLabel(peer) : connection.peerId}</span>
         {connection.direction === "outgoing" ? <p>Outgoing · <code>{connection.endpoint ?? "Endpoint unavailable"}</code></p>
           : connection.via === "cloudflare-tunnel" ? <>
             {/* The remote socket is this computer's own cloudflared, which read as a local peer. */}

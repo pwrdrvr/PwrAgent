@@ -1363,12 +1363,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           <dl className="settings-aboutkv">
             {effectiveHealth.peers.map((peer) => (
               <div key={peer.id}>
-                <dt>
-                  {formatFederationPeerDisplayLabel(
-                    peer,
-                    effectiveHealth.peers,
-                  )}
-                </dt>
+                <dt>{formatFederationPeerDisplayLabel(peer)}</dt>
                 <dd className="federation-peer-summary">
                   <span>
                     {roleLabel(peer.role)} · {statusLabel(peer.status)}
@@ -2207,7 +2202,7 @@ function peerDisplayName(
 ): string {
   const peer = peers.find((candidate) => candidate.id === peerId);
   return peer && peer.label !== peerId
-    ? formatFederationPeerDisplayLabel(peer, peers)
+    ? formatFederationPeerDisplayLabel(peer)
     : peerId;
 }
 

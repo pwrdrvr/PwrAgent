@@ -887,7 +887,10 @@ it("names each instance toggle by its short name, with the full name as its tool
   const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: Date.now(), rateLimits: [], truncated: false }));
   const readFederationActivity = vi.fn(async () => ({ health: {
     localLabel: "Harold-MBP-M5-Max", localShortLabel: "M5 Max",
-    peers: [{ id: "win", label: "DESKTOP-17ISFOI", profileName: "dev", shortLabel: "Win-Tower", status: "connected" }],
+    peers: [
+      { id: "win", label: "DESKTOP-17ISFOI", profileName: "dev", shortLabel: "Win-Tower", status: "connected" },
+      { id: "win-default", label: "DESKTOP-17ISFOI", profileName: "default", shortLabel: "Win-Tower", status: "connected" },
+    ],
   } }) as ReadFederationActivityResponse);
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity }} />);
 
@@ -896,6 +899,9 @@ it("names each instance toggle by its short name, with the full name as its tool
   const remote = await within(instances).findByRole("button", { name: "DESKTOP-17ISFOI (dev)" });
   expect(remote).toHaveTextContent("Win-Tower (dev)");
   expect(remote).toHaveAttribute("title", "DESKTOP-17ISFOI (dev)");
+  const remoteDefault = within(instances).getByRole("button", { name: "DESKTOP-17ISFOI" });
+  expect(remoteDefault).toHaveTextContent(/^Win-Tower$/);
+  expect(remoteDefault).toHaveAttribute("title", "DESKTOP-17ISFOI");
   const local = within(instances).getByRole("button", { name: "Harold-MBP-M5-Max" });
   expect(local).toHaveTextContent("M5 Max");
 });
