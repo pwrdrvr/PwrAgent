@@ -484,6 +484,16 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     }
     if (typeof request.terminalUpdatedAfter === "number") {
       const scope = where.length ? " WHERE " + where.join(" AND ") + " AND " : " WHERE ";
+      if (request.backend && request.threadId) {
+        // The existing thread index narrows all three projection reads before
+        // testing the window. The owner-wide time index can be much broader.
+        return {
+          source: "scheduled_thread_actions INDEXED BY idx_scheduled_thread_actions_thread"
+            + scope + "(" + ACTIVE_SCHEDULED_ACTION + " OR updated_at >= ?)",
+          values: [...values, request.terminalUpdatedAfter],
+          ownerHistory: false,
+        };
+      }
       // Disjoint branches let SQLite seek both active statuses and the
       // terminal time range, even when the consumer orders by another key.
       const select = "SELECT " + ROW_COLUMNS + " FROM scheduled_thread_actions";

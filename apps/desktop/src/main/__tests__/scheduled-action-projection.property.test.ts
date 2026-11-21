@@ -167,7 +167,12 @@ it("admits owner history when the conservative JSON bound alone exceeds the limi
   }
 });
 
-it("backfills existing v82 rows once and serves their original payloads", () => {
+it.each([
+  { version: 82, missingTriggerOnly: false },
+  { version: 83, missingTriggerOnly: false },
+  { version: 84, missingTriggerOnly: false },
+  { version: 84, missingTriggerOnly: true },
+])("repairs scheduled projections at v$version (only update trigger absent: $missingTriggerOnly)", ({ version, missingTriggerOnly }) => {
   const { dbPath, tempDir } = createTempStateDb("scheduled-projection-migration-");
   let db = StateDb.open(dbPath);
   try {
@@ -175,23 +180,32 @@ it("backfills existing v82 rows once and serves their original payloads", () => 
     store.create(schedule("retained", 1));
     const retained = store.cancel("retained", 2);
     const { payload_ref } = db.raw.prepare("SELECT payload_ref FROM scheduled_thread_actions").get() as { payload_ref: string };
-    db.raw.exec(`
-      DROP TRIGGER scheduled_action_projection_insert;
-      DROP TRIGGER scheduled_action_projection_update;
-      DROP TRIGGER scheduled_action_projection_delete;
-      DROP TABLE scheduled_action_projection_state;
-      DROP INDEX idx_scheduled_thread_actions_projection_order;
-      DROP INDEX idx_scheduled_thread_actions_terminal_updated;
-      PRAGMA user_version = 82;
-    `);
+    const errorMessage = missingTriggerOnly ? "A writer ran before the projection trigger was installed" : undefined;
+    db.raw.exec("DROP TRIGGER scheduled_action_projection_update");
+    if (missingTriggerOnly) {
+      db.raw.prepare("UPDATE scheduled_thread_actions SET error_message = ?").run(errorMessage);
+    } else {
+      db.raw.exec(`
+        DROP TRIGGER scheduled_action_projection_insert;
+        DROP TRIGGER scheduled_action_projection_delete;
+        DROP TABLE scheduled_action_projection_state;
+        DROP INDEX idx_scheduled_thread_actions_projection_order;
+        DROP INDEX idx_scheduled_thread_actions_terminal_updated;
+      `);
+    }
+    db.raw.pragma("user_version = " + version);
     db.close();
 
     db = StateDb.open(dbPath);
-    expect(db.raw.pragma("user_version", { simple: true })).toBe(83);
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, 83));
+    const reopened = new ScheduledThreadActionStore(db);
+    const expected = [{ ...retained, errorMessage }];
+    expect(reopened.listProjectionPage({ ...history, terminalUpdatedAfter: 2 }).actions).toEqual(expected);
+    expect(reopened.listProjectionPage(history).actions).toEqual(expected);
     const state = () => db.raw.prepare("SELECT * FROM scheduled_action_projection_state").get();
     const migrated = state();
-    expect(migrated).toMatchObject({ admission_bytes: 512 + "retained".length + scope.threadId.length + Buffer.byteLength(payload_ref) });
-    expect(new ScheduledThreadActionStore(db).listProjectionPage(history).actions).toEqual([retained]);
+    expect(migrated).toMatchObject({ admission_bytes: 512 + "retained".length + scope.threadId.length
+      + Buffer.byteLength(payload_ref) + Buffer.byteLength(errorMessage ?? "") });
     db.close();
 
     db = StateDb.open(dbPath);

@@ -1,3 +1,5 @@
+import type Database from "better-sqlite3";
+
 const ACTIVE_STATUSES = "'held', 'scheduled', 'dispatching', 'queued'";
 export const ACTIVE_SCHEDULED_ACTION = "status IN (" + ACTIVE_STATUSES + ")";
 export const TERMINAL_SCHEDULED_ACTION = "status NOT IN (" + ACTIVE_STATUSES + ")";
@@ -52,7 +54,7 @@ CREATE TABLE IF NOT EXISTS scheduled_action_projection_state (
   admission_bytes INTEGER NOT NULL,
   json_bytes_upper_bound INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO scheduled_action_projection_state
+INSERT OR REPLACE INTO scheduled_action_projection_state
   SELECT 1, randomblob(16), COALESCE(SUM(` + scheduledProjectionAdmissionBytes() + `), 0), COALESCE(SUM(` + jsonBytesUpperBound("") + `), 0)
   FROM scheduled_thread_actions;
 
@@ -88,3 +90,18 @@ CREATE TRIGGER IF NOT EXISTS scheduled_action_projection_delete AFTER DELETE ON 
   WHERE singleton = 1;
 END;
 `;
+
+/** Read only the schema catalog and singleton on a healthy profile. */
+export function hasScheduledActionProjectionSchema(db: Database.Database): boolean {
+  const { objects } = db.prepare(
+    `SELECT COUNT(*) AS objects FROM sqlite_schema WHERE name IN (
+      'scheduled_action_projection_state',
+      'idx_scheduled_thread_actions_projection_order',
+      'idx_scheduled_thread_actions_terminal_updated',
+      'scheduled_action_projection_insert',
+      'scheduled_action_projection_update',
+      'scheduled_action_projection_delete'
+    )`,
+  ).get() as { objects: number };
+  return objects === 6 && db.prepare("SELECT 1 FROM scheduled_action_projection_state WHERE singleton = 1").get() !== undefined;
+}

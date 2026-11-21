@@ -8,7 +8,7 @@ import { StateDb } from "../state/state-db";
 import { FileScheduledThreadActionPayloadStore } from "../storage/scheduled-thread-action-payload-store";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 function observeSql(db: StateDb) {
   const prepare = db.raw.prepare.bind(db.raw);
@@ -159,6 +159,84 @@ it.each([1_000, 2_000, 8_000])("bounds scheduler projection and observer work wi
   }
 });
 
+it.each([0, 8_000])("seeks within the requested thread with %i recent terminal rows on other threads", async (unrelated) => {
+  const db = openInMemoryStateDb();
+  const store = new ScheduledThreadActionStore(db);
+  const thread = { backend: "codex" as const, threadId: "selected" };
+  const observed = observeSql(db);
+  try {
+    const create = (id: string, scheduledFor: number) => store.create({
+      ...thread, id, kind: "turn", origin: "desktop", displayText: id, now: 1, scheduledFor,
+    });
+    const active = create("active", 10);
+    create("old-terminal", 20);
+    create("recent-terminal", 30);
+    store.cancel("old-terminal", now - 1);
+    const recent = store.cancel("recent-terminal", now);
+    db.raw.prepare(`WITH RECURSIVE ids(i) AS (
+      SELECT 1 WHERE ? > 0 UNION ALL SELECT i + 1 FROM ids WHERE i < ?
+    )
+    INSERT INTO scheduled_thread_actions
+      (action_id, backend, thread_id, kind, origin, status, scheduled_for, created_at, updated_at, payload_ref)
+    SELECT 'peer-' || i, 'codex', 'other-' || i, 'turn', 'desktop', 'cancelled', 30, 1, ?, payload_ref
+    FROM ids CROSS JOIN scheduled_thread_actions WHERE action_id = 'recent-terminal'`).run(unrelated, unrelated, now);
+    observed.reads.length = 0;
+
+    const page = store.listProjectionPage({ ...projection, ...thread, terminalUpdatedAfter: now });
+    expect(page).toMatchObject({ actions: [active, recent], complete: true });
+    await report(`thread-window-${unrelated}`, db, observed.reads);
+    // Admission, revision, and page reads must all constrain the native
+    // table seek by thread, even when other threads have recent history.
+    const actionReads = observed.reads.flatMap(read => read.plan)
+      .filter(detail => /^(SEARCH|SCAN) scheduled_thread_actions\b/.test(detail));
+    expect(actionReads.length).toBeGreaterThan(0);
+    expect(actionReads.filter(detail => !/SEARCH scheduled_thread_actions USING INDEX .*\(backend=\? AND thread_id=\?/.test(detail))).toEqual([]);
+  } finally {
+    observed.restore();
+    db.close();
+  }
+});
+
+async function measureScheduledActionWrites(db: StateDb, action: () => unknown) {
+  // SQLite's per-statement changes() excludes the projection triggers. Keep
+  // the normal commit/WAL metrics and count every row touched by this action.
+  const totalChanges = db.raw.prepare("SELECT total_changes()").pluck();
+  const before = Number(totalChanges.get());
+  const { writes } = await measureSqliteWrites(action);
+  return { ...writes, rowsChanged: Number(totalChanges.get()) - before };
+}
+
+it("budgets every mutation of one scheduled action including its projection trigger", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const { dbPath, tempDir } = createTempStateDb("scheduled-action-mutation-budget-");
+  const db = StateDb.open(dbPath);
+  const store = new ScheduledThreadActionStore(db);
+  const id = "mutation-budget";
+  const ownerId = "fixture-owner";
+  const budget = async (operation: string, note: string, action: () => unknown) => {
+    const writes = await measureScheduledActionWrites(db, action);
+    expectSqliteWriteBudget({ scenario: "scheduled-projection-" + operation, note, writes });
+  };
+  try {
+    await budget("create", "One schedule insert and its projection trigger in the same commit.", () => store.create({
+      id, backend: "codex", threadId: "fixture", kind: "turn", origin: "desktop", displayText: "Scheduled", scheduledFor: now, now,
+    }));
+    await budget("edit", "One schedule and payload-reference update and its projection trigger in the same commit.",
+      () => store.update(id, { now: now + 1, scheduledFor: now + 1, displayText: "Edited" }));
+    await budget("claim", "One dispatch claim and its projection trigger in the same commit.",
+      () => store.claim(id, { ownerId, now: now + 1, leaseExpiresAt: now + 30_001 }));
+    await budget("cancel", "One claimed action ending and its projection trigger in the same commit.",
+      () => store.markCancelled(id, now + 2, ownerId));
+    await budget("prune", "One retained terminal action removed and its projection trigger in the same commit.",
+      () => store.cleanupTerminalBefore(now + 3));
+    expect(store.get(id)).toBeUndefined();
+  } finally {
+    db.close();
+    removeTempStateDbDir(tempDir);
+    vi.unstubAllEnvs();
+  }
+});
+
 it("keeps a claimed action's heartbeat to one existing WAL commit", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const { dbPath, tempDir } = createTempStateDb("scheduled-claim-heartbeat-");
@@ -181,7 +259,7 @@ it("keeps a claimed action's heartbeat to one existing WAL commit", async () => 
     scheduler.start();
     await scheduler.evaluateDueActions();
     clock += 10_000;
-    const { writes } = await measureSqliteWrites(tick);
+    const writes = await measureScheduledActionWrites(db, tick);
     expect(store.get("claimed")).toMatchObject({ status: "dispatching", updatedAt: clock });
     expectSqliteWriteBudget({ scenario: "scheduled-claimed-heartbeat",
       note: "One existing claimed lease renews every 10 seconds in one commit and one WAL frame. At 0.1 commit/s for 24 hours, 35.6 MB/day of existing WAL and zero additional projection WAL.", writes });
