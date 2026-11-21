@@ -168,7 +168,7 @@ it("uses the serialized outbound frame for bytes and request association after o
   }
 });
 
-it.each([1_024, 65_536, 131_072].flatMap((bytes) => [[bytes, 256], [bytes, 512]] as const))(
+it.each([1_024, 65_536, 131_072].flatMap((bytes) => [[bytes, 8], [bytes, 16]] as const))(
   "parses each %i-byte turn/start frame once over %i connected sends", async (bytes, count) => {
     const { child, transport } = await connectOutboundFixture();
     const encode = (id: number, text: string) => JSON.stringify({
