@@ -57,7 +57,7 @@ export function ComposerDictationFeedback({ phase, text, error, onLevel }: Compo
         <p className="composer__meta composer__dictation-status" aria-live="polite">
           {phase === "listening" ? <InputLevel onLevel={onLevel} /> : null}
           {phase === "connecting" ? "Connecting to OpenAI and the microphone…"
-            : phase === "listening" ? "Listening… Press Enter to add this to the draft."
+            : phase === "listening" ? "Listening… Enter adds this to the draft. Esc cancels."
               : "Finalizing transcript…"}
         </p>
       ) : null}

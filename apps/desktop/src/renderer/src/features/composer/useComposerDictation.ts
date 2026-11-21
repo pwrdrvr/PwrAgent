@@ -202,7 +202,19 @@ export function useComposerDictation(
     }
   }
 
-  return { ...view, toggle, onLevel };
+  /** Stops capture and discards the transcript, in any live phase. */
+  function cancel(): void {
+    const active = recording.current;
+    if (!active) return;
+    recording.current = undefined;
+    clearTimeout(active.silence);
+    active.unsubscribe?.();
+    active.abort.abort();
+    void api?.cancel(active.id).catch(() => undefined);
+    setView({ phase: "idle" });
+  }
+
+  return { ...view, toggle, cancel, onLevel };
 }
 
 function publishLevel(listeners: Set<DictationLevelListener>, pcm: Uint8Array): void {

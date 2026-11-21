@@ -6489,13 +6489,23 @@ function useComposerController(props: ComposerProps) {
   };
   /**
    * Enter never submits a draft whose transcript is still pending: it finishes
-   * dictation, and the next Enter sends. Send stays a deliberate way to send
-   * the existing draft while dictation continues.
+   * dictation, and the next Enter sends.
    */
   const finishDictationInsteadOfSubmitting = (): boolean => {
     if (dictation.phase === "idle") return false;
     if (dictation.phase === "listening") void dictation.toggle();
     return true;
+  };
+  // A send asked for while dictation is live. It runs once the transcript is
+  // in the draft, so a message never leaves without the words being spoken.
+  const sendAfterDictationRef = useRef<{
+    scopeKey: string;
+    mode: "default" | "steer" | "interrupt";
+    options?: { restoreComposerFocus?: boolean };
+  }>(undefined);
+  const cancelDictation = (): void => {
+    sendAfterDictationRef.current = undefined;
+    dictation.cancel();
   };
   const dictationLabel = dictation.phase === "idle" ? "Dictate with OpenAI"
     : dictation.phase === "connecting" ? "Cancel dictation"
@@ -9894,6 +9904,14 @@ function useComposerController(props: ComposerProps) {
     mode: "default" | "steer" | "interrupt" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
+    if (dictation.phase !== "idle") {
+      // Send finishes dictation first. Nothing has been heard while
+      // connecting, so that session is dropped and the draft goes as it is.
+      sendAfterDictationRef.current = { scopeKey: composerScopeKey, mode, options };
+      if (dictation.phase === "listening") void dictation.toggle();
+      else if (dictation.phase === "connecting") dictation.cancel();
+      return;
+    }
     // The status line under the tray says why: the message would reference
     // files the owner does not have yet.
     if (
@@ -10248,6 +10266,17 @@ function useComposerController(props: ComposerProps) {
 
     await sendThreadTurn(undefined, { payload });
   };
+
+  const submitTurnRef = useRef(submitTurn);
+  submitTurnRef.current = submitTurn;
+  useEffect(() => {
+    if (dictation.phase !== "idle") return;
+    const pending = sendAfterDictationRef.current;
+    sendAfterDictationRef.current = undefined;
+    // A failed or empty dictation leaves the draft for the operator to check.
+    if (!pending || dictation.error || pending.scopeKey !== composerScopeKey) return;
+    void submitTurnRef.current(pending.mode, pending.options);
+  }, [composerScopeKey, dictation.error, dictation.phase]);
 
   const stopTurn = async (): Promise<void> => {
     const turnId = activeTurnIdRef.current;
@@ -12268,19 +12297,28 @@ function useComposerController(props: ComposerProps) {
         label: option.label,
       })),
     ];
-    const sendButtonDisabled =
+    const sendBlocked =
       forking ||
       preparingSend ||
       preparingImages ||
       props.disabled ||
       remoteFileUploads.uploads.length > 0 ||
       steering ||
-      (!activeTurnId && sending && !isLaunchpad) ||
-      (!hasComposerContent &&
-        imageAttachments.length === 0 &&
-        fileAttachments.length === 0);
+      (!activeTurnId && sending && !isLaunchpad);
+    const nothingToSend =
+      !hasComposerContent &&
+      imageAttachments.length === 0 &&
+      fileAttachments.length === 0;
+    // Send finishes live dictation first, so spoken words count as content
+    // before they reach the draft.
+    const sendButtonDisabled =
+      sendBlocked ||
+      (nothingToSend && dictation.phase !== "listening" && dictation.phase !== "finishing");
+    // A scheduled send would leave without the transcript.
     const scheduleButtonDisabled =
-      sendButtonDisabled ||
+      sendBlocked ||
+      nothingToSend ||
+      dictation.phase !== "idle" ||
       launchpadSubmitting ||
       (!props.thread && !props.launchpad) ||
       Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
@@ -13184,6 +13222,12 @@ function useComposerController(props: ComposerProps) {
 
       if (event.key === "Enter" && !event.shiftKey && !event.altKey && finishDictationInsteadOfSubmitting()) {
         event.preventDefault();
+        return;
+      }
+      // An open autocomplete keeps Escape; otherwise it discards dictation.
+      if (event.key === "Escape" && !hasAutocompleteOptions && dictation.phase !== "idle") {
+        event.preventDefault();
+        cancelDictation();
         return;
       }
 
