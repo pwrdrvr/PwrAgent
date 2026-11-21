@@ -1,3 +1,4 @@
+import { SCHEDULED_ACTION_PROJECTION_SCHEMA } from "./scheduled-thread-action-projection-schema";
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
@@ -40,7 +41,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 82;
+export const CURRENT_STATE_DB_USER_VERSION = 83;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2206,6 +2207,13 @@ export class StateDb {
           if ((db.pragma("user_version", { simple: true }) as number) >= 82) return;
           ensureThreadSearchIdentityIndexes(db);
           db.pragma("user_version = 82");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 83) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 83) return;
+          db.exec(SCHEDULED_ACTION_PROJECTION_SCHEMA);
+          db.pragma("user_version = 83");
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);

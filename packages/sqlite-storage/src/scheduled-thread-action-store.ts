@@ -23,6 +23,13 @@ import type {
   UpdateScheduledThreadActionRecord,
 } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { scheduledTurnQueueEntryId } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import {
+  ACTIVE_SCHEDULED_ACTION,
+  CLAIMED_SCHEDULED_ACTION,
+  SCHEDULED_PROJECTION_COLUMNS,
+  TERMINAL_SCHEDULED_ACTION,
+  scheduledProjectionAdmissionBytes,
+} from "./scheduled-thread-action-projection-schema.js";
 import type { StateDb } from "./state-db.js";
 import {
   FileScheduledThreadActionPayloadStore,
@@ -49,12 +56,12 @@ type ScheduledThreadActionRow = {
   updated_at: number;
 };
 
-const ACTIVE_STATUSES: readonly ScheduledThreadActionStatus[] = [
-  "held",
-  "scheduled",
-  "dispatching",
-  "queued",
-];
+const PROJECTION_INDEX_BUDGET = 8 * 1024 * 1024;
+const PROJECTION_PAGE_BUDGET = 248 * 1024;
+
+type ProjectionSelection = { source: string; values: unknown[]; ownerHistory: boolean };
+type OwnerProjectionState = { generation: string; admission_bytes: number; json_bytes_upper_bound: number };
+
 /**
  * The fired agent follow-ups a thread's rolling window still counts. A
  * reservation is keyed by action id, so claiming the same follow-up again
@@ -269,11 +276,10 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   }
 
   list(request: ListScheduledThreadActionsRequest = {}): ScheduledThreadAction[] {
-    const { clause, values } = this.listPredicate(request);
+    const { source, values } = this.projectionSelection(request);
     const rows = this.stateDb.raw
       .prepare(
-        `SELECT ` + ROW_COLUMNS + ` FROM scheduled_thread_actions
-         ` + clause + `
+        `SELECT ` + ROW_COLUMNS + ` FROM ` + source + `
          ORDER BY scheduled_for ASC, created_at ASC`,
       )
       .all(...values) as ScheduledThreadActionRow[];
@@ -345,81 +351,127 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   }
 
   listProjectionPage(request: ListScheduledThreadActionsRequest): ListScheduledThreadActionsResponse {
-    const { clause, values } = this.listPredicate(request);
-    const revision = (): string => this.readProjectionRevision(request);
-    const currentRevision = revision();
-    let offset = 0;
-    if (request.cursor) {
-      if (request.cursor.length > 256) throw new Error("Invalid scheduled action cursor.");
-      const match = /^([a-f0-9]{64}):([0-9]{1,6})$/.exec(request.cursor);
-      if (!match) throw new Error("Invalid scheduled action cursor.");
-      if (match[1] !== currentRevision) throw new Error("[navigation_cursor_expired] Scheduled actions changed while paging.");
-      offset = Number(match[2]);
-    }
-    const rows = this.stateDb.raw.prepare(
-      `SELECT ` + ROW_COLUMNS + ` FROM scheduled_thread_actions ` + clause + `
-       ORDER BY scheduled_for ASC, created_at ASC, action_id ASC LIMIT ? OFFSET ?`,
-    ).all(...values, 101, offset) as ScheduledThreadActionRow[];
+    const selection = this.projectionSelection(request);
+    const cursor = request.cursor
+      ? /^([a-f0-9]{64}):([0-9]{1,6})$/.exec(request.cursor)
+      : null;
+    if (request.cursor && !cursor) throw new Error("Invalid scheduled action cursor.");
+    const offset = cursor ? Number(cursor[2]) : 0;
+    const db = this.stateDb.raw;
+    // The revision and ordered rows must describe one SQLite snapshot. Payload
+    // files are immutable but may be removed after a writer replaces a ref.
+    const before = this.projectionConnectionVersion();
+    const { currentRevision, rows } = db.transaction(() => {
+      const currentRevision = this.readProjectionRevision(selection);
+      if (cursor && cursor[1] !== currentRevision) throw new Error("[navigation_cursor_expired] Scheduled actions changed while paging.");
+      const rows = db.prepare(
+        `SELECT ` + ROW_COLUMNS + ` FROM ` + selection.source + `
+         ORDER BY scheduled_for ASC, created_at ASC, action_id ASC LIMIT ? OFFSET ?`,
+      ).all(...selection.values, 101, offset) as ScheduledThreadActionRow[];
+      return { currentRevision, rows };
+    })();
+    // Recheck the actual selection only if a local write or external commit
+    // could have raced payload hydration. Unrelated commits keep it current.
+    const assertCurrent = (cause?: unknown): void => {
+      if (this.projectionConnectionVersion() !== before
+        && db.transaction(() => this.readProjectionRevision(selection))() !== currentRevision) {
+        throw new Error("[navigation_cursor_expired] Scheduled actions changed while paging.", { cause });
+      }
+    };
     const actions: ScheduledThreadAction[] = [];
     let bytes = 0;
-    for (const row of rows.slice(0, 100)) {
-      const action = this.actionFromRow(row, 248 * 1024);
-      const actionBytes = Buffer.byteLength(JSON.stringify(action));
-      if (actionBytes > 248 * 1024) throw new Error("Scheduled action exceeds the bounded projection budget.");
-      if (bytes + actionBytes > 248 * 1024) break;
-      actions.push(action);
-      bytes += actionBytes;
+    try {
+      for (const row of rows.slice(0, 100)) {
+        const action = this.actionFromRow(row, PROJECTION_PAGE_BUDGET);
+        const actionBytes = Buffer.byteLength(JSON.stringify(action));
+        if (actionBytes > PROJECTION_PAGE_BUDGET) throw new Error("Scheduled action exceeds the bounded projection budget.");
+        if (bytes + actionBytes > PROJECTION_PAGE_BUDGET) break;
+        actions.push(action);
+        bytes += actionBytes;
+      }
+    } catch (error) {
+      assertCurrent(error);
+      throw error;
     }
-    if (revision() !== currentRevision) throw new Error("[navigation_cursor_expired] Scheduled actions changed while paging.");
+    assertCurrent();
     const complete = actions.length === rows.length;
     return { actions, projectionProtocol: 2, revision: currentRevision, complete,
       ...(!complete ? { nextCursor: `${currentRevision}:${offset + actions.length}` } : {}),
     };
   }
 
+  private projectionConnectionVersion(): string {
+    const db = this.stateDb.raw;
+    const version = db.pragma("data_version", { simple: true }) as number;
+    const { changes } = db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    return `${version}:${changes}`;
+  }
+
   private externalDataVersion?: number;
   private externalProjectionRevision?: string;
 
   observeExternalProjectionChange(): boolean {
-    const version = this.stateDb.raw.pragma("data_version", { simple: true }) as number;
+    const db = this.stateDb.raw;
+    const version = db.pragma("data_version", { simple: true }) as number;
     if (version === this.externalDataVersion) return false;
-    const revision = this.readProjectionRevision({ includeTerminal: true });
+    const revision = db.transaction(() => this.readOwnerProjectionStamp(this.readOwnerProjectionState().generation))();
     const changed = this.externalProjectionRevision !== undefined && this.externalProjectionRevision !== revision;
     this.externalDataVersion = version;
     this.externalProjectionRevision = revision;
     return changed;
   }
 
-  private readProjectionRevision(request: ListScheduledThreadActionsRequest): string {
-    const { clause, values } = this.listPredicate(request);
-    const admission = this.stateDb.raw.prepare(
-      `SELECT COALESCE(SUM(
-         length(CAST(action_id AS BLOB)) + length(CAST(thread_id AS BLOB))
-         + COALESCE(length(CAST(error_message AS BLOB)), 0)
-         + COALESCE(length(CAST(payload_ref AS BLOB)), 0)
-         + COALESCE(length(CAST(queue_entry_id AS BLOB)), 0)
-         + COALESCE(length(CAST(turn_id AS BLOB)), 0) + 512
-       ), 0) AS bytes FROM scheduled_thread_actions ` + clause + ``,
-    ).get(...values) as { bytes: number };
-    if (admission.bytes > 8 * 1024 * 1024) throw new Error("Scheduled action index exceeds its byte budget.");
-    const hash = createHash("sha256").update(JSON.stringify([clause, values]));
-    let bytes = 0;
-    // Stream compact rows; neither hash construction nor cursor validation
-    // loads scheduled inputs or retains an owner-wide payload collection.
+  private readOwnerProjectionState(): OwnerProjectionState {
+    return this.stateDb.raw.prepare(
+      `SELECT hex(generation) AS generation, admission_bytes, json_bytes_upper_bound
+       FROM scheduled_action_projection_state WHERE singleton = 1`,
+    ).get() as OwnerProjectionState;
+  }
+
+  private readOwnerProjectionStamp(generation: string): string {
+    const hash = createHash("sha256").update("owner-history:" + generation);
+    // Lease renewal changes updatedAt, which is visible in projections. Read
+    // just those active claims so the 10-second lease write dirties no new page.
     for (const row of this.stateDb.raw.prepare(
-      `SELECT action_id, backend, thread_id, kind, origin, status, scheduled_for,
-        queue_entry_id, turn_id, error_message, payload_ref, created_at, updated_at
-       FROM scheduled_thread_actions ` + clause + ` ORDER BY action_id`,
-    ).iterate(...values)) {
-      const json = JSON.stringify(row);
-      bytes += Buffer.byteLength(json);
-      if (bytes > 8 * 1024 * 1024) throw new Error("Scheduled action index exceeds its byte budget.");
-      hash.update(json);
+      `SELECT action_id, updated_at FROM scheduled_thread_actions
+       INDEXED BY idx_scheduled_thread_actions_due WHERE ` + CLAIMED_SCHEDULED_ACTION + `
+       ORDER BY status, scheduled_for, created_at, rowid`,
+    ).iterate()) {
+      hash.update(JSON.stringify(row));
     }
     return hash.digest("hex");
   }
 
-  private listPredicate(request: ListScheduledThreadActionsRequest): { clause: string; values: unknown[] } {
+  private readProjectionRevision(selection: ProjectionSelection): string {
+    const { source, values, ownerHistory } = selection;
+    if (ownerHistory) {
+      const state = this.readOwnerProjectionState();
+      if (state.admission_bytes > PROJECTION_INDEX_BUDGET) throw new Error("Scheduled action index exceeds its byte budget.");
+      if (state.json_bytes_upper_bound > PROJECTION_INDEX_BUDGET) this.readProjectionRows(selection);
+      return this.readOwnerProjectionStamp(state.generation);
+    }
+    const admission = this.stateDb.raw.prepare(
+      "SELECT COALESCE(SUM(" + scheduledProjectionAdmissionBytes() + "), 0) AS bytes FROM " + source,
+    ).get(...values) as { bytes: number };
+    if (admission.bytes > PROJECTION_INDEX_BUDGET) throw new Error("Scheduled action index exceeds its byte budget.");
+    const hash = createHash("sha256").update(JSON.stringify([source, values]));
+    this.readProjectionRows(selection, hash);
+    return hash.digest("hex");
+  }
+
+  private readProjectionRows(selection: ProjectionSelection, hash?: ReturnType<typeof createHash>): void {
+    let bytes = 0;
+    for (const row of this.stateDb.raw.prepare(
+      "SELECT " + SCHEDULED_PROJECTION_COLUMNS.join(", ") + " FROM " + selection.source + " ORDER BY action_id",
+    ).iterate(...selection.values)) {
+      const json = JSON.stringify(row);
+      bytes += Buffer.byteLength(json);
+      if (bytes > PROJECTION_INDEX_BUDGET) throw new Error("Scheduled action index exceeds its byte budget.");
+      hash?.update(json);
+    }
+  }
+
+  private projectionSelection(request: ListScheduledThreadActionsRequest): ProjectionSelection {
     const where: string[] = [];
     const values: unknown[] = [];
     if (request.backend) {
@@ -431,21 +483,23 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       values.push(request.threadId);
     }
     if (typeof request.terminalUpdatedAfter === "number") {
-      where.push(
-        `(status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")}) OR updated_at >= ?)`,
-      );
-      values.push(...ACTIVE_STATUSES, request.terminalUpdatedAfter);
-    } else if (request.includeFailed && !request.includeTerminal) {
-      where.push(
-        `(status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")}) OR status = 'failed')`,
-      );
-      values.push(...ACTIVE_STATUSES);
-    } else if (!request.includeTerminal) {
-      where.push(`status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")})`);
-      values.push(...ACTIVE_STATUSES);
+      const scope = where.length ? " WHERE " + where.join(" AND ") + " AND " : " WHERE ";
+      // Disjoint branches let SQLite seek both active statuses and the
+      // terminal time range, even when the consumer orders by another key.
+      const select = "SELECT " + ROW_COLUMNS + " FROM scheduled_thread_actions";
+      return {
+        source: "(" + select + scope + ACTIVE_SCHEDULED_ACTION + " UNION ALL "
+          + select + " INDEXED BY idx_scheduled_thread_actions_terminal_updated"
+          + scope + TERMINAL_SCHEDULED_ACTION + " AND updated_at >= ?)",
+        values: [...values, ...values, request.terminalUpdatedAfter],
+        ownerHistory: false,
+      };
     }
-    const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
-    return { clause, values };
+    if (!request.includeTerminal) {
+      where.push(request.includeFailed ? "(" + ACTIVE_SCHEDULED_ACTION + " OR status = 'failed')" : ACTIVE_SCHEDULED_ACTION);
+    }
+    const clause = where.length ? " WHERE " + where.join(" AND ") : "";
+    return { source: "scheduled_thread_actions" + clause, values, ownerHistory: !clause };
   }
 
   nextScheduledAt(): number | undefined {
@@ -884,8 +938,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     const rows = this.stateDb.raw.prepare(
       `SELECT action_id, payload_ref
        FROM scheduled_thread_actions
-       WHERE status NOT IN ('held', 'scheduled', 'dispatching', 'queued')
-         AND updated_at < ?`,
+       WHERE ` + TERMINAL_SCHEDULED_ACTION + ` AND updated_at < ?`,
     ).all(cutoff) as Array<{
       action_id: string;
       payload_ref: string | null;
