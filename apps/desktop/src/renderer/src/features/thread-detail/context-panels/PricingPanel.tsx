@@ -40,7 +40,7 @@ import {
   type ChipContextMenuItem,
   type ChipContextMenuPosition,
 } from "../../chrome/ChipContextMenu";
-import { MoreVerticalIcon, PopoutIcon } from "../../../icons";
+import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../../lib/federation-window";
@@ -93,7 +93,6 @@ type PricingPanelProps = {
   loading?: boolean;
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
-  onOpenToolOutputIncidentExplorer?: () => void;
   /** Opens the explorer directly to the Token Miser savings lens. */
   onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
@@ -223,19 +222,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
 
   return (
     <section className="context-panel__section">
-      <div className="context-panel__section-heading">
-        <h3>Pricing</h3>
-        {props.onOpenToolOutputIncidentExplorer ? (
-          <button
-            className="context-panel__section-action"
-            onClick={props.onOpenToolOutputIncidentExplorer}
-            type="button"
-          >
-            <PopoutIcon size={11} aria-hidden="true" />
-            Tool Output Incidents
-          </button>
-        ) : null}
-      </div>
+      <h3>Pricing</h3>
       {fallbackEstimate ? <PricingSnapshotCard estimate={fallbackEstimate} /> : null}
       {summary ? (
         <>

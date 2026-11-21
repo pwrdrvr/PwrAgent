@@ -886,6 +886,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             backends={props.backends}
             platform={props.platform}
             desktopApi={props.desktopApi}
+            onOpenToolOutputIncidentExplorer={
+              onOpenToolOutputIncidentExplorer ? openIncidentExplorer : undefined
+            }
             onRefreshNavigation={props.onRefreshNavigation}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
@@ -944,11 +947,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             loading={displayResource.loading}
             onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
             displayOptions={props.pricingDisplayOptions}
-            onOpenToolOutputIncidentExplorer={
-              props.onOpenToolOutputIncidentExplorer
-                ? openIncidentExplorer
-                : undefined
-            }
             onOpenTokenMiserSavings={
               props.onOpenToolOutputIncidentExplorer
                 ? openTokenMiserSavings

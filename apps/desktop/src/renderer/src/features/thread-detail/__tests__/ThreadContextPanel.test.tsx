@@ -938,12 +938,13 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByRole("tab", { name: "Tool calls" })).not.toBeInTheDocument();
   });
 
-  it("opens the incident explorer from Pricing even without accounting", () => {
+  it.each([false, true])("opens the incident explorer from Thread info with pricing enabled=%s", (pricingEnabled) => {
     const onOpenToolOutputIncidentExplorer = vi.fn();
     renderPanel({
-      activeTab: "pricing",
+      activeTab: "info",
       onOpenToolOutputIncidentExplorer,
       pinned: true,
+      threadPricingSummaryEnabled: pricingEnabled,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Tool Output Incidents" }));
