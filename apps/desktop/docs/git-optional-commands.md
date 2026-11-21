@@ -70,8 +70,9 @@ Sharing replaces files, so the main process decides where, not the renderer.
   on this machine that is not archived. An archived thread's retained
   checkout can be read, not changed. This check reads no pull requests.
 - A share does not start while a turn, a reserved turn start, a review, or
-  Codex work that outlives a turn (a background terminal, a live tool call,
-  a sub-agent) is running in that worktree in **any** local thread
+  work that outlives a turn (a Codex background terminal, live tool call or
+  sub-agent, or a Claude background task) is running in that worktree in
+  **any** local thread
   (`BackendRegistry.workspaceHasActiveTurn`). Threads can share a worktree,
   so the dialog's own thread being idle is not enough. An estimate changes
   nothing and always runs.

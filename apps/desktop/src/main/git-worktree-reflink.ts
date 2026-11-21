@@ -163,9 +163,15 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
 
   constructor(private readonly dependencies: WorktreeReflinkServiceDependencies<Identity>) {}
 
-  /** `directories`: the target first, then other repositories to ask in its place. */
-  async readCapabilities(directories: string | readonly string[]): Promise<WorktreeReflinkRuntime> {
-    return runtimeOf(await this.dependencies.probe.read(directories));
+  /**
+   * `directories`: the target first, then other repositories to ask in its
+   * place. `answered` is false when none of them said what this Git can do.
+   */
+  async readCapabilities(
+    directories: string | readonly string[],
+  ): Promise<WorktreeReflinkRuntime & { answered: boolean }> {
+    const probed = await this.dependencies.probe.read(directories);
+    return { ...runtimeOf(probed), answered: probed.answered };
   }
 
   /**
@@ -176,14 +182,15 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
    *
    * A share replaces files, which races anything else writing them. `isBusy`
    * says whether a turn is running in the worktree, in any thread; a share
-   * does not start while one is. An estimate changes nothing and always runs.
+   * does not start while one is. It is required so that no caller shares
+   * unguarded. An estimate changes nothing and always runs.
    */
   async run(params: {
     cwd: string;
     mode: WorktreeReflinkMode;
     verifyFilters?: boolean;
     runtimeKey: string;
-    isBusy?: () => Promise<boolean>;
+    isBusy: () => Promise<boolean>;
   }): Promise<RunWorktreeReflinkResponse> {
     const probed = await this.dependencies.probe.read(params.cwd);
     const runtime = runtimeOf(probed);
@@ -219,7 +226,7 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
     }
     try {
       // Checked after the claim above, so two shares cannot both pass it.
-      if (params.mode === "share" && params.isBusy) {
+      if (params.mode === "share") {
         let busy: boolean;
         try {
           busy = await params.isBusy();

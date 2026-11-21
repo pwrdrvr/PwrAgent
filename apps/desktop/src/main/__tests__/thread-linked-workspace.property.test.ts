@@ -2,7 +2,7 @@ import { createDesktopBackendRegistry, registryModules } from "../app-server/bac
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerThreadSummary,
   LinkedDirectorySummary,
@@ -120,6 +120,32 @@ describe("thread linked workspaces", () => {
 
   it("counts a background terminal left running after its turn ended", async () => {
     await checkWorkspaceRules([{ worktree: 0, pathSource: "project", archived: false, work: "terminal" }]);
+  });
+
+  it("counts a Claude background task left running after its turn ended", async () => {
+    const db = openInMemoryStateDb();
+    const registry = createDesktopBackendRegistry({
+      codexClient: {
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
+        onNotification: () => () => {}, onPendingRequest: () => () => {},
+        listThreads: async () => [], readConfiguredMcpServerNames: async () => [],
+      } as never,
+      overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
+    });
+    try {
+      const threads = ["claude-idle", "claude-task"].map((id, index): AppServerThreadSummary => ({
+        id, source: "claude", title: id, titleSource: "explicit", linkedDirectories: [],
+        projectKey: WORKTREES[index],
+      }));
+      vi.spyOn(registry, "listThreads").mockResolvedValue(threads);
+      const claude = (registry as unknown as { claudeBackend: { backgroundTaskThreadIds(): string[] } }).claudeBackend;
+      vi.spyOn(claude, "backgroundTaskThreadIds").mockReturnValue(["claude-task"]);
+      expect(await registry.workspaceHasActiveTurn(WORKTREES[0])).toBe(false);
+      expect(await registry.workspaceHasActiveTurn(WORKTREES[1])).toBe(true);
+    } finally {
+      await registry.close();
+      db.close();
+    }
   });
 
   it("authorizes changes only for unarchived owners, and reports a worktree busy for every thread that shares it", async () => {

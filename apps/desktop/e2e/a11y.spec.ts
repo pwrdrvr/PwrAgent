@@ -990,8 +990,10 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         process.platform === "win32",
         "The stand-in Git is a shell script, which Windows cannot run as PWRAGENT_GIT_PATH.",
       );
-      // Three unscoped scans plus a launch.
-      test.setTimeout(60_000);
+      // Three unscoped scans plus a launch, an estimate and a share. The same
+      // budget as the neighbouring blocks, so a slow guest reports an axe
+      // result and not a timeout from inside a step.
+      test.setTimeout(75_000);
       const audit = await prepareWorktreeStorageAudit(test.info().outputPath("worktree-storage"));
       const app = await launchAuditApp({
         ...appearance,

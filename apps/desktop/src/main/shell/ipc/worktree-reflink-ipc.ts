@@ -16,6 +16,7 @@ import { isFederationWindowWebContents } from "../window";
 
 const REMOTE_THREAD_REASON = "Worktree storage is shared on the machine that owns the thread.";
 const UNLINKED_REASON = "This directory is not linked to the thread.";
+const UNANSWERED_REASON = "The selected Git could not be run in this thread's directories.";
 
 /**
  * The directory Git runs in is the thread's own record of it, never the
@@ -52,8 +53,10 @@ export function registerWorktreeReflinkIpc(): void {
       if ("reason" in target) return { status: "unavailable", reason: target.reason };
       // What Git can do is the same in any of the thread's repositories, so
       // a target that is hibernated or gone does not hide the answer.
-      const runtime = await getWorktreeReflinkService().readCapabilities([target.cwd, ...target.others]);
-      return { status: "ready", ...runtime };
+      const { answered, ...runtime } = await getWorktreeReflinkService()
+        .readCapabilities([target.cwd, ...target.others]);
+      // "Cannot share" is a fact about a Git. Without an answer there is none.
+      return answered ? { status: "ready", ...runtime } : { status: "unavailable", reason: UNANSWERED_REASON };
     },
   );
   ipcMain.handle(

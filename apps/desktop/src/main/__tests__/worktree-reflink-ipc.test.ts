@@ -40,7 +40,9 @@ beforeEach(async () => {
     worktreePath: "/work/wt",
     workspacePaths: ["/work/project", "/work/wt", "/work/other"],
   });
-  service.readCapabilities.mockResolvedValue({ capabilities: { reflink: true, verifyFilters: true }, runtimeKey: "k" });
+  service.readCapabilities.mockResolvedValue({
+    capabilities: { reflink: true, verifyFilters: true }, runtimeKey: "k", answered: true,
+  });
   service.run.mockResolvedValue({ status: "failed", reason: "stub" });
   const { registerWorktreeReflinkIpc } = await import("../shell/ipc/worktree-reflink-ipc");
   registerWorktreeReflinkIpc();
@@ -48,8 +50,18 @@ beforeEach(async () => {
 
 describe("worktree reflink IPC", () => {
   it("reads capabilities in the thread's own target first, then its other workspaces", async () => {
-    await expect(invoke(WORKTREE_REFLINK_CAPABILITIES_CHANNEL, target)).resolves.toMatchObject({ status: "ready" });
+    await expect(invoke(WORKTREE_REFLINK_CAPABILITIES_CHANNEL, target)).resolves.toEqual({
+      status: "ready", capabilities: { reflink: true, verifyFilters: true }, runtimeKey: "k",
+    });
     expect(service.readCapabilities).toHaveBeenCalledWith(["/work/wt", "/work/project", "/work/other"]);
+  });
+
+  it("does not report a Git as unable to share when no directory answered", async () => {
+    service.readCapabilities.mockResolvedValue({
+      capabilities: { reflink: false, verifyFilters: false }, runtimeKey: "k", answered: false,
+    });
+    await expect(invoke(WORKTREE_REFLINK_CAPABILITIES_CHANNEL, target))
+      .resolves.toMatchObject({ status: "unavailable", reason: expect.stringContaining("could not be run") });
   });
 
   it("runs in the thread's spelling of the path, with a busy check for that worktree", async () => {

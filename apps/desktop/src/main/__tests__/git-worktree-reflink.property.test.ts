@@ -19,6 +19,8 @@ import {
   type FakeGitVersion,
 } from "./worktree-reflink-fixtures";
 
+/** No turn is running in the worktree. */
+const idle = async (): Promise<boolean> => false;
 const capabilitiesArbitrary = fc.record({ reflink: fc.boolean(), verifyFilters: fc.boolean() });
 const modeArbitrary = fc.constantFrom("estimate" as const, "share" as const);
 const verifyArbitrary = fc.constantFrom(true, false, undefined);
@@ -184,6 +186,7 @@ describe("WorktreeReflinkService", () => {
           }
           const before = runs.length;
           const response = await service.run({
+            isBusy: idle,
             cwd: "/repo",
             mode: step.mode,
             verifyFilters: step.verifyFilters,
@@ -229,7 +232,7 @@ describe("WorktreeReflinkService", () => {
     expect(shown.capabilities).toEqual({ reflink: true, verifyFilters: true });
 
     state.selected = "pwrgit.1";
-    const refused = await service.run({ cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
+    const refused = await service.run({ isBusy: idle, cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
     expect(refused).toMatchObject({
       status: "runtime-changed",
       capabilities: { reflink: true, verifyFilters: false },
@@ -237,12 +240,12 @@ describe("WorktreeReflinkService", () => {
     expect(runs).toHaveLength(0);
 
     // Even when the window claims the .1 runtime, .1 is never asked to verify.
-    const forced = await service.run({ cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: "pwrgit.1" });
+    const forced = await service.run({ isBusy: idle, cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: "pwrgit.1" });
     expect(forced.status).toBe("failed");
     expect(runs).toHaveLength(0);
 
     state.selected = "pwrgit.2";
-    const ran = await service.run({ cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
+    const ran = await service.run({ isBusy: idle, cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
     expect(ran).toMatchObject({ status: "completed", verifiedFilters: true });
     expect(runs).toEqual([
       { version: "pwrgit.2", args: ["worktree", "reflink", "--porcelain", "-z", "--verify-filters"] },
@@ -259,10 +262,10 @@ describe("WorktreeReflinkService", () => {
       },
     });
     await expect(failing(PWRGIT_2_DRY_RUN_PORCELAIN, { exitCode: 1, stderr: "" })
-      .run({ cwd: "/repo", mode: "share", runtimeKey: "k" }))
+      .run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" }))
       .resolves.toMatchObject({ status: "completed", summary: { scanned: 2, skipped: 2 } });
     await expect(failing("", { exitCode: 128, stderr: "fatal: reflink requires an existing non-bare worktree\n" })
-      .run({ cwd: "/repo", mode: "share", runtimeKey: "k" }))
+      .run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" }))
       .resolves.toEqual({ status: "failed", reason: "reflink requires an existing non-bare worktree" });
   });
 
@@ -276,14 +279,14 @@ describe("WorktreeReflinkService", () => {
         onStdout(PWRGIT_2_DRY_RUN_PORCELAIN);
       },
     });
-    const first = service.run({ cwd: "/repo", mode: "share", runtimeKey: "k" });
+    const first = service.run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" });
     await expect.poll(() => release).toBeDefined();
-    await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey: "k" }))
+    await expect(service.run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" }))
       .resolves.toMatchObject({ status: "failed" });
     release!();
     await expect(first).resolves.toMatchObject({ status: "completed" });
     release = undefined;
-    const again = service.run({ cwd: "/repo", mode: "share", runtimeKey: "k" });
+    const again = service.run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" });
     await expect.poll(() => release).toBeDefined();
     release!();
     await expect(again).resolves.toMatchObject({ status: "completed" });
@@ -350,7 +353,7 @@ describe("WorktreeReflinkService", () => {
       }),
       run: async () => { throw new Error("must not run"); },
     });
-    await expect(service.run({ cwd: "/repo", mode: "estimate", runtimeKey: "k" }))
+    await expect(service.run({ isBusy: idle, cwd: "/repo", mode: "estimate", runtimeKey: "k" }))
       .resolves.toEqual({ status: "failed", reason: "The selected Git is unavailable." });
   });
 
@@ -362,7 +365,7 @@ describe("WorktreeReflinkService", () => {
       }),
       run: async () => { throw new Error("must not run"); },
     });
-    await expect(service.run({ cwd: "/gone", mode: "estimate", runtimeKey: "k" }))
+    await expect(service.run({ isBusy: idle, cwd: "/gone", mode: "estimate", runtimeKey: "k" }))
       .resolves.toEqual({ status: "failed", reason: "The selected Git could not be run in this worktree." });
   });
 });
