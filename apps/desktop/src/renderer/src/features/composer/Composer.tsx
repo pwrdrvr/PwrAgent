@@ -6402,11 +6402,16 @@ function useComposerController(props: ComposerProps) {
       ownerSummary: reviewThreadOwnerSummary,
       thread: props.thread,
     });
-  const opensReviewPanel = (command: SlashCommandSuggestion): boolean =>
+  // Running it (Enter in the menu) opens the panel; Tab or a click inserts
+  // the command, so arguments such as `ultra` can still be typed after it.
+  const runOpensReviewPanel = (command: SlashCommandSuggestion): boolean =>
     command.id === "review-current"
     || (codeReviewOpensReviewPanel
       && command.source === "provider"
       && isBareClaudeCodeReviewCommand(command.label));
+  // A draft that opens the panel when sent or scheduled instead of going out.
+  const draftOpensCodeReviewPanel = codeReviewOpensReviewPanel
+    && isBareClaudeCodeReviewCommand(draft);
   // Together needs an owner that takes a combined target.
   const reviewPullRequestSetSupported =
     reviewThreadOwnerSummary?.capabilities.reviewPullRequestSet === true;
@@ -9300,6 +9305,14 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
+    // Scheduling a bare /code-review opens the panel with the time armed,
+    // as scheduling a bare /review does.
+    if (draftOpensCodeReviewPanel) {
+      enterReviewComposer();
+      setScheduledDraftSendAt(scheduledSendAt);
+      setScheduleArmed(true);
+      return;
+    }
     if (reviewCommand) {
       if (isBareReviewCommand) {
         setScheduledDraftSendAt(scheduledSendAt);
@@ -9950,7 +9963,7 @@ function useComposerController(props: ComposerProps) {
       await submitForkCommand(forkCommand);
       return;
     }
-    if (codeReviewOpensReviewPanel && isBareClaudeCodeReviewCommand(draft)) {
+    if (draftOpensCodeReviewPanel) {
       enterReviewComposer();
       return;
     }
@@ -10417,7 +10430,7 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
-    if (opensReviewPanel(command)) {
+    if (command.id === "review-current") {
       enterReviewComposer();
       return;
     }
@@ -12945,7 +12958,7 @@ function useComposerController(props: ComposerProps) {
     };
 
     const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
-      if (opensReviewPanel(command)) {
+      if (runOpensReviewPanel(command)) {
         enterReviewComposer();
         return true;
       }

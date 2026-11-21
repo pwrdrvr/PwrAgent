@@ -216,11 +216,9 @@ export class MessagingReviewWorkflow {
       claudeCodeAvailable: claudeCodeOwner && !managedReason,
       managed: Boolean(managedReason),
       modeSupported,
-      // A mode this owner cannot run (a Claude thread has no Codex Sub
-      // Agent) falls back to the default instead of being submitted.
-      requested: !modeSupported || modeOptions.find((option) => option.value === params.runMode)?.supported
-        ? params.runMode
-        : undefined,
+      // An explicit mode stands even when the owner can no longer run it,
+      // so Start fails instead of running another engine.
+      requested: params.runMode,
     });
     const claudeCodeReview = runMode === "claude-code-review";
     const target = messagingReviewTargetForMode(requestedTarget, runMode, defaultBaseBranch);
@@ -402,7 +400,13 @@ export class MessagingReviewWorkflow {
       ];
     } else if (params.phase === "run_mode") {
       title = "Review mode";
-      body = modeUnavailable ?? managedReason ?? "Choose how to run this review.";
+      const claudeCodeOffered = modeSupported
+        && modeOptions.some((option) => option.value === "claude-code-review" && option.supported);
+      body = modeUnavailable
+        ?? (managedReason && claudeCodeOffered
+          ? `${managedReason} Claude Code reviews as this thread instead and drops the picked reviewer.`
+          : managedReason)
+        ?? "Choose how to run this review.";
       actions = [
         ...modeOptions.filter((option) => modeSupported && option.supported).map((option) => ({
           id: `review:mode:${option.value}`,
@@ -939,9 +943,12 @@ export class MessagingReviewWorkflow {
     ) {
       const current = pendingIntent.intent.review.reviewer;
       if (action.id === "review:reviewer:inherit") {
+        // The reviewer forced the PwrAgent Sub Agent; without it the thread's
+        // own default applies again.
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "summary",
           clearReviewer: true,
+          resetRunMode: true,
         });
         return;
       }
@@ -1039,6 +1046,9 @@ export class MessagingReviewWorkflow {
           ...(repositoryPath ? { repositoryPath } : {}),
           resetRepositoryTarget: true,
           resetBaseBranch: true,
+          // A secondary workspace forced the PwrAgent Sub Agent; another
+          // workspace starts again from the thread's default mode.
+          resetRunMode: true,
         });
       }
       return;
@@ -1114,6 +1124,7 @@ export class MessagingReviewWorkflow {
       reviewer?: ModelSettingsRecent;
       modelMenuValue?: MessagingJsonValue;
       clearReviewer?: boolean;
+      resetRunMode?: boolean;
       forceBaseBranch?: boolean;
       resetRepositoryTarget?: boolean;
       resetBaseBranch?: boolean;
@@ -1172,7 +1183,7 @@ export class MessagingReviewWorkflow {
       binding,
       navigation,
       phase: review.phase,
-      runMode: review.runMode ?? pendingIntent.intent.review.runMode,
+      runMode: review.resetRunMode ? undefined : review.runMode ?? pendingIntent.intent.review.runMode,
       afterReview: review.afterReview ?? pendingIntent.intent.review.afterReview,
       codeReviewLevel: review.codeReviewLevel ?? pendingIntent.intent.review.codeReviewLevel,
       cwd,

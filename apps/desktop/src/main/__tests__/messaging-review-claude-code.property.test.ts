@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import { messagingReviewTargetForMode, resolveMessagingReviewRunMode } from "../messaging/core/messaging-review-claude-code";
+import { messagingModules } from "./fixtures/messaging-controller-modules";
 import { messagingReviewHarness } from "./fixtures/messaging-review-harness";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { SqliteMessagingRequestStore } from "../storage/messaging-request-store";
@@ -174,6 +175,50 @@ describe("messaging /review on a Claude thread", () => {
         }
       },
     ), { numRuns: 14 });
+  });
+
+  /**
+   * Rule: an explicit mode the owner cannot run stands, so Start fails rather
+   * than running another engine (docs/review-execution-modes.md).
+   */
+  it("keeps an explicit mode the owner cannot run", async () => {
+    const { fixture, close } = await claudeFixture();
+    try {
+      await fixture.command();
+      const pending = (await fixture.pending())!;
+      await messagingModules(fixture.controller).reviews.updateReviewPendingIntent(
+        pending, fixture.event(), { phase: "summary", runMode: "pwragent-sub-agent" },
+      );
+      // This owner advertises no managed reviewer, so the mode cannot run.
+      expect(fixture.review().review.runMode).toBe("pwragent-sub-agent");
+    } finally {
+      await close();
+    }
+  });
+
+  /**
+   * Rule: the mode screen does not claim the PwrAgent Sub Agent is required
+   * while it offers Claude Code; leaving the reviewer returns to Claude Code.
+   */
+  it("explains the Claude Code way out of another provider's reviewer", async () => {
+    const { fixture, close } = await claudeFixture();
+    fixture.controls.runner = true;
+    try {
+      await fixture.command();
+      await fixture.click("review:summary:reviewer");
+      const codex = fixture.review().actions.find(action => action.fallbackText === "codex");
+      await fixture.click(codex!.id);
+      await fixture.click("review:reviewer:model:default");
+      await fixture.click("review:summary:mode");
+      expect(fixture.review().body).toContain("Claude Code reviews as this thread instead");
+      expect(fixture.review().actions.map(action => action.id)).toContain("review:mode:claude-code-review");
+      await fixture.click("review:back");
+      await fixture.click("review:summary:reviewer");
+      await fixture.click("review:reviewer:inherit");
+      expect(fixture.review().review).toMatchObject({ runMode: "claude-code-review" });
+    } finally {
+      await close();
+    }
   });
 
   /**

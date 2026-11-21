@@ -8929,7 +8929,7 @@ describe("Composer", () => {
         reviewPullRequestSet: true, reviewClaudeCodeReview: codeReviewCapable };
       render(<Composer
         backends={[claude]}
-        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        desktopApi={{ ...createScheduledActionApi(), onAgentEvent: () => () => undefined, startTurn }}
         disabled={false} skills={[]}
         providerCommands={[{
           name: "code-review", description: "Review the current diff.", argumentHint: "[low|medium|high] [--fix]",
@@ -8973,14 +8973,45 @@ describe("Composer", () => {
       },
     );
 
-    it("opens the review panel when /code-review is picked from the command menu", async () => {
+    /**
+     * Rule: Enter on /code-review in the command menu runs it and opens the
+     * panel; Tab or a click only completes it, so arguments can follow.
+     */
+    it("opens the review panel when /code-review is run from the command menu", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      await send("/code-r");
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["Tab", "click"])("completes /code-review on %s so arguments can follow", async (input) => {
       const { startTurn } = codeReviewComposer(true);
       fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/code-r" } });
       const commands = screen.getByRole("listbox", { name: "Commands" });
       await act(async () => {
-        fireEvent.click(within(commands).getByRole("option", { name: /\/code-review/ }));
+        if (input === "Tab") fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Tab" });
+        else fireEvent.click(within(commands).getByRole("option", { name: /\/code-review/ }));
       });
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      // Sending it with no arguments still opens the panel.
+      await act(async () => { fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" }); });
       expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    /** Rule: scheduling a bare /code-review opens the panel, as for /review. */
+    it("opens the review panel with the time armed when a bare /code-review is scheduled", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/code-review" } });
+        fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Send in 30m" }));
+      });
+      const reviewTarget = screen.getByRole("group", { name: "Review target" });
+      expect(within(reviewTarget).getByRole("button", { name: /^Send in \d+m/ })).toBeEnabled();
       expect(startTurn).not.toHaveBeenCalled();
     });
 
