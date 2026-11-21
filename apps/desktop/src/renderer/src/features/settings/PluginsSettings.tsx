@@ -176,6 +176,18 @@ const REVEAL_HIGHLIGHT_MS = 2_400;
 /** Space left between a revealed row and its section's pinned header. */
 const REVEAL_SCROLL_GAP_PX = 12;
 
+/**
+ * Scroll a revealed row to the top of the pane, below its section's pinned
+ * header, so its whole drawer reads down from there. `nearest` stopped as
+ * soon as the row's bottom edge entered view.
+ */
+function scrollRowToTop(row: HTMLElement) {
+  const header = row.closest(".settings-panel")
+    ?.querySelector<HTMLElement>(":scope > .settings-section__header-button");
+  row.style.scrollMarginTop = `${(header?.getBoundingClientRect().height ?? 0) + REVEAL_SCROLL_GAP_PX}px`;
+  row.scrollIntoView?.({ block: "start" });
+}
+
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
 const TOOL_APPROVAL_OPTIONS: SelectOption<McpConnectionToolApproval>[] = [
@@ -1350,6 +1362,9 @@ export function PluginsSettings(props: {
       ?.focus();
   }, [pluginStoreDialogRef, storeView]);
 
+  /** A revealed row to scroll up again once the Codex list below loads. */
+  const realignRevealedRowRef = useRef<HTMLElement | undefined>(undefined);
+
   // Declared after the store's dialog hook, whose cleanup returns focus to
   // the Plugin store button when the store closes; this then moves it on to
   // the row the store added or pointed at. Every caller reloads the list
@@ -1363,17 +1378,23 @@ export function PluginsSettings(props: {
     setRevealConnectionId(undefined);
     if (!row) return;
     setHighlightConnectionId(revealConnectionId);
-    // The row lands at the top of the pane, below its section's pinned
-    // header, so its whole drawer reads down from there. `nearest` stopped
-    // as soon as the row's bottom edge entered view.
-    const header = row.closest(".settings-panel")
-      ?.querySelector<HTMLElement>(":scope > .settings-section__header-button");
-    row.style.scrollMarginTop = `${(header?.getBoundingClientRect().height ?? 0) + REVEAL_SCROLL_GAP_PX}px`;
-    row.scrollIntoView?.({ block: "start" });
+    scrollRowToTop(row);
     // The row's own next step when it marks one, else its first control.
     (row.querySelector<HTMLElement>("[data-reveal-focus]:not(:disabled)")
       ?? row.querySelector<HTMLElement>("button"))?.focus();
-  }, [connections, revealConnectionId, storeView]);
+    if (loading) realignRevealedRowRef.current = row;
+  }, [connections, loading, revealConnectionId, storeView]);
+
+  // While the Codex section below still reads "Loading", the pane can be too
+  // short to bring a low row up to the top, and the scroll above stops at
+  // the bottom edge. Once that list fills in, finish the scroll, unless the
+  // operator has already moved focus out of the row.
+  useEffect(() => {
+    const row = realignRevealedRowRef.current;
+    if (loading || !row) return;
+    realignRevealedRowRef.current = undefined;
+    if (row.isConnected && row.contains(document.activeElement)) scrollRowToTop(row);
+  }, [loading]);
 
   // Sandboxer's store page closes onto its row once it works, as adding
   // GitHub or a custom server does.
