@@ -92,6 +92,7 @@ import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { buildFederatedThreadRef, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { federationShortNameKey } from "@pwragent/shared/contracts/federation-short-names";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import type {
   MessagingBackendBridge,
@@ -289,10 +290,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async listNavigationOwners(): Promise<{ owners: Array<{ target?: FederationRemoteTarget; label: string }>; omitted: number }> {
     const peers = this.federation?.connectedPeerTargets().filter((peer) => peer.capabilities.includes("messaging_route")) ?? [];
+    const admittedPeers = peers.slice(0, 7);
     return {
       owners: [
         { label: "This instance" },
-        ...peers.slice(0, 7).map((peer) => ({ target: peer.target, label: peer.shortLabel ?? peer.label })),
+        ...admittedPeers.map((peer) => {
+          const { target, label, shortLabel } = peer;
+          if (!shortLabel) return { target, label };
+          const key = federationShortNameKey(shortLabel);
+          // Reserve full labels as well so falling back cannot create another collision.
+          const collides = admittedPeers.some((other) => other !== peer
+            && (federationShortNameKey(other.label) === key
+              || (other.shortLabel !== undefined && federationShortNameKey(other.shortLabel) === key)));
+          return { target, label: collides ? label : shortLabel };
+        }),
       ],
       omitted: Math.max(0, peers.length - 7),
     };
