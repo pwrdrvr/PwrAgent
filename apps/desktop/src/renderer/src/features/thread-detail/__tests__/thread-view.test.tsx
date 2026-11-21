@@ -4403,7 +4403,9 @@ describe("ThreadView", () => {
     expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
   });
 
-  it("navigates images across activity and message entries as one thread gallery", () => {
+  it("opens the fourth image and navigates all four when activity and reply reuse screenshot paths", () => {
+    const beforeSource = "file:///tmp/before.png";
+    const afterSource = "file:///tmp/after.png";
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
@@ -4473,8 +4475,15 @@ describe("ThreadView", () => {
                 images: [
                   {
                     type: "image",
-                    url: "https://example.test/overview.png",
-                    alt: "Overview",
+                    url: "pwragent-image://file/activity-before.png",
+                    sourceUrl: beforeSource,
+                    alt: "Activity before",
+                  },
+                  {
+                    type: "image",
+                    url: "pwragent-image://file/activity-after.png",
+                    sourceUrl: afterSource,
+                    alt: "Activity after",
                   },
                 ],
               },
@@ -4489,13 +4498,15 @@ describe("ThreadView", () => {
               { type: "text", text: "Two more screenshots." },
               {
                 type: "image",
-                url: "https://example.test/branches.png",
-                alt: "Branches",
+                url: "pwragent-image://file/reply-after.png",
+                sourceUrl: afterSource,
+                alt: "Reply after",
               },
               {
                 type: "image",
-                url: "https://example.test/remotes.png",
-                alt: "Remotes",
+                url: "pwragent-image://file/reply-before.png",
+                sourceUrl: beforeSource,
+                alt: "Reply before",
               },
             ],
           },
@@ -4506,28 +4517,39 @@ describe("ThreadView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand tool result image 1" }));
+    fireEvent.click(screen.getByAltText("Reply before"));
 
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
-    expect(within(dialog).getByRole("img", { name: "Overview" })).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("1 / 3");
-    // `aria-disabled`, not `disabled`: a disabled button fires no pointer
-    // events and so could never raise its own tooltip.
-    expect(screen.getByRole("button", { name: "Previous image" }))
-      .toHaveAttribute("aria-disabled", "true");
+    const gallery = within(dialog);
+    const previous = gallery.getByRole("button", { name: "Previous image" });
+    const next = gallery.getByRole("button", { name: "Next image" });
+    expect(gallery.getByRole("img", { name: "Reply before" }))
+      .toHaveAttribute("src", "pwragent-image://file/reply-before.png");
+    expect(dialog).toHaveTextContent("4 / 4");
+    expect(previous).toHaveAttribute("aria-disabled", "false");
+    expect(next).toHaveAttribute("aria-disabled", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Next image" }));
-    expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("2 / 3");
+    for (const [position, name] of [
+      [3, "Reply after"],
+      [2, "Activity after"],
+      [1, "Activity before"],
+    ] as const) {
+      fireEvent.click(previous);
+      expect(gallery.getByRole("img", { name })).toBeInTheDocument();
+      expect(dialog).toHaveTextContent(`${position} / 4`);
+    }
+    expect(previous).toHaveAttribute("aria-disabled", "true");
+    expect(next).toHaveAttribute("aria-disabled", "false");
 
-    fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(within(dialog).getByRole("img", { name: "Remotes" })).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("3 / 3");
-    expect(screen.getByRole("button", { name: "Next image" }))
-      .toHaveAttribute("aria-disabled", "true");
-
-    fireEvent.keyDown(window, { key: "ArrowLeft" });
-    expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();
+    for (const [position, name] of [
+      [2, "Activity after"],
+      [3, "Reply after"],
+      [4, "Reply before"],
+    ] as const) {
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      expect(gallery.getByRole("img", { name })).toBeInTheDocument();
+      expect(dialog).toHaveTextContent(`${position} / 4`);
+    }
   });
 
   it.each(["removed", "hydrated", "extended"] as const)(
