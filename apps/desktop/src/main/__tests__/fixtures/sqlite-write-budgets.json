@@ -1200,6 +1200,12 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "scheduled-claimed-heartbeat": {"commits": 1, "note": "One existing claimed lease renews every 10 seconds in one commit and one WAL frame. At 0.1 commit/s for 24 hours, 35.6 MB/day of existing WAL and zero additional projection WAL.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "scheduled-projection-create": {"commits": 1, "note": "One schedule insert and its projection trigger in the same commit.", "observedWalBytes": 24752, "rowsChanged": 2, "statements": 1},
+  "scheduled-projection-edit": {"commits": 1, "note": "One schedule and payload-reference update and its projection trigger in the same commit.", "observedWalBytes": 20600, "rowsChanged": 2, "statements": 1},
+  "scheduled-projection-claim": {"commits": 1, "note": "One dispatch claim and its projection trigger in the same commit.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 1},
+  "scheduled-projection-cancel": {"commits": 1, "note": "One claimed action ending and its projection trigger in the same commit.", "observedWalBytes": 20600, "rowsChanged": 2, "statements": 1},
+  "scheduled-projection-prune": {"commits": 1, "note": "One retained terminal action removed and its projection trigger in the same commit.", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 1},
   "settings-save-codex-path": {
     "commits": 2,
     "note": "one config publication and one discovery publication per explicit Codex path save; no idle writes",
