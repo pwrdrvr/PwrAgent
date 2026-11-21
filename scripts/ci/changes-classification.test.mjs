@@ -101,7 +101,7 @@ it("always runs full CI for non-PR events without a changed-file lookup", async 
 // CI does not.
 const platformPaths = [
   { path: "pnpm-lock.yaml", platform: true },
-  { path: "apps/desktop/e2e/onboarding-wizard.spec.ts", platform: true },
+  { path: "apps/desktop/e2e/get-started.spec.ts", platform: true },
   { path: "apps/desktop/e2e/fixtures/detached-profile-instances.ts", platform: true },
   { path: "apps/desktop/e2e/visual-regression.spec.ts", platform: true },
   { path: "apps/desktop/e2e/visual-regression.spec.ts-snapshots/pending-approval-darwin.webp", platform: true },

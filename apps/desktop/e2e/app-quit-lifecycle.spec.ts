@@ -272,12 +272,12 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
   }
 });
 
-test("exits the process when the first-run wizard is asked to quit", async () => {
+test("exits the process when first-run Get started is asked to quit", async () => {
   test.setTimeout(TEST_TIMEOUT_MS);
 
   // No profile dir, no onboarding seed: the boot decision resolves to
-  // `no-profile-configured` and app state comes up in bootstrap mode with the
-  // wizard on screen — the state that hung a full E2E run for an hour.
+  // `no-profile-configured` and app state comes up in bootstrap mode with Get
+  // started on screen — the state that hung a full E2E run for an hour.
   const app = await launchElectronApp({
     suppressOnboarding: false,
     requiresReplayDriver: false,
@@ -285,11 +285,11 @@ test("exits the process when the first-run wizard is asked to quit", async () =>
 
   try {
     await expect(
-      app.window.getByRole("heading", { name: /A few short choices/i }),
+      app.window.getByRole("dialog", { name: "Get started" }),
     ).toBeVisible();
     requestQuit(app.electronApp);
     const outcome = await awaitExit(app.electronApp);
-    expect(outcome.exited, describeOutcome("first-run wizard app", outcome)).toBe(
+    expect(outcome.exited, describeOutcome("first-run Get started app", outcome)).toBe(
       true,
     );
     expect(outcome.signalCode).toBeNull();

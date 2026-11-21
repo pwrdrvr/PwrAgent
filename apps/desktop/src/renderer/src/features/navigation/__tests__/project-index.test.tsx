@@ -293,7 +293,7 @@ describe("Sidebar project index", () => {
       onProjectIndexWidthChange: undefined,
     });
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /project index/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sidebar view" })).not.toBeInTheDocument();
   });
 
   it("marks a project whose only running turn is on a peer with the grey scanner", () => {
@@ -380,11 +380,12 @@ describe("Sidebar project index", () => {
     expect(scrollTop).toBe(1400);
   });
 
-  it("hides and shows from the toggle beside the lens switch", () => {
+  it("hides and shows from the view menu beside the lens switch", () => {
     const { onProjectIndexHiddenChange, rerender } = renderSidebar();
-    const toggle = screen.getByRole("button", { name: "Project index" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
+    const item = screen.getByRole("menuitemcheckbox", { name: /Project index/ });
+    expect(item).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(item);
     expect(onProjectIndexHiddenChange).toHaveBeenCalledWith(true);
 
     const threads = [thread("t-quill", "quill"), thread("t-relay", "relay")];
@@ -408,7 +409,7 @@ describe("Sidebar project index", () => {
       />,
     );
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Project index" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("menuitemcheckbox", { name: /Project index/ })).toHaveAttribute("aria-checked", "false");
   });
 
   it("says why the index is missing when the sidebar is too narrow for it", () => {
@@ -417,11 +418,11 @@ describe("Sidebar project index", () => {
     // no container queries, so hide it the way that rule does.
     const pane = screen.getByRole("navigation", { name: "Project index" }).parentElement!;
     pane.style.display = "none";
-    fireEvent.focus(screen.getByRole("button", { name: "Project index" }));
-    expect(screen.getByText("Hide project index · Widen the sidebar to show it")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: /Project index/ })).toHaveTextContent("Widen the sidebar to show it");
   });
 
-  it("steps aside for a single project, keeping the toggle", () => {
+  it("steps aside for a single project, keeping the menu item", () => {
     const threads = [thread("t-quill", "quill")];
     renderSidebar({
       directories: [directory("quill", "t-quill")],
@@ -429,8 +430,36 @@ describe("Sidebar project index", () => {
       threads,
     });
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
-    fireEvent.focus(screen.getByRole("button", { name: "Project index" }));
-    expect(screen.getByText("Hide project index · Shown with two or more projects")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: /Project index/ })).toHaveTextContent("Shown with two or more projects");
+  });
+});
+
+describe("Sidebar view menu", () => {
+  it("offers the three row styles and applies one without closing", () => {
+    const onDensityChange = vi.fn();
+    renderSidebar({ density: "mission-control", onDensityChange });
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
+    const radios = screen.getAllByRole("menuitemradio");
+    expect(radios.map((radio) => radio.querySelector(".sidebar-view-menu__title")?.textContent))
+      .toEqual(["Mission control", "Compact", "Minimal"]);
+    expect(radios.map((radio) => radio.getAttribute("aria-checked")))
+      .toEqual(["true", "false", "false"]);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Minimal/ }));
+    expect(onDensityChange).toHaveBeenCalledWith("minimal");
+    expect(screen.getByRole("menu", { name: "Sidebar view" })).toBeInTheDocument();
+  });
+
+  it("is still offered without a project index", () => {
+    renderSidebar({
+      density: "compact",
+      onDensityChange: () => undefined,
+      onProjectIndexHiddenChange: undefined,
+      onProjectIndexWidthChange: undefined,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
+    expect(screen.getByRole("menuitemradio", { name: /Compact/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("menuitemcheckbox", { name: /Project index/ })).not.toBeInTheDocument();
   });
 });
 
