@@ -302,4 +302,58 @@ describe("WorktreeReflinkCapabilityProbe", () => {
     await probe.read("/repo");
     expect(git.state.helpReads).toBe(1);
   });
+
+  // What a Git can do does not depend on which repository it is asked in, so
+  // one directory that is hibernated, deleted, or no repository must not hide
+  // the answer the others would give. The oracle is the Git's own truth.
+  it("reports the Git's capabilities when any offered directory is a repository, and remembers nothing when none is", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(...PATHS),
+      fc.array(fc.constantFrom("repository" as const, "missing" as const, "plain" as const), { minLength: 1, maxLength: 4 }),
+      async (selected, kinds) => {
+        const git = world();
+        git.state.selected = selected;
+        const directories = kinds.map((kind, index) => `/${kind}/${index}`);
+        const asked: string[] = [];
+        const probe = new WorktreeReflinkCapabilityProbe<Identity>({
+          identify: async () => git.identify(),
+          readHelp: async (identity, cwd) => {
+            asked.push(cwd);
+            if (cwd.startsWith("/missing/")) return `fatal: cannot change to '${cwd}': No such file or directory\n`;
+            if (cwd.startsWith("/plain/")) return "fatal: not a git repository (or any of the parent directories): .git\n";
+            return git.help(identity);
+          },
+        });
+        const firstRepository = kinds.indexOf("repository");
+        const result = await probe.read(directories);
+        if (firstRepository === -1) {
+          expect(result).toMatchObject({ answered: false, capabilities: NO_WORKTREE_REFLINK_CAPABILITIES });
+          expect(asked).toEqual(directories);
+          // Not remembered: a repository offered next is asked.
+          expect(await probe.read("/repository/later"))
+            .toMatchObject({ answered: true, capabilities: git.truth(git.currentKey()) });
+          return;
+        }
+        expect(result).toMatchObject({ answered: true, capabilities: git.truth(git.currentKey()) });
+        // In order, and no further than the first that answers.
+        expect(asked).toEqual(directories.slice(0, firstRepository + 1));
+        // Remembered for the Git: a directory that cannot answer is not asked.
+        expect(await probe.read("/missing/later")).toMatchObject({ answered: true, capabilities: result.capabilities });
+        expect(asked).toHaveLength(firstRepository + 1);
+      },
+    ));
+  });
+
+  it("launches Git in a bounded number of directories", async () => {
+    const git = world();
+    git.state.selected = "/git/b";
+    let reads = 0;
+    const probe = new WorktreeReflinkCapabilityProbe<Identity>({
+      identify: async () => git.identify(),
+      readHelp: async () => { reads += 1; return "fatal: not a git repository\n"; },
+    });
+    const many = Array.from({ length: 40 }, (_, index) => `/plain/${index}`);
+    expect((await probe.read(many)).answered).toBe(false);
+    expect(reads).toBe(4);
+  });
 });

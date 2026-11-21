@@ -149,6 +149,9 @@ export type WorktreeReflinkServiceDependencies<Identity extends GitRuntimeIdenti
   ) => Promise<void>;
 };
 
+export const WORKTREE_TURN_RUNNING_REASON =
+  "A turn is running in this worktree. Share its storage when the turn finishes.";
+
 function runtimeOf(result: { identity: GitRuntimeIdentity; capabilities: WorktreeReflinkCapabilities }): WorktreeReflinkRuntime {
   return { capabilities: result.capabilities, runtimeKey: result.identity.key };
 }
@@ -158,8 +161,9 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
 
   constructor(private readonly dependencies: WorktreeReflinkServiceDependencies<Identity>) {}
 
-  async readCapabilities(cwd: string): Promise<WorktreeReflinkRuntime> {
-    return runtimeOf(await this.dependencies.probe.read(cwd));
+  /** `directories`: the target first, then other repositories to ask in its place. */
+  async readCapabilities(directories: string | readonly string[]): Promise<WorktreeReflinkRuntime> {
+    return runtimeOf(await this.dependencies.probe.read(directories));
   }
 
   /**
@@ -167,15 +171,23 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
    * uses the executable that answered. A share made for another Git (the
    * `runtimeKey` the operator's choices were shown against) does not run:
    * an option ticked for one Git is not consent for the next.
+   *
+   * A share replaces files, which races anything else writing them. `isBusy`
+   * says whether a turn is running in the worktree, in any thread; a share
+   * does not start while one is. An estimate changes nothing and always runs.
    */
   async run(params: {
     cwd: string;
     mode: WorktreeReflinkMode;
     verifyFilters?: boolean;
     runtimeKey: string;
+    isBusy?: () => Promise<boolean>;
   }): Promise<RunWorktreeReflinkResponse> {
     const probed = await this.dependencies.probe.read(params.cwd);
     const runtime = runtimeOf(probed);
+    if (!probed.answered) {
+      return { status: "failed", reason: "The selected Git could not be run in this worktree." };
+    }
     if (params.mode === "share" && probed.identity.key !== params.runtimeKey) {
       return { status: "runtime-changed", ...runtime };
     }
@@ -199,6 +211,10 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
       this.sharing.add(params.cwd);
     }
     try {
+      // Checked after the claim above, so two shares cannot both pass it.
+      if (params.mode === "share" && await params.isBusy?.()) {
+        return { status: "failed", reason: WORKTREE_TURN_RUNNING_REASON };
+      }
       const reader = new WorktreeReflinkOutputReader();
       let outcome: WorktreeReflinkOutcome;
       try {

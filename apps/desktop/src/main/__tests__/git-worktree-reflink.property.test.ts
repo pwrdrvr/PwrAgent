@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  WORKTREE_TURN_RUNNING_REASON,
   WorktreeReflinkOutputReader,
   WorktreeReflinkService,
   planWorktreeReflink,
@@ -250,7 +251,7 @@ describe("WorktreeReflinkService", () => {
   it("keeps the summary Git printed before it exited non-zero, and reports Git's own complaint otherwise", async () => {
     const identity: Identity = { key: "k", executable: "/git", version: "pwrgit.2" };
     const failing = (stdout: string, error: object) => new WorktreeReflinkService<Identity>({
-      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"] }) },
+      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"], answered: true }) },
       run: async (_identity, _cwd, _args, onStdout) => {
         onStdout(stdout);
         throw Object.assign(new Error("Git exited with code 1."), error);
@@ -268,7 +269,7 @@ describe("WorktreeReflinkService", () => {
     const identity: Identity = { key: "k", executable: "/git", version: "pwrgit.2" };
     let release: (() => void) | undefined;
     const service = new WorktreeReflinkService<Identity>({
-      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"] }) },
+      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"], answered: true }) },
       run: async (_identity, _cwd, _args, onStdout) => {
         await new Promise<void>((resolve) => { release = resolve; });
         onStdout(PWRGIT_2_DRY_RUN_PORCELAIN);
@@ -285,5 +286,59 @@ describe("WorktreeReflinkService", () => {
     await expect.poll(() => release).toBeDefined();
     release!();
     await expect(again).resolves.toMatchObject({ status: "completed" });
+  });
+
+  // A share replaces files. A turn in the worktree, in any thread, is writing
+  // them. The model: the worktree is busy or not at each request, and the
+  // oracle is that Git is launched for a share only when it was not.
+  it("never starts a share while a turn runs in the worktree, and never lets a turn stop an estimate", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({ mode: modeArbitrary, busy: fc.boolean() }), { minLength: 1, maxLength: 20 }),
+      async (requests) => {
+        const { runs, service } = harness("pwrgit.2");
+        const runtimeKey = (await service.readCapabilities("/repo")).runtimeKey;
+        for (const request of requests) {
+          const before = runs.length;
+          const response = await service.run({
+            cwd: "/repo",
+            mode: request.mode,
+            runtimeKey,
+            isBusy: async () => request.busy,
+          });
+          if (request.mode === "share" && request.busy) {
+            expect(response).toEqual({ status: "failed", reason: WORKTREE_TURN_RUNNING_REASON });
+            expect(runs).toHaveLength(before);
+          } else {
+            // A refused share leaves nothing claimed: the next request runs.
+            expect(response.status).toBe("completed");
+            expect(runs).toHaveLength(before + 1);
+            expect(runs[before].args.includes("--dry-run")).toBe(request.mode === "estimate");
+          }
+        }
+      },
+    ));
+  });
+
+  it("does not ask whether the worktree is busy for a share Git would not run", async () => {
+    const { state, service } = harness("pwrgit.2");
+    const runtimeKey = (await service.readCapabilities("/repo")).runtimeKey;
+    state.selected = "pwrgit.1";
+    let asked = 0;
+    const isBusy = async () => { asked += 1; return true; };
+    await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey, isBusy }))
+      .resolves.toMatchObject({ status: "runtime-changed" });
+    expect(asked).toBe(0);
+  });
+
+  it("says Git could not be run, rather than that it cannot share, when the worktree gives no usage", async () => {
+    const service = new WorktreeReflinkService<Identity>({
+      probe: new WorktreeReflinkCapabilityProbe<Identity>({
+        identify: async () => ({ key: "k", executable: "/git", version: "pwrgit.2" }),
+        readHelp: async () => "fatal: not a git repository (or any of the parent directories): .git\n",
+      }),
+      run: async () => { throw new Error("must not run"); },
+    });
+    await expect(service.run({ cwd: "/gone", mode: "estimate", runtimeKey: "k" }))
+      .resolves.toEqual({ status: "failed", reason: "The selected Git could not be run in this worktree." });
   });
 });

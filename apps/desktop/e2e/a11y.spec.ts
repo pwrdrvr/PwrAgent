@@ -53,6 +53,11 @@ import {
 } from "./fixtures/pr-watch-state-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
 import { buildAuditSubAgents } from "./fixtures/sub-agent-state-seeding";
+import {
+  WORKTREE_STORAGE_AUDIT_LABEL,
+  prepareWorktreeStorageAudit,
+  seedWorktreeStorageAuditState,
+} from "./fixtures/worktree-storage-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
@@ -966,6 +971,78 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await expect(watchedCard.getByText("Stopped by the agent")).toBeVisible();
           await app.window.mouse.move(0, 0);
           await runAxe(app.window, "rail Pull requests watch history");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The Share storage dialog is reachable only from a worktree row, and
+    // only when the selected Git's help lists `git worktree reflink`. No
+    // fixture thread has a worktree that exists on disk, and what a real run
+    // reports depends on the runner's filesystem, so this block links a real
+    // directory to the smoke thread and selects a stand-in Git (see
+    // fixtures/worktree-storage-seeding.ts). The main process still
+    // authorizes the path against the thread and probes the Git's help
+    // before the renderer is offered anything.
+    test("share storage dialog has no violations", async () => {
+      test.skip(
+        process.platform === "win32",
+        "The stand-in Git is a shell script, which Windows cannot run as PWRAGENT_GIT_PATH.",
+      );
+      // Three unscoped scans plus a launch.
+      test.setTimeout(60_000);
+      const audit = await prepareWorktreeStorageAudit(test.info().outputPath("worktree-storage"));
+      const app = await launchAuditApp({
+        ...appearance,
+        env: { PWRAGENT_GIT_PATH: audit.gitPath },
+        preLaunchHook: async (homeRoot) => {
+          await seedWorktreeStorageAuditState(homeRoot, audit);
+        },
+      });
+      try {
+        await app.window
+          .getByRole("button", { name: /Replay smoke thread/i })
+          .first()
+          .click();
+        await expect(
+          app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" }),
+        ).toBeVisible();
+        const contextRail = app.window.getByRole("complementary", { name: "Thread context" });
+        await contextRail.getByRole("tab", { name: "Linked projects" }).click();
+        await contextRail
+          .getByRole("button", { name: `Share storage for ${WORKTREE_STORAGE_AUDIT_LABEL}`, exact: true })
+          .click();
+        const dialog = app.window.getByRole("dialog", { name: "Share worktree storage", exact: true });
+        const verify = dialog.getByRole("checkbox", { name: /^Verify filtered files/ });
+        const share = dialog.getByRole("button", { name: "Share storage", exact: true });
+
+        await test.step("share storage estimate", async () => {
+          // Without the estimate and the option, this would scan the
+          // "Checking the selected Git..." state and pass on an empty dialog.
+          await expect(dialog.getByText(/1,204 of 3,310 files can be shared, freeing about 412 MB\./))
+            .toBeVisible();
+          await expect(verify).toBeVisible();
+          if (runsFunctionalChecks) {
+            // Filter verification is never on until the operator asks.
+            await expect(verify).not.toBeChecked();
+            await expect(share).toBeEnabled();
+          }
+          await runAxe(app.window, "share storage estimate");
+        });
+
+        await test.step("share storage with filter verification chosen", async () => {
+          await verify.check();
+          await expect(verify).toBeChecked();
+          await runAxe(app.window, "share storage with filter verification chosen");
+        });
+
+        await test.step("share storage result", async () => {
+          await share.click();
+          await expect(dialog.getByText(/Shared 1,204 files, freeing 412 MB\./)).toBeVisible();
+          await expect(dialog.getByText(/Filtered files were verified\./)).toBeVisible();
+          await expect(dialog.getByRole("button", { name: "Done", exact: true })).toBeVisible();
+          await runAxe(app.window, "share storage result");
         });
       } finally {
         await app.close();
