@@ -333,6 +333,8 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
     });
   }
 
+  // Each example builds and starts three owners. Report the first failure
+  // and its seed before shrinking can spend the Vitest deadline.
   await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
     const example = ++sample;
     trace(`${example} setup:start`);
@@ -391,11 +393,14 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
         expect(snapshot(), `${kind} shutdown changed unsupported provider state`).toBe(expected);
         ownerTrace("stopped-snapshot:done");
       }
+    } catch (error) {
+      trace(`${example} failed: ${String(error).slice(0, 900)}`);
+      throw error;
     } finally {
       trace(`${example} cleanup:start`);
       await removeOwnerFixture(root, host);
       activeRoot = undefined;
       trace(`${example} cleanup:done`);
     }
-  }), { numRuns: 3 });
+  }), { numRuns: 3, endOnFailure: true });
 }, 120_000);
