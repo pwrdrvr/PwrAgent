@@ -17,7 +17,8 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
   // recovery guard, research, request-pricing, sub-agent dismissal, and
-  // operator-request scope changes that followed it.
+  // operator-request scope changes that followed it. Restore the two index
+  // definitions replaced in v83.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
@@ -36,9 +37,22 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.name !== "idx_thread_todos_thread_backend"
     && row.name !== "idx_thread_reviews_backend"
     && row.name !== "idx_thread_reviews_thread_backend"
-  ).map(row => row.name === "thread_usage_lines"
-    ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
-    : row) : rows;
+    && row.name !== "idx_thread_usage_lines_completion_turn"
+  ).map(row => {
+    if (row.name === "thread_usage_lines") {
+      return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
+    }
+    if (row.name === "idx_thread_usage_turns_turn") {
+      return { ...row, sql: row.sql?.replace(
+        "(backend, thread_id, turn_id)\n  WHERE turn_id IS NOT NULL",
+        "(provider, backend, thread_id, turn_id)",
+      ) };
+    }
+    if (row.name === "idx_thread_usage_lines_read_parent") {
+      return { ...row, sql: row.sql?.replace("parent_thread_id IS NOT NULL AND ", "") };
+    }
+    return row;
+  }) : rows;
   return {
     sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
     objects: compared.length,
