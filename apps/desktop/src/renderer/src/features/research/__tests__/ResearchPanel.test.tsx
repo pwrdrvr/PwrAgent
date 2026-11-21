@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import fc from "fast-check";
+import { Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyResearchChanges,
@@ -15,6 +17,7 @@ import {
   type ResearchChanges,
   type ResearchChangesRequest,
   type ResearchEvent,
+  type ResearchEventPage,
   type ResearchRun,
   type ResearchSnapshot,
   type ResearchSnapshotRequest,
@@ -524,7 +527,17 @@ describe("Research panel", () => {
   it("pages Activity newest first, reads only new events on a change, and reaches the first event with Show older", async () => {
     const data = snapshot(250);
     const { api, mocks, changed } = apiFor(data);
-    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    const user = userEvent.setup();
+    let lastPageButton: HTMLElement | undefined;
+    let focusWhenButtonDisappeared: Element | null | undefined;
+    render(<Profiler id="activity" onRender={() => {
+      // Observe the commit that removed the button before passive effects run.
+      if (lastPageButton && !lastPageButton.isConnected && focusWhenButtonDisappeared === undefined) {
+        focusWhenButtonDisappeared = document.activeElement;
+      }
+    }}>
+      <ResearchPanel desktopApi={api} thread={thread} />
+    </Profiler>);
     await screen.findByLabelText("Research map");
     expect(mocks.readResearchEvents).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
@@ -542,13 +555,30 @@ describe("Research panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show older" }));
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(201));
     expect(mocks.readResearchEvents).toHaveBeenLastCalledWith(expect.objectContaining({ range: { beforeSeq: 153, limit: 100 } }));
-    fireEvent.click(screen.getByRole("button", { name: "Show older" }));
-    await waitFor(() => expect(screen.getByText("All 253 events.")).toBeInTheDocument());
+    expect(list).not.toHaveFocus();
+
+    const finalPage = Promise.withResolvers<ResearchEventPage>();
+    const readFinalPage = vi.fn(() => finalPage.promise);
+    mocks.readResearchEvents.mockImplementationOnce(readFinalPage);
+    lastPageButton = screen.getByRole("button", { name: "Show older" });
+    lastPageButton.focus();
+    expect(lastPageButton).toHaveFocus();
+    await user.keyboard("{Enter}");
+    const range = { beforeSeq: 53, limit: 100 };
+    expect(readFinalPage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ range }));
+    expect(lastPageButton).toBeDisabled();
+    expect(list).not.toHaveFocus();
+    await act(async () => finalPage.resolve(researchEventPage(data.runs[0]!, range)));
+
+    expect(screen.getByText("All 253 events.")).toBeInTheDocument();
     const rows = within(list).getAllByRole("listitem");
     expect(rows).toHaveLength(253);
     expect(rows.at(-1)).toHaveTextContent("Run requested");
     expect(screen.queryByRole("button", { name: "Show older" })).not.toBeInTheDocument();
     expect(list).toHaveFocus();
+    expect(focusWhenButtonDisappeared === list,
+      `Expected focus on the Research activity list when Show older disappeared, received ${focusWhenButtonDisappeared?.tagName ?? "no element"}`,
+    ).toBe(true);
   });
 
   it("counts events the Activity read found beyond the board it was given", async () => {

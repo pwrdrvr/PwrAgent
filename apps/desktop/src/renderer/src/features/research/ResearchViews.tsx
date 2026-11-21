@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ResearchFinding, ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
@@ -144,9 +144,9 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
 
   const older = activity.loaded.nextBeforeSeq !== undefined;
   const list = useRef<HTMLOListElement>(null);
-  // Show older disappears with the last page; keep focus in the list instead of dropping it to the page.
+  // Move focus in the same commit that removes Show older on the last page.
   const requestedOlder = useRef(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (older || !requestedOlder.current) return;
     requestedOlder.current = false;
     list.current?.focus();
