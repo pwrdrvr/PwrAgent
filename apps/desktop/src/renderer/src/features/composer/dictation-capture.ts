@@ -4,7 +4,7 @@ export async function startDictationCapture(
   signal: AbortSignal,
   onAudio: (pcm: Uint8Array) => void,
   onInterrupted: () => void,
-): Promise<{ finish: () => Promise<void> }> {
+): Promise<{ finish: () => Promise<void>; playReadyTone: () => void }> {
   const microphone = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 }, video: false });
   const tracks = microphone.getTracks();
   const stopTracks = () => {
@@ -49,7 +49,25 @@ export async function startDictationCapture(
     await context.resume();
     checkMicrophone();
 
-    return { finish: async () => {
+    const audio = context;
+    return { playReadyTone: () => {
+      if (audio.state !== "running") return;
+      // Two short rising notes, quiet enough to sit under speech.
+      const gain = audio.createGain();
+      gain.connect(audio.destination);
+      const start = audio.currentTime;
+      for (const [index, frequency] of [660, 880].entries()) {
+        const at = start + index * 0.09;
+        const note = audio.createOscillator();
+        note.frequency.value = frequency;
+        note.connect(gain);
+        gain.gain.setValueAtTime(0, at);
+        gain.gain.linearRampToValueAtTime(0.08, at + 0.01);
+        gain.gain.linearRampToValueAtTime(0, at + 0.08);
+        note.start(at);
+        note.stop(at + 0.09);
+      }
+    }, finish: async () => {
       stopTracks();
       capture.port.postMessage("flush");
       const timeout = setTimeout(flushed.resolve, 1_000);

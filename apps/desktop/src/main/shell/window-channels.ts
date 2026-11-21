@@ -94,6 +94,13 @@ export function federationTargetForChannelSubscriber(
   return entries.get(webContents)?.federationTarget;
 }
 
+/** Any main window: this instance's own profile or a federation viewer. */
+export function isMainWindowWebContents(
+  webContents: WebContents | undefined,
+): boolean {
+  return (webContents ? entries.get(webContents) : undefined)?.kind === WINDOW_KIND_MAIN;
+}
+
 /** A main window on this instance's own profile, not a federation viewer. */
 export function isLocalMainWindowWebContents(
   webContents: WebContents | undefined,

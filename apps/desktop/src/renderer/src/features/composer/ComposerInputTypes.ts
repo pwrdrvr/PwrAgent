@@ -61,7 +61,7 @@ export type ComposerInputChangeMetadata = {
 };
 
 export type ComposerInputHandle = {
-  appendPlainText: (text: string) => boolean;
+  appendPlainText: (text: string, options?: { focusEnd?: boolean }) => boolean;
   deleteSelection: () => void;
   focus: (options?: { synchronous?: boolean }) => void;
   insertMentionToken: (token: ComposerSkillToken) => boolean;

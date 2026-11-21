@@ -50197,8 +50197,40 @@ button.composer__subthread-source-parent:hover {
   gap: 4px;
 }
 
+.composer__dictation-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer__dictation-level {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--accent-soft);
+}
+
+.composer__dictation-level > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(var(--dictation-level, 0));
+  transform-origin: left center;
+  transition: transform 90ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__dictation-level > span {
+    transition: none;
+  }
+}
+
 .composer__dictation-preview {
-  max-height: 5em;
+  /* A whole number of lines, so the oldest visible line is never cut in half
+     while the preview follows the newest text. */
+  max-height: calc(1.45em * 6);
   overflow: auto;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

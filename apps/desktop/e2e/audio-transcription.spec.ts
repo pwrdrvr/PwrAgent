@@ -180,6 +180,8 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
     await page.getByRole("button", { name: "Stop dictation", exact: true }).click();
     await expect(reply.locator("p")).toHaveText([DRAFT, TRANSCRIPT]);
     await expect(reply).toBeEditable();
+    // The keyboard returns to the draft, after the transcript.
+    await expect(reply).toBeFocused();
     expect(await app.getLastStartTurn()).toBeFalsy();
     expect(await connection.jsonValue()).toMatchObject({
       started: 1,
