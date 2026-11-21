@@ -2,7 +2,7 @@ import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shar
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -164,7 +164,7 @@ it("keeps checkpoints equal to the ledger through replay, regrouping, and repric
   }), { numRuns: 25 });
 });
 
-it("upgrades existing totals lazily and keeps peer writes and rollbacks in the ledger commit", async () => {
+it.each([82, 83, 84])("upgrades pricing from a v%i profile and keeps peer writes and rollbacks in the ledger commit", async (version) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const temp = createTempStateDb("pwragent-pricing-summary-");
   let db: StateDb | undefined;
@@ -175,26 +175,27 @@ it("upgrades existing totals lazily and keeps peer writes and rollbacks in the l
       usageLine("legacy-root"),
       usageLine("legacy-child", { threadId: "legacy-child", parentThreadId: thread.threadId }),
     ] });
-    // Restore the v82 schema and emulate a ledger edit that v82's summaries
-    // did not capture. The upgrade must not treat its old total as a baseline.
+    // Restore the pre-delta schema, including profiles stamped by another
+    // build. Emulate a ledger edit those summaries did not capture.
     db.raw.exec(`
       DROP TRIGGER thread_pricing_summary_delta_insert;
       DROP TRIGGER thread_pricing_summary_delta_update;
       DROP TRIGGER thread_pricing_summary_delta_delete;
       ALTER TABLE thread_pricing_summaries DROP COLUMN ledger_delta_ready;
       UPDATE thread_usage_lines SET input_tokens = 100 WHERE usage_line_id = 'legacy-child';
-      PRAGMA user_version = 82;
     `);
+    db.raw.pragma(`user_version = ${version}`);
     db.close();
     db = StateDb.open(temp.dbPath);
     const store = new SqliteOverlayStore(db);
-    expect(db.raw.prepare("SELECT ledger_delta_ready FROM thread_pricing_summaries").get())
-      .toEqual({ ledger_delta_ready: 0 });
     await appendAndCheck(store, db, "first-upgraded");
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, CURRENT_STATE_DB_USER_VERSION));
 
     // Alternating owners and a raw edit exercise the SQLite triggers on
     // independent connections. A trigger write counts in total_changes().
+    const versionBeforeReopen = db.raw.pragma("data_version", { simple: true });
     peer = StateDb.open(temp.dbPath);
+    expect(db.raw.pragma("data_version", { simple: true })).toBe(versionBeforeReopen);
     const peerStore = new SqliteOverlayStore(peer);
     const writers = [{ store, db }, { store: peerStore, db: peer }];
     const totalChanges = () => writers.reduce((sum, writer) =>
