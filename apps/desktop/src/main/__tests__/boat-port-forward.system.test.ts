@@ -41,6 +41,8 @@ const version = await sshVersion();
 
 describe.runIf(version !== undefined)("the system tunnel runtime", () => {
   it("makes a key ssh will load and starts ssh with options it accepts, failing only to connect", async () => {
+    // On Windows, the client that applies Windows ACLs, not Git's MSYS ssh.
+    if (process.platform === "win32") expect(version).toMatch(/^OpenSSH_for_Windows/);
     const directory = await runtime.makeDirectory();
     made.push(directory);
     const { publicKey, privateKeyPath } = await runtime.createKey(directory);
