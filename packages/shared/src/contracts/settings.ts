@@ -45,9 +45,9 @@ export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
 /**
- * The operator's worktree folder for `user-home` worktrees: PwrAgent's go to
- * `<directory>/.pwragent/worktrees`, and Codex threads' to
- * `<directory>/.codex/worktrees` only when `includeCodex` is on.
+ * The operator's worktree folder for `user-home` worktrees: PwrAgent's go
+ * straight into `<directory>`, and Codex threads' to `<directory>/codex` only
+ * when `includeCodex` is on.
  */
 export type DesktopWorktreeFolder = {
   directory: string;
@@ -59,7 +59,8 @@ export type DesktopWorktreeFolder = {
  * demand off the settings snapshot. `not-responding`: the check timed out,
  * as on a stale network mount.
  */
-export type DesktopWorktreeFolderStatus = "available" | "missing" | "not-responding";
+/** `in-use`: the folder holds other files and is not marked as PwrAgent's. */
+export type DesktopWorktreeFolderStatus = "available" | "missing" | "not-responding" | "in-use";
 
 export type DesktopWorktreeFolderCheck = {
   /** The configured folder that was checked; absent when none is set. */
@@ -1819,7 +1820,7 @@ export type DesktopSettingsSnapshot = {
     effectivePath: string;
     /**
      * Folder that replaces the home folder for `user-home` worktrees, which
-     * then live in `<baseDirectory>/.pwragent/worktrees`. Absent: home folder.
+     * then live directly in `<baseDirectory>`. Absent: home folder.
      */
     baseDirectory?: string;
     /** Codex threads use the folder too; Codex Desktop then does not list them. */

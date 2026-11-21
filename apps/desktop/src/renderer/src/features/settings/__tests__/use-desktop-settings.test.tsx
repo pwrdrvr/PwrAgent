@@ -1,11 +1,46 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
+import { isToolManagedWorktreePath, setConfiguredWorktreeFolder } from "@pwragent/shared/worktree-paths";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 import { useDesktopSettings } from "../useDesktopSettings";
 
 describe("useDesktopSettings", () => {
+  it("teaches this window's path recognition the worktree folder from each snapshot", async () => {
+    // Worktrees in the folder have no `.pwragent/worktrees` in their path.
+    const worktree = "/Volumes/Dev/Worktrees/mwqrxb7t/Orbit";
+    const folderSnapshot = {
+      worktrees: { baseDirectory: "/Volumes/Dev/Worktrees" },
+    } as unknown as DesktopSettingsSnapshot;
+    const homeSnapshot = { worktrees: {} } as unknown as DesktopSettingsSnapshot;
+    let runtimeChanged: Parameters<NonNullable<DesktopApi["onSettingsRuntimeChanged"]>>[0] | undefined;
+    const readSettings = vi
+      .fn<NonNullable<DesktopApi["readSettings"]>>()
+      .mockResolvedValueOnce({ snapshot: folderSnapshot })
+      .mockResolvedValueOnce({ snapshot: homeSnapshot });
+    const desktopApi: DesktopApi = {
+      onSettingsRuntimeChanged: (callback) => {
+        runtimeChanged = callback;
+        return () => {
+          runtimeChanged = undefined;
+        };
+      },
+      readSettings,
+    };
+    try {
+      const { result } = renderHook(() => useDesktopSettings(desktopApi));
+      await waitFor(() => expect(result.current.snapshot).toBe(folderSnapshot));
+      expect(isToolManagedWorktreePath(worktree)).toBe(true);
+
+      act(() => runtimeChanged?.({ version: 2, configRevision: "home", changedDomains: ["worktrees"] }));
+      await waitFor(() => expect(result.current.snapshot).toBe(homeSnapshot));
+      expect(isToolManagedWorktreePath(worktree)).toBe(false);
+    } finally {
+      setConfiguredWorktreeFolder(undefined);
+    }
+  });
+
   it("refreshes when a delayed managed runtime switch completes", async () => {
     let runtimeChanged: (() => void) | undefined;
     const readSettings = vi
