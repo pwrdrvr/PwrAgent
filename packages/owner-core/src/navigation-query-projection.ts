@@ -81,6 +81,8 @@ export type NavigationQueryIndex = {
   directories: NavigationDirectorySummary[];
   /** Worktree directory keys folded into each primary project. */
   worktreeProjectAliases?: Record<string, string[]>;
+  /** The checkout supplying fallback repository identity for a synthesized parent project. */
+  worktreeRepositorySources?: Record<string, { key: string; repositoryRevision?: string }>;
   threads: NavigationThreadSummary[];
   inputRequestThreadKeys?: ReadonlySet<string>;
   /** The observation clock value taken when this index's listing began. */
@@ -661,14 +663,19 @@ function projectDirectoryGitStatus(status: NavigationDirectoryGitStatus | undefi
   };
 }
 
+export function navigationDirectoryRepositoryRevision(status: NavigationDirectoryGitStatus | undefined): string | undefined {
+  const remotes = status?.remoteRepositories;
+  if ((status?.originRepository?.length ?? 0) > 1024
+    || (remotes && (remotes.length > 32 || remotes.some((remote) => remote.length > 1024)))) return undefined;
+  return hashValue(["repository", status?.originRepository, remotes]);
+}
+
 /** Compare the current write with the serving snapshot, independently of prior notifications or writers. */
 export function navigationDirectoryGitRevisions(status: NavigationDirectoryGitStatus | undefined): NavigationDirectoryGitRevisions | undefined {
-  const remotes = status?.remoteRepositories;
-  if (remotes && (remotes.length > 32 || remotes.some((remote) => remote.length > 1024))) return undefined;
+  const repository = navigationDirectoryRepositoryRevision(status);
+  if (!repository) return undefined;
   const descriptor = projectDirectoryGitStatus(status);
-  if ((status?.originRepository?.length ?? 0) > 1024
-    || Object.values(descriptor ?? {}).some((value) => typeof value === "string" && value.length > 1024)) return undefined;
-  const repository = hashValue(["repository", status?.originRepository, remotes]);
+  if (Object.values(descriptor ?? {}).some((value) => typeof value === "string" && value.length > 1024)) return undefined;
   return { version: 1, repository, descriptor: hashValue(["descriptor", repository, descriptor]) };
 }
 
@@ -1426,6 +1433,12 @@ function collectionDirectoryGitProof(params: {
     const revisions = navigationDirectoryGitRevisions(dir.gitStatus);
     if (!revisions) return undefined;
     directories.push(Object.freeze([dir.key, revisions[part]] as const));
+    const source = index.worktreeRepositorySources?.[dir.key];
+    if (source) {
+      if (!source.repositoryRevision || source.key.length > DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH) return undefined;
+      directories.push(Object.freeze([source.key, source.repositoryRevision] as const));
+    }
+    if (directories.length > DIRECTORY_GIT_PROOF_MAX_KEYS) return undefined;
   }
   directories.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   return Object.freeze({ version: 1, directories: Object.freeze(directories) });
