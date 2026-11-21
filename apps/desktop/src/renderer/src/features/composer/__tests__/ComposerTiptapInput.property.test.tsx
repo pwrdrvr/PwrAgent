@@ -3,6 +3,7 @@ import { createRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { expect, it } from "vitest";
 import fc from "fast-check";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
 import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 
@@ -55,6 +56,31 @@ it("restoring autocomplete and replaying accessibility inputs reaches a silent d
 
 it("does not replay stale content while restoring /a (shrunk #2281 regression)", () => {
   checkFixpoint("/a", [{ disabled: false, readOnly: false, expanded: false }]);
+});
+
+it("restores fenced code and its surrounding paragraphs as parsed by CommonMark", () => {
+  const codeLines = fc.oneof(
+    fc.constant([""]),
+    fc.array(fc.constantFrom("", " ", "  at src/example.test.ts:1:2", "FAIL"), { maxLength: 5 }),
+  );
+  fc.assert(fc.property(fc.constantFrom("", "text", "console"), codeLines, (language, lines) => {
+    const source = ["Check the tests", "", `\`\`\`${language}`, ...lines, "```", "", "Keep this too"].join("\n");
+    const code = fromMarkdown(source).children.find((node) => node.type === "code");
+    const tokens: ComposerSkillToken[] = [];
+    const onChange = (): void => {};
+    const editor = (value: string) => <ComposerTiptapInput id="restore-code" label="Reply"
+      value={value} skillTokens={tokens} placeholder="Reply" markdownConversion onChange={onChange} />;
+    const view = render(editor(""));
+    try {
+      view.rerender(editor(source));
+      const textbox = view.getByRole("textbox", { name: "Reply" });
+      expect(Array.from(textbox.querySelectorAll("p"), (paragraph) => paragraph.textContent))
+        .toEqual(["Check the tests", "Keep this too"]);
+      expect(textbox.querySelector("pre code")?.textContent).toBe(code?.value);
+    } finally {
+      view.unmount();
+    }
+  }), { numRuns: 25 });
 });
 
 it("preserves the active selection anywhere in the existing draft when appending dictation", () => {

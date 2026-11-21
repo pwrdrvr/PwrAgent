@@ -1287,12 +1287,12 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
       if (index < lines.length) {
         index += 1;
       }
+      const code = codeLines.join("\n");
       content.push({
         type: "codeBlock",
         attrs: { language: openFence.info.split(/\s+/)[0] || null },
-        content: codeLines.length > 0
-          ? [{ type: "text", text: codeLines.join("\n") }]
-          : undefined,
+        // A single blank line has no text. ProseMirror rejects empty text nodes.
+        content: code ? [{ type: "text", text: code }] : undefined,
       });
       continue;
     }
