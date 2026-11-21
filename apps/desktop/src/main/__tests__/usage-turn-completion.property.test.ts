@@ -141,8 +141,7 @@ function observeCompletionPlans(db: StateDb) {
 
 it.each([false, true])("bounds production completion work as unrelated history grows (ANALYZE: %s)", async (analyze) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const { dbPath, tempDir } = createTempStateDb("pwragent-usage-completion-");
-  const db = openFreshStateDb(dbPath);
+  const db = openInMemoryStateDb();
   try {
     const store = new SqliteOverlayStore(db);
     let previous = 0;
@@ -152,7 +151,7 @@ it.each([false, true])("bounds production completion work as unrelated history g
       const root = await addTurn(db, `root-${size}`, "root");
       const child = await addTurn(db, `child-${size}`, "child");
       const shutdown = await addTurn(db, `shutdown-${size}`, "legacy", "inferred");
-      if (analyze) db.raw.exec("ANALYZE");
+      if (analyze) db.raw.exec("ANALYZE thread_usage_turns; ANALYZE thread_usage_lines;");
       vi.spyOn(Date, "now").mockReturnValue(now);
       async function check<T>(label: string, work: () => Promise<T>, expected: T, commits: number) {
         const observation = observeCompletionPlans(db);
@@ -192,7 +191,6 @@ it.each([false, true])("bounds production completion work as unrelated history g
     }
   } finally {
     db.close();
-    removeTempStateDbDir(tempDir);
   }
 });
 
