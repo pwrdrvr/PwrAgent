@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   BOAT_SANDBOX_TYPES,
@@ -24,6 +25,8 @@ import { BoatApiError, type BoatApi, type BoatApiRequest } from "./boat-api";
  *   send `noEnv: true`.
  * - Size and auto-stop never exceed the operator's caps. A larger request is
  *   refused, not clamped, so the agent knows what it did not get.
+ * - A fork never copies a snapshot Boat is still writing. `fork_sandbox`
+ *   waits for a stopping source to finish saving, or refuses.
  * - Every sandbox id must be one this thread created or forked. PwrAgent's
  *   own cleanup session may only stop and delete, and only such ids.
  * - No result or error contains a Boat API key PwrAgent has used, and no
@@ -32,10 +35,12 @@ import { BoatApiError, type BoatApi, type BoatApiRequest } from "./boat-api";
 
 export const BOAT_SERVER_INSTRUCTIONS = [
   "Boat sandboxes are cloud Ubuntu VMs that bill the operator per second while they run.",
-  "Create one with create_sandbox, wait until get_sandbox reports state ready, then use exec and the file tools.",
+  "Create one with create_sandbox, wait until get_sandbox reports state ready or idle, then use exec and the file tools. Both states accept commands; idle is a running sandbox with nothing executing.",
   "A command that may take longer than 30 seconds needs timeoutSeconds (up to 600) or detached: true with command_status to poll.",
   "Sandboxes start with none of the operator's credentials: no GitHub token, model keys or secrets. Write files in with write_file.",
   "host_port returns a private URL that works only with its token. Ports cannot be made public from here.",
+  "fork_sandbox copies the source's last saved snapshot, not its live disk: to fork the current state, call stop_sandbox on the source first, then fork it.",
+  "Named snapshots are not offered here. A stopped sandbox keeps its disk, and resume_sandbox or fork_sandbox start from it.",
   "Only sandboxes this thread created are reachable. Call stop_sandbox or delete_sandbox when you are done; auto-stop is a backstop, not a spending cap.",
 ].join(" ");
 
@@ -57,6 +62,7 @@ export type BoatToolsContext = {
   recordOwned: (sandbox: BoatOwnedSandbox) => void;
   forgetOwned: (sandboxId: string) => void;
   idempotencyKey?: () => string;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
 const SANDBOX_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
@@ -69,6 +75,10 @@ const ENV_LIMIT = 100;
 const ENV_BYTES_LIMIT = 64 * 1024;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const LIST_LIMIT = 25;
+/** Boat is still writing the sandbox's snapshot while it reports these. */
+const SAVING_STATES: ReadonlySet<string> = new Set(["stopping", "archiving"]);
+const SAVING_WAIT_MS = 90_000;
+const SAVING_POLL_MS = 3_000;
 const CLEANUP_TOOLS: ReadonlySet<string> = new Set(["stop_sandbox", "delete_sandbox"]);
 
 const sandboxIdProperty = { type: "string", description: "A sandbox this thread created, as create_sandbox returned it." } as const;
@@ -95,7 +105,7 @@ function tool(
 }
 
 export const BOAT_TOOLS: readonly Tool[] = [
-  tool("create_sandbox", "Create a cloud Ubuntu VM. Billing starts now and runs until it stops. Returns its id; poll get_sandbox until state is ready.", {
+  tool("create_sandbox", "Create a cloud Ubuntu VM. Billing starts now and runs until it stops. Returns its id; poll get_sandbox until state is ready or idle.", {
     name: { type: "string", maxLength: NAME_LIMIT },
     type: typeProperty,
     ttlMinutes: ttlProperty,
@@ -149,7 +159,7 @@ export const BOAT_TOOLS: readonly Tool[] = [
     type: typeProperty,
     ttlMinutes: ttlProperty,
   }, ["sandboxId"]),
-  tool("fork_sandbox", "Create a new sandbox from another's latest snapshot. Billing starts for the new one.", {
+  tool("fork_sandbox", "Create a new sandbox from another's last saved snapshot, not its live disk. Stop the source first to fork its current state; a source that is still saving is waited for. Returns the new sandbox and forkedFrom, the source's state when it was copied. Billing starts for the new one.", {
     sandboxId: sandboxIdProperty,
     type: typeProperty,
     ttlMinutes: ttlProperty,
@@ -345,6 +355,7 @@ export class BoatTools {
       }
       case "fork_sandbox": {
         const sandboxId = this.owned(args);
+        const source = await this.saved(sandboxId, send, signal);
         const answer = await send({
           method: "POST", path: ["sandboxes", sandboxId, "fork"],
           body: this.startFields(args, false),
@@ -353,7 +364,10 @@ export class BoatTools {
         const forked = answer.sandbox && typeof answer.sandbox === "object"
           ? answer.sandbox
           : { id: answer.id };
-        return { sandbox: await this.adopt(forked, send) };
+        return {
+          sandbox: await this.adopt(forked, send),
+          forkedFrom: pick(source, ["id", "state", "stoppedAt", "snapshotAvailable"]),
+        };
       }
       case "delete_sandbox": {
         const sandboxId = this.owned(args);
@@ -466,6 +480,34 @@ export class BoatTools {
         : `PwrAgent could not record or delete the new sandbox ${sandboxId}. Tell the operator to delete it in the Boat dashboard.`);
     }
     return described;
+  }
+
+  /**
+   * The source once Boat has finished saving it. While a stopped sandbox is
+   * `stopping` or `archiving`, Boat already reports a snapshot and a fork
+   * succeeds, but from the snapshot before the one being written: the fork
+   * silently lacks the latest work. Waits a bounded time, then refuses.
+   */
+  private async saved(
+    sandboxId: string,
+    send: (request: Omit<BoatApiRequest, "signal">) => Promise<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const sleep = this.context.sleep ?? (async (ms: number, aborted?: AbortSignal) => {
+      await delay(ms, undefined, aborted ? { signal: aborted } : undefined);
+    });
+    for (let waited = 0; ; waited += SAVING_POLL_MS) {
+      const source = describeSandbox((await send({ method: "GET", path: ["sandboxes", sandboxId] })).sandbox);
+      const state = typeof source.state === "string" ? source.state : "";
+      if (!SAVING_STATES.has(state)) return source;
+      if (waited >= SAVING_WAIT_MS) {
+        throw new Refusal(
+          `Sandbox ${sandboxId} is still saving its snapshot (state ${state}). A fork now would copy an older snapshot. `
+          + "Wait until get_sandbox reports it archived, then fork again.",
+        );
+      }
+      await sleep(SAVING_POLL_MS, signal);
+    }
   }
 
   private idempotencyKey(): string {

@@ -259,4 +259,59 @@ describe("PwrAgent's Boat tools", () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).not.toContain("on.boat.dev");
   });
+
+  it("never forks a source whose snapshot Boat is still writing", async () => {
+    // Model: the source reports a saving state for `saving` reads, then
+    // `archived`. Whatever that count, a fork request is only ever sent after
+    // a read that was not a saving state, or no fork is sent at all.
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 0, max: 60 }),
+      fc.constantFrom("stopping", "archiving"),
+      async (saving, savingState) => {
+        const boat = fakeBoat();
+        let reads = 0;
+        let waitedMs = 0;
+        const owned = new Set<string>();
+        const tools = new BoatTools({
+          api: boat.api,
+          policy: () => normalizeBoatSandboxPolicy(undefined),
+          role: "thread",
+          ownedSandboxIds: () => owned,
+          recordOwned: ({ sandboxId }) => { owned.add(sandboxId); },
+          forgetOwned: (sandboxId) => { owned.delete(sandboxId); },
+          sleep: async (ms) => { waitedMs += ms; },
+        });
+        await tools.call("create_sandbox", {});
+        const request = boat.api.request;
+        const states: string[] = [];
+        boat.api.request = async (sent) => {
+          const answer = await request(sent);
+          if (sent.method === "GET" && sent.path.length === 2 && sent.path[1] === "bx_0") {
+            const state = reads++ < saving ? savingState : "archived";
+            states.push(state);
+            return { ...answer, sandbox: { ...(answer.sandbox as object), state, snapshotAvailable: true } };
+          }
+          if (sent.path[2] === "fork") states.push("fork");
+          return answer;
+        };
+
+        const result = await tools.call("fork_sandbox", { sandboxId: "bx_0" });
+
+        const fork = states.indexOf("fork");
+        if (fork === -1) {
+          // Refused: said why, started nothing, and gave up in bounded time.
+          expect(result.isError).toBe(true);
+          expect(JSON.stringify(result)).toContain("still saving its snapshot");
+          expect(owned).toEqual(new Set(["bx_0"]));
+          expect(waitedMs).toBeLessThanOrEqual(120_000);
+        } else {
+          expect(states[fork - 1]).toBe("archived");
+          expect(result.isError).not.toBe(true);
+          expect(result.structuredContent).toMatchObject({ forkedFrom: { id: "bx_0", state: "archived" } });
+        }
+        // A source that finishes saving within a minute is always forked.
+        if (saving <= 20) expect(fork).not.toBe(-1);
+      },
+    ));
+  });
 });

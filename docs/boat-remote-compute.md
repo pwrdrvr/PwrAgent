@@ -90,6 +90,17 @@ stated as properties in `boat-tools.property.test.ts`.
   and does not prompt.
 - **Named fields only.** Each request is built from the fields a tool
   declares; unknown arguments never reach Boat.
+- **A fork copies a finished snapshot.** While a stopped sandbox is `stopping`
+  or `archiving`, Boat already reports `snapshotAvailable: true` and accepts
+  a fork, but copies the snapshot before the one it is writing. `fork_sandbox`
+  reads the source first, waits up to 90 seconds for it to finish saving, and
+  otherwise refuses. Its result carries `forkedFrom`, the source's state when
+  it was copied. Seen with a real account on 2026-11-20.
+
+A fresh sandbox reports `idle`, not `ready`, and accepts commands in both
+states; the tool instructions say so. Named snapshots are not offered: Boat
+refuses them on a trial plan (`trial_saved_snapshots_not_allowed`), and a
+stopped sandbox already keeps its disk for resume and fork.
 - **Cleanup is narrow.** PwrAgent's own cleanup session can stop and delete a
   thread's sandboxes and nothing else.
 
