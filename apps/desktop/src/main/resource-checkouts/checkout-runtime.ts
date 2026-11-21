@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { readMachineCheckoutEvidence } from "./checkout-machine-evidence";
 import type { ResourceAdvertisement } from "@pwragent/shared/contracts/resource-checkouts";
 import { getMainLogger } from "../log";
@@ -11,6 +12,21 @@ import { DesktopResourceCheckoutService } from "./resource-checkout-service";
 
 let runtime: DesktopResourceCheckoutService | undefined;
 let unsubscribe: (() => void) | undefined;
+
+async function openCheckoutStorage<T>(open: () => T): Promise<T> {
+  // The first WAL transition can return SQLITE_BUSY without waiting for
+  // SQLite's transaction busy handler. Both profiles retry this same file.
+  for (const backoffMs of [10, 25, 50, 100, 200]) {
+    try {
+      return open();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!code || !/^SQLITE_(BUSY|LOCKED)(_|$)/.test(code)) throw error;
+      await delay(backoffMs);
+    }
+  }
+  return open();
+}
 
 export async function initializeResourceCheckouts(federation: DesktopFederationRuntime): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
@@ -35,10 +51,10 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   }
   if (machineId && /^mach_[0-9a-f-]{36}$/i.test(machineId)) {
     const identity = JSON.stringify([machineId, evidence.hostBinding ?? null]);
-    try { machineStore = openMachineCheckoutStorage(root, identity); }
+    try { machineStore = await openCheckoutStorage(() => openMachineCheckoutStorage(root, identity)); }
     catch (error) { warn(error); }
     if (machineStore && evidence.hostBinding && bindings.some((binding) => binding.authorityInstanceId === instanceId && binding.authorityMachineId === machineId)) {
-      try { externalStore = openFederationCheckoutStorage(root, identity); }
+      try { externalStore = await openCheckoutStorage(() => openFederationCheckoutStorage(root, identity)); }
       catch (error) { warn(error); }
     }
   }

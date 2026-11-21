@@ -40,6 +40,7 @@ test("default and dev contend for one durable machine allocation through preload
     expect(devView.viewer.profile).toBe("dev");
     expect(defaultView.viewer.machineId).toBeTruthy();
     expect(defaultView.viewer.machineId).toBe(devView.viewer.machineId);
+    expect([defaultView.resources[0].condition, devView.resources[0].condition]).toEqual(["available", "available"]);
     const [{ resourceId }] = defaultView.resources;
     expect(devView.resources.map((resource) => resource.resourceId)).toEqual([resourceId]);
     const [a, b] = await Promise.all([first.window, second.window].map((page, index) =>
@@ -47,7 +48,9 @@ test("default and dev contend for one durable machine allocation through preload
         purpose: `Profile ${index} hold`, expectedDurationMs: 120_000 })));
     const [holder, waiter] = a.outcome === "granted" ? [first, second] : [second, first];
     const [granted, queued] = a.outcome === "granted" ? [a, b] : [b, a];
-    if (granted.outcome !== "granted" || queued.outcome !== "queued") throw new Error("Expected exactly one grant and one queued request.");
+    if (granted.outcome !== "granted" || queued.outcome !== "queued") {
+      throw new Error(`Expected one grant and one queued request. Results: ${JSON.stringify([a, b])}`);
+    }
 
     await holder.closeApplication();
     const retained = (await read(waiter.window)).resources[0];
