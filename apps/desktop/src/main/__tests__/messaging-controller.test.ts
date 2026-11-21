@@ -2370,7 +2370,7 @@ describe("MessagingController", () => {
       expect(harness.delivered[0]).toMatchObject({
         kind: "thread_picker", prompt: expect.stringContaining("Results are incomplete"),
       });
-      expect(harness.delivered[0]!.prompt).not.toContain("Still checking");
+      expect(JSON.stringify(harness.delivered[0])).not.toContain("Still checking");
     } finally {
       peer.resolve();
       await pending.finally(() => harness.controller.dispose());
