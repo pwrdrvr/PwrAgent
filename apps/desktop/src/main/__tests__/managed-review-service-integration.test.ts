@@ -671,14 +671,15 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("runs a Claude Code review as the thread's own /code-review turn and arms Auto-fix on that turn", async () => {
+  it("runs a Claude Code review as the thread's own /code-review turn, with Auto-fix as its --fix", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-code-review-"));
     const store = new ClaudeSessionStore(path.join(root, "sessions"));
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const overlayStore = createOverlayStoreMock();
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       pdfToolMcpServer: null,
       claudeBackendOptions: {
         store,
@@ -711,11 +712,25 @@ describe("DesktopBackendRegistry", () => {
       });
       expect(response).toMatchObject({ backend: "claude", threadId, reviewThreadId: threadId });
       expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: response.turnId });
-      // Auto-fix waits on the turn that sent the command, where ReportFindings lands.
-      expect(getReviewAutoFixArming().armedTurnIds({ backend: "claude", threadId })).toEqual([response.turnId]);
+      // Rule: Auto-fix is Claude Code's own `--fix`, which settles the
+      // findings in this turn; PwrAgent arms no second fix turn behind it.
+      expect(getReviewAutoFixArming().armedTurnIds({ backend: "claude", threadId })).toEqual([]);
       expect(JSON.stringify((await registry.readThread({ backend: "claude", threadId })).replay))
-        .toContain("/code-review high");
+        .toContain("/code-review high --fix");
       finish();
+      await vi.waitFor(() => expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined());
+
+      // Rule: a review sent without an effort runs at the thread's own effort,
+      // so a medium thread is not reviewed at high.
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "claude", threadId });
+      overlay!.reasoningEffort = "medium";
+      await registry.startReview({
+        backend: "claude", threadId, runMode: "claude-code-review", target: { type: "uncommittedChanges" },
+      });
+      const replay = JSON.stringify((await registry.readThread({ backend: "claude", threadId })).replay);
+      expect(replay).toContain("/code-review medium");
+      // Without Auto-fix, the command carries no --fix.
+      expect(replay).not.toContain("/code-review medium --fix");
     } finally {
       finish();
       await registry.close();

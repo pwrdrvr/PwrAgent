@@ -3,7 +3,7 @@ import { permissionForCommandVerb } from "@pwragent/shared/contracts/rbac";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { buildHelpActions, formatMessagingCommandHelpBody, matchMessagingCommandVerb, MESSAGING_COMMAND_CATALOG, MESSAGING_HELP_ACTION_COMMANDS, MESSAGING_REVIEW_HELP_SPEC, paginateHelpCatalog } from "./messaging-command-catalog.js";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
-import { parseReviewCommand } from "../../../shared/review-command.js";
+import { isBareClaudeCodeReviewCommand, parseReviewCommand } from "../../../shared/review-command.js";
 import { parseMessagingSchedule, resolveScheduledAction, scheduledActionDisplayId } from "./messaging-scheduled-actions.js";
 import { messageOriginForInboundEvent, scheduledActionFailureMessage, parseDefaultAgentScopeKind, normalizeMonitorCommandAction, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
 import type { MessagingCommandContext } from "./messaging-command-context";
@@ -127,7 +127,56 @@ export class MessagingCommandHandlers {
       await this.handleReviewCommand(event);
       return;
     }
-    await this.routeUnknownCommandToBoundThread(event);
+    const binding = await this.context.store.findActiveBindingForChannel(event.channel);
+    if (await this.handleBareCodeReviewCommand(event, binding)) {
+      return;
+    }
+    await this.routeUnknownCommandToBoundThread(event, binding);
+  }
+
+  /**
+   * A bare `/code-review` on a thread that reviews as Claude Code starts the
+   * same tracked review of the current changes that `/review` and the desktop
+   * panel start: a review card, Auto-fix, and the requesting contact's
+   * permissions. Anywhere else, and with arguments, it is the agent's own
+   * command and goes to the thread as typed. Returns false to pass it on.
+   */
+  private async handleBareCodeReviewCommand(
+    event: MessagingInboundCommandEvent,
+    binding: MessagingBindingRecord | undefined,
+  ): Promise<boolean> {
+    if (!isBareClaudeCodeReviewCommand(`/${event.command.replace(/^\/+/, "")} ${event.args.join(" ")}`)) {
+      return false;
+    }
+    if (!binding || !await this.context.host().claudeCodeReviewSupportedForBinding(binding)) {
+      return false;
+    }
+    // In a shared conversation, a command not addressed to PwrAgent is
+    // ignored here exactly as it is when it goes to the thread as typed.
+    if (
+      binding.targetKind === "agent_thread"
+      && !await this.context.host().shouldHandleAmbientSharedMessage({ ...event, kind: "text", text: event.rawText }, binding)
+    ) {
+      return true;
+    }
+    const permission = permissionForCommandVerb("review");
+    if (permission && !await this.context.host().requirePermission(event, permission, "command:code-review")) {
+      return true;
+    }
+    if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
+      event, binding, "review:remote-instance",
+    )) {
+      return true;
+    }
+    await this.context.host().submitMessagingReview({
+      binding,
+      event,
+      runMode: "claude-code-review",
+      target: { type: "uncommittedChanges" },
+      // A typed `/code-review` sends just that; `--fix` is the operator's to add.
+      afterReview: "wait",
+    });
+    return true;
   }
 
   private async handleScheduleCommand(
@@ -335,8 +384,8 @@ export class MessagingCommandHandlers {
 
   private async routeUnknownCommandToBoundThread(
     event: MessagingInboundCommandEvent,
+    binding: MessagingBindingRecord | undefined,
   ): Promise<void> {
-    const binding = await this.context.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
       await this.presentThreadCommandNeedsBinding(event);
       return;
@@ -400,14 +449,16 @@ export class MessagingCommandHandlers {
       await this.presentThreadCommandNeedsBinding(event);
       return;
     }
+    // A peer's thread is reviewed on the peer, and its picker shows the
+    // peer's workspaces, so every form needs peer scope first.
+    if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
+      event, binding, "review:remote-instance",
+    )) {
+      return;
+    }
     const argument = event.args.join(" ").trim();
     const pullRequestFlag = /^--pr(?:\s+|$)/.exec(argument);
     if (pullRequestFlag) {
-      if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
-        event, binding, "review:remote-instance",
-      )) {
-        return;
-      }
       await this.context.host().submitMessagingReview({
         binding,
         event,
@@ -415,7 +466,12 @@ export class MessagingCommandHandlers {
       });
       return;
     }
-    if (!await this.context.host().reviewSupportedForBinding(binding)) {
+    // A Claude owner has no review/start, but its picker runs Claude Code's
+    // /code-review. Typed targets still need review/start.
+    if (
+      !await this.context.host().reviewSupportedForBinding(binding)
+      && (event.args.length > 0 || !await this.context.host().claudeCodeReviewSupportedForBinding(binding))
+    ) {
       await this.context.host().deliverReviewUnsupported(binding, event);
       return;
     }
@@ -476,6 +532,7 @@ export class MessagingCommandHandlers {
     const binding = await this.context.store.findActiveBindingForChannel(event.channel);
     const reviewSupported = binding
       ? await this.context.host().reviewSupportedForBinding(binding)
+        || await this.context.host().claudeCodeReviewSupportedForBinding(binding)
       : false;
     const actionCatalog =
       reviewSupported

@@ -23,6 +23,7 @@ export interface MessagingCommandHost {
   readonly shouldHandleAmbientSharedMessage: (event: MessagingInboundTextEvent | MessagingInboundMediaEvent, binding?: MessagingBindingRecord) => Promise<boolean>;
   readonly admitTurnInput: (params: { binding: MessagingBindingRecord; event: MessagingTurnInputEvent; }) => Promise<boolean>;
   readonly reviewSupportedForBinding: (binding: MessagingBindingRecord) => Promise<boolean>;
+  readonly claudeCodeReviewSupportedForBinding: (binding: MessagingBindingRecord) => Promise<boolean>;
   readonly deliverReviewUnsupported: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => Promise<void>;
   readonly submitMessagingReview: (params: MessagingReviewSubmission) => Promise<void>;
   readonly presentReviewPicker: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => Promise<void>;

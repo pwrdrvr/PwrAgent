@@ -36,6 +36,7 @@ export function commandHarness(overrides: Partial<MessagingCommandHost> = {}) {
     shouldHandleAmbientSharedMessage: async () => true,
     admitTurnInput: async ({ event }) => { trace.push(`input:${"text" in event ? event.text : "media"}`); return true; },
     reviewSupportedForBinding: async () => true,
+    claudeCodeReviewSupportedForBinding: async () => { trace.push("claude-code-review-supported"); return true; },
     deliverReviewUnsupported: async () => { trace.push("unsupported"); },
     submitMessagingReview: async () => { trace.push("review"); },
     presentReviewPicker: async () => { trace.push("review-picker"); },

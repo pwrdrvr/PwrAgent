@@ -289,9 +289,11 @@ import {
 } from "../../lib/skill-mentions";
 import {
   claudeCodeReviewCommand,
+  claudeCodeReviewRepository,
   type ClaudeCodeReviewLevel,
-  DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+  defaultClaudeCodeReviewLevel,
   formatReviewCommand,
+  isBareClaudeCodeReviewCommand,
   parseReviewCommand,
 } from "../../../../shared/review-command";
 import {
@@ -1225,6 +1227,8 @@ function claudeCodeReviewCommands(params: {
   separately: boolean;
   level: ClaudeCodeReviewLevel;
   repository?: string;
+  /** Auto-fix, which Claude Code runs as its own `--fix`. */
+  fix: boolean;
 }): { commands: string[]; problem?: string } {
   const { target } = params;
   if (!target) return { commands: [] };
@@ -1237,6 +1241,7 @@ function claudeCodeReviewCommands(params: {
         target: each,
         level: params.level,
         ...(params.repository ? { repository: params.repository } : {}),
+        fix: params.fix,
       })),
     };
   } catch (error) {
@@ -6391,6 +6396,25 @@ function useComposerController(props: ComposerProps) {
     reviewerChosen: Boolean(reviewConfig?.reviewer),
     thread: props.thread,
   });
+  // A bare /code-review opens the same panel as /review on a thread that
+  // reviews as Claude Code, so the panel's targets, effort and Auto-fix apply.
+  // With arguments it is Claude Code's own command and runs as typed.
+  const codeReviewOpensReviewPanel = supportsReview
+    && !props.launchpad
+    && prefersClaudeCodeReview({
+      ownerSummary: reviewThreadOwnerSummary,
+      thread: props.thread,
+    });
+  // Running it (Enter in the menu) opens the panel; Tab or a click inserts
+  // the command, so arguments such as `ultra` can still be typed after it.
+  const runOpensReviewPanel = (command: SlashCommandSuggestion): boolean =>
+    command.id === "review-current"
+    || (codeReviewOpensReviewPanel
+      && command.source === "provider"
+      && isBareClaudeCodeReviewCommand(command.label));
+  // A draft that opens the panel when sent or scheduled instead of going out.
+  const draftOpensCodeReviewPanel = codeReviewOpensReviewPanel
+    && isBareClaudeCodeReviewCommand(draft);
   // Together needs an owner that takes a combined target.
   const reviewPullRequestSetSupported =
     reviewThreadOwnerSummary?.capabilities.reviewPullRequestSet === true;
@@ -6405,15 +6429,15 @@ function useComposerController(props: ComposerProps) {
    */
   const reviewPullRequestsTogetherRuns = (reviewerRunsSubAgent: boolean): boolean =>
     claudeCodeReviewMode || reviewerRunsSubAgent;
+  // A Claude Code review starts at the thread's own effort.
+  const defaultCodeReviewLevel = defaultClaudeCodeReviewLevel(props.thread?.reasoningEffort);
   const claudeCodeReviewLevel =
-    reviewConfig?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+    reviewConfig?.codeReviewLevel ?? defaultCodeReviewLevel;
   // A bare pull request number names the checkout's own repository's, and
   // only when it has exactly one remote repository, as the owner decides.
-  const reviewCodeReviewRemotes = new Set(reviewDirectory?.gitStatus?.remoteRepositories
-    ?.map((repository) => repository.trim().toLowerCase()) ?? []);
-  const reviewCodeReviewRepository = reviewCodeReviewRemotes.size === 1
-    ? [...reviewCodeReviewRemotes][0]
-    : undefined;
+  const reviewCodeReviewRepository = claudeCodeReviewRepository(
+    reviewDirectory?.gitStatus?.remoteRepositories,
+  );
   /**
    * Checked pull requests in the order they are reviewed: list order, or a
    * stack bottom first when they are reviewed together, which is the order
@@ -8058,7 +8082,7 @@ function useComposerController(props: ComposerProps) {
       runMode: runModeDecision.explicitRunModeSupported
         ? runModeDecision.runMode : undefined,
       ...(runModeDecision.runMode === "claude-code-review"
-        ? { codeReviewLevel: config?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+        ? { codeReviewLevel: config?.codeReviewLevel ?? defaultCodeReviewLevel }
         : {}),
       // An owner that predates auto-fix gets no field, so it is never told a
       // choice it would ignore.
@@ -9047,8 +9071,9 @@ function useComposerController(props: ComposerProps) {
         ? claudeCodeReviewCommands({
             target: reviewCommand.target,
             separately: false,
-            level: reviewCommand.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+            level: reviewCommand.codeReviewLevel ?? defaultCodeReviewLevel,
             repository: reviewCodeReviewRepository,
+            fix: reviewCommand.afterReview === "auto-fix",
           }).commands[0] ?? formatReviewCommand(reviewCommand.target)
         : formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
@@ -9284,6 +9309,14 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
+    // Scheduling a bare /code-review opens the panel with the time armed,
+    // as scheduling a bare /review does.
+    if (draftOpensCodeReviewPanel) {
+      enterReviewComposer();
+      setScheduledDraftSendAt(scheduledSendAt);
+      setScheduleArmed(true);
+      return;
+    }
     if (reviewCommand) {
       if (isBareReviewCommand) {
         setScheduledDraftSendAt(scheduledSendAt);
@@ -9932,6 +9965,10 @@ function useComposerController(props: ComposerProps) {
     }
     if (forkCommand) {
       await submitForkCommand(forkCommand);
+      return;
+    }
+    if (draftOpensCodeReviewPanel) {
+      enterReviewComposer();
       return;
     }
     const reviewCommand = parsedReviewCommand;
@@ -12925,7 +12962,7 @@ function useComposerController(props: ComposerProps) {
     };
 
     const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
-      if (command.id === "review-current") {
+      if (runOpensReviewPanel(command)) {
         enterReviewComposer();
         return true;
       }
@@ -14389,6 +14426,8 @@ function useComposerController(props: ComposerProps) {
       separately: reviewPullRequestBatch && !reviewPullRequestsTogether,
       level: claudeCodeReviewLevel,
       repository: reviewCodeReviewRepository,
+      // As the submission decides: a batch never auto-fixes.
+      fix: reviewAutoFixSupported && reviewAutoFixChecked && !reviewPullRequestBatch,
     });
     return <ClaudeCodeReviewCommandPreview commands={preview.commands} problem={preview.problem} />;
   }

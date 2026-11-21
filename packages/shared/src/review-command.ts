@@ -378,7 +378,7 @@ export const DEFAULT_CLAUDE_CODE_REVIEW_LEVEL: ClaudeCodeReviewLevel = "high";
 
 /** Claude Code is the default reviewer on a compatible Claude thread. */
 export function prefersClaudeCodeReview(params: {
-  ownerSummary?: BackendSummary;
+  ownerSummary?: Pick<BackendSummary, "capabilities">;
   requestedRunMode?: ReviewRunMode;
   reviewerChosen?: boolean;
   thread?: { source: AppServerBackendKind };
@@ -387,6 +387,38 @@ export function prefersClaudeCodeReview(params: {
     && params.ownerSummary?.capabilities.reviewClaudeCodeReview === true
     && (params.requestedRunMode === "claude-code-review"
       || (params.requestedRunMode === undefined && !params.reviewerChosen));
+}
+
+/**
+ * The repository `/code-review` may name a pull request of by bare number:
+ * the checkout's remote repository when it has exactly one, compared
+ * case-insensitively. Otherwise a pull request is named by its URL.
+ */
+export function claudeCodeReviewRepository(
+  remoteRepositories: readonly string[] | undefined,
+): string | undefined {
+  const remotes = new Set(remoteRepositories?.map((repository) => repository.trim().toLowerCase()) ?? []);
+  return remotes.size === 1 ? [...remotes][0] : undefined;
+}
+
+/**
+ * Whether text is Claude Code's `/code-review` with no arguments. Where a
+ * thread reviews as Claude Code, PwrAgent opens its review panel (desktop)
+ * or picker (messaging) for it, as it does for a bare `/review`. A command
+ * with arguments is Claude Code's own and runs as typed.
+ */
+export function isBareClaudeCodeReviewCommand(input: string): boolean {
+  return /^\/code-review$/i.test(input.trim());
+}
+
+/**
+ * The effort a Claude Code review starts at: the thread's own effort when
+ * `/code-review` takes it, so a medium thread reviews at medium. A thread on
+ * its model's default effort, or an effort the command has no level for,
+ * reviews at high.
+ */
+export function defaultClaudeCodeReviewLevel(threadEffort: string | undefined): ClaudeCodeReviewLevel {
+  return isClaudeCodeReviewLevel(threadEffort) ? threadEffort : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
 }
 
 export function isClaudeCodeReviewLevel(value: unknown): value is ClaudeCodeReviewLevel {
@@ -420,13 +452,16 @@ function claudeCodeReviewPullRequest(url: string, repository: string | undefined
  * the effort level, then the target. Several pull requests are one
  * comma-separated argument, which Claude Code reviews as one combined report.
  * A pull request of `repository` (the checkout's `host/owner/repo`) is its
- * bare number; any other is its URL. Throws for a target `/code-review` has
- * no form for, and for an argument it would read as something else.
+ * bare number; any other is its URL. `fix` adds Claude Code's own `--fix`,
+ * which applies the findings in the same turn and reports them settled.
+ * Throws for a target `/code-review` has no form for, and for an argument it
+ * would read as something else.
  */
 export function claudeCodeReviewCommand(params: {
   target: AppServerReviewTarget;
   level?: string;
   repository?: string;
+  fix?: boolean;
 }): string {
   const { target } = params;
   if (params.level !== undefined && !isClaudeCodeReviewLevel(params.level)) {
@@ -482,5 +517,7 @@ export function claudeCodeReviewCommand(params: {
     default:
       throw new Error("Claude Code's /code-review has no form for this review target.");
   }
-  return ["/code-review", params.level, argument].filter(Boolean).join(" ");
+  return ["/code-review", params.level, params.fix ? "--fix" : undefined, argument]
+    .filter(Boolean)
+    .join(" ");
 }

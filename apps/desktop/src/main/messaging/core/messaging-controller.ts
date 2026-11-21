@@ -1041,6 +1041,7 @@ export class MessagingController {
       shouldHandleAmbientSharedMessage: (...args) => this.inboundTurns.shouldHandleAmbientSharedMessage(...args),
       admitTurnInput: (...args) => this.inboundTurns.admitTurnInput(...args),
       reviewSupportedForBinding: (...args) => this.reviewWorkflow.reviewSupportedForBinding(...args),
+      claudeCodeReviewSupportedForBinding: (...args) => this.reviewWorkflow.claudeCodeReviewSupportedForBinding(...args),
       deliverReviewUnsupported: (...args) => this.reviewWorkflow.deliverReviewUnsupported(...args),
       submitMessagingReview: (...args) => this.reviewWorkflow.submitMessagingReview(...args),
       presentReviewPicker: (...args) => this.reviewWorkflow.presentReviewPicker(...args),

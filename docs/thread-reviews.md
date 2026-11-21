@@ -299,9 +299,11 @@ id: a review runs as a turn of its own thread, and its artifact lands in that
 turn, inline or from a sub-agent. A review that lands before its start
 returns matches the thread's pending start. A refused start removes only
 itself, so a running review keeps its own choice. A review PwrAgent did not
-start, such as a typed `/code-review`, never fixes; one started from the
-review panel's Claude Code mode does, because the owner arms it on the turn
-that sends the command. An app restart ends the
+start, such as a typed `/code-review`, never fixes. A review in Claude Code
+mode is never armed either: its Auto-fix is Claude Code's own `--fix`, which
+the owner adds to the command and which settles the findings in the review's
+own turn. The panel's and the messaging picker's command preview show it. A
+bare `/code-review` typed in messaging stays bare. An app restart ends the
 review's turn, so nothing needs to outlive it.
 `review-auto-fix.property.test.ts` holds these rules against a model of the
 reviews.
