@@ -688,8 +688,9 @@ export function PluginsSettings(props: {
     [loadConnections, props.desktopApi],
   );
 
-  // Asked when the edit dialog opens for a local IPC connection, and again
-  // each time it reopens, since a save may have replaced or removed the token.
+  // Asked when the edit dialog opens for a local IPC connection, again each
+  // time it reopens (a save may have replaced or removed the token), and
+  // whenever this machine changes the connection while the dialog is open.
   const editingIpcConnectionId = connectionEdit
     && !connectionEdit.local
     && !connectionEdit.github
@@ -697,18 +698,39 @@ export function PluginsSettings(props: {
     ? connectionEdit.connectionId
     : undefined;
   useEffect(() => {
-    const read = props.desktopApi?.readMcpIpcBearerTokenState;
+    const api = props.desktopApi;
+    const read = api?.readMcpIpcBearerTokenState;
     if (!editingIpcConnectionId || !read) return;
+    const connectionId = editingIpcConnectionId;
     let current = true;
-    read({ connectionId: editingIpcConnectionId }).then(
-      ({ stored }) => {
-        if (current) setIpcBearerTokenState({ connectionId: editingIpcConnectionId, stored });
-      },
-      // Unanswered (an older owner), the line claims neither.
-      () => undefined,
-    );
+    let latest = 0;
+    const ask = () => {
+      const asked = ++latest;
+      read({ connectionId }).then(
+        ({ stored }) => {
+          if (!current || asked !== latest) return;
+          setIpcBearerTokenState({ connectionId, stored });
+          // Remove is offered before the answer arrives. With nothing
+          // stored, a removal marked meanwhile has nothing to remove.
+          if (!stored) {
+            setConnectionEdit((draft) =>
+              draft?.connectionId === connectionId && draft.ipcBearerToken === ""
+                ? { ...draft, ipcBearerToken: undefined }
+                : draft,
+            );
+          }
+        },
+        // Unanswered (an older owner), the line claims neither.
+        () => undefined,
+      );
+    };
+    ask();
+    const unsubscribe = api?.onMcpConnectionsChanged?.((event) => {
+      if (event.connectionIds.includes(connectionId)) ask();
+    });
     return () => {
       current = false;
+      unsubscribe?.();
       setIpcBearerTokenState(undefined);
     };
   }, [editingIpcConnectionId, props.desktopApi]);

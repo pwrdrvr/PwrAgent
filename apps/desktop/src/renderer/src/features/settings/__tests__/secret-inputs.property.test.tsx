@@ -399,6 +399,64 @@ describe("a secret in a form that writes on its own Save", () => {
   });
 });
 
+describe("a local IPC connection's session bearer token", () => {
+  async function openEdit(api: DesktopApi) {
+    await act(async () => {
+      render(
+        <PluginsSettings
+          desktopApi={api}
+          snapshot={pluginsSnapshot()}
+          onMcpGatewayEnabledChange={async () => undefined}
+        />,
+      );
+    });
+    const article = (await screen.findByText("Native app", { exact: true })).closest("article")!;
+    await act(async () => {
+      fireEvent.click(within(article).getByRole("button", { name: "Edit" }));
+    });
+    return within(screen.getByRole("dialog", { name: "Edit connection" }));
+  }
+
+  // Remove is offered while the owner has not answered. Pressed then, and
+  // answered "nothing stored", the box must not go on promising a removal.
+  it("drops a removal marked before the owner says nothing is stored", async () => {
+    let answer!: (stored: boolean) => void;
+    const api = ipcConnectionApi(false);
+    api.readMcpIpcBearerTokenState = vi.fn(async () => await new Promise<{ connectionId: string; stored: boolean }>((resolve) => {
+      answer = (stored) => resolve({ connectionId: "native-app", stored });
+    }));
+    const dialog = await openEdit(api);
+    fireEvent.click(dialog.getByRole("button", { name: "Remove saved session bearer token" }));
+    expect(dialog.getByText("Not removed yet. Removed when you save.")).toBeInTheDocument();
+    await act(async () => answer(false));
+    const input = dialog.getByLabelText("Session bearer token");
+    expect(input).toBeEnabled();
+    expect(dialog.queryByRole("button", { name: "Keep saved session bearer token" })).toBeNull();
+    expectSecretRow(input, { stored: false, draft: false, removeName: "Remove saved session bearer token" });
+  });
+
+  // An agent or another window can set or remove the token while the dialog
+  // is open; this machine announces it, and the line follows.
+  it("asks again when this machine changes the connection", async () => {
+    let stored = true;
+    let announce!: (event: { connectionIds: string[] }) => void;
+    const api = ipcConnectionApi(true);
+    api.readMcpIpcBearerTokenState = vi.fn(async () => ({ connectionId: "native-app", stored }));
+    api.onMcpConnectionsChanged = vi.fn((callback) => {
+      announce = callback;
+      return () => undefined;
+    });
+    const dialog = await openEdit(api);
+    const input = dialog.getByLabelText("Session bearer token");
+    await waitFor(() => expectSecretRow(input, { stored: true, draft: false }));
+    stored = false;
+    await act(async () => announce({ connectionIds: ["another-connection"] }));
+    expectSecretRow(input, { stored: true, draft: false });
+    await act(async () => announce({ connectionIds: ["native-app"] }));
+    await waitFor(() => expectSecretRow(input, { stored: false, draft: false }));
+  });
+});
+
 describe("a removal question", () => {
   it("is dropped when the value goes away, and does not come back with a new one", () => {
     const row = (configured: boolean) => (
