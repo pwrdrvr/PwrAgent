@@ -1557,8 +1557,13 @@ export class DesktopBackendRegistry {
   canonicalizeNavigationThreadPullRequests(
     threads: NavigationSnapshot["threads"],
     demand?: PrMetadataDemand,
+    verifyAttachments = true,
   ): Promise<NavigationSnapshot["threads"]> {
-    return this.forgeToolBridge.canonicalizeNavigationThreadPullRequests(threads, demand);
+    return this.forgeToolBridge.canonicalizeNavigationThreadPullRequests(threads, demand, verifyAttachments);
+  }
+
+  canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>, demand?: PrMetadataDemand): Promise<typeof prs> {
+    return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand);
   }
 
   // Thread inspection members the registry's importers use. ThreadInspectionTools

@@ -459,6 +459,7 @@ import {
   awaitStartupProviderCoverage,
   getNavigationDirectorySetAnnouncer,
   loadLocalNavigationQueryIndex,
+  navigationPullRequestProjection,
 } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -7575,6 +7576,7 @@ async function mountRemoteParentForLocalChild(
         }
         return await getDesktopNavigationQueryStore().readPage({
           request: query, scopeKey: "renderer-local",
+          pullRequests: navigationPullRequestProjection({ kind: query.query.kind, signal }),
           loadIndex: async () => {
             const index = await loadLocalNavigationQueryIndex({ backend: query.backend, callerReason: "created-child-parent" });
             signal.throwIfAborted();
@@ -7728,6 +7730,7 @@ function localBackendOperations(): FederationBackendOperations {
           request: { ...request, deadlineAt: rpcOptions?.deadlineAt === undefined ? request.deadlineAt
             : Math.min(request.deadlineAt ?? rpcOptions.deadlineAt, rpcOptions.deadlineAt) },
           load: ({ signal, deadlineAt }) => getDesktopNavigationQueryStore().readPage({
+            pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal }),
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
               return loadLocalNavigationQueryIndex({ backend: request.backend,

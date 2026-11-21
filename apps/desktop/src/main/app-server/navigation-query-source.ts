@@ -1,5 +1,5 @@
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
@@ -9,6 +9,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backen
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
+import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
@@ -20,8 +21,28 @@ import {
 } from "./navigation-directory-set-announcer";
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
+import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 
 const indexReads = new NavigationIndexReadPool(1_000);
+
+export function navigationPullRequestProjection(options: {
+  kind: NavigationQueryRequest["query"]["kind"];
+  signal?: AbortSignal;
+  registry?: DesktopBackendRegistry;
+}): NavigationPullRequestProjection {
+  const priority = options.kind === "star-map" ? PR_METADATA_PRIORITY.background : PR_METADATA_PRIORITY.page;
+  const verify = (batches: PrSummary[][]) => {
+    const registry = options.registry ?? getDesktopBackendRegistry();
+    return Promise.all(batches.map((prs) => registry.canonicalizeNavigationPullRequests(prs, { signal: options.signal, priority: () => priority })));
+  };
+  return {
+    verify,
+    read: (threads) => {
+      options.signal?.throwIfAborted();
+      return verify(getDesktopOverlayStore().readNavigationPullRequests(threads));
+    },
+  };
+}
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
 const sourceIds = new WeakMap<object, number>();
 let nextSourceId = 0;
@@ -240,7 +261,7 @@ async function buildLocalNavigationQueryIndex(params: {
   );
   params.signal?.throwIfAborted();
   const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
-    watchedThreads,
+    watchedThreads, undefined, false,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {

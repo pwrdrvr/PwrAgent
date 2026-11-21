@@ -783,6 +783,8 @@ const setForgeToolRuleWriter = vi.fn();
 const setForgeProjectLabelResolver = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
+const canonicalizeNavigationThreadPullRequests = vi.fn(async (threads: NavigationThreadSummary[], _demand?: unknown, _verify?: boolean) => threads);
+const canonicalizeNavigationPullRequests = vi.fn(async (prs: PrSummary[], _demand?: unknown) => prs);
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
@@ -900,6 +902,7 @@ const registerDirectoryFromDiskService = vi.fn(async (request: { path: string })
 });
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
+const readNavigationPullRequests = vi.fn();
 const readDetachedThreadPullRequests = vi.fn(() => ({}));
 const addLinkedDirectory = vi.fn(async (request: {
   backend: "codex" | "acp:grok";
@@ -1178,6 +1181,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,
+    readNavigationPullRequests,
     addLinkedDirectory,
     removeLinkedDirectory,
     setThreadPullRequests,
@@ -1270,7 +1274,8 @@ vi.mock("../app-server/backend-registry", () => {
     invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
-    canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+    canonicalizeNavigationThreadPullRequests,
+    canonicalizeNavigationPullRequests,
     withNavigationSubAgentActivity: (threads: unknown[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
     refreshThreadGitWorkingStates,
@@ -1669,6 +1674,7 @@ describe("app server ipc", () => {
     removeLinkedDirectory.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
+    readNavigationPullRequests.mockReset();
     readDetachedThreadPullRequests.mockReset();
     readDetachedThreadPullRequests.mockReturnValue({});
     getThreadOverlayStates.mockReset();
@@ -2462,6 +2468,89 @@ describe("app server ipc", () => {
     emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
     const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
     await vi.waitFor(() => expect(owner(buildPullRequestStatusKey(pr))).toBe(true));
+  });
+
+  it("fences the cached owner index before refreshing PR metadata on a thread start", async () => {
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    overlayStoreFixture.stable = getDesktopOverlayStore();
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+    listThreads.mockResolvedValue([]);
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+    listThreads.mockResolvedValue([{ id: "new-after-cache", source: "codex", title: "New thread", titleSource: "explicit",
+      linkedDirectories: [] }] as never);
+    emitRegistryEvent({ backend: "codex", notification: { method: "thread/started", params: { threadId: "new-after-cache" } } });
+    await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads)
+      .toEqual([expect.objectContaining({ threadId: "new-after-cache" })]));
+    expect(listThreads).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([20, 40])("validates only demanded PR rows from a mounted query over %i stored checkouts", async (size) => {
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const git = await import("../app-server/git-executable");
+    let now = Date.now();
+    let defaultBranch = "main";
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args) => {
+      if (cwd.endsWith("-1")) throw new Error("checkout unavailable");
+      return { stdout: args[0] === "symbolic-ref" ? `origin/${defaultBranch}\n`
+        : args.length === 1 ? "origin\n" : "https://github.com/fixture/project.git\n", stderr: "" };
+    });
+    onTestFinished(() => { runner.mockRestore(); clock.mockRestore(); });
+    const root = `page-budget-${size}-${now}`;
+    const rows = Array.from({ length: size }, (_, index) => ({
+      id: `page-${index}`, source: "codex", title: `Page ${index}`, titleSource: "explicit", updatedAt: index,
+      gitOriginUrl: "https://github.com/fixture/project.git",
+      linkedDirectories: [], prs: [githubPr({ number: index + 1, org: "fixture", repo: "project", state: "passing",
+        url: `https://github.com/fixture/project/pull/${index + 1}`, headRefName: "main", linkedDirectoryPaths: [`${root}-${index}`] })],
+    }));
+    overlayStoreFixture.stable = getDesktopOverlayStore();
+    listThreads.mockResolvedValue(rows as never);
+    readNavigationPullRequests.mockImplementation((refs: { threadId: string }[]) =>
+      refs.map(({ threadId }) => rows.find(({ id }) => id === threadId)?.prs ?? []));
+    registerAppServerIpcHandlers();
+    const canonicalizer = setThreadPullRequestCanonicalizer.mock.lastCall?.[0] as import("../app-server/backend-registry-types").ThreadPullRequestCanonicalizer;
+    canonicalizeNavigationThreadPullRequests.mockImplementation(async (threads, _demand, verify) =>
+      await Promise.all(threads.map(async (thread) => ({ ...thread, prs: await canonicalizer(thread.prs ?? [], undefined, verify) }))));
+    canonicalizeNavigationPullRequests.mockImplementation(async (prs) => await canonicalizer(prs));
+
+    const handler = navigationReadHandler("backend.getNavigationQueryPage")!;
+    const read = async (query: import("@pwragent/shared/contracts/navigation").NavigationQueryRequest["query"], known?: NavigationQueryPage) =>
+      await handler({ sender: { id: 90490, once: vi.fn() } }, { protocol: 2, consumer: "main-sidebar", pageSize: 1, query,
+        ...(known ? { completeBaselineRevision: known.countsRevision } : {}) }) as NavigationQueryPage;
+
+    await read({ kind: "directory-index" });
+    const group = await read({ kind: "group-members", roots: [{ backend: "codex", threadId: "page-0" }], membershipOnly: true });
+    expect(group.entries.map(({ row }) => row.id)).toEqual(["page-0"]);
+    expect(runner).not.toHaveBeenCalled();
+    expect(readNavigationPullRequests).not.toHaveBeenCalled();
+    const exact = (index: number) => ({ kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: `page-${index}` }] });
+    const first = await read(exact(0));
+    expect(first.entries[0]?.row.prs ?? []).toEqual([]);
+    expect(readNavigationPullRequests).toHaveBeenCalledExactlyOnceWith([{ backend: "codex", threadId: "page-0" }]);
+    expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual(Array(4).fill(`${root}-0`));
+    expect((await read(exact(0), first)).unchanged).toBe(true);
+    const missing = await read(exact(1));
+    expect(missing.entries[0]?.row.prs?.[0]?.number).toBe(2);
+    expect((await read(exact(1), missing)).unchanged).toBe(true);
+    expect(runner.mock.calls.filter(([cwd]) => cwd === `${root}-1`)).toHaveLength(1);
+    now += 60_001;
+    defaultBranch = "release";
+    const refreshed = await read(exact(0), first);
+    expect(refreshed.entries[0]?.row.prs?.[0]?.number).toBe(1);
+    expect(refreshed.countsRevision).not.toBe(first.countsRevision);
+    expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual([
+      ...Array(4).fill(`${root}-0`), `${root}-1`, `${root}-0`, `${root}-0`,
+    ]);
+
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+    await startAppServerOwnerNavigation();
+    expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads).toEqual(rows.map((row) => ({
+      backend: row.source, threadId: row.id, prKeys: [buildPullRequestStatusKey(row.prs[0]!)],
+    })));
+    expect(runner.mock.calls).toHaveLength(7 + 4 * (size - 2));
   });
 
   it.each([12, 24])("probes only PR-bearing checkouts when a thread starts in an inventory of %i worktrees", async (size) => {

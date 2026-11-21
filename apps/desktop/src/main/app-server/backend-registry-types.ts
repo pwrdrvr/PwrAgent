@@ -546,6 +546,7 @@ export type ThreadPullRequestStatusToolHandler = (
 export type ThreadPullRequestCanonicalizer = (
   prs: PrSummary[],
   demand?: PrMetadataDemand,
+  verifyAttachments?: boolean,
 ) => PrSummary[] | Promise<PrSummary[]>;
 
 export type LocalPullRequestAuthorityResolver = (prKey: string) => boolean;

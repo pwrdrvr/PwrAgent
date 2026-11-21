@@ -973,8 +973,8 @@ export function wireAppServerOwnerServices(): void {
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
   );
   getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
-    async (prs, demand) =>
-      await appServerService.canonicalizeStoredPullRequests(prs, demand),
+    async (prs, demand, verifyAttachments) =>
+      await appServerService.canonicalizeStoredPullRequests(prs, demand, verifyAttachments),
   );
   getDesktopBackendRegistry().setPullRequestReferenceResolver(
     async (params) => await appServerService.resolvePullRequestReference(params),

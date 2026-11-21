@@ -40,6 +40,18 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore partial navigation snapshots", () => {
+  it("reads page attachments in request order and isolates owners with the same provider thread ID", async () => {
+    const codex = { backend: "codex", threadId: "shared-id" } as const;
+    const claude = { backend: "claude", threadId: codex.threadId } as const;
+    await store.setThreadPullRequests({ ...codex, prs: [{ number: 1, org: "fixture", repo: "app",
+      provider: "github.com", state: "passing", url: "https://github.com/fixture/app/pull/1" }], fetchedAt: 1 });
+    await store.setThreadPullRequests({ ...claude, prs: [{ number: 2, org: "fixture", repo: "app",
+      provider: "github.com", state: "pending", url: "https://github.com/fixture/app/pull/2" }], fetchedAt: 1 });
+    const refs = [claude, { ...codex, threadId: "missing" }, codex, claude];
+    const fullOverlays = await Promise.all(refs.map((ref) => store.getThreadOverlayState(ref)));
+    expect(store.readNavigationPullRequests(refs)).toEqual(fullOverlays.map((overlay) => overlay?.prs ?? []));
+  });
+
   it("renders overlays without replacing the full navigation baseline", async () => {
     const pinnedThread = buildThread({
       id: "thread-pinned",
