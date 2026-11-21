@@ -72,6 +72,13 @@ import {
 } from "../shared/ipc";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../shared/federation-receiving-folder";
 import { SETTINGS_RECEIVING_FOLDER_CHANNEL, SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL } from "../shared/ipc";
+import { WORKTREE_REFLINK_CAPABILITIES_CHANNEL, WORKTREE_REFLINK_RUN_CHANNEL } from "../shared/ipc";
+import type {
+  ReadWorktreeReflinkCapabilitiesRequest,
+  ReadWorktreeReflinkCapabilitiesResponse,
+  RunWorktreeReflinkRequest,
+  RunWorktreeReflinkResponse,
+} from "@pwragent/shared/contracts/worktree-reflink";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
   NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
@@ -3355,6 +3362,14 @@ const desktopApi = Object.freeze({
     request: ReadWorktreeImageRequest,
   ): Promise<ReadWorktreeImageResponse> =>
     await ipcRenderer.invoke(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL, request),
+  readWorktreeReflinkCapabilities: async (
+    request: ReadWorktreeReflinkCapabilitiesRequest,
+  ): Promise<ReadWorktreeReflinkCapabilitiesResponse> =>
+    await ipcRenderer.invoke(WORKTREE_REFLINK_CAPABILITIES_CHANNEL, request),
+  runWorktreeReflink: async (
+    request: RunWorktreeReflinkRequest,
+  ): Promise<RunWorktreeReflinkResponse> =>
+    await ipcRenderer.invoke(WORKTREE_REFLINK_RUN_CHANNEL, request),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
     await invokeWithStartupProfileTiming(
       "getGhStatus",

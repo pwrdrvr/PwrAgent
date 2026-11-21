@@ -8,10 +8,12 @@ const HELPER = path.join("app-server", "managed-worktree.ts");
 const LOCKS = path.join("app-server", "worktree-volume-lock.ts");
 /**
  * A Git argument array whose command is `worktree` (after any `-C dir`,
- * `-c key=value`, or spread prefix) with anything but a literal `"list"`
- * next: add, remove, lock, unlock, or a subcommand passed as a variable.
+ * `-c key=value`, or spread prefix) with anything but a literal `"list"` or
+ * `"reflink"` next: add, remove, lock, unlock, or a subcommand passed as a
+ * variable. `reflink` re-shares the files of a worktree that already exists;
+ * it creates and removes no worktree and reads no lock.
  */
-const GIT_WORKTREE_WRITE = /\[\s*(?:(?:\.\.\.[\w.]+|"-[\w-]+"|[\w.]+)\s*,\s*)*"worktree"\s*,(?!\s*"list")/;
+const GIT_WORKTREE_WRITE = /\[\s*(?:(?:\.\.\.[\w.]+|"-[\w-]+"|[\w.]+)\s*,\s*)*"worktree"\s*,(?!\s*"(?:list|reflink)")/;
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -31,10 +33,19 @@ function sourceFiles(directory: string): string[] {
 describe("managed worktree guard", () => {
   it("keeps every worktree add, remove, lock, and unlock in the managed-worktree helper", () => {
     // The pattern itself: written-out and variable subcommands count; list and plain values do not.
-    for (const form of ['["worktree", "add", p]', '[...HOOKS, "worktree", ...args]', '["-C", repo, "worktree", action]']) {
+    for (const form of [
+      '["worktree", "add", p]',
+      '[...HOOKS, "worktree", ...args]',
+      '["-C", repo, "worktree", action]',
+      '["worktree", "reflinked", p]',
+    ]) {
       expect(GIT_WORKTREE_WRITE.test(form), form).toBe(true);
     }
-    for (const form of ['["worktree", "list", "--porcelain"]', '{ kind: "worktree", label }']) {
+    for (const form of [
+      '["worktree", "list", "--porcelain"]',
+      '["-C", cwd, "worktree", "reflink", "-h"]',
+      '{ kind: "worktree", label }',
+    ]) {
       expect(GIT_WORKTREE_WRITE.test(form), form).toBe(false);
     }
 

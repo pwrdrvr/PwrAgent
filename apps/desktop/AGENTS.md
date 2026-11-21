@@ -263,6 +263,12 @@ changing worktree creation, handoff, or where worktrees are stored (including
 the `[worktrees] base_directory` Worktree folder), read
 [docs/worktree-paths.md](docs/worktree-paths.md#worktree-path-computation).
 
+## Optional Git Commands
+
+Offer a Git option only after the selected Git's own help lists it, never from
+its version or exit code. Before changing `git worktree reflink` use, read
+[docs/git-optional-commands.md](docs/git-optional-commands.md#optional-git-commands).
+
 ## Release Notes
 
 Never hardcode a version string; use `app.getVersion()` or
