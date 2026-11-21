@@ -83,9 +83,10 @@ export class MessagingBrowseQueryPool {
     if (this.pendingReads >= 32) throw new Error("Messaging browser query admission is full. Try again after the current pages finish.");
     if (!Number.isInteger(params.pageSize) || params.pageSize < 1 || params.pageSize > 10) throw new Error("Messaging pages accept 1–10 items.");
     if (!Number.isSafeInteger(params.pageIndex) || params.pageIndex < 0) throw new Error("Invalid messaging page.");
-    const owners = [...new Map(params.owners.map((owner) => [owner.target?.instanceId ?? "local", owner])).values()];
+    const owners = [...new Map(params.owners.map((owner) => [owner.target?.instanceId, owner])).values()];
     const admittedOwners = owners.slice(0, MAX_OWNERS);
-    const signature = JSON.stringify([params.query, admittedOwners, params.pageSize, params.omittedOwners]);
+    const ownerIds = admittedOwners.map((owner) => owner.target?.instanceId ?? null);
+    const signature = JSON.stringify([params.query, ownerIds, params.pageSize, params.omittedOwners]);
     const now = this.now();
     let generation = this.sessions.get(params.sessionId);
     let rebaseline = false;
@@ -95,6 +96,7 @@ export class MessagingBrowseQueryPool {
       this.sessions.delete(params.sessionId);
       for (const [key, old] of this.sessions) if (!old.pending && old.touchedAt + IDLE_MS <= now) this.sessions.delete(key);
       if (this.sessions.size >= MAX_SESSIONS) throw new Error("Too many messaging browsers are open. Close a browser and try again.");
+      // Use the opening labels throughout a generation so cached and newly read pages agree.
       generation = { signature, owners: admittedOwners.map((owner) => ({ owner, rows: [], started: false, complete: false, total: 0 })),
         pages: new Map(), nextPage: 0, touchedAt: now };
       this.sessions.set(params.sessionId, generation);
