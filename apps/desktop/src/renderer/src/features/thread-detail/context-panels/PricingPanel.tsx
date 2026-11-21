@@ -40,7 +40,7 @@ import {
   type ChipContextMenuItem,
   type ChipContextMenuPosition,
 } from "../../chrome/ChipContextMenu";
-import { MoreVerticalIcon } from "../../../icons";
+import { MoreVerticalIcon, PopoutIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../../lib/federation-window";
@@ -93,12 +93,8 @@ type PricingPanelProps = {
   loading?: boolean;
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
-  /**
-   * Opens the Explorer on its savings lens. The Pricing rail is where an
-   * operator asks what a thread cost, so it is where the full savings
-   * breakdown has to be reachable — until now that window could only be
-   * opened from Tool calls, a tab the tool-accounting experiment gates off.
-   */
+  onOpenToolOutputIncidentExplorer?: () => void;
+  /** Opens the explorer directly to the Token Miser savings lens. */
   onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
@@ -227,7 +223,19 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
 
   return (
     <section className="context-panel__section">
-      <h3>Pricing</h3>
+      <div className="context-panel__section-heading">
+        <h3>Pricing</h3>
+        {props.onOpenToolOutputIncidentExplorer ? (
+          <button
+            className="context-panel__section-action"
+            onClick={props.onOpenToolOutputIncidentExplorer}
+            type="button"
+          >
+            <PopoutIcon size={11} aria-hidden="true" />
+            Tool Output Incidents
+          </button>
+        ) : null}
+      </div>
       {fallbackEstimate ? <PricingSnapshotCard estimate={fallbackEstimate} /> : null}
       {summary ? (
         <>

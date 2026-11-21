@@ -4254,12 +4254,7 @@ function DesktopAppShell(props: {
         messageCount: session.messages.length,
         contextWindow: session.contextWindow,
         pricing: session.response?.pricing,
-        toolAccounting:
-          settings.snapshot?.experimental.threadToolAccounting?.value === true
-            ? session.response?.toolAccounting
-            : undefined,
-        threadToolAccountingEnabled:
-          settings.snapshot?.experimental.threadToolAccounting?.value === true,
+        tokenMiserAccounting: session.response?.toolAccounting?.tokenMiser,
         researchEnabled:
           settings.snapshot?.experimental.researchEnabled?.value === true,
         threadPricingSummaryEnabled:

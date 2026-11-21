@@ -359,7 +359,6 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
         threadPricingSummary: true,
         threadPricingDisplayUsd: false,
         threadPricingDisplayCodexCredits: true,
-        threadToolAccounting: true,
       },
     });
 
@@ -377,11 +376,6 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       {
         op: "set",
         path: ["experimental", "thread_pricing_display_codex_credits"],
-        value: true,
-      },
-      {
-        op: "set",
-        path: ["experimental", "thread_tool_accounting"],
         value: true,
       },
     ]);

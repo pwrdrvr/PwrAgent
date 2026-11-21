@@ -11,7 +11,7 @@ import { supportsBulkDisplayReads } from "./thread-display-bulk-reads";
 export function useThreadDisplayResource(params: {
   desktopApi?: DesktopApi;
   thread?: Pick<NavigationThreadSummary, "id" | "source" | "federation" | "updatedAt">;
-  resource?: "pricing" | "tools" | "subagents";
+  resource?: "pricing" | "subagents";
   subAgentLens?: SubAgentLens;
   pricingGateGroup?: PricingGateSelection;
 }) {
@@ -56,11 +56,10 @@ export function useThreadDisplayResource(params: {
       if (event.backend !== backend
         || (event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined) !== instanceId
         || fields.threadId !== threadId) return;
-      // Pricing includes Token Miser and subagent costs. Tools and subagent
-      // collections must not refetch in response to unrelated ledger events.
+      // Pricing includes Token Miser and subagent costs. The subagent
+      // collection does not refetch in response to unrelated ledger events.
       if (method === "turn/started" || method === "turn/completed"
         || (resource === "pricing" && ["thread/pricing/updated", "thread/tokenUsage/updated", "thread/toolAccounting/updated", "thread/subAgents/updated"].includes(method))
-        || (resource === "tools" && method === "thread/toolAccounting/updated")
         || (resource === "subagents" && method === "thread/subAgents/updated")) refresh();
     });
   }, [instanceId, key, params.desktopApi, params.resource, params.thread?.id, params.thread?.source]);

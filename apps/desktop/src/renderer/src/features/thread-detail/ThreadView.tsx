@@ -61,8 +61,7 @@ import type {
   HandoffThreadWorkspaceRequest,
   ThreadExecutionMode,
   ThreadCompactionRecord,
-  ThreadToolAccounting,
-  ThreadToolInvocationRecord,
+  ThreadTokenMiserAccounting,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   SetThreadCheckoutHibernationResponse,
@@ -228,7 +227,6 @@ import {
   type McpApprovalPersistence,
 } from "./mcp-elicitation";
 import { readRendererSequence } from "./live-transcript-activity";
-import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
 import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
 import {
   MissingWorktreeCard,
@@ -745,8 +743,7 @@ export type ThreadViewProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
-  toolAccounting?: ThreadToolAccounting;
-  threadToolAccountingEnabled?: boolean;
+  tokenMiserAccounting?: ThreadTokenMiserAccounting;
   researchEnabled?: boolean;
   pricingDisplayOptions?: {
     codexCredits: boolean;
@@ -1077,20 +1074,11 @@ type WorkflowBudgetDialogState = {
   maxAgentBudget: string;
 };
 
-type PendingTranscriptTurnTarget =
-  | {
-      intent: "reveal";
-      threadKey: string;
-      turnId: string;
-      turnTimeMs?: number;
-    }
-  | {
-      intent: "tool-detail";
-      itemId: string;
-      threadKey: string;
-      turnId: string;
-      turnTimeMs?: number;
-    };
+type PendingTranscriptTurnTarget = {
+  threadKey: string;
+  turnId: string;
+  turnTimeMs?: number;
+};
 
 const MAX_TRANSCRIPT_TARGET_PAGE_LOADS = 60;
 
@@ -1272,11 +1260,9 @@ export function ThreadView(props: ThreadViewProps) {
   // threaded a value through yet, so the rail is discoverable.
   const contextRailPinned = props.contextRailPinned ?? true;
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
-  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   const researchEnabled = props.researchEnabled ?? false;
   const activeContextTab =
     (!threadPricingSummaryEnabled && props.activeContextTab === "pricing")
-    || (!threadToolAccountingEnabled && props.activeContextTab === "tool-calls")
     || (!researchEnabled && props.activeContextTab === "research")
       ? DEFAULT_CONTEXT_TAB
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
@@ -1825,49 +1811,38 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    const targetIndex = target.intent === "tool-detail"
-      ? findTranscriptCommandDetailEntryIndex(
-          props.transcriptEntries,
-          target.itemId,
-        )
-      : findTranscriptTurnEntryIndex(
-          props.transcriptEntries,
-          target.turnId,
-          target.turnTimeMs,
-        );
+    const targetIndex = findTranscriptTurnEntryIndex(
+      props.transcriptEntries,
+      target.turnId,
+      target.turnTimeMs,
+    );
     if (targetIndex >= 0) {
-      if (target.intent === "reveal") {
-        expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
-      }
+      expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
       setPendingTranscriptTurnTarget(undefined);
       transcriptTurnPageLoadsRef.current = 0;
-      if (target.intent === "reveal") {
+      requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const container = transcriptPanelRef.current;
-            if (container) {
-              scrollRenderedTranscriptToTurn(
-                container,
-                target.turnId,
-                target.turnTimeMs,
-              );
-            }
-          });
+          const container = transcriptPanelRef.current;
+          if (container) {
+            scrollRenderedTranscriptToTurn(
+              container,
+              target.turnId,
+              target.turnTimeMs,
+            );
+          }
         });
-      }
+      });
       return;
     }
 
     const finishAtNearestRenderedTurn = (): void => {
-      if (target.intent === "reveal") {
-        const container = transcriptPanelRef.current;
-        if (container) {
-          scrollRenderedTranscriptToTurn(
-            container,
-            target.turnId,
-            target.turnTimeMs,
-          );
-        }
+      const container = transcriptPanelRef.current;
+      if (container) {
+        scrollRenderedTranscriptToTurn(
+          container,
+          target.turnId,
+          target.turnTimeMs,
+        );
       }
       setPendingTranscriptTurnTarget(undefined);
       transcriptTurnPageLoadsRef.current = 0;
@@ -2448,18 +2423,6 @@ export function ThreadView(props: ThreadViewProps) {
     pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
       ? pendingActivityEntry
       : undefined;
-  const toolCallEntries = useMemo(
-    () => [
-      ...props.transcriptEntries,
-      ...(pendingActivityEntry ? [pendingActivityEntry] : []),
-      ...pendingProtocolActivityEntries,
-    ],
-    [
-      pendingActivityEntry,
-      pendingProtocolActivityEntries,
-      props.transcriptEntries,
-    ],
-  );
   const { openImageGallery, imageLightbox, setExpandedGallery } = useThreadImageGallery({
     props, pendingTranscriptActivityEntry, pendingProtocolActivityEntries, pendingUsageActivityEntry,
   });
@@ -2582,7 +2545,6 @@ export function ThreadView(props: ThreadViewProps) {
       if (canLoadServerTranscriptHistory && selectedThreadKey) {
         transcriptTurnPageLoadsRef.current = 0;
         setPendingTranscriptTurnTarget({
-          intent: "reveal",
           threadKey: selectedThreadKey,
           turnId,
           turnTimeMs,
@@ -2600,35 +2562,6 @@ export function ThreadView(props: ThreadViewProps) {
     ],
   );
 
-  const handleRequestToolCallDetails = useCallback(
-    (invocation: ThreadToolInvocationRecord) => {
-      // Tool Calls owns isolated Codex item bodies. Only other backends use
-      // transcript discovery; partial Codex reads must never enter history.
-      if (invocation.backend === "codex") return;
-      if (!invocation.turnId || !selectedThreadKey) {
-        return;
-      }
-      const targetIndex = findTranscriptCommandDetailEntryIndex(
-        props.transcriptEntries,
-        invocation.itemId,
-      );
-      if (targetIndex >= 0 || !canLoadServerTranscriptHistory) {
-        return;
-      }
-      transcriptTurnPageLoadsRef.current = 0;
-      setPendingTranscriptTurnTarget({
-        intent: "tool-detail",
-        itemId: invocation.itemId,
-        threadKey: selectedThreadKey,
-        turnId: invocation.turnId,
-        turnTimeMs: invocation.observedAt,
-      });
-    }, [
-      canLoadServerTranscriptHistory,
-      props.transcriptEntries,
-      selectedThreadKey,
-    ],
-  );
   const handleOpenToolOutputIncidentExplorer = useCallback(
     (lens?: ToolOutputIncidentExplorerLens) => {
       if (!selectedThread) return;
@@ -2649,16 +2582,6 @@ export function ThreadView(props: ThreadViewProps) {
     },
     [desktopApi, props.selectedDirectory?.label, selectedThread],
   );
-  const handleAnalyzeToolHistory = useCallback(() => {
-    if (!selectedThread) return;
-    void desktopApi?.analyzeThreadToolHistory?.({
-      backend: selectedThread.source,
-      ...(selectedThread.federation?.ref.target
-        ? { federationTarget: selectedThread.federation.ref.target }
-        : {}),
-      threadId: selectedThread.id,
-    });
-  }, [desktopApi, selectedThread]);
 
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
@@ -3852,18 +3775,10 @@ export function ThreadView(props: ThreadViewProps) {
           platform: props.platform,
           thread: selectedThread,
           pricing: props.pricing,
-          toolAccounting: props.toolAccounting,
-          toolCallEntries,
-          loadingToolCallDetailItemId:
-            pendingTranscriptTurnTarget?.intent === "tool-detail"
-              ? pendingTranscriptTurnTarget.itemId
-              : undefined,
-          onRequestToolCallDetails: handleRequestToolCallDetails,
-          onAnalyzeToolHistory: handleAnalyzeToolHistory,
+          tokenMiserAccounting: props.tokenMiserAccounting,
           onOpenToolOutputIncidentExplorer: handleOpenToolOutputIncidentExplorer,
           pricingDisplayOptions: props.pricingDisplayOptions,
           threadPricingSummaryEnabled,
-          threadToolAccountingEnabled,
           researchEnabled,
           worktreeArchiveError: props.worktreeArchiveError,
           onRestoreWorktree: props.onRestoreWorktree,

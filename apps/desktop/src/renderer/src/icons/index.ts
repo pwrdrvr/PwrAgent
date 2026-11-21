@@ -82,7 +82,6 @@ export { SubAgentsIcon } from "./SubAgentsIcon";
 export { SubthreadIcon } from "./SubthreadIcon";
 export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";
-export { ToolCallsIcon } from "./ToolCallsIcon";
 export { TrashIcon } from "./TrashIcon";
 export { ThreadIcon } from "./ThreadIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";

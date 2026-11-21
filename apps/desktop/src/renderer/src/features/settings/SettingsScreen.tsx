@@ -1239,11 +1239,6 @@ function SettingsSectionBody(props: {
             experimental: { liveTranscriptEventFiltering: enabled },
           });
         }}
-        onThreadToolAccountingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { threadToolAccounting: enabled },
-          });
-        }}
         onTokenMiserEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserEnabled: enabled },
