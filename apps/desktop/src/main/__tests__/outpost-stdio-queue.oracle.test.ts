@@ -1,8 +1,11 @@
 import fs from "node:fs";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import { canonicalDurableTurnRequest } from "@pwragent/shared/durable-turn-request";
+import type { ListBackendsResponse } from "@pwragent/shared/contracts/backend";
 import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 import type { SubmitDurableTurnRequest } from "@pwragent/shared/contracts/durable-turn-requests";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -10,6 +13,26 @@ import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostDaemon } from "./helpers/outpost-daemon";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+
+const PROVIDER_REFRESH_CAPABILITIES = [...OUTPOST_VIEWER_CAPABILITIES, "event_subscriptions" as const];
+
+async function readBackendsAfterProviderRefresh(
+  owner: OutpostDaemon,
+  signal: AbortSignal,
+  beforeRefresh?: (snapshot: ListBackendsResponse) => void,
+): Promise<ListBackendsResponse> {
+  // Subscribe before reading the owner's refresh outcome so a viewer catches
+  // the event while startup is in flight and can read the outcome if it missed it.
+  owner.subscribe(["transcript"]);
+  const read = () => owner.client.listBackends({ includeUnavailable: true });
+  const snapshot = await read();
+  if (snapshot.providerRefresh?.state === "ready" || snapshot.providerRefresh?.state === "degraded") return snapshot;
+  beforeRefresh?.(snapshot);
+  await owner.waitForEvent("navigation/providerThreads/refreshed", event => event.backend === "codex", signal);
+  const refreshed = await read();
+  expect(["ready", "degraded"]).toContain(refreshed.providerRefresh?.state);
+  return refreshed;
+}
 
 function prepareProxyProfile(config: string): string {
   const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-proxy-"));
@@ -33,7 +56,7 @@ describe.skipIf(process.platform === "win32")("the E2E Outpost's real Codex prot
   });
   afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-  it("admits remote launches only through the configured provider when OpenAI is off", async () => {
+  it("admits remote launches only through the configured provider when OpenAI is off", async ({ signal }) => {
     const root = prepareProxyProfile(`
 [[models.codex.providers]]
 id = "empty-proxy"
@@ -64,6 +87,7 @@ models = ["proxy-model"]
     }));
     fs.writeFileSync(path.join(data, "helper-title.json"), JSON.stringify({ title: "Unwanted helper" }));
     const host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
+      capabilities: PROVIDER_REFRESH_CAPABILITIES,
       env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } }).catch(error => {
       fs.rmSync(root, { recursive: true, force: true });
       throw error;
@@ -77,13 +101,10 @@ models = ["proxy-model"]
       const input = [{ type: "text" as const, text: "Run through the proxy" }];
       const launch = (model?: string) => host.client.materializeDirectoryLaunchpad({ directoryKey: draft.directoryKey,
         launchpad: { ...draft, model }, input });
-      const { backends } = await vi.waitFor(async () => {
-        const response = await host.client.listBackends();
-        const codex = response.backends.find(backend => backend.kind === "codex");
-        expect(codex?.available).toBe(true);
-        expect(codex?.codexModelProviders).toContainEqual(expect.objectContaining({ id: "listed-proxy", status: "unavailable" }));
-        return response;
-      });
+      const { backends } = await readBackendsAfterProviderRefresh(host, signal);
+      const codex = backends.find(backend => backend.kind === "codex");
+      expect(codex?.available).toBe(true);
+      expect(codex?.codexModelProviders).toContainEqual(expect.objectContaining({ id: "listed-proxy", status: "unavailable" }));
       // The static catalog is the oracle for what the owner can offer or run.
       expect(buildProviderPickerEntries(backends).map(entry => [entry.value, entry.models.map(model => model.id)]))
         .toEqual([["codex-provider:empty-proxy", []], ["codex-provider:listed-proxy", ["@listed-proxy/listed-model"]],
@@ -184,30 +205,54 @@ execution_mode = "default"
     }
   });
 
-  it("uses a listed model for an omitted-model launch when discovery fails", async () => {
-    const root = prepareProxyProfile(`
+  it("uses a listed model for an omitted-model launch when discovery fails", async ({ signal }) => {
+    const discovery = Promise.withResolvers<void>();
+    const endpoint = createServer(async (request, response) => {
+      if (request.method !== "GET" || request.url !== "/v1/models") {
+        response.writeHead(404).end();
+        return;
+      }
+      await discovery.promise;
+      response.writeHead(503).end();
+    });
+    let root: string | undefined;
+    let host: OutpostDaemon | undefined;
+    try {
+      endpoint.listen(0, "127.0.0.1");
+      await once(endpoint, "listening");
+      const address = endpoint.address();
+      if (!address || typeof address === "string") throw new Error("Discovery fixture did not bind a loopback port");
+      root = prepareProxyProfile(`
 [[models.codex.providers]]
 id = "proxy"
 name = "Proxy"
-base_url = "http://127.0.0.1:1/v1"
+base_url = "http://127.0.0.1:${address.port}/v1"
 models = ["proxy-model"]
 `);
-    let host: OutpostDaemon | undefined;
-    try {
       const owner = host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
+        capabilities: PROVIDER_REFRESH_CAPABILITIES,
         env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: "off" } });
-      await vi.waitFor(async () => {
-        const { backends } = await owner.client.listBackends();
+      // The test endpoint holds the catalog read open until the viewer has
+      // seen pending. The owner must publish the failure before signaling the
+      // refresh, and still offer the operator's listed model.
+      const { backends } = await readBackendsAfterProviderRefresh(owner, signal, ({ backends }) => {
         expect(backends.find(backend => backend.kind === "codex")?.codexModelProviders)
-          .toContainEqual(expect.objectContaining({ id: "proxy", status: "unavailable" }));
+          .toContainEqual(expect.objectContaining({ id: "proxy", status: "pending" }));
+        discovery.resolve();
       });
+      const codex = backends.find(backend => backend.kind === "codex");
+      expect(codex?.available).toBe(true);
+      expect(codex?.codexModelProviders)
+        .toContainEqual(expect.objectContaining({ id: "proxy", status: "unavailable", error: "HTTP 503" }));
       expect.soft((await owner.client.getNavigationLaunchpadConfig({ protocol: 2 })).defaults)
         .toMatchObject({ codexModelProviderId: "proxy", model: "@proxy/proxy-model" });
       await expect(owner.client.startThread({ backend: "codex", cwd: owner.workspace }))
         .resolves.toMatchObject({ backend: "codex", threadId: expect.any(String) });
     } finally {
+      discovery.resolve();
       await host?.close();
-      fs.rmSync(root, { recursive: true, force: true });
+      await new Promise<void>(resolve => endpoint.close(() => resolve()));
+      if (root) fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
