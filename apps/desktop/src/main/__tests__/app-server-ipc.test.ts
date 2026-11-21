@@ -11056,6 +11056,136 @@ describe("app server ipc", () => {
     });
   });
 
+  it.each([1_000, 2_000, 50_000])("bounds terminal retry and selected history reads with %i unrelated ended watches", async (unrelated) => {
+    await withRenamedRepositoryStore("terminal-watch-read-budget-", async ({ db, store }) => {
+      const { appServerService, service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const internal = service as unknown as {
+        retryPendingPrTerminalWatches: (thread?: { backend: "codex"; threadId: string }) => Promise<void>;
+        prStatusRegistryLoaded: boolean;
+        prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+      };
+      const identity = { backend: "codex" as const, threadId: "selected" };
+      const pending = githubPr({ org: "fixture", repo: "project", number: 1, state: "passing",
+        lifecycleState: "closed", url: "https://github.com/fixture/project/pull/1" });
+      const watching = { ...pending, number: 2, lifecycleState: "open" as const, url: "https://github.com/fixture/project/pull/2" };
+      const ended = { ...pending, number: 3, url: "https://github.com/fixture/project/pull/3" };
+      const pendingKey = buildPullRequestStatusKey(pending);
+      const watchingKey = buildPullRequestStatusKey(watching);
+      const previous = { loaded: internal.prStatusRegistryLoaded, pending: internal.prStatusRegistry.get(pendingKey),
+        watching: internal.prStatusRegistry.get(watchingKey) };
+      const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+      const appState = await import("../state/app-state");
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const prepare = db.raw.prepare.bind(db.raw);
+      try {
+        for (const [watchId, pr] of [["saved", pending], ["watching", watching], ["ended", ended]] as const) {
+          await store.registerThreadPrStatusWatch({ now: 1, watch: {
+            ...identity, watchId, prKey: buildPullRequestStatusKey(pr), prUrl: pr.url, prNumber: pr.number,
+            kind: "terminal", headSha: "", notifyOn: ["closed"], createdAt: 1, failureHandledByAutoFix: false,
+          } });
+        }
+        await store.observeThreadPrTerminalWatches({ pr: pending, observedAt: 2, outcome: "closed", now: 2 });
+        await store.cancelThreadPrStatusWatch({ ...identity, watchId: "ended", now: 3 });
+        db.raw.prepare(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
+          INSERT INTO pr_status_watches (watch_id, backend, thread_id, pr_key, head_sha, notify_on_success,
+            notify_on_failure, status, created_at, updated_at, payload)
+          SELECT 'bulk-' || n, 'codex', 'unrelated-' || n, 'github/fixture/retained#' || n, '',
+            0, 0, 'dispatched', 1, 4, '{}' FROM seq`).run(unrelated);
+        // Check both planner modes against the same workload across the cases.
+        if (unrelated === 2_000) db.raw.exec("ANALYZE");
+        internal.prStatusRegistryLoaded = true;
+        internal.prStatusRegistry.set(pendingKey, { pr: { ...pending, lifecycleState: "open" }, fetchedAt: 5 });
+        internal.prStatusRegistry.set(watchingKey, { pr: watching, fetchedAt: 5 });
+
+        const partialIndexes = new Set((db.raw.pragma("index_list(pr_status_watches)") as Array<{
+          name: string; partial: number;
+        }>).filter((index) => index.partial).map((index) => index.name));
+        const reads: Array<{ phase: string; sql: string; plans: string[] }> = [];
+        let phase = "startup";
+        const trace = vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+          const statement = prepare(sql);
+          if (!statement.reader || !/FROM pr_status_watches\b/.test(sql)) return statement;
+          const wrap = <Result>(execute: (...args: unknown[]) => Result) => (...args: unknown[]): Result => {
+            const result = execute(...args);
+            const plans = (prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>)
+              .map((row) => row.detail);
+            reads.push({ phase, sql, plans });
+            return result;
+          };
+          statement.all = wrap(statement.all.bind(statement));
+          statement.get = wrap(statement.get.bind(statement));
+          return statement;
+        });
+        try {
+          submitTurnIfIdle.mockResolvedValueOnce({ status: "busy" });
+          await internal.retryPendingPrTerminalWatches();
+          expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+          phase = "indicators";
+          expect((await store.listActiveThreadPrStatusWatches(identity)).map((watch) => watch.watchId)).toEqual(["watching"]);
+          phase = "history";
+          expect(await appServerService.manageThreadPrWatches({ ...identity, action: "history", limit: 1 })).toEqual({
+            ok: true, history: [expect.objectContaining({ watchId: "ended", status: "cancelled", updatedAt: 3 })],
+          });
+          // The persisted event supplies the wake after both reopening and cache eviction.
+          internal.prStatusRegistry.delete(pendingKey);
+          submitTurnIfIdle.mockClear();
+          phase = "unlock";
+          const retry = vi.spyOn(internal, "retryPendingPrTerminalWatches");
+          try {
+            const { writes } = await measureSqliteWrites(async () => {
+              appServerService.handleAgentEventForPrWatches({ backend: identity.backend,
+                notification: { method: "thread/lock/updated", params: { threadId: identity.threadId } },
+              });
+              expect(retry).toHaveBeenCalledExactlyOnceWith(identity);
+              await retry.mock.results[0]!.value;
+            });
+            expect({ commits: writes.commits, rowsChanged: writes.rowsChanged }).toEqual({ commits: 2, rowsChanged: 2 });
+          } finally { retry.mockRestore(); }
+          expect(submitTurnIfIdle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            ...identity, messageOrigin: expect.objectContaining({
+              prAutomation: expect.objectContaining({ prKey: pendingKey, outcome: "closed" }),
+            }),
+          }));
+          expect(fetchPullRequestTerminalDetails).not.toHaveBeenCalled();
+        } finally { trace.mockRestore(); }
+        expect(await store.listPendingPrTerminalWatchObservations(identity)).toEqual([]);
+        expect(await store.listPendingPrTerminalWatchPrKeys(identity)).toEqual([watchingKey]);
+        const idle = await measureSqliteWrites(() => internal.retryPendingPrTerminalWatches(identity));
+        expect(idle.writes.commits).toBe(0);
+
+        // Adding ended rows on other threads cannot turn retry into a scan of
+        // either the table or a full secondary index, or add a history sort.
+        for (const scope of ["startup", "unlock"]) {
+          const candidates = reads.filter(({ phase, sql }) => phase === scope
+            && /^(SELECT payload FROM|SELECT DISTINCT pr_key\s+FROM) pr_status_watches\b/.test(sql));
+          expect(candidates).toHaveLength(2);
+        }
+        const selected = reads.filter(({ phase, sql }) => phase === "history" || phase === "indicators"
+          || (phase === "unlock" && /^(SELECT payload FROM|SELECT DISTINCT pr_key\s+FROM) pr_status_watches\b/.test(sql)));
+        expect(selected).toHaveLength(4);
+        for (const { plans } of selected) {
+          expect.soft(plans.some((plan) => /SEARCH pr_status_watches .*\bbackend=\? AND thread_id=\?/.test(plan)), plans.join("\n")).toBe(true);
+        }
+        const unbounded = reads.flatMap(({ phase, plans }) => plans
+          .filter((plan) => {
+            if (phase === "history" && plan.includes("TEMP B-TREE")) return true;
+            const scan = /^SCAN pr_status_watches(?: USING (?:COVERING )?INDEX (\S+))?$/.exec(plan);
+            return scan !== null && !partialIndexes.has(scan[1] ?? "");
+          })
+          .map((plan) => ({ phase, plan })));
+        expect(unbounded).toEqual([]);
+      } finally {
+        mode.mockRestore();
+        internal.prStatusRegistryLoaded = previous.loaded;
+        for (const [key, entry] of [[pendingKey, previous.pending], [watchingKey, previous.watching]] as const) {
+          if (entry) internal.prStatusRegistry.set(key, entry);
+          else internal.prStatusRegistry.delete(key);
+        }
+        restore();
+      }
+    });
+  });
+
   it("removes an archived thread from PR routing immediately and rejects late lookup results", async () => {
     const { appServerService, service, restore } = await renamedRepositoryService();
     const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
