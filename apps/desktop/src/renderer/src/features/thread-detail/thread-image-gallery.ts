@@ -8,21 +8,14 @@ export function collectThreadImageGallery(
   entries: Array<AppServerThreadEntry | undefined>,
 ): AppServerThreadImagePart[] {
   const images: AppServerThreadImagePart[] = [];
-  const seenSourceUrls = new Set<string>();
   const seenUrls = new Set<string>();
 
   const appendImage = (image: AppServerThreadImagePart): void => {
-    if (
-      transcriptImageUnavailableReason(image)
-      || seenUrls.has(image.url)
-      || (image.sourceUrl ? seenSourceUrls.has(image.sourceUrl) : false)
-    ) {
+    // One source path can point to several independently retained images.
+    if (transcriptImageUnavailableReason(image) || seenUrls.has(image.url)) {
       return;
     }
     seenUrls.add(image.url);
-    if (image.sourceUrl) {
-      seenSourceUrls.add(image.sourceUrl);
-    }
     images.push(image);
   };
 
@@ -52,14 +45,5 @@ export function threadGalleryImageMatches(
   candidate: AppServerThreadImagePart,
   selected: AppServerThreadImagePart,
 ): boolean {
-  return (
-    candidate === selected
-    || candidate.url === selected.url
-    || Boolean(
-      candidate.sourceUrl
-      && selected.sourceUrl
-      && candidate.sourceUrl === selected.sourceUrl,
-    )
-  );
+  return candidate.url === selected.url;
 }
-
