@@ -792,6 +792,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           : tab.label;
     const label = suspended ? `${baseLabel} · agent follow-ups suspended` : baseLabel;
     const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
+    const tooltipText = `${label} — ${tab.hint}`;
     return (
       <button
         key={tab.id}
@@ -799,13 +800,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         aria-label={label}
         aria-selected={isActive && open}
         aria-controls={open ? "context-rail-panel" : undefined}
-        className={`context-rail__tab tooltip-target${isActive ? " is-active" : ""}${
+        className={`context-rail__tab${isActive ? " is-active" : ""}${
           landing ? " is-landing" : ""
         }`}
         role="tab"
         tabIndex={isActive ? 0 : -1}
-        data-tooltip={`${label} — ${tab.hint}`}
         type="button"
+        // The rail's one tooltip, shared with its panels' controls: a tab's
+        // explanation is replaced, never joined, when a panel control raises
+        // its own. A second tooltip system here left both on screen.
+        onMouseEnter={(event) => railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
+        onMouseLeave={railTooltip.hide}
+        onFocus={(event) => railTooltip.show(event.currentTarget, tooltipText)}
+        onBlur={railTooltip.hide}
         onClick={() => selectTab(tab.id)}
         onAnimationEnd={landing ? () => setLandedRingPlayed(connectionsLanding) : undefined}
       >

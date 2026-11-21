@@ -895,7 +895,8 @@ describe("ThreadContextPanel", () => {
     // The rendered order is the accessibility oracle, including optional tabs.
     const tabs = screen.getAllByRole("tab");
     for (const [index, tab] of tabs.entries()) {
-      tab.focus();
+      // Focus shows the tab's tooltip, a state update.
+      act(() => tab.focus());
       fireEvent.keyDown(tab, { key: "ArrowDown" });
       expect(document.activeElement).toBe(tabs[(index + 1) % tabs.length]);
       fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
@@ -907,21 +908,42 @@ describe("ThreadContextPanel", () => {
     expect(document.activeElement).toBe(tabs[0]);
   });
 
-  it("explains every rail tab through the shared portal tooltip layer", () => {
+  it("explains every rail tab in the rail's tooltip", () => {
     renderPanel({ pinned: true });
     const tabs = screen.getAllByRole("tab");
     expect(tabs.length).toBeGreaterThan(5);
     for (const tab of tabs) {
       const name = tab.getAttribute("aria-label")!;
-      // `DataTooltipLayer` draws `.tooltip-target[data-tooltip]` in a body
-      // portal clamped into the window. A native `title` would add a second,
-      // unclamped tooltip on top of it.
-      expect(tab).toHaveClass("tooltip-target");
+      // A native `title` would draw a second, unclamped tooltip.
       expect(tab).not.toHaveAttribute("title");
-      expect(tab.getAttribute("data-tooltip")).toMatch(
+      fireEvent.focus(tab);
+      const tooltips = screen.getAllByRole("tooltip");
+      expect(tooltips).toHaveLength(1);
+      expect(tooltips[0]!.textContent).toMatch(
         new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — \\S`),
       );
+      fireEvent.blur(tab);
     }
+  });
+
+  it("replaces a tab's tooltip with a panel control's instead of showing both", () => {
+    renderPanel({
+      activeTab: "projects",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          { id: "local-dir", kind: "local", label: "PwrAgent", path: "/Users/fixture-user/github/PwrAgent" },
+        ],
+      },
+    });
+    // The pointer stays on a tab after clicking it, so its tooltip is still
+    // up when focus moves into the panel.
+    fireEvent.focus(screen.getByRole("tab", { name: "Linked projects" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Linked projects — ");
+    fireEvent.focus(screen.getByLabelText("Path for PwrAgent"));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/fixture-user/github/PwrAgent");
   });
 
   it("draws every rail tab with its own glyph, none shared with the lens switch or machines", () => {
