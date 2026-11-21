@@ -92,9 +92,8 @@ afterEach(() => {
 });
 
 /**
- * The Experimental tab tucks its deprecated features (Diff Condensation,
- * Live Transcript Event Filtering) inside a collapsed-by-
- * default "Soon to be discontinued" drawer, where they are hidden from the
+ * The Experimental tab keeps deprecated features in the collapsed-by-default
+ * "Soon to be discontinued" drawer, where they are hidden from the
  * accessibility tree until expanded. Idempotent (checks `aria-expanded`) so
  * it is safe regardless of the drawer's persisted collapse state from a
  * prior test in this file.
@@ -222,10 +221,6 @@ function createSnapshot(
         source: "default",
       },
       fullAccessRiskWarningDismissed: {
-        value: false,
-        source: "default",
-      },
-      liveTranscriptEventFiltering: {
         value: false,
         source: "default",
       },
@@ -2582,15 +2577,6 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(
-      getLabeledSwitch("Enable live transcript event filtering"),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { liveTranscriptEventFiltering: true },
-      });
-    });
-
     expect(
       getLabeledSwitch("Display tool call tracking"),
     ).not.toBeDisabled();
@@ -3306,12 +3292,11 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("defaults missing experimental flags appropriately and persists changes", async () => {
+  it("defaults the missing Codex skill questions flag to off and persists changes", async () => {
     const snapshot = createSnapshot();
     const experimental = snapshot.experimental as Partial<
       typeof snapshot.experimental
     >;
-    delete experimental.liveTranscriptEventFiltering;
     delete experimental.codexDefaultModeRequestUserInput;
     const settings = createSettingsState(snapshot);
 
@@ -3322,23 +3307,11 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    openDiscontinuedDrawer();
-    const filteringSwitch = screen.getByRole("switch", {
-      name: "Enable live transcript event filtering",
-    });
     const questionsSwitch = screen.getByRole("switch", {
       name: "Enable Codex skill questions",
     });
 
-    expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
-
-    fireEvent.click(filteringSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { liveTranscriptEventFiltering: true },
-      });
-    });
 
     fireEvent.click(questionsSwitch);
     await waitFor(() => {

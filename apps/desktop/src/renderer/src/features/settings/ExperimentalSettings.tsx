@@ -19,11 +19,6 @@ import {
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
 
-const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
-  value: false,
-  source: "default" as const,
-};
-
 const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   value: false,
   source: "default" as const,
@@ -103,7 +98,6 @@ export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
-  onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
@@ -124,9 +118,6 @@ export function ExperimentalSettings(props: {
     ?? { value: true, source: "default" as const };
   const researchEnabled = props.snapshot.experimental.researchEnabled
     ?? { value: false, source: "default" as const };
-  const liveTranscriptEventFiltering =
-    props.snapshot.experimental.liveTranscriptEventFiltering ??
-    DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
   const threadToolAccounting =
     props.snapshot.experimental.threadToolAccounting ??
     DEFAULT_THREAD_TOOL_ACCOUNTING;
@@ -183,9 +174,7 @@ export function ExperimentalSettings(props: {
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
-  const discontinuedEnabledCount =
-    (condensation.enabled.value ? 1 : 0) +
-    (liveTranscriptEventFiltering.value ? 1 : 0);
+  const discontinuedEnabledCount = condensation.enabled.value ? 1 : 0;
 
   return (
     <SettingsSectionStack paneId="experimental" aria-label="Experimental settings">
@@ -443,28 +432,6 @@ export function ExperimentalSettings(props: {
               }}
             />
 
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          eyebrow="Experimental"
-          title="Live Transcript Event Filtering"
-          description="Reduce renderer work from live transcript notifications by ignoring unrelated thread-local events and skipping duplicate activity updates. Disabled by default."
-          chip={liveTranscriptEventFiltering.value ? "On" : "Off"}
-          chipKind={liveTranscriptEventFiltering.value ? "ok" : "default"}
-        >
-          <div className="settings-fields">
-            <ToggleField
-              checked={liveTranscriptEventFiltering.value}
-              disabled={props.saving}
-              label="Enable live transcript event filtering"
-              sub="Ignore unrelated live transcript events."
-              help="Live transcript notifications for other threads no longer update the focused thread view."
-              source={sourceBadge(liveTranscriptEventFiltering)}
-              onChange={(enabled) => {
-                return props.onLiveTranscriptEventFilteringChange(enabled);
-              }}
-            />
           </div>
         </SettingsSection>
       </SettingsSectionGroup>

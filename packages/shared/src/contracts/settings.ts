@@ -1475,7 +1475,6 @@ export type DesktopSettingsSnapshot = {
      * thread-local transcript events are ignored and duplicate live activity
      * updates become no-ops.
      */
-    liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
      * Controls whether the released thread context-rail Pricing tab is visible.
      * The pricing ledger continues collecting usage while the tab is hidden.
@@ -1890,7 +1889,6 @@ export type DesktopSettingsConfigPatch = {
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
-    liveTranscriptEventFiltering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;

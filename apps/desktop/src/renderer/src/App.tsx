@@ -3158,8 +3158,6 @@ function DesktopAppShell(props: {
     desktopApi,
     retainedRemoteThreads: recentRemoteThreads,
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
-    liveTranscriptEventFiltering:
-      settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
     suspended: remoteReadsSuspended,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
