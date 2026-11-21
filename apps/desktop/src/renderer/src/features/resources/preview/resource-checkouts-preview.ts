@@ -12,6 +12,7 @@ import {
   type ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { ResourceCheckoutsSource } from "../resource-checkouts-source";
+import { requestWouldWait } from "../resource-view-model";
 
 /**
  * Invented fixture data for the development preview and tests. Every
@@ -103,6 +104,7 @@ export function buildPreviewResources(now: number): ResourceDomain[] {
     instanceLabel,
     profile,
     isViewer: instanceLabel === "studio-m4" && profile === "default",
+    onViewerMachine: instanceLabel === "studio-m4",
     observedAt: now - minutesAgo * MIN,
     freshness: "fresh" as const,
     ...extra,
@@ -446,7 +448,7 @@ export function createPreviewResourceCheckoutsSource(options: {
         allocations: [],
         queue: [],
         readiness: [{ checkId: "registry", label: "Registry confirmation", state: "warning", detail: "Waiting for the studio-m4 broker", observedAt: now, advisory: false }],
-        advertisements: [{ instanceId: "inst-studio-m4-default", instanceLabel: "studio-m4", profile: "default", isViewer: true, observedAt: now, freshness: "fresh", note: "Draft on this instance" }],
+        advertisements: [{ instanceId: "inst-studio-m4-default", instanceLabel: "studio-m4", profile: "default", isViewer: true, onViewerMachine: true, observedAt: now, freshness: "fresh", note: "Draft on this instance" }],
         routes: [],
         instructions: request.draft.instructionsSource
           ? { revision: 1, title: request.draft.displayName, source: "skill", sourceLabel: request.draft.instructionsSource, excerpt: "Publishes with the definition.", updatedAt: now }
@@ -466,9 +468,8 @@ export function createPreviewResourceCheckoutsSource(options: {
     if (gate && !gate.allowed) return { outcome: "rejected", reason: gate.reason, message: gate.detail };
     switch (request.kind) {
       case "request": {
-        const sharing = resource.sharing;
-        const free = resource.queue.length === 0 && (sharing.mode === "counted" ? sharing.inUse < sharing.capacity : resource.allocations.length === 0) && resource.condition === "available";
-        if (free) {
+        // The same rule that labels the button Request checkout or Join queue.
+        if (!requestWouldWait(resource, resource.condition)) {
           generation += 1;
           const allocationId = `alloc-${generation}`;
           update(resource.resourceId, (current) => ({

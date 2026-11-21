@@ -128,7 +128,7 @@ export function RequestCheckoutDialog(props: {
   const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)] ?? 15 * 60_000);
   const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
   const holder = resource.allocations[0];
-  const waits = props.action.label === "Join queue";
+  const waits = props.action.waits === true;
   return (
     <ResourceDialog
       busy={busy}
@@ -171,7 +171,7 @@ export function RequestCheckoutDialog(props: {
         <small>Shown to other waiters and kept in the audit record.</small>
       </label>
       <div className="resources-field">
-        <span id="resources-request-duration">Expected duration</span>
+        <span>Expected duration</span>
         <SegmentedControl
           label="Expected duration"
           options={durations.map((ms) => ({ label: formatDuration(ms), value: ms }))}

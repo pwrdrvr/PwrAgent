@@ -37,6 +37,15 @@ export type SettledResourceAction = {
   result: ResourceCheckoutActionResult;
 };
 
+export type PerformResourceActionOptions = {
+  /**
+   * Whether a rejected or unknown result is reported through `settled`. A
+   * dialog that shows its own failure passes false so the result is not
+   * announced twice; success is always reported.
+   */
+  reportFailure?: boolean;
+};
+
 /**
  * Reads and follows a resource checkouts source.
  *
@@ -45,19 +54,26 @@ export type SettledResourceAction = {
  */
 export function useResourceCheckouts(source: ResourceCheckoutsSource) {
   const [view, setView] = useState<ResourceCheckoutsView>({ status: "loading" });
-  const [pending, setPending] = useState<PendingResourceAction | null>(null);
+  const [pending, setPending] = useState<readonly PendingResourceAction[]>([]);
   const [settled, setSettled] = useState<SettledResourceAction | null>(null);
   const shownRef = useRef<ResourceCheckoutsSnapshot | undefined>(undefined);
   const mountedRef = useRef(true);
+  const readSeqRef = useRef(0);
+  const succeededSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const seq = ++readSeqRef.current;
     try {
       const snapshot = await source.read();
-      if (!mountedRef.current || !acceptSnapshot(shownRef.current, snapshot)) return;
+      if (!mountedRef.current) return;
+      succeededSeqRef.current = Math.max(succeededSeqRef.current, seq);
+      if (!acceptSnapshot(shownRef.current, snapshot)) return;
       shownRef.current = snapshot;
       setView({ status: "ready", snapshot });
     } catch (error) {
-      if (!mountedRef.current) return;
+      // A read started after this one already succeeded, so what is on
+      // screen is newer than anything this failure could say is stale.
+      if (!mountedRef.current || succeededSeqRef.current > seq) return;
       setView({
         status: "error",
         message: error instanceof Error ? error.message : String(error),
@@ -69,6 +85,7 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
   useEffect(() => {
     mountedRef.current = true;
     shownRef.current = undefined;
+    succeededSeqRef.current = readSeqRef.current;
     setView({ status: "loading" });
     const unsubscribe = source.subscribe((event) => {
       if (shownRef.current && event.revision <= shownRef.current.revision) return;
@@ -82,8 +99,12 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
   }, [refresh, source]);
 
   const perform = useCallback(
-    async (request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> => {
-      setPending({ request });
+    async (
+      request: ResourceCheckoutActionRequest,
+      options: PerformResourceActionOptions = {},
+    ): Promise<ResourceCheckoutActionResult> => {
+      const entry: PendingResourceAction = { request };
+      setPending((current) => [...current, entry]);
       setSettled(null);
       let result: ResourceCheckoutActionResult;
       try {
@@ -95,8 +116,9 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
         };
       }
       if (mountedRef.current) {
-        setPending(null);
-        setSettled({ request, result });
+        setPending((current) => current.filter((candidate) => candidate !== entry));
+        const failed = result.outcome === "rejected" || result.outcome === "unknown";
+        if (!failed || options.reportFailure !== false) setSettled({ request, result });
         void refresh();
       }
       return result;

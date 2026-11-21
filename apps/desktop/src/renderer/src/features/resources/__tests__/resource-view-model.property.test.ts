@@ -15,6 +15,7 @@ import {
   effectiveCondition,
   effectiveGate,
   resourceActions,
+  resourceGroup,
 } from "../resource-view-model";
 import { acceptSnapshot } from "../useResourceCheckouts";
 
@@ -280,6 +281,38 @@ describe("resource view model", () => {
       const kinds = resourceActions(resource, authority).map((action) => action.kind);
       const primary = kinds.filter((kind) => kind === "request" || kind === "cancel_request" || kind === "release");
       expect(primary.length).toBeLessThanOrEqual(1);
+    }));
+  });
+});
+
+describe("resource grouping", () => {
+  const brokerArb: fc.Arbitrary<ResourceAuthority> = fc.constantFrom("reachable", "unreachable", "unresolved")
+    .map((status) => ({ authorityId: AUTHORITY_ID, kind: "machine_broker", label: "Broker", endpointLabel: "socket", epoch: 1, status }));
+  const adArb = fc.record({ isViewer: fc.boolean(), onViewerMachine: fc.boolean() }).map(({ isViewer, onViewerMachine }) => ({
+    instanceId: "inst",
+    instanceLabel: "host",
+    profile: "default",
+    isViewer,
+    onViewerMachine,
+    observedAt: 0,
+    freshness: "fresh" as const,
+  }));
+
+  it("puts a broker under This machine only when this machine advertises it", () => {
+    fc.assert(fc.property(resourceArb, brokerArb, fc.array(adArb, { maxLength: 3 }), (base, broker, advertisements) => {
+      const resource = { ...base, advertisements };
+      const local = advertisements.some((ad) => ad.isViewer || ad.onViewerMachine);
+      expect(resourceGroup(resource, broker)).toBe(local ? "machine" : "federation");
+    }));
+  });
+
+  it("never puts federation-scoped or coordinator-allocated capacity under This machine", () => {
+    fc.assert(fc.property(resourceArb, authorityArb, fc.array(adArb, { maxLength: 3 }), (base, authority, advertisements) => {
+      const resource = { ...base, advertisements, allocationScope: "federation" as const };
+      expect(resourceGroup(resource, authority)).toBe("federation");
+      if (authority?.kind !== "machine_broker") {
+        expect(resourceGroup({ ...resource, allocationScope: "machine" }, authority)).toBe("federation");
+      }
     }));
   });
 });

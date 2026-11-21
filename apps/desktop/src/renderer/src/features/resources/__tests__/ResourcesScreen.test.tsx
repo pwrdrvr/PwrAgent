@@ -156,6 +156,71 @@ describe("ResourcesScreen", () => {
     expect(screen.queryByText("bench rig rev 2")).toBeNull();
   });
 
+  it("resends the same idempotency key when Extend is retried after an unknown outcome", async () => {
+    const base = buildPreviewSnapshot(Date.now());
+    const held: ResourceCheckoutsSnapshot = {
+      ...base,
+      resources: base.resources.map((resource) => resource.resourceId === "res-serial"
+        ? {
+          ...resource,
+          condition: "busy",
+          allocations: [{ allocationId: "alloc-held", state: "granted", holder: { kind: "operator", label: "You" }, taskLabel: "Flash", executorLabel: "atlas-mini · default", grantedAt: NOW, deadlineAt: NOW + 30 * 60_000, renewalsUsed: 0, renewalsAllowed: 1, generation: 4, authorityEpoch: 2, lastKnown: false, viewerOwns: true }],
+          actions: { ...resource.actions, extend: { allowed: true }, release: { allowed: true } },
+        }
+        : resource),
+    };
+    const { source, perform } = liveSource(held);
+    perform
+      .mockResolvedValueOnce({ outcome: "unknown", message: "The broker did not answer." })
+      .mockResolvedValueOnce({ outcome: "accepted", message: "Extended." })
+      .mockResolvedValueOnce({ outcome: "accepted", message: "Extended." });
+    await renderScreen(source);
+    selectRow("bench serial rig");
+    const extend = async () => {
+      await act(async () => {
+        fireEvent.click(within(inspector()).getByTestId("resources-action-extend"));
+      });
+    };
+    await extend();
+    await extend();
+    await extend();
+    const keys = perform.mock.calls.map(([request]) => request.idempotencyKey);
+    expect(perform.mock.calls[0]![0]).toMatchObject({ kind: "extend", allocationId: "alloc-held", generation: 4 });
+    // The retry after "unknown" cannot apply twice; a new extend after a
+    // definite answer is a new intent.
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("moves the inspector off a resource the scope hides", async () => {
+    await renderScreen(createPreviewResourceCheckoutsSource({ latencyMs: 0 }));
+    selectRow("win-lab-07");
+    expect(within(inspector()).getAllByText("win-lab-07").length).toBeGreaterThan(0);
+    const thisMachine = screen.getAllByRole("button", { name: "This machine" })
+      .find((button) => button.hasAttribute("aria-pressed"));
+    await act(async () => {
+      fireEvent.click(thisMachine!);
+    });
+    expect(within(inspector()).queryByText("win-lab-07")).toBeNull();
+    expect(row("studio-m4 compute")).toBeInTheDocument();
+  });
+
+  it("reports a dialog's failure in the dialog only", async () => {
+    const base = buildPreviewSnapshot(Date.now());
+    const { source, perform } = liveSource(base);
+    perform.mockResolvedValueOnce({ outcome: "rejected", reason: "not_authorized", message: "Not allowed for this profile." });
+    await renderScreen(source);
+    selectRow("win-lab-07");
+    fireEvent.click(within(inspector()).getByTestId("resources-action-request"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("What the checkout is for"), { target: { value: "Retry headed suite" } });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Join queue" }));
+    });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Not allowed for this profile.");
+    expect(document.querySelector(".resources-notice")).toBeNull();
+  });
+
   it("blocks administrative release until fencing is verified and an audit note is written", async () => {
     await renderScreen(createPreviewResourceCheckoutsSource({ latencyMs: 0 }));
     selectRow("mac-lab-03");

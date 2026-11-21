@@ -6,7 +6,7 @@ import type {
   ResourceReadinessState,
   ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
-import { ConditionGlyph, ResourceConditionChip } from "./ResourceConditionChip";
+import { ConditionGlyph, ResourceConditionChip, StatusDot, type StatusDotTone } from "./ResourceConditionChip";
 import { ResourceActionButton } from "./ResourceActionButton";
 import {
   capacitySummary,
@@ -37,7 +37,7 @@ const LIFECYCLE: ReadonlyArray<ResourceAllocationState | "queued" | "released"> 
   "released",
 ];
 
-const READINESS_DOT: Record<ResourceReadinessState, string> = {
+const READINESS_DOT: Record<ResourceReadinessState, StatusDotTone> = {
   ok: "ok",
   warning: "warn",
   failing: "err",
@@ -163,7 +163,7 @@ export function ResourceInspector(props: {
           <ul className="resources-facts">
             {resource.readiness.map((check) => (
               <li key={check.checkId}>
-                <span aria-hidden="true" className={`resources-dot resources-dot--${READINESS_DOT[check.state]}`} />
+                <StatusDot tone={READINESS_DOT[check.state]} />
                 <span className="resources-facts__what">
                   <span>
                     {check.label}

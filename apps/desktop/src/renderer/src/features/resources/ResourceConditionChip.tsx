@@ -2,6 +2,21 @@ import type { ReactElement } from "react";
 import type { ResourceCondition } from "@pwragent/shared/contracts/resource-checkouts";
 import { presentCondition, type ResourceConditionTone } from "./resource-view-model";
 
+export type StatusDotTone = "ok" | "warn" | "err" | "off";
+
+const STATUS_DOT_CLASS: Record<StatusDotTone, string> = {
+  ok: "status-dot status-dot--ok",
+  warn: "status-dot status-dot--warning",
+  err: "status-dot status-dot--error",
+  // A hollow ring, so "off" differs from the others by shape as well as color.
+  off: "status-dot resources-dot--off",
+};
+
+/** A small state pip using the app's `.status-dot` vocabulary. */
+export function StatusDot(props: { tone: StatusDotTone }): ReactElement {
+  return <span aria-hidden="true" className={STATUS_DOT_CLASS[props.tone]} />;
+}
+
 /**
  * A resource's state as glyph plus words. Each state has its own glyph shape
  * as well as its own tone, so Busy, Authority unreachable, Needs interactive

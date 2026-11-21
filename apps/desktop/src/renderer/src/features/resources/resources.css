@@ -519,27 +519,8 @@
   white-space: nowrap;
 }
 
-.resources-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--status-suspended);
-}
-
-.resources-dot--ok {
-  background: var(--status-ok);
-}
-
-.resources-dot--warn {
-  background: var(--status-warning);
-}
-
-.resources-dot--err {
-  background: var(--status-error);
-}
-
-.resources-dot--off {
+/* Two classes: `.status-dot` is declared later, in app.css. */
+.status-dot.resources-dot--off {
   border: 1.5px solid var(--status-suspended);
   background: transparent;
 }

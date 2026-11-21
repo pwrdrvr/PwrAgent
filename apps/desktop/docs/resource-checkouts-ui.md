@@ -102,13 +102,23 @@ simulated results.
   have their own glyph and wording, not only a color.
 - **Instructions are untrusted shared content.** Send a bounded plain-text
   `excerpt`. The UI shows it as text and never as an instruction.
+- **This machine needs positive evidence.** A `machine_broker` resource is
+  listed under This machine only when an advertisement has `isViewer` or
+  `onViewerMachine`. Set `onViewerMachine` only after both machine-ids
+  resolve and match; an unresolved id leaves a peer's broker under
+  Federation.
 
 ## Action semantics
 
 - Each operator intent carries one `idempotencyKey` (`rco-<uuid>`). A dialog
   reuses its key when the operator presses **Send again** after an `unknown`
   outcome, so a retry cannot double-apply. Separate steps (fence, then
-  verify) get separate keys.
+  verify) get separate keys. Dialog-less actions (`extend`,
+  `cancel_request`) keep one key per target (allocation and generation, or
+  queue entry) until a definite outcome, so clicking again after `unknown`
+  resends the same key.
+- Several actions can be in flight at once. Each one's button stays busy
+  until its own result arrives.
 - Grant-scoped actions (`release`, `extend`, `fence`, `verify_cleanup`,
   `administrative_release`) carry the `allocationId` and `generation` the
   operator saw. Reject a stale generation with `stale_generation`.
@@ -117,7 +127,8 @@ simulated results.
 - Results are reports, not state. After any result the renderer re-reads and
   shows what the snapshot says; it never applies a grant or queue entry
   locally. `rejected` keeps the dialog open with the message; `unknown` offers
-  **Send again**.
+  **Send again**. A dialog's failure is shown only in the dialog; the
+  screen's notice reports successes and failures of dialog-less actions.
 - `administrative_release` requires a non-empty `auditNote` and verified
   fencing. It must never erase an active owner.
 - `register_definition` creates a `pending_registration` resource. It is not

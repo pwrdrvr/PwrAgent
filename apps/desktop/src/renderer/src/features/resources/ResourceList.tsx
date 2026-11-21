@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { ChevronRightIcon } from "../../icons";
-import { ResourceConditionChip } from "./ResourceConditionChip";
+import { ResourceConditionChip, StatusDot } from "./ResourceConditionChip";
 import {
   conditionChipLabel,
   DEADLINE_SOON_MS,
@@ -168,7 +168,7 @@ function ResourceRow(props: {
             <ul className="resources-facts">
               {resource.advertisements.map((ad) => (
                 <li key={ad.instanceId}>
-                  <span aria-hidden="true" className={`resources-dot resources-dot--${ad.freshness === "fresh" ? "ok" : "off"}`} />
+                  <StatusDot tone={ad.freshness === "fresh" ? "ok" : "off"} />
                   <span className="resources-facts__what">
                     <span>{ad.instanceLabel} · {ad.profile}</span>
                     {ad.note ? <span className="resources-row__meta">{ad.note}</span> : null}
@@ -189,7 +189,7 @@ function ResourceRow(props: {
               <ul className="resources-facts">
                 {resource.routes.map((route) => (
                   <li key={route.routeId}>
-                    <span aria-hidden="true" className={`resources-dot resources-dot--${route.status === "available" ? "ok" : route.status === "unreachable" ? "warn" : "off"}`} />
+                    <StatusDot tone={route.status === "available" ? "ok" : route.status === "unreachable" ? "warn" : "off"} />
                     <span className="resources-facts__what">
                       <span>{ROUTE_KIND_LABEL[route.kind]}</span>
                       <span className="resources-row__meta">{route.label}</span>

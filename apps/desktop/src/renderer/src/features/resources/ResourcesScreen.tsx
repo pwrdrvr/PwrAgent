@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import type {
   ResourceCheckoutActionRequest,
   ResourceCheckoutActionResult,
@@ -11,6 +11,7 @@ import { newResourceActionIdempotencyKey, type ResourceCheckoutsSource } from ".
 import { useResourceCheckouts, type SettledResourceAction } from "./useResourceCheckouts";
 import { ResourceList, type ResourceListGroup } from "./ResourceList";
 import { ResourceInspector, type ResourceInspectorIntent } from "./ResourceInspector";
+import { StatusDot } from "./ResourceConditionChip";
 import {
   RecoveryDialog,
   RegisterResourceDialog,
@@ -52,6 +53,31 @@ type DialogState =
   | { kind: "resolve"; resourceId: string }
   | { kind: "register" };
 
+function groupOf(item: PresentedResource): "machine" | "federation" {
+  return resourceGroup(item.resource, item.authority);
+}
+
+/**
+ * One idempotency key per direct (dialog-less) action target, kept until the
+ * authority gives a definite answer. Clicking again after an unknown outcome
+ * resends the same key, so the authority cannot apply it twice.
+ */
+function useDirectActionKeys() {
+  const keys = useRef(new Map<string, string>());
+  return {
+    keyFor(target: string): string {
+      const existing = keys.current.get(target);
+      if (existing) return existing;
+      const created = newResourceActionIdempotencyKey();
+      keys.current.set(target, created);
+      return created;
+    },
+    settle(target: string, result: ResourceCheckoutActionResult): void {
+      if (result.outcome !== "unknown") keys.current.delete(target);
+    },
+  };
+}
+
 /** Re-render on a slow tick so deadlines and ages stay current. */
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -86,21 +112,17 @@ export function ResourcesScreen(props: {
 
   const snapshot = view.status === "loading" ? undefined : view.snapshot;
   const presented = useMemo(() => (snapshot ? presentResources(snapshot) : []), [snapshot]);
-  const viewerMachineId = snapshot?.viewer.machineId;
-  const groupOf = useCallback(
-    (item: PresentedResource) => resourceGroup(item.resource, item.authority, viewerMachineId),
-    [viewerMachineId],
-  );
+  const directKeys = useDirectActionKeys();
   const counts = useMemo(() => {
     const scoped = presented.filter((item) => scope === "all" || groupOf(item) === scope);
     return Object.fromEntries(FILTERS.map(({ value }) => [value, scoped.filter((item) => matchesFilter(item, value)).length])) as Record<ResourceFilter, number>;
-  }, [groupOf, presented, scope]);
+  }, [presented, scope]);
   const visible = useMemo(
     () => presented.filter((item) =>
       (scope === "all" || groupOf(item) === scope)
       && matchesFilter(item, filter)
       && matchesSearch(item.resource, query)),
-    [filter, groupOf, presented, query, scope],
+    [filter, presented, query, scope],
   );
   const groups: ResourceListGroup[] = [
     {
@@ -117,13 +139,21 @@ export function ResourcesScreen(props: {
     },
   ];
   const ordered = groups.flatMap((group) => group.items);
-  const selected = presented.find((item) => item.resource.resourceId === selectedId)
+  // Only a visible row can be inspected: once a filter, scope or search hides
+  // the selection, the inspector follows the first row still shown.
+  const selected = ordered.find((item) => item.resource.resourceId === selectedId)
     ?? ordered[0];
 
+  // Dialogs show their own failures, so only success reaches the screen.
   const submit = useCallback(
-    (request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> => perform(request),
+    (request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> =>
+      perform(request, { reportFailure: false }),
     [perform],
   );
+
+  const performDirect = (target: string, build: (idempotencyKey: string) => ResourceCheckoutActionRequest) => {
+    void perform(build(directKeys.keyFor(target))).then((result) => directKeys.settle(target, result));
+  };
 
   const onIntent = (intent: ResourceInspectorIntent) => {
     if (!selected) return;
@@ -139,14 +169,14 @@ export function ResourcesScreen(props: {
       case "cancel_request": {
         const entry = resource.queue.find((candidate) => candidate.viewerOwns);
         if (entry) {
-          void perform({ kind: "cancel_request", idempotencyKey: newResourceActionIdempotencyKey(), resourceId: resource.resourceId, queueEntryId: entry.queueEntryId });
+          performDirect(`cancel_request:${entry.queueEntryId}`, (idempotencyKey) => ({ kind: "cancel_request", idempotencyKey, resourceId: resource.resourceId, queueEntryId: entry.queueEntryId }));
         }
         return;
       }
       case "extend": {
         const held = resource.allocations.find((candidate) => candidate.viewerOwns);
         if (held) {
-          void perform({ kind: "extend", idempotencyKey: newResourceActionIdempotencyKey(), resourceId: resource.resourceId, allocationId: held.allocationId, generation: held.generation });
+          performDirect(`extend:${held.allocationId}:${held.generation}`, (idempotencyKey) => ({ kind: "extend", idempotencyKey, resourceId: resource.resourceId, allocationId: held.allocationId, generation: held.generation }));
         }
         return;
       }
@@ -275,7 +305,7 @@ export function ResourcesScreen(props: {
               />
             </div>
             <ResourceInspector
-              busyKind={pending && "resourceId" in pending.request && pending.request.resourceId === selected?.resource.resourceId ? pending.request.kind : undefined}
+              busyKind={pending.find(({ request }) => "resourceId" in request && request.resourceId === selected?.resource.resourceId)?.request.kind}
               item={selected}
               now={now}
               onIntent={onIntent}
@@ -318,7 +348,7 @@ function AuthorityStrip(props: { snapshot: ResourceCheckoutsSnapshot; now: numbe
     <ul aria-label="Checkout authorities" className="resources-authorities">
       {props.snapshot.authorities.map((authority) => (
         <li key={authority.authorityId}>
-          <span aria-hidden="true" className={`resources-dot resources-dot--${authority.status === "reachable" ? "ok" : "off"}`} />
+          <StatusDot tone={authority.status === "reachable" ? "ok" : "off"} />
           <span>{authority.label}</span>
           <span className="resources-mono resources-authorities__meta">
             {authority.status === "reachable"

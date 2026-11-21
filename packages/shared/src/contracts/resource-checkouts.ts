@@ -246,7 +246,14 @@ export type ResourceAdvertisement = {
   instanceId: FederationInstanceId;
   instanceLabel: string;
   profile: string;
+  /** Advertised by the viewing instance and profile. */
   isViewer: boolean;
+  /**
+   * Advertised by any profile whose `<PwrAgent root>/machine-id` matches the
+   * viewer's. False while the viewer's machine-id is unresolved: the producer
+   * must not guess that a broker is local.
+   */
+  onViewerMachine: boolean;
   observedAt: number;
   freshness: "fresh" | "stale" | "expired";
   note?: string;

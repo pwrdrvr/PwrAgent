@@ -210,6 +210,8 @@ export type ResourceActionDescriptor = {
   label: string;
   emphasis: "primary" | "secondary" | "danger";
   gate: ResourceActionGate;
+  /** For `request`: whether it would wait in the queue instead of granting now. */
+  waits?: boolean;
 };
 
 /**
@@ -225,9 +227,10 @@ export function resourceActions(
     kind: ResourceActionKind,
     label: string,
     emphasis: ResourceActionDescriptor["emphasis"],
+    extra: Pick<ResourceActionDescriptor, "waits"> = {},
   ) => {
     const gate = effectiveGate(resource, authority, kind);
-    if (gate) out.push({ kind, label, emphasis, gate });
+    if (gate) out.push({ kind, label, emphasis, gate, ...extra });
   };
   const condition = effectiveCondition(resource, authority);
   const held = viewerAllocation(resource);
@@ -238,7 +241,8 @@ export function resourceActions(
     add("release", "Release", "secondary");
     add("extend", "Extend", "secondary");
   } else {
-    add("request", requestWouldWait(resource, condition) ? "Join queue" : "Request checkout", "primary");
+    const waits = requestWouldWait(resource, condition);
+    add("request", waits ? "Join queue" : "Request checkout", "primary", { waits });
   }
   if (resource.recovery) {
     add("fence", "Fence old workload", "secondary");
@@ -251,7 +255,8 @@ export function resourceActions(
   return out;
 }
 
-function requestWouldWait(resource: ResourceDomain, condition: ResourceCondition): boolean {
+/** Whether a request would queue rather than be granted now. */
+export function requestWouldWait(resource: ResourceDomain, condition: ResourceCondition): boolean {
   if (condition !== "available" && condition !== "busy") return true;
   if (resource.queue.length > 0) return true;
   if (resource.sharing.mode === "counted") {
@@ -306,11 +311,12 @@ export function presentResources(snapshot: ResourceCheckoutsSnapshot): Presented
 export function resourceGroup(
   resource: ResourceDomain,
   authority: ResourceAuthority | undefined,
-  viewerMachineId: string | undefined,
 ): "machine" | "federation" {
   if (resource.allocationScope === "federation") return "federation";
   if (authority?.kind !== "machine_broker") return "federation";
-  return resource.advertisements.some((ad) => ad.isViewer) || viewerMachineId === undefined
+  // Only positive evidence places a broker on this machine. An unresolved
+  // machine-id leaves a peer's broker under Federation, never under here.
+  return resource.advertisements.some((ad) => ad.isViewer || ad.onViewerMachine)
     ? "machine"
     : "federation";
 }
