@@ -65,7 +65,7 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
       .filter((entry) => entry.name !== profile)
       .flatMap((entry) => findLiveProfileRuntimeMarkers(entry.name).map((marker): ResourceAdvertisement => ({
         instanceId: marker.instanceId, instanceLabel: entry.displayName ?? entry.name, profile: entry.name,
-        isViewer: false, observedAt: marker.heartbeatAt, freshness: "fresh",
+        isViewer: false, onViewerMachine: Boolean(machineId), observedAt: marker.heartbeatAt, freshness: "fresh",
         note: "Live profile on this PwrAgent root",
       }))),
     requestPeer: (id, request) => federation.requestResourceCheckout(id, request),
@@ -80,9 +80,10 @@ export function getResourceCheckoutService(): DesktopResourceCheckoutService | u
   return runtime;
 }
 
-export function disposeResourceCheckouts(): void {
+export async function disposeResourceCheckouts(graceMs?: number): Promise<void> {
   unsubscribe?.();
   unsubscribe = undefined;
-  runtime?.close();
-  runtime = undefined;
+  // Keep the closing authority installed until the owner exits. Late launch
+  // requests must still go through admission while other services drain.
+  await runtime?.close(graceMs);
 }

@@ -54,6 +54,63 @@ function granted(authority: ResourceCheckoutAuthority, key: string): CheckoutTok
 }
 
 describe("the persisted resource checkout authority", () => {
+  it.each(["default", "dev"])("keeps unpublished drafts private to the %s instance", async (owner) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-draft-"));
+    const services = ["default", "dev"].map((instanceId) => new DesktopResourceCheckoutService({
+      viewer: { instanceId, instanceLabel: instanceId, profile: instanceId, machineId: "host" },
+      machineStore: openResourceCheckoutStore(path.join(root, "machine.db"), "host"),
+      bindings: [], now: () => 1, requestPeer: async () => { throw new Error("Offline"); }, warn: () => {},
+    }));
+    const [local, peer] = owner === "default" ? services : services.toReversed();
+    try {
+      const registration = {
+        kind: "register_definition", idempotencyKey: "draft",
+        draft: { displayName: "Private draft", canonicalKey: resourceId, kindLabel: "Fixture", allocationScope: "federation",
+          sharing: { mode: "exclusive" }, instructionsSource: "Private instructions" },
+      };
+      await expect(local.perform(registration)).resolves.toMatchObject({ outcome: "accepted" });
+      expect(local.read().resources.some(({ displayName }) => displayName === "Private draft")).toBe(true);
+      expect(JSON.stringify(peer.read())).not.toContain("Private");
+      expect(JSON.stringify(await peer.discover(peer.threadActor("codex", "thread")))).not.toContain("Private");
+      await expect(peer.perform({ ...registration, draft: { ...registration.draft, displayName: "Other draft" } })).resolves.toMatchObject({ outcome: "accepted" });
+    } finally {
+      for (const service of services) await service.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([true, false])("persists shutdown evidence after stopping an admitted job (verified %s)", async (verified) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-cleanup-"));
+    const database = path.join(root, "machine.db");
+    const old = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "default", instanceLabel: "default", profile: "default", machineId: "host" },
+      machineStore: openResourceCheckoutStore(database, "host"),
+      bindings: [], now: () => 1, requestPeer: async () => { throw new Error("Offline"); }, warn: () => {},
+    });
+    const observer = openResourceCheckoutStore(database, "host");
+    try {
+      const checkout = service.admitEnvironmentAction("job", "Job");
+      checkout.active();
+      checkout.watch(() => { if (verified) setImmediate(() => checkout.finish(true)); });
+      const { writes } = await measureSqliteWrites(() => service.close(verified ? 2_000 : 0));
+      expectSqliteWriteBudget({
+        scenario: verified ? "resource-checkout-shutdown-verified" : "resource-checkout-shutdown-unverified",
+        note: verified ? "One commit to persist late verified drain and release" : "One commit to retain the slot in recovery when shutdown runs out of time",
+        writes,
+      });
+      const grants = observer.readAll()[0].grants;
+      if (verified) expect(grants).toEqual([]);
+      else expect(grants).toMatchObject([{ state: "recovery_required" }]);
+    } finally {
+      await service.close();
+      observer.close();
+      rmSync(root, { recursive: true, force: true });
+      if (old === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = old;
+    }
+  });
   it("agrees with a FIFO capacity model across profile writers, replays, expiry and reopen", () => {
     fc.assert(fc.property(fc.integer({ min: 1, max: 4 }), fc.array(fc.record({
       command: fc.constantFrom("request", "release", "expire", "reopen", "cancel", "replay"),
@@ -215,7 +272,7 @@ describe("the persisted resource checkout authority", () => {
       });
       await client.refreshPeers();
       const initialRevision = client.read().revision;
-      const worker = client.threadActor("codex", "worker");
+      const worker = client.threadActor("acp:registry.worker", "worker");
       const rival = client.threadActor("codex", "rival");
       loseResponse = true;
       await expect(client.perform(request("acquire"), worker)).resolves.toMatchObject({ outcome: "unknown" });

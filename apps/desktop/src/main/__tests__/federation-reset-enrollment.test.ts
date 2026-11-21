@@ -31,6 +31,10 @@ vi.mock("../state/app-state", () => ({
   getAppStateDb: () => ({
     getMeta: (key: string) => metaStore.get(key) ?? "",
     setMeta: (key: string, value: string) => void metaStore.set(key, value),
+    getOrInsertMeta: (key: string, value: string) => {
+      if (!metaStore.has(key)) metaStore.set(key, value);
+      return metaStore.get(key)!;
+    },
   }),
   isAppStateInitialized: () => true,
 }));

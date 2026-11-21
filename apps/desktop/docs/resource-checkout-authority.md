@@ -27,10 +27,11 @@ paths, including agent shells, terminals, CI and independent applications,
 are advisory.
 
 An expired bound job retains capacity and enters recovery. On POSIX the
-executor verifies that the process group is empty. On Windows the Job
-launcher confirms its active-process count reached zero. If the Windows
-launcher is killed before recording that evidence, the checkout stays in
-recovery. On platforms with a reliable boot ID, a new boot can clear
+executor tracks the process group after shell exit and verifies that it
+is empty. On Windows the Job launcher receives the stop request, terminates
+its Job and confirms its active-process count reached zero. Shutdown closes
+admission and waits briefly to persist that evidence. Work without verified
+cleanup remains in recovery. On platforms with a reliable boot ID, a new boot can clear
 process ownership from a prior boot on the same host. An operator can
 confirm that a recorded POSIX group is gone from the recovery dialog.
 Cleanup and administrative release recheck the proof. Administrative

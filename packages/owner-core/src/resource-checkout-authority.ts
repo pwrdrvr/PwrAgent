@@ -196,7 +196,7 @@ export class ResourceCheckoutAuthority {
     return position < 0 ? { receipt: result, state: "ended" as const } : { receipt: result, state: "queued" as const, position: position + 1 };
   }
 
-  perform(actor: CheckoutActor, action: ResourceCheckoutActionRequest, options?: { draft?: CheckoutDefinition; proveFenced?: FenceProof }): ResourceCheckoutActionResult {
+  perform(actor: CheckoutActor, action: ResourceCheckoutActionRequest, options?: { draft?: CheckoutDefinition; proveFenced?: FenceProof; draftOwnerInstanceId?: string }): ResourceCheckoutActionResult {
     const draft = options?.draft;
     const fingerprint = JSON.stringify(action);
     return this.store.change((tx) => {
@@ -213,7 +213,10 @@ export class ResourceCheckoutAuthority {
         tx.save({ definition: draft, generation: 0, grants: [], queue: [] });
         result = { outcome: "accepted" };
       } else {
-        if (!record) return rejectCheckout("not_applicable", "The authority has no record for this resource.");
+        if (!record || (record.definition.publication === "pending_registration" &&
+          (!record.definition.draftOwnerInstanceId || record.definition.draftOwnerInstanceId !== options?.draftOwnerInstanceId))) {
+          return rejectCheckout("not_applicable", "The authority has no record for this resource.");
+        }
         const reconciled = reconcile(record, now);
         result = applyCheckout(record, actor, action, now, this.newId, options?.proveFenced);
         if (reconciled || result.outcome !== "rejected") tx.save(record);

@@ -1,4 +1,6 @@
 {
+  "resource-checkout-shutdown-unverified": {"commits": 1, "note": "One commit to retain the slot in recovery when shutdown runs out of time", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "resource-checkout-shutdown-verified": {"commits": 1, "note": "One commit to persist late verified drain and release", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-administrative-release": {"commits": 1, "note": "One commit for validated recovery, a wake, and the operator audit note", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "resource-checkout-fence": {"commits": 1, "note": "One commit for fencing evidence and its receipt", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "resource-checkout-begin-drain": {"commits": 1, "note": "One commit to begin draining an owned job before adapter effects", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},

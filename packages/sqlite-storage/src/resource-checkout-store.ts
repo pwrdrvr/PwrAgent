@@ -36,7 +36,11 @@ export function openResourceCheckoutStore(path: string, identity: string): Check
         return record === undefined ? undefined : JSON.parse(record) as CheckoutDomainRecord;
       },
       list: () => (list.all() as string[]).map((row) => JSON.parse(row) as CheckoutDomainRecord),
-      save: (record) => { save.run(record.definition.resourceId, record.definition.canonicalKey, JSON.stringify(record)); },
+      save: (record) => {
+        const { canonicalKey, draftOwnerInstanceId, resourceId } = record.definition;
+        const storageKey = draftOwnerInstanceId ? JSON.stringify([draftOwnerInstanceId, canonicalKey]) : canonicalKey;
+        save.run(resourceId, storageKey, JSON.stringify(record));
+      },
       receipt(actor, key) {
         const value = receipt.get(actor, key) as string | undefined;
         return value === undefined ? undefined : JSON.parse(value) as CheckoutReceipt;

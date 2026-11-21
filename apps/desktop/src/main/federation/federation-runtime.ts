@@ -5611,16 +5611,8 @@ export class DesktopFederationRuntime {
 
   private ensureLocalInstanceId(): FederationInstanceId {
     if (this.localInstanceId) return this.localInstanceId;
-    const state = desktopFederationState;
-    const existing = state.read("instanceId");
-    if (existing) {
-      this.localInstanceId = existing;
-      return existing;
-    }
-    const next = `pwr_${randomUUID()}`;
-    state.write("instanceId", next);
-    this.localInstanceId = next;
-    return next;
+    this.localInstanceId = desktopFederationState.getOrCreateInstanceId(`pwr_${randomUUID()}`);
+    return this.localInstanceId;
   }
 
   private store(): FederationStorage {

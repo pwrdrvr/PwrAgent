@@ -101,8 +101,8 @@ simulated results.
 
 - Each operator intent carries one `idempotencyKey` (`rco-<uuid>`). A dialog
   reuses its key when the operator presses **Send again** after an `unknown`
-  outcome, so a retry cannot double-apply. Separate steps (fence, then
-  verify) get separate keys. Dialog-less actions (`extend`,
+  outcome, so a retry cannot double-apply. Separate steps and deliberate
+  retries after confirmed rejections get fresh keys. Dialog-less actions (`extend`,
   `cancel_request`) keep one key per target (allocation and generation, or
   queue entry) until a definite outcome, so clicking again after `unknown`
   resends the same key.
@@ -112,7 +112,8 @@ simulated results.
   `administrative_release`) carry the `allocationId` and `generation` the
   operator saw. Reject a stale generation with `stale_generation`.
 - `request` comes from the operator, and its holder is the operator. It
-  never names a thread as owner. Agents request through their own tools.
+  never names a thread as owner. On counted resources the operator selects
+  the unit count. Agents request through their own tools.
 - Results are reports, not state. After any result the renderer re-reads and
   shows what the snapshot says; it never applies a grant or queue entry
   locally. `rejected` keeps the dialog open with the message; `unknown` offers

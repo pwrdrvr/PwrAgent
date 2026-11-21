@@ -841,6 +841,7 @@ function runShellCommand(
         command: shell,
         cwd: params.cwd,
         env: commandEnv,
+        keepDrainEvidenceOnStop: params.mode === "detach" && !!params.detachedTerminationKey,
       })
     : undefined;
   const launch = windowsJobLaunch ?? {
@@ -850,12 +851,20 @@ function runShellCommand(
   };
 
   return new Promise((resolve, reject) => {
-    const checkout = params.mode === "detach" && params.detachedTerminationKey
-      ? getResourceCheckoutService()?.admitEnvironmentAction(
+    let checkout: ReturnType<NonNullable<ReturnType<typeof getResourceCheckoutService>>["admitEnvironmentAction"]> | undefined;
+    try {
+      if (params.mode === "detach" && params.detachedTerminationKey) {
+        checkout = getResourceCheckoutService()?.admitEnvironmentAction(
           params.detachedTerminationKey, params.detachedDescriptor?.actionName ?? "Environment action",
           params.detachedDescriptor?.threadId,
-        )
-      : undefined;
+        );
+      }
+    } catch (error) {
+      windowsJobLaunch?.cleanup();
+      cleanupShellEnvironmentCaptureTarget(capture);
+      reject(error);
+      return;
+    }
     const child = spawn(
       launch.command,
       launch.args,
@@ -882,6 +891,9 @@ function runShellCommand(
     let settled = false;
     let closed = false;
     let timedOut = false;
+    let checkoutSettled = false;
+    let groupPoll: NodeJS.Timeout | undefined;
+    const checkoutCompletion = checkout ? Promise.withResolvers<void>() : undefined;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
     let forceSettleHandle: NodeJS.Timeout | undefined;
@@ -893,17 +905,49 @@ function runShellCommand(
       combinedOutput = `${combinedOutput}${text}`.slice(-32_000);
     };
 
-    const terminateChild = (signal: NodeJS.Signals) => {
-      if (!child.pid) {
-        return;
+    const forgetDetachedProcess = () => {
+      if (!params.detachedTerminationKey) return;
+      const entry = detachedCommandProcesses.get(params.detachedTerminationKey);
+      if (entry?.killHandle) clearTimeout(entry.killHandle);
+      detachedCommandProcesses.delete(params.detachedTerminationKey);
+    };
+
+    const finishCheckout = (verified: boolean) => {
+      if (checkoutSettled) return;
+      checkoutSettled = true;
+      clearInterval(groupPoll);
+      forgetDetachedProcess();
+      checkout?.finish(verified);
+      checkoutCompletion?.resolve();
+    };
+
+    const observeOwnedGroup = (): boolean => {
+      if (checkoutSettled) return true;
+      if (!child.pid || isEnvironmentGroupGone(child.pid)) {
+        finishCheckout(true);
+        return true;
       }
+      return false;
+    };
+
+    const watchGroupAfterShellExit = () => {
+      if (observeOwnedGroup() || groupPoll) return;
+      groupPoll = setInterval(observeOwnedGroup, 50);
+      groupPoll.unref();
+    };
+
+    const terminateChild = (signal: NodeJS.Signals) => {
+      if (!child.pid || checkoutSettled) return;
       try {
         if (windowsJobLaunch) {
-          // The launcher is the only process outside its Job. Terminating it
-          // closes the KILL_ON_JOB_CLOSE handle and atomically terminates the
-          // shell plus every descendant, so no taskkill tree walk is needed.
-          child.kill(signal);
+          if (checkout && windowsJobLaunch.requestStop) {
+            windowsJobLaunch.requestStop();
+          } else {
+            // The launcher's KILL_ON_JOB_CLOSE handle owns every descendant.
+            child.kill(signal);
+          }
         } else if (process.platform !== "win32") {
+          if (checkout && observeOwnedGroup()) return;
           process.kill(-child.pid, signal);
         } else {
           const taskkillArgs = ["/pid", String(child.pid), "/t"];
@@ -935,13 +979,16 @@ function runShellCommand(
     };
 
     if (checkout) {
-      checkout.watch(() => { if (!closed && child.exitCode === null && child.signalCode === null) terminateChild("SIGKILL"); });
-      child.once("spawn", () => checkout.active(windowsJobLaunch ? undefined : child.pid));
+      const admission = checkout;
+      checkout.watch(() => terminateChild("SIGKILL"));
+      child.once("spawn", () => admission.active(windowsJobLaunch ? undefined : child.pid));
+      if (!windowsJobLaunch && process.platform !== "win32") child.once("exit", watchGroupAfterShellExit);
       child.once("close", () => {
-        const verified = windowsJobLaunch
-          ? !child.pid || readWindowsJobStartupTelemetry(windowsJobLaunch).phases.some(({ phase }) => phase === "job-drained")
-          : !child.pid || isEnvironmentGroupGone(child.pid);
-        checkout.finish(verified);
+        if (windowsJobLaunch) {
+          finishCheckout(!child.pid || readWindowsJobStartupTelemetry(windowsJobLaunch).phases.some(({ phase }) => phase === "job-drained"));
+        } else {
+          watchGroupAfterShellExit();
+        }
       });
     }
 
@@ -951,7 +998,7 @@ function runShellCommand(
       }
       detachedCommandProcesses.set(params.detachedTerminationKey, {
         killTree: terminateChild,
-        closed: () => closed,
+        closed: () => checkout ? checkoutSettled : closed,
         descriptor: params.detachedDescriptor,
         pid: child.pid,
       });
@@ -1196,15 +1243,7 @@ function runShellCommand(
         closed = true;
         windowsJobReadyPoll?.cancel();
         windowsJobReadyPoll = undefined;
-        if (params.detachedTerminationKey) {
-          const processEntry = detachedCommandProcesses.get(
-            params.detachedTerminationKey,
-          );
-          if (processEntry?.killHandle) {
-            clearTimeout(processEntry.killHandle);
-          }
-          detachedCommandProcesses.delete(params.detachedTerminationKey);
-        }
+        if (!checkout) forgetDetachedProcess();
         // Cancel any pending throttled snapshot so it doesn't race past
         // onDetachedExit's final-output write to the overlay.
         if (snapshotTimer) {
@@ -1261,24 +1300,31 @@ function runShellCommand(
             output: truncateForLog(output),
           });
         }
-        try {
-          params.onDetachedExit?.({
-            exitCode: typeof code === "number" ? code : null,
-            exitSignal: signal ?? null,
-            durationMs,
-            output,
-          });
-        } catch (callbackError) {
-          environmentRuntimeLog.warn(
-            "codex-environment-detached-exit-callback-failed",
-            {
-              processId,
-              message:
-                callbackError instanceof Error
-                  ? callbackError.message
-                  : String(callbackError),
-            },
-          );
+        const reportExit = () => {
+          try {
+            params.onDetachedExit?.({
+              exitCode: typeof code === "number" ? code : null,
+              exitSignal: signal ?? null,
+              durationMs,
+              output,
+            });
+          } catch (callbackError) {
+            environmentRuntimeLog.warn(
+              "codex-environment-detached-exit-callback-failed",
+              {
+                processId,
+                message:
+                  callbackError instanceof Error
+                    ? callbackError.message
+                    : String(callbackError),
+              },
+            );
+          }
+        };
+        if (checkoutCompletion && !checkoutSettled) {
+          void checkoutCompletion.promise.then(reportExit);
+        } else {
+          reportExit();
         }
         windowsJobLaunch?.cleanup();
       });

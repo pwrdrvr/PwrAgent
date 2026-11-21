@@ -1,11 +1,12 @@
 import { isEnvironmentGroupGone } from "./checkout-machine-evidence";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus } from "@pwragent/owner-core/resource-checkout-authority";
 import type { CheckoutActor, CheckoutDefinition, CheckoutStore } from "@pwragent/owner-core/resource-checkout-storage";
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
   type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement,
 } from "@pwragent/shared/contracts/resource-checkouts";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseCheckoutAction, object, text } from "./checkout-input";
 import type { ExternalBinding } from "./checkout-configuration";
@@ -41,11 +42,17 @@ export class DesktopResourceCheckoutService {
   private readonly listeners = new Set<(revision: number) => void>();
   private readonly remoteViews = new Map<string, ExternalView>();
   private readonly timer: NodeJS.Timeout;
-  private readonly admittedJobs = new Map<string, { check(): void; stop(): void }>();
+  private readonly admittedJobs = new Map<string, {
+    check(): void;
+    stop(): void;
+    markRecovery(): void;
+    settled: Promise<void>;
+  }>();
   private revision = 0;
   private fingerprint = "";
   private refreshPending?: Promise<void>;
   private closed = false;
+  private closing?: Promise<void>;
   private machineConflict = false;
   private lastAdvertisementScan = -Infinity;
   private localAdvertisements: ResourceAdvertisement[] = [];
@@ -140,12 +147,14 @@ export class DesktopResourceCheckoutService {
         return [{ authority: unresolved(), resource: projectCheckoutDomain({ definition: def, generation: 0, grants: [], queue: [] }, actor, unresolved()) }];
       }
       const authority = this.authorityView(def, "machine_broker", "reachable");
-      return this.machine.records().map((record) => {
+      return this.machine.records().filter(({ definition }) => definition.publication !== "pending_registration"
+        || definition.draftOwnerInstanceId === this.options.viewer.instanceId).map((record) => {
         const resource = projectCheckoutDomain(record, actor, authority);
         if (record.definition.resourceId === def.resourceId) {
           resource.advertisements = [{
             instanceId: this.options.viewer.instanceId, instanceLabel: this.options.viewer.instanceLabel,
-            profile: this.options.viewer.profile, isViewer: true, freshness: "fresh", observedAt: def.updatedAt,
+            profile: this.options.viewer.profile, isViewer: true, onViewerMachine: Boolean(this.options.viewer.machineId),
+            freshness: "fresh", observedAt: def.updatedAt,
           }, ...this.machineAdvertisements()];
         }
         return { authority, resource };
@@ -171,8 +180,8 @@ export class DesktopResourceCheckoutService {
   private readView(actor: CheckoutActor, remotes: ReadonlyMap<string, ExternalView>): ExternalView[] {
     const bindings = this.options.bindings.filter((binding) => this.isLocalAuthority(binding)
       || binding.allowedInstances.includes(this.options.viewer.instanceId));
-    const external = new Set(bindings.map(({ definition }) => definition.resourceId));
-    const local = this.localMachineView(actor).filter(({ resource }) => !external.has(resource.resourceId));
+    const external = new Set(bindings.map(({ definition }) => definition.canonicalKey));
+    const local = this.localMachineView(actor).filter(({ resource }) => !external.has(resource.canonicalKey));
     for (const binding of bindings) {
       try {
         local.push(remotes.get(binding.definition.resourceId) ?? this.externalView(binding, actor));
@@ -212,11 +221,11 @@ export class DesktopResourceCheckoutService {
   }
 
   private poll(): void {
-    if (!this.closed) this.read();
+    if (!this.closing && !this.closed) this.read();
   }
 
   refreshPeers(): Promise<void> {
-    if (this.closed) return Promise.resolve();
+    if (this.closing || this.closed) return Promise.resolve();
     this.refreshPending ??= this.refreshRemoteViews().finally(() => { this.refreshPending = undefined; });
     return this.refreshPending;
   }
@@ -294,15 +303,17 @@ export class DesktopResourceCheckoutService {
       return rejectCheckout("policy", error instanceof Error ? error.message : "Invalid checkout action.");
     }
     try {
-      if (this.closed) return rejectCheckout("authority_unreachable", "The checkout authority is shutting down.");
+      if (this.closing || this.closed) return rejectCheckout("authority_unreachable", "The checkout authority is shutting down.");
       if (action.kind === "register_definition") {
         if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
         const { draft } = action;
         if (this.options.bindings.some(({ definition }) => definition.canonicalKey === draft.canonicalKey)) {
           return rejectCheckout("conflict", "This canonical key has a configured Federation authority.");
         }
+        const owner = this.options.viewer.instanceId;
+        const resourceId = "draft:" + createHash("sha256").update(JSON.stringify([owner, draft.canonicalKey])).digest("hex");
         return this.machine.perform(actor, action, { draft: {
-          ...this.machineDefinition, resourceId: draft.canonicalKey, canonicalKey: draft.canonicalKey,
+          ...this.machineDefinition, resourceId, canonicalKey: draft.canonicalKey, draftOwnerInstanceId: owner,
           displayName: draft.displayName, kindLabel: draft.kindLabel, scope: draft.allocationScope,
           counted: draft.sharing.mode === "counted", capacity: draft.sharing.mode === "counted" ? draft.sharing.capacity : 1,
           publication: "pending_registration", updatedAt: this.now(),
@@ -328,6 +339,7 @@ export class DesktopResourceCheckoutService {
       }
       if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
       return this.machine.perform(actor, action, {
+        draftOwnerInstanceId: this.options.viewer.instanceId,
         proveFenced: (job) => action.resourceId === this.machineDefinition.resourceId
           && !!job.machineBootId && job.machineBootId === this.options.bootId
           && job.processGroupId !== undefined && isEnvironmentGroupGone(job.processGroupId),
@@ -342,7 +354,7 @@ export class DesktopResourceCheckoutService {
   }
 
   admitEnvironmentAction(jobId: string, purpose: string, threadId?: string) {
-    if (!this.machine || this.machineConflict || this.closed) throw new Error("The machine checkout authority is unavailable.");
+    if (!this.machine || this.machineConflict || this.closing || this.closed) throw new Error("The machine checkout authority is unavailable.");
     const machine = this.machine;
     const actor: CheckoutActor = threadId ? this.threadActor("codex", threadId) : {
       key: JSON.stringify([this.options.viewer.instanceId, "automation", jobId]),
@@ -355,6 +367,8 @@ export class DesktopResourceCheckoutService {
     if (!token) throw new Error("Machine capacity is reserved. Check Resources and retry when capacity is available.");
     this.poll();
     let cancelled = false;
+    const completion = Promise.withResolvers<void>();
+    const markRecovery = () => { machine.markJobRecovery(token, jobId); };
     return {
       watch: (stop: () => void): void => {
         const cancel = () => {
@@ -370,7 +384,7 @@ export class DesktopResourceCheckoutService {
             cancel();
           }
         };
-        this.admittedJobs.set(jobId, { check, stop: cancel });
+        this.admittedJobs.set(jobId, { check, stop: cancel, markRecovery, settled: completion.promise });
         check();
       },
       active: (processGroupId?: number): void => {
@@ -384,20 +398,22 @@ export class DesktopResourceCheckoutService {
       },
       finish: (verified: boolean): void => {
         this.admittedJobs.delete(jobId);
-        if (this.closed) return;
         try {
+          if (this.closed) return;
           if (verified) machine.finishJob(token, jobId);
-          else machine.markJobRecovery(token, jobId);
-          this.poll();
+          else markRecovery();
+          if (!this.closing) this.poll();
         } catch (error) {
           this.options.warn(error);
+        } finally {
+          completion.resolve();
         }
       },
     };
   }
 
   receivePeer(sourceInstanceId: string, value: unknown): unknown {
-    if (this.closed) throw new Error("The checkout authority is shutting down.");
+    if (this.closing || this.closed) throw new Error("The checkout authority is shutting down.");
     const request = object(value);
     const id = text(request.resourceId, "resource ID");
     const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === id);
@@ -420,21 +436,45 @@ export class DesktopResourceCheckoutService {
     if (subject === undefined) return this.operatorFor(sourceInstanceId);
     const claims = object(subject);
     const backend = text(claims.backend, "backend");
-    if (backend !== "codex" && backend !== "claude" && !/^acp:[a-z0-9_-]+$/i.test(backend)) throw new Error("Invalid backend.");
+    if (!isAppServerBackendKind(backend)) throw new Error("Invalid backend.");
     const threadId = text(claims.threadId, "thread ID");
     // The authenticated owner can delegate a subject on its own instance only.
     return {
       key: JSON.stringify([sourceInstanceId, backend, threadId]), manage: false,
-      holder: { kind: "thread", thread: { backend: backend as AppServerBackendKind, threadId, title: "Federation agent thread", instanceId: sourceInstanceId } },
+      holder: { kind: "thread", thread: { backend, threadId, title: "Federation agent thread", instanceId: sourceInstanceId } },
     };
   }
 
-  close(): void {
-    this.closed = true;
-    for (const job of this.admittedJobs.values()) job.stop();
-    this.admittedJobs.clear();
+  close(graceMs = 2_000): Promise<void> {
+    if (this.closing) return this.closing;
+    const completion = Promise.withResolvers<void>();
+    this.closing = completion.promise;
+    void this.drainAndClose(graceMs).then(completion.resolve, completion.reject);
+    return this.closing;
+  }
+
+  private async drainAndClose(graceMs: number): Promise<void> {
     clearInterval(this.timer);
     this.listeners.clear();
+    const jobs = [...this.admittedJobs.values()];
+    for (const job of jobs) {
+      try { job.stop(); }
+      catch (error) { this.options.warn(error); }
+    }
+    if (this.admittedJobs.size && graceMs > 0) {
+      let deadline: NodeJS.Timeout | undefined;
+      await Promise.race([
+        Promise.all(jobs.map((job) => job.settled)),
+        new Promise<void>((resolve) => { deadline = setTimeout(resolve, graceMs); }),
+      ]);
+      clearTimeout(deadline);
+    }
+    for (const job of this.admittedJobs.values()) {
+      try { job.markRecovery(); }
+      catch (error) { this.options.warn(error); }
+    }
+    this.admittedJobs.clear();
+    this.closed = true;
     this.options.machineStore?.close();
     this.options.externalStore?.close();
   }

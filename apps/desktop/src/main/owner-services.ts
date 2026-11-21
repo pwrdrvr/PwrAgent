@@ -923,6 +923,8 @@ export async function disposeOwnerServices(source: string, remainingTimeoutMs?: 
   ownerShutdownStarted = true;
   mainProcessShutdownPromise ??= (async () => {
     disposeDesktopAutomationService();
+    const checkoutShutdown = disposeResourceCheckouts(remainingTimeoutMs === undefined ? undefined : Math.min(2_000, remainingTimeoutMs))
+      .catch((error: unknown) => mainLog.warn("checkout shutdown failed", { error: String(error) }));
     if (shutdownOwner) {
       await shutdownOwner(source, remainingTimeoutMs);
     } else {
@@ -935,7 +937,7 @@ export async function disposeOwnerServices(source: string, remainingTimeoutMs?: 
     }
     // Keep the scheduler subscribed until registry shutdown drains accepted work.
     disposeScheduledThreadActionService();
-    disposeResourceCheckouts();
+    await checkoutShutdown;
     disposeDesktopSettingsService();
     getExistingRuntimeLeaseManager()?.markExited();
     stopProfileRuntimeHeartbeatRefresh();

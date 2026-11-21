@@ -7,6 +7,7 @@ import type {
   ResourceCheckoutsChangedEvent,
   ResourceCheckoutsSnapshot,
 } from "@pwragent/shared/contracts/resource-checkouts";
+import { RequestCheckoutDialog } from "../ResourceDialogs";
 import { ResourcesScreen } from "../ResourcesScreen";
 import { createDesktopResourceCheckoutsSource, type ResourceCheckoutsSource } from "../resource-checkouts-source";
 import { buildPreviewSnapshot, createPreviewResourceCheckoutsSource } from "../preview/resource-checkouts-preview";
@@ -242,6 +243,33 @@ describe("ResourcesScreen", () => {
       target: { value: "Executor fenced; owner thread is archived." },
     });
     expect(admin()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("replays an unknown recovery intent but uses a fresh key after a confirmed rejection", async () => {
+    const { source, perform } = liveSource(buildPreviewSnapshot(Date.now()));
+    perform.mockResolvedValueOnce({ outcome: "unknown", message: "Response lost" });
+    perform.mockResolvedValueOnce({ outcome: "rejected", reason: "fencing_required", message: "Still running" });
+    perform.mockResolvedValueOnce({ outcome: "accepted" });
+    await renderScreen(source);
+    selectRow("mac-lab-03");
+    fireEvent.click(within(inspector()).getByTestId("resources-action-recover"));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await act(async () => fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Fence old workload" })));
+    }
+    const [first, second, third] = perform.mock.calls.map(([request]) => request);
+    expect(second).toEqual(first);
+    expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it.each([1, 2, 5])("sends the selected number of counted units (%i) and predicts the queue", async (units) => {
+    const resource = buildPreviewSnapshot(NOW).resources[0];
+    const submit = vi.fn(async (_request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> => ({ outcome: "accepted" }));
+    render(<RequestCheckoutDialog resource={{ ...resource, queue: [], sharing: { mode: "counted", capacity: 5, inUse: 3, unitLabel: "slots" } }}
+      action={{ kind: "request", label: "Request checkout", gate: { allowed: true }, emphasis: "primary" }} now={NOW} submit={submit} onClose={() => undefined} />);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Units" }), { target: { value: String(units) } });
+    fireEvent.change(screen.getByPlaceholderText("What the checkout is for"), { target: { value: "Partial grant" } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: units > 2 ? "Join queue" : "Request checkout" })));
+    expect(submit.mock.calls[0][0]).toMatchObject({ kind: "request", units });
   });
 
   it("opens the holder's thread from the inspector", async () => {

@@ -25,6 +25,7 @@ export type CheckoutDefinition = {
   revision: number;
   updatedAt: number;
   publication: "published" | "pending_registration";
+  draftOwnerInstanceId?: string;
   instructions?: ResourceInstructionsRef;
 };
 

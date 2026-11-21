@@ -457,7 +457,7 @@ vi.mock("../resource-checkouts/checkout-runtime", () => {
   return {
     initializeResourceCheckouts: vi.fn(async () => service),
     getResourceCheckoutService: vi.fn(() => service),
-    disposeResourceCheckouts: vi.fn(),
+    disposeResourceCheckouts: vi.fn(async () => {}),
   };
 });
 
