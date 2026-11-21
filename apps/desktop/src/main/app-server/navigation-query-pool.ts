@@ -1,3 +1,4 @@
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationDiagnosticCause } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -228,8 +229,9 @@ export class NavigationQueryPool {
     return promise;
   }
 
-  invalidateQueryOwner(target?: FederationTarget, reason?: NavigationDiagnosticCause, trigger?: string): void {
-    listingDiagnostics.record("navigation", "invalidate", { reason, trigger, source: target?.scope === "remote" ? "remote" : "local" });
+  invalidateQueryOwner(target?: FederationTarget, reason?: NavigationDiagnosticCause, trigger?: string, event?: AgentEvent): void {
+    listingDiagnostics.record("navigation", "invalidate", { ...listingDiagnostics.launchFields(event, target?.scope === "remote" ? target.instanceId : undefined),
+      reason, trigger, source: target?.scope === "remote" ? "remote" : "local" });
     const owner = ownerKey(target);
     for (const query of this.queries.values()) {
       if (query.kind !== "query" || query.ownerKey !== owner) continue;

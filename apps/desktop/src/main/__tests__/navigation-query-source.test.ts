@@ -3,6 +3,8 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -61,7 +63,7 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     isIncompleteThreadList: () => coverage === "degraded",
   } as unknown as DesktopBackendRegistry;
   return {
-    finish, listThreads, listeners, rememberNavigationVisibilityIndex, rememberDirectoryScope, navigationDirectoryScope,
+    registry, finish, listThreads, listeners, rememberNavigationVisibilityIndex, rememberDirectoryScope, navigationDirectoryScope,
     read: (backend?: AppServerBackendScope) => loadLocalNavigationQueryIndex({ registry, backend, callerReason: "source-event-regression" }),
     refresh: () => loadLocalNavigationQueryIndex({ registry, callerReason: "source-event-regression", refreshProviders: true }),
     emit: (method: string) => {
@@ -72,6 +74,51 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
 }
 
 describe("owner index source event admission", () => {
+  it.each([96, 192].flatMap((size) => [false, true].map((mounted) => ({ size, mounted }))))(
+    "shares certified local launch rows for $size threads with an existing viewer mount: $mounted", async ({ size, mounted }) => {
+      // Either inventory fits the pool. Two copies of the same 192 rows do not.
+      const source = createSource();
+      const threads = Array.from({ length: size }, (_, i): NavigationThreadSummary => ({
+        id: `launch-${i}`, source: "codex", title: "x".repeat(26_000), titleSource: "explicit",
+        createdAt: i, updatedAt: i, linkedDirectories: [], inbox: { inInbox: false },
+      }));
+      source.listThreads.mockResolvedValue(threads);
+      const pin = { ...threads[0]!, id: "remote", federation: {
+        instanceLabel: "Peer", ref: buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: "remote" }),
+      } };
+      const project = vi.fn(async (local: NavigationQueryIndex) => mounted ? appendViewerNavigationPins(local, [pin]) : local);
+      const previous = mocks.store.readNavigationQueryIndex.getMockImplementation();
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const viewer = { source: {}, project };
+      const readViewer = () => loadLocalNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query", viewer });
+      try {
+        mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+        const before = await source.read();
+        const child = { ...threads[0]!, id: "new-child", parentThreadId: threads[0]!.id };
+        source.listThreads.mockResolvedValue([...threads, child]);
+        source.emit("thread/started");
+        const [owner, shown] = await Promise.all([source.read(), readViewer()]);
+        expect(owner).not.toBe(before);
+        expect(shown.threads[size]?.id).toBe(child.id);
+        for (let i = 0; i < 3; i++) {
+          await source.read();
+          await readViewer();
+        }
+        expect({ physical: source.listThreads.mock.calls.length, projections: project.mock.calls.length,
+          sharedRows: shown.threads[0] === owner.threads[0] }).toEqual({ physical: 2, projections: 1, sharedRows: true });
+        expect(shown === owner).toBe(!mounted);
+        if (mounted) {
+          pin.title = "updated after publication";
+          expect(shown.threads.at(-1)?.title).not.toBe(pin.title);
+          expect(owner.threads).toHaveLength(size + 1);
+        }
+      } finally {
+        source.emit("thread/name/updated");
+        mocks.store.readNavigationQueryIndex.mockImplementation(previous!);
+        vi.useRealTimers();
+      }
+    });
+
   it.each([
     { backend: "all", coverage: "complete", remembers: true },
     { backend: "codex", coverage: "complete", remembers: false },

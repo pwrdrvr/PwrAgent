@@ -350,6 +350,24 @@ it.each([512, 2_048])("stops sizing a rejected %i-row snapshot at the retention 
   }
 });
 
+it.each([false, true])("keeps native row bytes charged until the last lease ends (viewer evicted first: %s)", async (viewerFirst) => {
+  const pool = new NavigationIndexReadPool(60_000);
+  const row = { id: "native", source: "codex" as const, title: "🌍", titleSource: "explicit" as const,
+    linkedDirectories: [], inbox: { inInbox: false } };
+  const owner = createNavigationQuerySnapshot({ threads: [row], directories: [] });
+  const viewer = createNavigationQuerySnapshot({ ...owner, threads: [...owner.threads, { ...row, id: "mount" }] }, undefined, owner);
+  const size = (snapshot: NavigationQueryIndex) => Buffer.byteLength(JSON.stringify({ ...snapshot, inputRequestThreadKeys: [] }))
+    + navigationQuerySnapshotAuxiliaryBytes(snapshot);
+  await pool.read("owner", async () => owner);
+  await pool.read("viewer", async () => viewer);
+  const rowBytes = Buffer.byteLength(JSON.stringify(row));
+  expect(pool.retainedUsage()).toEqual({ entries: 2, bytes: size(owner) + size(viewer) - rowBytes });
+  pool.invalidate(viewerFirst ? "viewer" : "owner");
+  expect(pool.retainedUsage()).toEqual({ entries: 1, bytes: size(viewerFirst ? owner : viewer) });
+  pool.invalidate(viewerFirst ? "owner" : "viewer");
+  expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+});
+
 it.each([0, 1, 127, 128, 129, 300])("charges the exact UTF-8 JSON size across %i-row batch boundaries", async (count) => {
   const pool = new NavigationIndexReadPool(1_000);
   const snapshot: NavigationQueryIndex = {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
 import { ListingDiagnostics, listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -27,6 +28,38 @@ describe("bounded listing diagnostics", () => {
     await setRendererListingDiagnosticsEnabled(target, false);
     expect(sendCommand).not.toHaveBeenCalled();
     expect(executeJavaScript).toHaveBeenCalledExactlyOnceWith("globalThis.__pwragentSetNavigationListingDiagnosticsEnabled?.(false)");
+  });
+
+  it("correlates launch notices only for the lifetime of a CPU monitor recording", () => {
+    const diagnostics = new ListingDiagnostics();
+    const event: AgentEvent = { backend: "codex", notification: { method: "thread/subAgents/updated",
+      params: { threadId: "private-subject", navigationChanged: false } } };
+    const delivery = () => diagnostics.recordLaunchDelivery("send", event, "private-owner", "private-peer", "private-frame");
+    diagnostics.setEnabled(true, "replay");
+    delivery();
+    expect(diagnostics.snapshot().recorded).toBe(0);
+    diagnostics.setEnabled(true);
+    delivery();
+    const tags = diagnostics.snapshot().events[0]!;
+    const compact: AgentEvent = { backend: "codex", notification: { method: "navigation/invalidated",
+      params: { sourceMethod: event.notification.method, threadId: "private-subject" } } };
+    diagnostics.recordLaunchDelivery("receive", compact, "private-owner", "private-relay", "private-frame");
+    const received = diagnostics.snapshot().events[1]!;
+    expect(received).toMatchObject({ ownerTag: tags.ownerTag, frameTag: tags.frameTag, subjectTag: tags.subjectTag,
+      compact: true, detailOnly: false, trigger: "thread/subAgents/updated" });
+    expect(tags.detailOnly).toBe(true);
+    expect(received.peerTag).not.toBe(tags.peerTag);
+    expect(diagnostics.launchFields(compact, "private-owner")?.subjectTag).toBe(received.subjectTag);
+    expect(diagnostics.launchFields({ ...compact, notification: { method: "navigation/invalidated",
+      params: { sourceMethod: "private-source" } } })).toBeUndefined();
+    expect(diagnostics.launchFields(event, "x".repeat(1025))?.ownerTag).toBeUndefined();
+    expect(JSON.stringify(diagnostics.snapshot())).not.toContain("private-");
+    diagnostics.setEnabled(false);
+    delivery();
+    expect(diagnostics.snapshot().recorded).toBe(2);
+    diagnostics.setEnabled(true);
+    delivery();
+    expect(diagnostics.snapshot().events[2]!.subjectTag).not.toBe(tags.subjectTag);
   });
 
   it("bounds retention and copies only fixed vocabulary/numeric fields", () => {

@@ -320,6 +320,15 @@ it("publishes the owner's discovered rows after late reads while an independent 
       first.subscribe(() => published.push(ids(first)!));
       wire.select("0-0");
       await until(() => idle(viewer));
+      // A transcript consumer receives the raw accounting notice even though
+      // the owner correctly withheld the navigation-class announcement.
+      const beforeAccounting = pinPages;
+      wire.invalidateSummary.mockClear();
+      wire.emit({ backend: "codex", notification: { method: "thread/subAgents/updated",
+        params: { threadId: "0-0", navigationChanged: false } } });
+      await Promise.resolve();
+      expect(wire.invalidateSummary).not.toHaveBeenCalled();
+      expect(pinPages).toBe(beforeAccounting);
       hold = true;
       firstAttempts.length = 0;
       const action = first.refresh("tray");

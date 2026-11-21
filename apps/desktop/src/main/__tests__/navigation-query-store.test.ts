@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createNavigationQuerySnapshot, projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
@@ -1010,6 +1011,45 @@ it("streams the same UTF-8 revision and backing count as canonical materializati
     revision: createHash("sha256").update(canonical).digest("base64url"),
     retainedBytes: Buffer.byteLength(canonical, "utf8"),
   });
+});
+
+it.each([
+  { overflow: 0, deferredPr: false }, { overflow: 1, deferredPr: false }, { overflow: 0, deferredPr: true },
+])("admits viewer owner proofs only when their canonical bytes fit (overflow $overflow, deferred PR $deferredPr)", async ({ overflow, deferredPr }) => {
+  const query = request({ inventory: "viewer", pageSize: 1 });
+  const threads = Array.from({ length: 160 }, (_, i) => thread(String(i + 1), ""));
+  // Recents are newest first. The second page will observe a detached PR
+  // and needs a few more bytes to remember that observation for its cursor.
+  if (deferredPr) threads.at(-2)!.prs = [{ provider: "github.com", org: "fixture", repo: "project", number: 1,
+    state: "passing", url: "https://github.com/fixture/project/pull/1" }];
+  const raw = { threads, directories: [], coverage: { state: "complete" as const } };
+  const project = (index: typeof raw) => projectNavigationQuery({ request: query, index, deferPullRequests: deferredPr });
+  const limit = 32 * 1024 * 1024;
+  const room = limit - Buffer.byteLength(JSON.stringify({ ...project(raw), viewerRowOwners: [] })) + overflow;
+  for (const [i, row] of threads.entries()) {
+    row.title = "x".repeat(Math.floor(room / threads.length) + Number(i < room % threads.length));
+  }
+  const index = createNavigationQuerySnapshot(raw);
+  const expected = project(raw);
+  const canonical = JSON.stringify(overflow ? expected : { ...expected, viewerRowOwners: [] });
+  expect(Buffer.byteLength(canonical)).toBeLessThanOrEqual(limit);
+  const store = new NavigationQueryStore();
+  const read = (cursor?: string) => store.readPage({ request: { ...query, cursor }, scopeKey: "viewer", loadIndex: async () => index,
+    ...(deferredPr ? { pullRequests: { read: async () => [[]], verify: async () => [] } } : {}) });
+  const first = await read();
+  expect(first.entries).toHaveLength(1);
+  expect(first.nextCursor).toBeTruthy();
+  expect(first.viewerRowOwners).toEqual(overflow ? undefined : []);
+  if (deferredPr) {
+    const second = await read(first.nextCursor);
+    expect(second.entries[0]?.row.id).toBe(threads.at(-2)!.id);
+    expect(second.nextCursor).toBeTruthy();
+    const third = await read(second.nextCursor);
+    expect(third.countsRevision).toBe(first.countsRevision);
+    expect(third.viewerRowOwners).toBeUndefined();
+  } else {
+    expect(first.countsRevision).toBe(createHash("sha256").update(canonical).digest("base64url"));
+  }
 });
 
 it("never serializes a whole retained collection while fingerprinting its generation", () => {

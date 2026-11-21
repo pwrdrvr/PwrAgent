@@ -154,7 +154,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       checkpoint();
       const projected = await params.viewer.project(local);
       signal.throwIfAborted();
-      return createNavigationQuerySnapshot(projected);
+      return createNavigationQuerySnapshot(projected, undefined, local);
     }
     // Taken before listing. The registry drops its cached and pending
     // listings for a boundary before it tells listeners, so this listing
