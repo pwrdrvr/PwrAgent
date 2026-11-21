@@ -3376,9 +3376,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
     }
 
+    // Seek by thread and sort just its groups. The provider-first primary key
+    // can walk unrelated summaries to satisfy this ordering.
     const summaryRows = this.stateDb.raw
       .prepare(
-        `SELECT * FROM thread_pricing_summaries
+        `SELECT * FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
          WHERE backend = ? AND thread_id = ?
          ORDER BY provider ASC, currency ASC`,
       )
@@ -3396,6 +3398,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * Stored running totals and a reference-price provenance flag. No usage
    * rows are materialized and no repricing repair runs on this read.
+   * Split the family membership checks so each uses its own sparse index.
+   * Keep the catalog predicate literal to match the partial indexes.
    */
   async readThreadPricingSummaries(threads: ReadonlyArray<{
     backend: ThreadOverlayState["backend"];
@@ -3405,17 +3409,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       `SELECT summary.*, EXISTS (
          SELECT 1 FROM thread_usage_lines AS line
          WHERE line.backend = summary.backend
-           AND (line.thread_id = summary.thread_id OR line.parent_thread_id = summary.thread_id)
+           AND line.thread_id = summary.thread_id
            AND line.provider = summary.provider AND line.currency = summary.currency
            AND line.status != 'superseded' AND line.price_status = 'priced'
-           AND line.pricing_catalog_id = ?
+           AND line.pricing_catalog_id = 'openrouter-assumed'
+         UNION ALL
+         SELECT 1 FROM thread_usage_lines AS line
+         WHERE line.backend = summary.backend
+           AND line.parent_thread_id = summary.thread_id
+           AND line.provider = summary.provider AND line.currency = summary.currency
+           AND line.status != 'superseded' AND line.price_status = 'priced'
+           AND line.pricing_catalog_id = 'openrouter-assumed'
        ) AS has_assumed_pricing
-       FROM thread_pricing_summaries AS summary
+       FROM thread_pricing_summaries AS summary INDEXED BY idx_thread_pricing_summaries_thread
        WHERE summary.backend = ? AND summary.thread_id = ?
        ORDER BY provider ASC, currency ASC`,
     );
     return threads.flatMap((thread) =>
-      (statement.all(OPENROUTER_ASSUMED_PRICING_CATALOG_ID, thread.backend, thread.threadId) as Array<ThreadPricingSummaryRow & { has_assumed_pricing: number }>)
+      (statement.all(thread.backend, thread.threadId) as Array<ThreadPricingSummaryRow & { has_assumed_pricing: number }>)
         .map((row) => ({ ...threadPricingSummaryFromRow(row), ...(row.has_assumed_pricing ? { hasAssumedPricing: true as const } : {}) })));
   }
 
