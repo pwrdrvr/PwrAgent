@@ -5,7 +5,7 @@ import fc from "fast-check";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1488,6 +1488,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     displaced = `${host.workspace}-unavailable`;
     host.subscribe(EVENT_CLASSES);
     const data = host.env.PWRAGENT_TEST_DATA!;
+    const releaseTarget = path.join(path.dirname(data), "steer.release");
+    // Creating the target makes the marker visible without a directory event.
+    await symlink(releaseTarget, path.join(data, "steer.release"));
     const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
     const identity = { backend: "codex" as const, threadId: created.threadId };
     const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
@@ -1505,7 +1508,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const guidance = request("held-guidance", guidanceText);
     expect(await host.client.startTurn(guidance)).toMatchObject({ queueStatus: "queued", queueEntryId: guidance.queueEntryId });
     await rename(host.workspace, displaced);
-    await writeFile(path.join(data, "steer.release"), "release");
+    await writeFile(releaseTarget, "release");
     const blocked = await host.waitForEvent("thread/turnQueue/updated", event =>
       event.backend === identity.backend && event.notification.method === "thread/turnQueue/updated"
       && event.notification.params.threadId === identity.threadId
