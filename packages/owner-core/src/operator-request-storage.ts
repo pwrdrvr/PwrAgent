@@ -32,9 +32,10 @@ export interface OperatorRequestStorage {
   dismissQuestionsForThread(params: { backend: AppServerBackendKind; threadId: string; now: number }): boolean;
   /** Repeated dismissals make no durable write. */
   dismissQuestion(params: { backend: AppServerBackendKind; threadId: string; messageId: string; now: number }): boolean;
-  listOpenQuestions(): OperatorAsyncQuestion[];
+  listOpenQuestions(filter?: ListOperatorRequestsRequest): OperatorAsyncQuestion[];
   listDismissedQuestionMessageIds(params: { backend: AppServerBackendKind; threadId: string }): string[];
-  listSeenKeys(): string[];
+  /** Omit keys for the owner-wide set, including retained marks. */
+  listSeenKeys(keys?: readonly string[]): string[];
   listTodoItemKeys(filter: ListOperatorRequestsRequest): string[];
   /** Record only unseen keys in one commit; preserve their first seen time. */
   markSeen(keys: readonly string[], now: number): number;

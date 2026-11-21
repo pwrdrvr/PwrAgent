@@ -92,17 +92,15 @@ export class OperatorRequestService {
     const matches = (backend: AppServerBackendKind, threadId: string) =>
       (!filter.backend || backend === filter.backend) && (!filter.threadId || threadId === filter.threadId);
     const serverRequests = this.listServerRequests().filter((entry) => matches(entry.backend, entry.notification.params.threadId));
-    const questions = this.store.listOpenQuestions().filter((entry) => matches(entry.backend, entry.threadId))
+    const questions = this.store.listOpenQuestions({ backend: filter.backend || undefined, threadId: filter.threadId || undefined })
       .map((entry) => ({ ...entry, threadTitle: this.registry.getThreadInfo(entry)?.title }));
-    let seenKeys = this.store.listSeenKeys();
-    if (filter.backend || filter.threadId) {
-      const visibleKeys = new Set([
+    const seenKeys = filter.backend || filter.threadId
+      ? this.store.listSeenKeys([
         ...this.store.listTodoItemKeys(filter),
         ...questions.map((entry) => operatorQuestionItemKey(entry.backend, entry.threadId, entry.messageId)),
         ...serverRequests.map((entry) => operatorServerRequestItemKey(entry.backend, entry.notification.params.threadId, entry.notification.params.requestId)),
-      ]);
-      seenKeys = seenKeys.filter((key) => visibleKeys.has(key));
-    }
+      ])
+      : this.store.listSeenKeys();
     return { serverRequests, questions, seenKeys };
   }
 

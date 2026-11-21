@@ -102,15 +102,18 @@ export class OperatorRequestStore implements OperatorRequestStorage {
     return this.resolveQuestions({ ...params, messageIds: [params.messageId], status: "dismissed" });
   }
 
-  listOpenQuestions(): OperatorAsyncQuestion[] {
+  listOpenQuestions(filter: ListOperatorRequestsRequest = {}): OperatorAsyncQuestion[] {
+    const scope = threadScopePredicates(filter);
+    // Without statistics, SQLite can prefer walking the entire creation-order
+    // index over sorting the questions from a single thread.
+    const index = filter.threadId == null ? "" : " INDEXED BY idx_operator_open_questions_thread";
     const rows = this.stateDb.raw
       .prepare(
         `SELECT backend, thread_id, message_id, questions_json, created_at
-          FROM operator_async_questions
-          WHERE status = 'open'
-          ORDER BY created_at DESC`,
+          FROM operator_async_questions` + index + " WHERE status = 'open'"
+          + scope + " ORDER BY created_at DESC, rowid DESC",
       )
-      .all() as AsyncQuestionRow[];
+      .all(filter) as AsyncQuestionRow[];
     return rows.flatMap((row) => {
       const questions = parseQuestions(row.questions_json);
       return questions
@@ -133,25 +136,24 @@ export class OperatorRequestStore implements OperatorRequestStorage {
       .map((row) => row.message_id);
   }
 
-  listSeenKeys(): string[] {
-    return (
-      this.stateDb.raw
-        .prepare("SELECT item_key FROM operator_seen_items")
-        .all() as Array<{ item_key: string }>
-    ).map((row) => row.item_key);
+  listSeenKeys(keys?: readonly string[]): string[] {
+    if (keys === undefined) {
+      return this.stateDb.raw.prepare("SELECT item_key FROM operator_seen_items").pluck().all() as string[];
+    }
+    if (keys.length === 0) return [];
+    // One parameter also covers a backend with more cards than SQLite's variable limit.
+    return this.stateDb.raw.prepare(`SELECT item_key FROM operator_seen_items
+      WHERE item_key IN (SELECT value FROM json_each(?))
+      ORDER BY item_key`).pluck().all(JSON.stringify(keys)) as string[];
   }
 
-  /** Seen marks for cards on the requested owner-local thread(s), including reviews. */
+  /** Item keys for owner-local to-dos and reviews, including completed cards. */
   listTodoItemKeys(filter: ListOperatorRequestsRequest): string[] {
-    return (this.stateDb.raw.prepare(`
-      SELECT 'todo:' || todo_id AS item_key FROM thread_todos
-        WHERE (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
-      UNION ALL
-      SELECT 'todo:review:' || review_id AS item_key FROM thread_reviews
-        WHERE (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
-    `).all(filter.backend ?? null, filter.backend ?? null, filter.threadId ?? null, filter.threadId ?? null,
-      filter.backend ?? null, filter.backend ?? null, filter.threadId ?? null, filter.threadId ?? null) as Array<{ item_key: string }>)
-      .map((row) => row.item_key);
+    const scope = threadScopePredicates(filter);
+    return this.stateDb.raw.prepare(
+      "SELECT 'todo:' || todo_id FROM thread_todos WHERE 1" + scope
+      + " UNION ALL SELECT 'todo:review:' || review_id FROM thread_reviews WHERE 1" + scope,
+    ).pluck().all(filter) as string[];
   }
 
   /** Marks items seen in one commit; returns how many were new. */
@@ -218,6 +220,11 @@ export class OperatorRequestStore implements OperatorRequestStorage {
         .run(cutoff);
     })();
   }
+}
+
+function threadScopePredicates(filter: ListOperatorRequestsRequest): string {
+  return (filter.backend == null ? "" : " AND backend = @backend")
+    + (filter.threadId == null ? "" : " AND thread_id = @threadId");
 }
 
 function parseQuestions(json: string): CodexAsyncQuestion[] | undefined {
