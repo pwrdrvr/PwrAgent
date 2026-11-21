@@ -14945,7 +14945,7 @@ command = "pnpm dev"
     expect(String(payload.parentAgentGuidance)).toContain("Do not delegate an already-running parent tool session");
     expect(String(payload.parentAgentGuidance)).toContain("exec_command/write_stdin stdin, stdout, stderr, or exit status");
     expect(String(payload.parentAgentGuidance)).toContain("captures stdout/stderr");
-    expect(String(payload.parentAgentGuidance)).toContain("about 30 seconds");
+    expect(String(payload.parentAgentGuidance)).toContain("Prefer built-in waits for attached PRs, standalone CI runs");
     expect(String(payload.parentAgentGuidance)).toContain("repeatable check");
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
     expect(String(payload.parentAgentGuidance)).toContain("long-running command");

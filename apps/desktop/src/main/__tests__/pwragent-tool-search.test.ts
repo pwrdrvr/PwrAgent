@@ -49,8 +49,8 @@ describe("PwrAgent tool discovery", () => {
       }
     }
     const instructions = buildPwrAgentMcpInstructions(workflows);
-    expect(instructions).toContain("Continue After");
-    expect(instructions).toContain("mode all");
+    expect(instructions).toContain("ci_run for standalone CI");
+    expect(instructions).toContain("local_file for watcher markers");
     expect(instructions).not.toContain("Other waits: create_monitor_delegation");
   });
   it("leaves the default catalog untouched and keeps only search eager when enabled", () => {

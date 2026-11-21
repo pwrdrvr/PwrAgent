@@ -307,18 +307,26 @@ An advancing release branch does not invalidate a retry.
 
 ## Monitor And Verify
 
-Find the run for the release tag and watch it. If it takes a while to appear,
-sleep for 5-10 minutes before deciding it failed to start.
+Find the workflow run for the release tag and verify its tag and commit. If
+it takes a while to appear, allow 5–10 minutes before deciding it failed to start.
 
 ```bash
 gh run list --workflow release.yml --limit 10
-gh run watch <run-id>
 ```
 
+In PwrAgent, register a Continue After wait with
+`manage_thread_dependencies`. Set `action: "create"`, and supply one
+`when: "ci_run"` condition with the thread's backend, `threadId: ""`,
+and the workflow run URL in `ciRun.url`. Put the release tag, expected
+commit, and verification steps in the continuation. Confirm registration
+and end the turn. When working outside PwrAgent, use `gh run watch <run-id>`.
+If PwrAgent refuses registration, report the reason to the operator.
+
 The `Sign, notarize, publish` job pauses for `apple-signing` Environment
-approval. Treat that pause as expected. Before approving, verify the workflow
-run is for the intended tag, the tag points at the intended default-branch
-commit, and the version/changelog metadata match the tag.
+approval. The `Sign and package Windows installer` job pauses for
+`windows-signing` approval. Before either approval, verify the workflow run
+is for the intended tag, the tag points at the intended release commit, and
+the version/changelog metadata match the tag.
 
 The npm job later pauses for `npm-pwragent` review after desktop assets/notes
 are visible. Before approval, verify the tag/SHA, Node 22/24 validation and
@@ -335,12 +343,16 @@ fail closed. Do not overwrite/unpublish, move tags, change trust or use a token
 fallback as recovery. Follow the runbook for operator action or a new paired
 version. GitHub and npm have no cross-service atomic transaction.
 
-If monitoring is delegated and the monitor stops at the approval gate, resume
-monitoring after approval. Do not end the release turn as "done" at the
-approval gate; the workflow still has to publish and verify release notes after
-assets are uploaded.
+A CI dependency wakes once. After reporting an approval gate, register a
+new `ci_run` wait for failures, the finish, and any remaining approval gates.
+Filter `ciRun.environments` to the unreported entries from `apple-signing`,
+`windows-signing`, and `npm-pwragent`. After all three have been reported,
+set `ciRun.on` to `["job_failed", "finished"]`.
 
-On failure, inspect logs yourself:
+If `job_failed` wakes the thread while the run is still active, report the
+failed job and register another `ci_run` wait with `ciRun.on: ["finished"]`.
+The final conclusion settles that wait even if the run fails. Inspect the
+failed logs once the run has concluded:
 
 ```bash
 gh run view <run-id> --log-failed
