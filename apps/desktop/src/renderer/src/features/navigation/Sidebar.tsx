@@ -457,6 +457,12 @@ type SidebarProps = {
   /** Opens the Usage Activity window: account limits and spend across instances. */
   onOpenUsageActivity?: () => void;
   /**
+   * Opens the Resources screen. Present only while this build serves
+   * resource checkouts, so the menu never offers a screen with nothing
+   * behind it.
+   */
+  onOpenResources?: () => void;
+  /**
    * `focusComposer` is set only for a plain click from a real mouse or
    * trackpad. A keyboard or assistive-technology activation leaves focus on
    * the row, so the list stays navigable from where the operator is.
@@ -771,6 +777,7 @@ export function Sidebar(props: SidebarProps) {
     onOpenLaunchpad: useEventCallback(props.onOpenLaunchpad),
     onOpenSettings: useStableRowCallback(props.onOpenSettings),
     onOpenUsageActivity: useStableRowCallback(props.onOpenUsageActivity),
+    onOpenResources: useStableRowCallback(props.onOpenResources),
     onSelectThread: useEventCallback(props.onSelectThread),
     onThreadJumpOpenChange: useStableRowCallback(props.onThreadJumpOpenChange),
     onJumpToProject: useStableRowCallback(props.onJumpToProject),
@@ -3669,6 +3676,27 @@ function SidebarContent(props: SidebarProps) {
                       <span className="sidebar__menu-item-title">Usage Activity</span>
                       <span className="sidebar__menu-item-detail">
                         Account limits and spend across instances
+                      </span>
+                    </button>
+                  </>
+                ) : null}
+                {props.onOpenResources ? (
+                  <>
+                    {props.onOpenUsageActivity ? null : (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    )}
+                    <button
+                      className="sidebar__menu-item"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        props.onOpenResources?.();
+                      }}
+                    >
+                      <span className="sidebar__menu-item-title">Resources</span>
+                      <span className="sidebar__menu-item-detail">
+                        Checkouts, queues and recovery across machines
                       </span>
                     </button>
                   </>
