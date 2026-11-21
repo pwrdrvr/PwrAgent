@@ -694,6 +694,42 @@ admission, so early lifecycle outcomes survive the response. A durable new-turn
 receipt remains attached to its cancelled original identity, and cannot replay
 or retarget changed input.
 
+**Job Monitor wake circuit breaker.** Each owning profile has a durable budget
+per parent backend, thread and automatic wake kind. Job Monitors get three
+admissions in a rolling thirty minutes. This matches the short-window
+compaction recovery cap and allows a few independent completions while bounding
+a rapid feedback loop. Explicit results and synthesized fallbacks spend the
+same allowance, regardless of outcome, task text or monitor identity. A fourth
+admission in the window trips the guard until an operator rearms it in
+**Waiting for**. The result and reported outcome stay on the monitor's Sub-agents
+card. Monitors can keep observing, and human messages can still start turns.
+
+Like scheduled agent follow-ups, the owner checks and reserves the allowance in
+an immediate SQLite transaction before starting or queueing a wake. Compaction
+recovery also rechecks its reservation before steering. Job Monitor wakes
+recheck at FIFO dispatch, before combining messages or calling a provider. An
+unlock, project release or restart can only deliver an eligible reservation.
+Dispatch renews its slot so an old hold cannot burst alongside fresh wakes.
+The immutable monitor ID deduplicates results across replay and restart. Rearm
+opens a new generation for monitors created afterwards and retires earlier
+automatic deliveries, including durable holds. A restored batch keeps unrelated
+messages at their original FIFO position. Monitors from older generations stay
+visible and stoppable without contributing to the pending wake count. A steer
+claims delivery after capability discovery, and a definitive no-send releases
+the dispatch owner so a saved wake can still run after restart. Sending a
+project-held wake reports suppression when the guard already rules it out.
+PR Auto-fix continues to use its
+repair claim and refill budget. The ordinary lock, archive, workspace, handoff
+and active-turn admission checks still apply to their respective turn paths.
+
+The guard's checked-in SQLite budget excludes existing monitor result and turn
+bookkeeping. Pending checks use zero commits. A reservation and dispatch claim
+use two commits and measured about 16.5 KB of WAL. Tripping uses one commit and
+about 4 KB, with zero further commits from suppressed reports. At three wakes
+per thirty minutes continuously, one parent adds about 2.4 MB of WAL per day.
+Checking an operator release writes nothing. A definitive no-send after a
+steer claim adds one commit and about 4 KB of WAL.
+
 Both hosts use the federation runtime's `DurableTurnRequestService` from
 owner-core. The profile binding supplies the FULL/immediate inbox storage port.
 Authenticated caller namespaces and owner-bound payload hashes precede dispatch

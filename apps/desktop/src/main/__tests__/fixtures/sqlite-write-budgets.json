@@ -1,4 +1,10 @@
 {
+  "job-monitor-wake-unsent-steer": {"commits": 1, "note": "release an owner claim for a definitively unsent steer", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "job-monitor-wake-release-check": {"commits": 0, "note": "preview 100 operator releases without changing the dispatch receipt", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "job-monitor-wake-rearmed": {"commits": 1, "note": "rearm once and attempt to rearm again", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "job-monitor-wake-tripped": {"commits": 1, "note": "trip once, then suppress 100 independent terminal reports and a held dispatch", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "job-monitor-wake-admitted": {"commits": 2, "note": "reserve and claim dispatch of one final result", "observedWalBytes": 16512, "rowsChanged": 2, "statements": 2},
+  "job-monitor-wake-pending": {"commits": 0, "note": "read the generation and check pending protection 100 times", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "child-launch-with-automatic-pin-and-turn": {"commits": 7, "note": "Materialize a child, set its parent, pin it in the collapsed project and start its first turn.", "observedWalBytes": 78312, "rowsChanged": 11, "statements": 13},
   "automation-throttle-marker-burst": {"commits": 3, "note": "100 inbound messages dropped by the hourly run cap within one minute, then one more a minute later: the marker's creation, one count write for the minute and one for the later drop. A channel flooding past the cap costs at most one commit a minute per automation (~1,440 commits, ~57 MB/day at the ~40 KB a commit measured here) instead of one per message (~86,400 commits, ~3.4 GB/day at one message a second).", "observedWalBytes": 119480, "rowsChanged": 6, "statements": 6},
   "messaging-streamed-final-reply-receipt": {"commits": 25, "note": "Five streamed final replies to one binding, each with several partial edits. Partials write nothing; the final edit costs a pending marker and one settle commit.", "observedWalBytes": 391400, "rowsChanged": 30, "statements": 30},

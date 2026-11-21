@@ -110,6 +110,7 @@ function readers(overrides: Partial<ThreadPendingWakeReaders> = {}): ThreadPendi
     dependencies: async () => [],
     scheduledActions: () => ({ actions: [] }),
     monitors: () => [],
+    monitorWakesTripped: () => false,
     recentSubAgents: async () => [],
     backendTasks: async () => [],
     backendWakes: () => [],

@@ -19,7 +19,7 @@ import {
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./state-schema.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./state-schema.js";
-import { AGENT_FOLLOW_UP_GUARD_SCHEMA } from "./state-schema.js";
+import { AGENT_FOLLOW_UP_GUARD_SCHEMA, AUTOMATIC_WAKE_GUARD_SCHEMA } from "./state-schema.js";
 import { PROJECT_HELD_WAKEUP_SCHEMA } from "./state-schema.js";
 import { RESTART_CONTINUATION_SCHEMA } from "./state-schema.js";
 import { MESSAGING_REQUEST_SCHEMA } from "./state-schema.js";
@@ -2902,6 +2902,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensurePrStatusWatchTerminalColumns(db);
     db.exec(THREAD_DEPENDENCY_SCHEMA);
     db.exec(AGENT_FOLLOW_UP_GUARD_SCHEMA);
+    db.exec(AUTOMATIC_WAKE_GUARD_SCHEMA);
     db.exec(PROJECT_HELD_WAKEUP_SCHEMA);
     db.exec(RESTART_CONTINUATION_SCHEMA);
     db.exec(MESSAGING_REQUEST_SCHEMA);

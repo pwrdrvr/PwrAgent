@@ -3013,6 +3013,10 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/taskMonitorWakeGuard/updated";
+      params: { threadId: string };
+    }
+  | {
       method: "thread/subAgents/updated";
       params: {
         threadId: string;

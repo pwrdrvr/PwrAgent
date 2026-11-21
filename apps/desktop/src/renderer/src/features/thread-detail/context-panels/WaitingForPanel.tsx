@@ -1,5 +1,6 @@
 import { memo, useState, type ReactNode } from "react";
 import { AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { JOB_MONITOR_WAKE_LIMIT, JOB_MONITOR_WAKE_WINDOW_MINUTES } from "@pwragent/shared/contracts/task-monitor-tools";
 import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
 import {
   buildPullRequestStatusKey,
@@ -64,6 +65,7 @@ type BackendWake = Extract<ThreadPendingWake, { kind: "backend_wake" }>;
 
 /** The busy key of the loop-guard rearm, which belongs to no single wake. */
 const REARM_FOLLOW_UPS_KEY = "rearm-follow-ups";
+const REARM_MONITOR_WAKES_KEY = "rearm-monitor-wakes";
 
 /** Ended rows one list shows. */
 const ENDED_ROWS = 8;
@@ -209,7 +211,32 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
             ) : null}
           </div>
         ) : null}
-        {liveCount === 0 ? (
+        {state.monitorWakesSuspended ? (
+          <div className="waiting-for-panel__hold" role="note">
+            <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
+            <span className="waiting-for-panel__hold-text">
+              <span className="waiting-for-panel__hold-title">Job Monitor wakes suspended</span>
+              <span className="pr-watch-list__sub">
+                {`This thread reached ${JOB_MONITOR_WAKE_LIMIT} automatic Job Monitor wakes in ${JOB_MONITOR_WAKE_WINDOW_MINUTES} minutes. Results are in Sub-agents. Rearm to allow wakes from new monitors.`}
+                {peer ? ` Rearm on ${props.ownerLabel ?? "the thread's own machine"}.` : null}
+              </span>
+            </span>
+            {!peer ? (
+              <button
+                type="button"
+                className="pr-watch-list__action"
+                disabled={busy.has(REARM_MONITOR_WAKES_KEY)}
+                onClick={() => run(REARM_MONITOR_WAKES_KEY, async () => {
+                  const response = await props.controller.rearmMonitorWakes();
+                  if (!response.ok) throw new Error(response.error.message);
+                })}
+              >
+                Rearm monitor wakes
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {liveCount === 0 && !state.monitorWakesSuspended ? (
           <div className="waiting-for-panel__empty">
             <p className="waiting-for-panel__empty-title">{state.incomplete ? "Could not confirm everything this thread is waiting for." : "Nothing will wake this thread."}</p>
             <p className="pr-watch-list__sub">
@@ -578,7 +605,8 @@ function describeWake(
         icon: <RadarIcon size={12} />,
         title: plainTitle,
         plainTitle,
-        sub: <>{`Checks every ${formatInterval(wake.pollIntervalSeconds)}. Last check ${formatAgo(wake.lastActivityAt, now)}.`}{transient}</>,
+        sub: <>{`Checks every ${formatInterval(wake.pollIntervalSeconds)}. Last check ${formatAgo(wake.lastActivityAt, now)}.`}
+          {wake.wakeSuppressed ? " Automatic wake suppressed for this monitor." : transient}</>,
       };
     }
     case "backend_wake": {

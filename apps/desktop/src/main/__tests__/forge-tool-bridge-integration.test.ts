@@ -40,6 +40,7 @@ import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { StateDb } from "../state/state-db";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -371,7 +372,7 @@ describe("DesktopBackendRegistry", () => {
 
         expect(completed).toMatchObject({ parentTurn: { status: "queued" } });
         expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([expect.objectContaining({
-          entryId: `task-monitor:${monitorId}`,
+          entryId: `task-monitor:wake:${monitorId}`,
           threadId: "parked",
           source: "monitor",
           summary: "Monitor finished: \"Watch the nightly run\"",
@@ -427,14 +428,15 @@ describe("DesktopBackendRegistry", () => {
         const rows = () => db.raw.prepare(
           "SELECT entry_id, owner_instance_id FROM project_held_wakeups",
         ).all() as { entry_id: string; owner_instance_id: string }[];
-        return { rows, store: new ProjectHeldWakeupStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+        return { db, rows, store: new ProjectHeldWakeupStore(db.raw, { processId: 4_242, processAlive: () => false }) };
       };
-      const launch = (store: ProjectHeldWakeupStore, instanceId: string, live: string[] = []) => {
+      const launch = (store: ProjectHeldWakeupStore, instanceId: string, live: string[] = [], taskMonitorWakeStore?: TaskMonitorWakeStore) => {
         const codexClient = new MockBackendClient({});
         const registry = createDesktopBackendRegistry({
           codexClient,
           overlayStore: createOverlayStoreMock(),
           projectHeldWakeupStore: store,
+          taskMonitorWakeStore,
           runtimeInstanceId: instanceId,
           resolveLiveProfileRuntimeInstanceIds: () => live,
         });
@@ -446,6 +448,36 @@ describe("DesktopBackendRegistry", () => {
           directoryKey: PROJECT,
           resolutions: [{ entryId: "task-monitor:nightly", backend: "codex", threadId: "parked", action }],
         });
+
+      it.each([false, true])("retires a tripped monitor's restored hold without sending it (rearm %s)", async (rearm) => {
+        pauseProject();
+        const { db, rows, store } = durableStore();
+        const guard = new TaskMonitorWakeStore(db.raw);
+        const parent = { backend: "codex", threadId: "parked" } as const;
+        const first = launch(store, "instance-a", [], guard);
+        expect(guard.reserve({ ...parent, monitorId: "nightly" }, 0)).toBe("admitted");
+        await first.registry.deliverProjectPausedWakeup({ ...wake(), messageOrigin: {
+          kind: "sub-agent", subAgent: { kind: "monitor", monitorId: "nightly", task: "Watch release", outcome: "success", summary: "Finished" },
+        } });
+        for (const monitorId of ["other-1", "other-2"]) {
+          expect(guard.reserve({ ...parent, monitorId }, 0)).toBe("admitted");
+        }
+        expect(guard.reserve({ ...parent, monitorId: "overflow" }, 0)).toBe("tripped");
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"], guard);
+        expect(second.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
+        if (rearm) {
+          expect(second.registry.rearmTaskMonitorWakes(parent)).toBe(true);
+          await expect(resolve(second.registry, "send")).resolves.toMatchObject({ results: [{ status: "not_found" }] });
+        } else {
+          await expect(resolve(second.registry, "send")).resolves.toMatchObject({ results: [{
+            status: "suppressed", error: expect.stringContaining("Job Monitor wake suppressed"),
+          }] });
+        }
+        await vi.waitFor(() => expect(rows()).toEqual([]));
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+      });
 
       it("holds the wake-up again after a restart, and Send starts it and drops the durable copy", async () => {
         pauseProject();

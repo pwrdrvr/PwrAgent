@@ -374,6 +374,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   // Loop protection's suspension waits on the operator, not on a wake, so it
   // marks the tab without adding to the count.
   const followUpsSuspended = readFollowUpsSuspended(pendingWakes.state);
+  const monitorWakesSuspended = pendingWakes.state.status === "ready" && pendingWakes.state.monitorWakesSuspended;
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
     subAgentLens,
@@ -793,7 +794,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
       : undefined;
     const watchCount = tab.id === "prs" ? prWatchCount : tab.id === "waiting" ? pendingWakeCount : 0;
-    const suspended = tab.id === "waiting" && followUpsSuspended;
+    const suspended = tab.id === "waiting" && (followUpsSuspended || monitorWakesSuspended);
     const baseLabel = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
       : watchCount && tab.id === "waiting"
@@ -805,7 +806,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         : todoBadge
           ? `${tab.label} · ${todoBadge.count} open for this thread`
           : tab.label;
-    const label = suspended ? `${baseLabel} · agent follow-ups suspended` : baseLabel;
+    const label = tab.id === "waiting"
+      ? `${baseLabel}${followUpsSuspended ? " · agent follow-ups suspended" : ""}${monitorWakesSuspended ? " · Job Monitor wakes suspended" : ""}`
+      : baseLabel;
     const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
     return (
       <button

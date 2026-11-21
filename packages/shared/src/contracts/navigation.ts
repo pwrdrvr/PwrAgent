@@ -342,6 +342,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   pendingWakesIncomplete?: true;
   /** The owner's agent follow-ups are suspended by loop protection, even with none waiting. */
   pendingWakesFollowUpsSuspended?: true;
+  pendingWakesMonitorWakesSuspended?: true;
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**

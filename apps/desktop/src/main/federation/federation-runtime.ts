@@ -894,6 +894,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/started",
   "thread/status/changed",
   "thread/subAgents/updated",
+  "thread/taskMonitorWakeGuard/updated",
   "thread/subthreadOrder/updated",
   "thread/subthreadsCollapsed/updated",
   "thread/turnQueue/reordered",

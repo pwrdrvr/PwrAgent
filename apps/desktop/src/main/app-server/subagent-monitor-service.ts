@@ -4,6 +4,7 @@ import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import type { TaskMonitorWakeStorage } from "../storage/desktop-runtime-storage";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
@@ -52,6 +53,7 @@ import {
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   type CancelMonitorDelegationToolArgs,
   type CompleteMonitoringToolArgs,
+  type TaskMonitorCompletionData,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
   type TaskMonitorCompletionSource,
@@ -85,6 +87,7 @@ import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gate
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import { getMainLogger } from "../log";
 import {
+  ThreadTurnQueueDispatchRefused,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueSubmissionResult,
@@ -186,14 +189,66 @@ import {
   taskMonitorRecentActivity,
 } from "./task-monitor-helpers";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
+import { combinedDeliveryInput, splitCombinedDelivery } from "@pwragent/shared/combined-delivery";
+import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const TASK_MONITOR_WAKE_ENTRY_PREFIX = "task-monitor:wake:";
+const TASK_MONITOR_WAKE_SUPPRESSED = "Automatic Job Monitor wake suppressed. The monitor result is still available.";
+
+type MonitorParent = { backend: AppServerBackendKind; threadId: string };
+type MonitorParentDelivery = Pick<TaskMonitorCompletionData, "parentTurn" | "parentWakeSuppressed">;
+
+/** Older quiet-restart checkpoints may contain a batch as one queue entry. */
+function taskMonitorWakeIds(entry: ThreadTurnQueueEntry): Set<string> {
+  const ids = new Set<string>();
+  const collect = (origin: AppServerThreadMessageOrigin | undefined) => {
+    if (origin?.subAgent?.kind === "monitor") ids.add(origin.subAgent.monitorId);
+  };
+  collect(entry.messageOrigin);
+  for (const origin of entry.agentMessageOrigins ?? []) collect(origin);
+  for (const message of entry.agentMessages ?? []) collect(message.origin);
+  for (const message of entry.messageOrigin?.deliveredMessages ?? []) collect(message.origin);
+  return ids;
+}
+
+function restoredBatchMessages(entry: ThreadTurnQueueEntry): ThreadTurnQueueEntry["agentMessages"] {
+  return entry.agentMessages ?? splitCombinedDelivery(entry.input, entry.messageOrigin?.deliveredMessages,
+    (part) => part.type === "text" ? part.text : undefined, (text) => ({ type: "text" as const, text }))
+    ?.map(({ parts, origin, receivedAt }) => ({ input: parts, origin, receivedAt }));
+}
+
+export function isOnlyTaskMonitorWake(entry: ThreadTurnQueueEntry): boolean {
+  const batch = restoredBatchMessages(entry);
+  return batch?.length ? batch.every((message) => message.origin?.subAgent?.kind === "monitor")
+    : taskMonitorWakeIds(entry).size > 0;
+}
+
+function rebuildMonitorBatch(entry: ThreadTurnQueueEntry, agentMessages: NonNullable<ThreadTurnQueueEntry["agentMessages"]>): ThreadTurnQueueEntry {
+  const messages = agentMessages.map(({ input, origin, receivedAt }) => ({ input,
+    messageOrigin: origin ?? { kind: "agent" as const }, createdAt: receivedAt,
+  }));
+  const messageOrigin: AppServerThreadMessageOrigin = messages.length === 1 ? messages[0]!.messageOrigin : {
+    kind: "agent",
+    ...(entry.messageOrigin?.operatorApproved ? { operatorApproved: true } : {}),
+    ...mergeCausalMessagingContext(messages.map((message) => message.messageOrigin)),
+    deliveredMessages: messages.map((message) => ({
+      origin: message.messageOrigin, receivedAt: message.createdAt, inputItemCount: message.input.length,
+    })),
+  };
+  const { title: _title, ...original } = entry;
+  // Keep the checkpoint's identity and its legacy sender-edit restriction.
+  return { ...original, messageOrigin, input: combinedDeliveryInput(messages), agentMessages,
+    agentMessageOrigins: agentMessages.flatMap(({ origin }) => origin ? [origin] : []),
+  };
+}
 
 /** Collaborators the composition root builds for this module. */
 export interface SubAgentMonitorServiceDependencies {
   readonly forgeToolBridge: ForgeToolBridge;
   readonly managedReviewService: ManagedReviewService;
   readonly threadMcpConnections: ThreadMcpConnections;
+  readonly taskMonitorWakeStore?: TaskMonitorWakeStorage;
 }
 
 /**
@@ -340,6 +395,7 @@ export class SubAgentMonitorService {
   private readonly forgeToolBridge: ForgeToolBridge;
   private readonly managedReviewService: ManagedReviewService;
   private readonly threadMcpConnections: ThreadMcpConnections;
+  private readonly taskMonitorWakeStore?: TaskMonitorWakeStorage;
 
   constructor(
     context: RegistryContext,
@@ -351,6 +407,98 @@ export class SubAgentMonitorService {
     this.forgeToolBridge = dependencies.forgeToolBridge;
     this.managedReviewService = dependencies.managedReviewService;
     this.threadMcpConnections = dependencies.threadMcpConnections;
+    this.taskMonitorWakeStore = dependencies.taskMonitorWakeStore;
+  }
+
+  taskMonitorWakesTripped(parent: MonitorParent): boolean {
+    return this.taskMonitorWakeStore?.read(parent).tripped ?? false;
+  }
+
+  rearmTaskMonitorWakes(parent: MonitorParent): boolean {
+    if (!this.taskMonitorWakeStore?.rearm(parent)) return false;
+    this.publishTaskMonitorWakeGuardChange(parent);
+    return true;
+  }
+
+  prepareTaskMonitorWakeDispatch(entry: ThreadTurnQueueEntry): ThreadTurnQueueEntry | string {
+    const store = this.taskMonitorWakeStore;
+    if (!store || (!entry.messageOrigin && !entry.agentMessages && !entry.agentMessageOrigins)) return entry;
+    const suppressed = new Set<string>();
+    try {
+      for (const monitorId of taskMonitorWakeIds(entry)) {
+        const decision = store.dispatch(
+          { backend: entry.backend, threadId: entry.threadId, monitorId },
+          this.host().registrySessionId,
+          !entry.id.startsWith(TASK_MONITOR_WAKE_ENTRY_PREFIX),
+        );
+        if (decision === "tripped") this.publishTaskMonitorWakeGuardChange(entry);
+        if (decision !== "admitted") suppressed.add(monitorId);
+      }
+    } catch (error) {
+      backendRegistryLog.warn("Job Monitor wake dispatch check failed", { error: String(error), entryId: entry.id });
+      for (const monitorId of taskMonitorWakeIds(entry)) suppressed.add(monitorId);
+    }
+    if (suppressed.size === 0) return entry;
+    const remaining = restoredBatchMessages(entry)?.filter((message) =>
+      message.origin?.subAgent?.kind !== "monitor" || !suppressed.has(message.origin.subAgent.monitorId));
+    return remaining?.length ? rebuildMonitorBatch(entry, remaining) : TASK_MONITOR_WAKE_SUPPRESSED;
+  }
+
+  projectHeldMonitorReleaseRefusal(entry: ThreadTurnQueueEntry): string | undefined {
+    const store = this.taskMonitorWakeStore;
+    if (!store || entry.projectHold?.source !== "monitor" || !isOnlyTaskMonitorWake(entry)) return undefined;
+    for (const monitorId of taskMonitorWakeIds(entry)) {
+      if (!store.canRelease({ backend: entry.backend, threadId: entry.threadId, monitorId }, this.host().registrySessionId,
+        !entry.id.startsWith(TASK_MONITOR_WAKE_ENTRY_PREFIX))) return TASK_MONITOR_WAKE_SUPPRESSED;
+    }
+    return undefined;
+  }
+
+  releaseUnsentTaskMonitorWakes(entries: readonly ThreadTurnQueueEntry[]): void {
+    const store = this.taskMonitorWakeStore;
+    if (!store || entries.length === 0) return;
+    const ids = new Set(entries.flatMap((entry) => [...taskMonitorWakeIds(entry)]));
+    if (ids.size === 0) return;
+    try {
+      store.releaseUnsent(entries[0]!, [...ids], this.host().registrySessionId);
+    } catch (error) {
+      backendRegistryLog.warn("Unsent Job Monitor wake could not release its dispatch claim", { error: String(error) });
+    }
+  }
+
+  private publishTaskMonitorWakeGuardChange(parent: MonitorParent): void {
+    void this.context.emit({
+      backend: parent.backend,
+      notification: {
+        method: "thread/taskMonitorWakeGuard/updated",
+        params: { threadId: parent.threadId },
+      },
+    }).catch((error: unknown) => {
+      backendRegistryLog.warn("Job Monitor wake guard update could not be published", { error: String(error) });
+    });
+  }
+
+  private reserveTaskMonitorWake(parent: MonitorParent, record: TaskMonitorDelegationRecord): boolean {
+    const store = this.taskMonitorWakeStore;
+    if (!store) return true;
+    if (record.wakeGeneration === undefined) return false;
+    try {
+      const decision = store.reserve({ ...parent, monitorId: record.monitorId }, record.wakeGeneration);
+      if (decision === "tripped") this.publishTaskMonitorWakeGuardChange(parent);
+      return decision === "admitted";
+    } catch (error) {
+      backendRegistryLog.warn("Job Monitor wake reservation failed", { error: String(error), monitorId: record.monitorId });
+      return false;
+    }
+  }
+
+  private readTaskMonitorWakeGeneration(parent: MonitorParent): number | undefined {
+    try {
+      return this.taskMonitorWakeStore?.read(parent).generation;
+    } catch (error) {
+      backendRegistryLog.warn("Job Monitor wake generation could not be read", { error: String(error), ...parent });
+      return undefined;
+    }
   }
 
   turnEventObservers(): Record<"activity" | "terminal" | "accounting", TurnEventObserver> {
@@ -581,24 +729,27 @@ export class SubAgentMonitorService {
     createdAt: number;
     lastActivityAt: number;
     pollIntervalSeconds: number;
+    wakeSuppressed?: true;
   }> {
-    return [...this.taskMonitorDelegations.values()]
+    const live = [...this.taskMonitorDelegations.values()]
       .filter((record) => record.parentBackend === params.backend
         && record.parentThreadId === params.threadId
         && !record.finalizationStarted
-        && !record.cancellation)
-      .map((record) => ({
-        monitorId: record.monitorId,
-        task: record.task,
-        backend: record.backend,
-        ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
-        ...(record.runtimeModel ?? record.preferredModel
-          ? { model: record.runtimeModel ?? record.preferredModel }
-          : {}),
-        createdAt: record.createdAt,
-        lastActivityAt: record.lastActivityAt,
-        pollIntervalSeconds: record.pollIntervalSeconds,
-      }));
+        && !record.cancellation);
+    const guard = live.length ? this.taskMonitorWakeStore?.read(params) : undefined;
+    return live.map((record) => ({
+      monitorId: record.monitorId,
+      task: record.task,
+      backend: record.backend,
+      ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
+      ...(record.runtimeModel ?? record.preferredModel
+        ? { model: record.runtimeModel ?? record.preferredModel }
+        : {}),
+      createdAt: record.createdAt,
+      lastActivityAt: record.lastActivityAt,
+      pollIntervalSeconds: record.pollIntervalSeconds,
+      ...(guard && (guard.tripped || guard.generation !== record.wakeGeneration) ? { wakeSuppressed: true as const } : {}),
+    }));
   }
 
   async stopSubAgent(
@@ -2841,6 +2992,7 @@ export class SubAgentMonitorService {
       parentBackend: context.backend,
       parentThreadId,
       parentTurnId: context.turnId,
+      wakeGeneration: this.readTaskMonitorWakeGeneration({ backend: context.backend, threadId: parentThreadId }),
       pollIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
@@ -3694,16 +3846,9 @@ export class SubAgentMonitorService {
 
     bound.record.lastActivityAt = Date.now();
     bound.record.finalizationStarted = true;
-    let parentTurn:
-      | {
-          status: "started" | "queued";
-          turnId?: string;
-          queueEntryId?: string;
-          position?: number;
-        }
-      | undefined;
+    let delivery: MonitorParentDelivery;
     try {
-      parentTurn = await this.finishTaskMonitorDelegation({
+      delivery = await this.finishTaskMonitorDelegation({
         completionSource: { type: "monitor_tool" },
         details: args.details,
         outcome: args.outcome,
@@ -3728,7 +3873,7 @@ export class SubAgentMonitorService {
         ...(bound.record.latestUsage
           ? { monitorUsage: bound.record.latestUsage }
           : {}),
-        ...(parentTurn ? { parentTurn } : {}),
+        ...delivery,
       },
     };
   }
@@ -3740,15 +3885,7 @@ export class SubAgentMonitorService {
     record: TaskMonitorDelegationRecord;
     summary: string;
     triggerParentTurn: boolean;
-  }): Promise<
-    | {
-        status: "started" | "queued";
-        turnId?: string;
-        queueEntryId?: string;
-        position?: number;
-      }
-    | undefined
-  > {
+  }): Promise<MonitorParentDelivery> {
     const finalText = formatTaskMonitorCompletionMessage({
       completionSource: params.completionSource,
       details: params.details,
@@ -3798,77 +3935,25 @@ export class SubAgentMonitorService {
       task: params.record.task,
     });
 
-    let parentTurn:
-      | {
-          status: "started" | "queued";
-          turnId?: string;
-          queueEntryId?: string;
-          position?: number;
-        }
-      | undefined;
+    let delivery: MonitorParentDelivery = {};
     if (params.triggerParentTurn) {
-      const messageOrigin = buildTaskMonitorMessageOrigin({
-        monitorId: params.record.monitorId,
-        monitorThreadId: params.record.monitorThreadId,
-        outcome: params.outcome,
-        summary: params.summary,
-        task: params.record.task,
+      delivery = await this.deliverTaskMonitorParentWake(params).catch((error: unknown) => {
+        // A refusal by turn admission cannot turn a reported result into a
+        // fallback failure or retry a wake that might already be in flight.
+        backendRegistryLog.warn("Job Monitor parent wake failed", { error: String(error), monitorId: params.record.monitorId });
+        return {};
       });
-      Object.assign(messageOrigin, params.record.causalContext);
-      const parentWake = {
-        backend: params.record.parentBackend,
-        threadId: params.record.parentThreadId,
-        input: [
-          {
-            type: "text" as const,
-            text: buildTaskMonitorFinalHandoffInput({
-              completionSource: params.completionSource,
-              details: params.details,
-              finalHandoffPrompt: params.record.finalHandoffPrompt,
-              outcome: params.outcome,
-              summary: params.summary,
-              task: params.record.task,
-            }),
-          },
-        ],
-        origin: "manual" as const,
-        messageOrigin,
-      };
-      const parentLock = await this.host().readThreadLock(parentWake.backend, parentWake.threadId);
-      // A paused project holds or discards the wake by its policy. A lock
-      // already holds everything, so it wins.
-      const pausedProject = parentLock ? undefined : this.host().resolvePausedThreadProject(parentWake);
-      // A locked parent holds the result rather than refusing it: the monitor
-      // finishes either way, and an unlock delivers what it found.
-      const submitted = parentLock
-        ? await this.host().submitHeldTurn({
-            ...parentWake,
-            queueEntryId: `task-monitor:${params.record.monitorId}`,
-            holdReason: threadLockRefusalMessage(parentLock),
-          })
-        : pausedProject
-          ? await this.host().deliverProjectPausedWakeup({
-              ...parentWake,
-              project: pausedProject,
-              queueEntryId: `task-monitor:${params.record.monitorId}`,
-              source: "monitor",
-              summary: summarizeProjectHeldWakeup(`Monitor finished: "${params.record.task}"`),
-            })
-          : await this.host().submitTurn(parentWake);
-      parentTurn =
-        submitted.status === "discarded"
-          ? undefined
-          : submitted.status === "started"
-            ? {
-                status: "started",
-                turnId: submitted.turnId,
-                queueEntryId: submitted.entry.id,
-              }
-            : {
-                status: "queued",
-                queueEntryId: submitted.entry.id,
-                position: submitted.position,
-              };
+      if (delivery.parentWakeSuppressed && params.record.parentBackend === "codex"
+        && this.host().canStartThreadTurnImmediately({ backend: "codex", threadId: params.record.parentThreadId })) {
+        await this.injectTaskMonitorCompletionMessage({
+          backend: "codex",
+          monitorId: params.record.monitorId,
+          parentThreadId: params.record.parentThreadId,
+          text: finalText,
+        }).catch((error: unknown) => {
+          backendRegistryLog.warn("Suppressed Job Monitor result injection failed", { error: String(error), monitorId: params.record.monitorId });
+        });
+      }
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
@@ -3885,7 +3970,69 @@ export class SubAgentMonitorService {
         params.record,
       );
     }
-    return parentTurn;
+    return delivery;
+  }
+
+  private async deliverTaskMonitorParentWake(
+    params: Parameters<SubAgentMonitorService["finishTaskMonitorDelegation"]>[0],
+  ): Promise<MonitorParentDelivery> {
+    const messageOrigin = buildTaskMonitorMessageOrigin({
+      monitorId: params.record.monitorId,
+      monitorThreadId: params.record.monitorThreadId,
+      outcome: params.outcome,
+      summary: params.summary,
+      task: params.record.task,
+    });
+    Object.assign(messageOrigin, params.record.causalContext);
+    const parentWake = {
+      backend: params.record.parentBackend,
+      threadId: params.record.parentThreadId,
+      queueEntryId: `${TASK_MONITOR_WAKE_ENTRY_PREFIX}${params.record.monitorId}`,
+      input: [{
+        type: "text" as const,
+        text: buildTaskMonitorFinalHandoffInput({
+          completionSource: params.completionSource,
+          details: params.details,
+          finalHandoffPrompt: params.record.finalHandoffPrompt,
+          outcome: params.outcome,
+          summary: params.summary,
+          task: params.record.task,
+        }),
+      }],
+      origin: "manual" as const,
+      messageOrigin,
+    };
+    const parentLock = await this.host().readThreadLock(parentWake.backend, parentWake.threadId);
+    // A lock holds the wake ahead of project policy. A policy discard has
+    // no turn or queue admission to reserve.
+    const pausedProject = parentLock ? undefined : this.host().resolvePausedThreadProject(parentWake);
+    if (pausedProject?.automation.wakeupPolicy !== "discard" && !this.reserveTaskMonitorWake(parentWake, params.record)) {
+      return { parentWakeSuppressed: true };
+    }
+    try {
+      const submitted = parentLock
+        ? await this.host().submitHeldTurn({
+            ...parentWake,
+            holdReason: threadLockRefusalMessage(parentLock),
+          })
+        : pausedProject
+          ? await this.host().deliverProjectPausedWakeup({
+              ...parentWake,
+              project: pausedProject,
+              source: "monitor",
+              summary: summarizeProjectHeldWakeup(`Monitor finished: "${params.record.task}"`),
+            })
+          : await this.host().submitTurn(parentWake);
+      if (submitted.status === "discarded") return {};
+      return { parentTurn: {
+        status: submitted.status,
+        queueEntryId: submitted.entry.id,
+        ...(submitted.status === "started" ? { turnId: submitted.turnId } : { position: submitted.position }),
+      } };
+    } catch (error) {
+      if (error instanceof ThreadTurnQueueDispatchRefused) return { parentWakeSuppressed: true };
+      throw error;
+    }
   }
 
   async handleTaskMonitorTerminalNotification(

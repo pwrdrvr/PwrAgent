@@ -10,7 +10,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
-import type { SubAgentMonitorService } from "./subagent-monitor-service";
+import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import type { RegistryReadThreadRequest } from "./registry-host-ports";
@@ -649,6 +649,7 @@ import {
 import {
   isSteerableAgentTraffic,
   ThreadTurnQueue,
+  ThreadTurnQueueDispatchRefused,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueOrigin,
@@ -9785,7 +9786,7 @@ export class DesktopBackendRegistry {
         const resumed = await this.setQueuedTurnPaused({
           queueEntryId: resolution.entryId,
           paused: false,
-        });
+        }, (live) => this.subAgentMonitorService.projectHeldMonitorReleaseRefusal(live));
         results.push({
           entryId: resolution.entryId,
           status: resumed.disposition === "updated" ? "sent" : "not_found",
@@ -9793,7 +9794,7 @@ export class DesktopBackendRegistry {
       } catch (error) {
         results.push({
           entryId: resolution.entryId,
-          status: "failed",
+          status: error instanceof ThreadTurnQueueDispatchRefused ? "suppressed" : "failed",
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -9961,6 +9962,7 @@ export class DesktopBackendRegistry {
    */
   async setQueuedTurnPaused(
     request: Omit<SetQueuedTurnPausedRequest, "federationTarget">,
+    checkRelease?: (entry: ThreadTurnQueueEntry) => string | undefined,
   ): Promise<SetQueuedTurnPausedResponse> {
     const saved = this.durableRestartContinuations.get(request.queueEntryId);
     if (!request.paused && saved?.ownsScheduledTurn) {
@@ -9969,6 +9971,7 @@ export class DesktopBackendRegistry {
     const result = await this.threadTurnQueue.setEntryPaused(
       request.queueEntryId,
       request.paused,
+      checkRelease,
     );
     const entry = result.entry;
     // A control can retire or replace this row while the shared mutation
@@ -12188,8 +12191,23 @@ export class DesktopBackendRegistry {
     createdAt: number;
     lastActivityAt: number;
     pollIntervalSeconds: number;
+    wakeSuppressed?: true;
   }> {
     return this.subAgentMonitorService.listPendingTaskMonitorWakes(params);
+  }
+
+  taskMonitorWakesTripped(thread: { backend: AppServerBackendKind; threadId: string }): boolean {
+    return this.subAgentMonitorService.taskMonitorWakesTripped(thread);
+  }
+
+  rearmTaskMonitorWakes(thread: { backend: AppServerBackendKind; threadId: string }): boolean {
+    if (!this.subAgentMonitorService.rearmTaskMonitorWakes(thread)) return false;
+    for (const entry of this.threadTurnQueue.getQueuedEntries(thread)) {
+      if (isOnlyTaskMonitorWake(entry)) {
+        this.cancelQueuedTurn(entry.id, "Job Monitor wakes were rearmed for future monitors.");
+      }
+    }
+    return true;
   }
 
   async dismissFailedSubAgents(params: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse> {

@@ -57,6 +57,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -3426,6 +3427,79 @@ describe("DesktopBackendRegistry", () => {
       ],
     });
     await registry.close();
+  });
+
+  it("stops fresh Job Monitors from repeatedly waking the parent of a pending release", async () => {
+    const parent = "thread-1";
+    const outcomes = ["failure", "cancelled", "success", "failure", "fallback"] as const;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startTurnResults: outcomes.flatMap((outcome, index) => [
+        { threadId: `observer-${index}`, turnId: `watch-${index}` },
+        ...(index < 3 ? [{ threadId: parent, turnId: `follow-up-${index}` }] : []),
+        ...(outcome === "fallback" ? [{ threadId: `observer-${index}`, turnId: `recover-${index}` }] : []),
+      ]),
+    });
+    let observer = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({ threadId: `observer-${observer++}` }));
+    const overlayStore = createOverlayStoreMock();
+    const db = openInMemoryStateDb();
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, taskMonitorWakeStore: new TaskMonitorWakeStore(db.raw) });
+    onTestFinished(async () => { await registry.close(); db.close(); });
+    const guardChanges = vi.fn();
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/taskMonitorWakeGuard/updated") guardChanges();
+    });
+    const toolCall = async (threadId: string, turnId: string, tool: string, args: Record<string, unknown>) => {
+      const result = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: { threadId, turnId, callId: `${turnId}-${tool}`, requestId: `${turnId}-${tool}`,
+          namespace: "pwragent_task_monitors", tool, arguments: args },
+      } as AppServerPendingRequestNotification) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(result.success).toBe(true);
+      return JSON.parse(result.contentItems[0]!.text) as {
+        monitorId: string;
+        parentTurn?: { status: string };
+        parentWakeSuppressed?: true;
+      };
+    };
+    const monitorIds = new Set<string>();
+    let parentTurn = "initial";
+    for (const [index, outcome] of outcomes.entries()) {
+      await emitStartedTurn(registry, "codex", parent, parentTurn);
+      const created = await toolCall(parent, parentTurn, "create_monitor_delegation", {
+        task: "Observe the same pending release watcher.",
+      });
+      monitorIds.add(created.monitorId);
+      await emitCompletedTurn(registry, "codex", parent, parentTurn);
+      if (outcome === "fallback") {
+        await emitCompletedTurn(registry, "codex", `observer-${index}`, `watch-${index}`);
+        await emitCompletedTurn(registry, "codex", `observer-${index}`, `recover-${index}`);
+        expect(await overlayStore.getThreadSubAgent({ backend: "codex", threadId: parent, monitorId: created.monitorId }))
+          .toMatchObject({ outcome: "failure", completionSource: { type: "pwragent_fallback" } });
+        continue;
+      }
+      const report = await toolCall(`observer-${index}`, `watch-${index}`, "complete_monitoring", {
+        monitorId: created.monitorId,
+        outcome,
+        summary: outcome === "success" ? "The release finished." : "The observer stopped while the release was pending.",
+      });
+      // Even a success claim consumes the same allowance. Neither a new
+      // monitor ID nor different wording buys another paid parent wake.
+      expect(report.parentTurn?.status).toBe(index < 3 ? "started" : undefined);
+      expect(report.parentWakeSuppressed).toBe(index < 3 ? undefined : true);
+      expect(await overlayStore.getThreadSubAgent({ backend: "codex", threadId: parent, monitorId: created.monitorId }))
+        .toMatchObject({ outcome });
+      parentTurn = index < 3 ? `follow-up-${index}` : `human-${index}`;
+    }
+    expect(monitorIds.size).toBe(outcomes.length);
+    expect(codexClient.startTurnCalls.filter((call) => call.threadId === parent)).toHaveLength(3);
+    expect(registry.taskMonitorWakesTripped({ backend: "codex", threadId: parent })).toBe(true);
+    expect(guardChanges).toHaveBeenCalledTimes(1);
+    await expect(registry.submitTurn({ backend: "codex", threadId: parent, input: [{ type: "text", text: "Verify the release." }] }))
+      .resolves.toMatchObject({ status: "started" });
+    expect(registry.taskMonitorWakesTripped({ backend: "codex", threadId: parent })).toBe(true);
   });
 
   it("holds a task monitor's result for a locked parent and delivers it on unlock", async () => {
