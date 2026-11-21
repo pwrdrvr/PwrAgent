@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   BOAT_SANDBOX_TYPES,
   BOAT_SANDBOX_TYPE_LABELS,
@@ -12,6 +12,8 @@ import {
   type McpConnectionStatus,
 } from "@pwragent/shared/contracts/mcp-connections";
 import { Select, type SelectOption } from "../../components/Select";
+import { PopoutIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "./SettingsSwitch";
 
@@ -95,6 +97,102 @@ function accountLine(connection: McpConnectionStatus): string | undefined {
  * never comes here. Pasting a key is the other way in. That field is
  * write-only: the key goes to main once and nothing sends it back.
  */
+const COPIED_RESET_MS = 2_000;
+
+/**
+ * The code Boat's page asks for. Copy comes first and is the primary action
+ * until it has been used; then opening Boat's page is. Nothing opens a
+ * browser before the operator has the code.
+ */
+function BoatSignInCode(props: {
+  desktopApi?: DesktopApi;
+  userCode: string;
+  onCancelled: () => void;
+  onError: (error: string | undefined) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [everCopied, setEverCopied] = useState(false);
+  const [opened, setOpened] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  const openPage = props.desktopApi?.openBoatSignInPage;
+  const cancelSignIn = props.desktopApi?.cancelBoatSignIn;
+
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+
+  const copy = () => {
+    props.onError(undefined);
+    void copyText(props.userCode, props.desktopApi).then(
+      () => {
+        setCopied(true);
+        setEverCopied(true);
+        window.clearTimeout(copiedTimer.current);
+        copiedTimer.current = window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
+      },
+      () => props.onError("Could not copy the code. Select it and copy it yourself."),
+    );
+  };
+  const open = () => {
+    if (!openPage || opening) return;
+    setOpening(true);
+    props.onError(undefined);
+    void openPage().then(
+      () => setOpened(true),
+      (error: unknown) => props.onError(errorText(error)),
+    ).finally(() => setOpening(false));
+  };
+
+  return (
+    <div className="settings-boat-code">
+      <span className="settings-boat-code__label">
+        {opened
+          ? "Paste this code on the Boat page that opened in your browser"
+          : "Copy this code, then open Boat and paste it there"}
+      </span>
+      <span className="settings-boat-code__value">{props.userCode}</span>
+      <div className="settings-boat-code__actions">
+        <button
+          className={"button " + (everCopied ? "button--secondary" : "button--primary")}
+          data-reveal-focus=""
+          type="button"
+          onClick={copy}
+        >
+          {copied ? "Copied" : "Copy code"}
+        </button>
+        <button
+          className={"button " + (everCopied && !opened ? "button--primary" : "button--secondary")}
+          disabled={!openPage || opening}
+          type="button"
+          onClick={open}
+        >
+          {opened ? "Open Boat again" : "Open Boat to sign in"}
+          <PopoutIcon size={12} />
+        </button>
+        {cancelSignIn ? (
+          <button
+            className="button button--ghost"
+            type="button"
+            onClick={() => void cancelSignIn().then(
+              () => props.onCancelled(),
+              (error: unknown) => props.onError(errorText(error)),
+            )}
+          >
+            Cancel sign-in
+          </button>
+        ) : null}
+      </div>
+      {/* Announces the copy, which the button's own label change does not. */}
+      <span className="settings-boat-code__hint" role="status">
+        {copied
+          ? "Code copied."
+          : opened
+            ? "Waiting for you to approve it on Boat’s page. PwrAgent finishes on its own."
+            : "PwrAgent finishes on its own once you approve it on Boat’s page."}
+      </span>
+    </div>
+  );
+}
+
 export function BoatSetupDetail(props: {
   connection: McpConnectionStatus;
   desktopApi?: DesktopApi;
@@ -169,7 +267,6 @@ export function BoatSetupDetail(props: {
 
   const signIn = props.connection.boatSignIn;
   const startSignIn = props.desktopApi?.startBoatSignIn;
-  const cancelSignIn = props.desktopApi?.cancelBoatSignIn;
   const canSignIn = props.connection.boatCliAvailable === true && startSignIn !== undefined;
   const begin = (method: BoatSignInMethod) => {
     if (!startSignIn || signingIn) return;
@@ -252,28 +349,12 @@ export function BoatSetupDetail(props: {
         </p>
       ) : null}
       {signIn?.state === "waiting" ? (
-        <div className="settings-boat-code" role="status">
-          <span className="settings-boat-code__label">
-            Enter this code on the Boat page that opened in your browser
-          </span>
-          <span className="settings-boat-code__value">{signIn.userCode}</span>
-          <span className="settings-boat-code__hint">
-            Waiting for you to approve it. PwrAgent finishes on its own.
-          </span>
-          {cancelSignIn ? (
-            <button
-              className="button button--ghost"
-              data-reveal-focus=""
-              type="button"
-              onClick={() => void cancelSignIn().then(
-                () => props.onChanged(),
-                (error: unknown) => setSignInError(errorText(error)),
-              )}
-            >
-              Cancel sign-in
-            </button>
-          ) : null}
-        </div>
+        <BoatSignInCode
+          desktopApi={props.desktopApi}
+          userCode={signIn.userCode}
+          onCancelled={props.onChanged}
+          onError={setSignInError}
+        />
       ) : canSignIn ? (
         <div className="settings-boat-setup__actions">
           <button
@@ -283,7 +364,7 @@ export function BoatSetupDetail(props: {
             type="button"
             onClick={() => begin("github")}
           >
-            {signingIn ? "Opening Boat..." : "Sign in with GitHub"}
+            {signingIn ? "Getting a code..." : "Sign in with GitHub"}
           </button>
           <button
             className="button button--secondary"
@@ -294,8 +375,8 @@ export function BoatSetupDetail(props: {
             Sign in with Google
           </button>
           <span className="settings-mcp-row__state">
-            Opens boat.dev. No key to copy: PwrAgent stores a 90-day key encrypted
-            on this computer and leaves nothing in a file.
+            Shows a code to paste on boat.dev. No key to copy: PwrAgent stores a
+            90-day key encrypted on this computer and leaves nothing in a file.
           </span>
         </div>
       ) : (

@@ -863,9 +863,11 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<MutateMcpConnectionResponse>;
   /** Checks a pasted Boat API key and stores it encrypted on this machine. */
   connectBoat?: (request: ConnectBoatRequest) => Promise<MutateMcpConnectionResponse>;
-  /** Opens Boat's sign-in page; the status carries the code it asks for. */
+  /** Starts a Boat sign-in; the status carries the code Boat's page asks for. */
   startBoatSignIn?: (method: BoatSignInMethod) => Promise<MutateMcpConnectionResponse>;
   cancelBoatSignIn?: () => Promise<MutateMcpConnectionResponse>;
+  /** Opens Boat's page for the sign-in in flight, once the code is copied. */
+  openBoatSignInPage?: () => Promise<MutateMcpConnectionResponse>;
   setBoatSandboxPolicy?: (
     request: SetBoatSandboxPolicyRequest,
   ) => Promise<MutateMcpConnectionResponse>;

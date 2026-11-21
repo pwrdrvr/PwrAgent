@@ -25681,6 +25681,13 @@ a.button {
   background: var(--bg-panel);
 }
 
+.settings-boat-code__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .settings-boat-code__label,
 .settings-boat-code__hint {
   color: var(--text-secondary);

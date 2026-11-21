@@ -31,7 +31,9 @@ create scoped, expiring API keys, so `BoatSignIn`
 (`apps/desktop/src/main/mcp-connections/boat-sign-in.ts`) drives the CLI:
 
 1. `boat login --json` answers a `login_url` event: a URL on boat.dev, a short
-   code, and an expiry. PwrAgent opens the URL and shows the code in Settings.
+   code, and an expiry. Settings shows the code with a Copy button first, and
+   opens the URL only when the operator clicks Open Boat to sign in, so the
+   code is on the clipboard before Boat's page asks for it.
 2. `boat login --wait --json` returns once the operator has approved it.
 3. `boat api-key create PwrAgent --actions <list> --ttl 90d --json` mints the
    key. It is read from the CLI's output into the encrypted store. The list is

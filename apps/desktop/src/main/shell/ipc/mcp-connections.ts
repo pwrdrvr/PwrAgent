@@ -81,6 +81,7 @@ import {
   MCP_CONNECTION_BOAT_OPEN_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
@@ -370,6 +371,15 @@ export function registerMcpConnectionIpcHandlers(
     async (event): Promise<MutateMcpConnectionResponse> => {
       requireLocalOwner(event);
       const connection = await service.cancelBoatSignIn();
+      return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
+    async (event): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      const connection = await service.openBoatSignInPage();
       return { connectionId: connection.id, connection };
     },
   );
@@ -802,6 +812,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_OPEN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);

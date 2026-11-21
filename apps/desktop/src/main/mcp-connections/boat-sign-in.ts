@@ -20,7 +20,8 @@ import {
  * private, throwaway home directory:
  *
  * 1. `boat login --json` answers a URL and a short code. PwrAgent shows the
- *    code and opens the URL; the operator approves in the browser.
+ *    code first, so the operator can copy it, and opens the URL when they
+ *    ask; they approve in the browser.
  * 2. `boat login --wait --json` returns once they have.
  * 3. `boat api-key create` mints a key limited to sandbox actions. It goes
  *    straight from the CLI's output to PwrAgent's encrypted store.
@@ -88,7 +89,7 @@ export type BoatSignInOptions = {
   now?: () => number;
 };
 
-type Attempt = { home: string; cli: string; controller: AbortController };
+type Attempt = { home: string; cli: string; controller: AbortController; url?: string };
 
 export class BoatSignIn {
   private attempt?: Attempt;
@@ -123,8 +124,9 @@ export class BoatSignIn {
   }
 
   /**
-   * Starts a sign-in and opens Boat's page. Resolves once the code is known;
-   * the rest runs on its own and reports through `onChanged`.
+   * Starts a sign-in. Resolves once the code is known; the rest runs on its
+   * own and reports through `onChanged`. Boat's page is not opened here: the
+   * operator copies the code first, then asks for the page with `openPage`.
    */
   async start(method: BoatSignInMethod): Promise<BoatSignInProgress> {
     await this.cancel();
@@ -140,15 +142,26 @@ export class BoatSignIn {
         }),
         this.now(),
       );
-      await this.options.openExternal(link.url);
     } catch (error) {
       await this.release(attempt);
       throw new Error(describeFailure(error, "Could not start Boat sign-in."), { cause: error });
     }
+    attempt.url = link.url;
     this.current = { state: "waiting", method, userCode: link.userCode, expiresAt: link.expiresAt };
     this.options.onChanged();
     void this.finish(attempt, link.expiresAt);
     return this.current;
+  }
+
+  /** Opens Boat's page for the sign-in in flight. It may be opened again. */
+  async openPage(): Promise<void> {
+    const url = this.attempt?.url;
+    if (!url) throw new Error("That Boat sign-in is no longer waiting. Start it again.");
+    try {
+      await this.options.openExternal(url);
+    } catch (error) {
+      throw new Error("Could not open Boat's sign-in page.", { cause: error });
+    }
   }
 
   /** Stops waiting. The link already open in the browser stops mattering. */

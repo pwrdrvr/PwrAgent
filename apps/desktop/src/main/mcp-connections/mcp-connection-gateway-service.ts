@@ -1537,9 +1537,9 @@ export class McpConnectionGatewayService {
   }
 
   /**
-   * Starts a browser sign-in to Boat and opens its page. The status that
-   * comes back carries the code Boat's page asks for; the key that results
-   * goes straight to the encrypted store.
+   * Starts a browser sign-in to Boat. The status that comes back carries the
+   * code Boat's page asks for; the key that results goes straight to the
+   * encrypted store.
    */
   async startBoatSignIn(method: BoatSignInMethod): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
@@ -1561,6 +1561,18 @@ export class McpConnectionGatewayService {
     }
     await this.boatSignIn.cancel();
     return this.announced(await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID)));
+  }
+
+  /** Opens Boat's page for the sign-in in flight, in this machine's browser. */
+  async openBoatSignInPage(): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/boat-sign-in-open", {},
+      );
+    }
+    await this.boatSignIn.openPage();
+    return await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID));
   }
 
   /** Changes what Boat's tools may do. The next tool call reads it. */
@@ -4720,6 +4732,7 @@ export class McpConnectionGatewayService {
       return await this.startBoatSignIn(values.method);
     }
     if (operation === "broker/boat-sign-in-cancel") return await this.cancelBoatSignIn();
+    if (operation === "broker/boat-sign-in-open") return await this.openBoatSignInPage();
     if (operation === "broker/set-boat-cleanup-on-pr-close") {
       if (typeof values.enabled !== "boolean") throw new Error("Invalid Boat cleanup on PR close request.");
       return await this.setBoatCleanupOnPrClose(values.enabled);

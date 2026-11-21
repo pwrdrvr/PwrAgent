@@ -1138,6 +1138,7 @@ import {
   MCP_CONNECTION_BOAT_OPEN_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
@@ -1595,6 +1596,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL, { method }),
   cancelBoatSignIn: async (): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL),
+  openBoatSignInPage: async (): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL),
   setBoatSandboxPolicy: async (
     request: SetBoatSandboxPolicyRequest,
   ): Promise<MutateMcpConnectionResponse> =>

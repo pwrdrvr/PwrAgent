@@ -199,14 +199,35 @@ describe("BoatSetupDetail sign-in", () => {
     expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
   });
 
-  it("shows the code Boat's page asks for while it waits, and a way out", async () => {
-    const cancelBoatSignIn = vi.fn(async () => ({ connectionId: BOAT_MCP_CONNECTION_ID, connection: signedOut() }));
+  it("shows the code to copy first, then opens Boat's page when asked, with a way out", async () => {
+    const mutated = { connectionId: BOAT_MCP_CONNECTION_ID, connection: signedOut() };
+    const cancelBoatSignIn = vi.fn(async () => mutated);
+    const openBoatSignInPage = vi.fn(async () => mutated);
+    const copyText = vi.fn(async () => undefined);
     renderSignIn(
       signedOut({ boatSignIn: { state: "waiting", method: "github", userCode: "DADA-MAMA", expiresAt: 1 } }),
-      { startBoatSignIn: vi.fn(), cancelBoatSignIn },
+      { startBoatSignIn: vi.fn(), cancelBoatSignIn, openBoatSignInPage, copyText },
     );
-    expect(screen.getByRole("status")).toHaveTextContent("DADA-MAMA");
+    expect(screen.getByText("DADA-MAMA")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
+    // Copy is the next step until it has been taken; nothing has opened.
+    const copy = screen.getByRole("button", { name: "Copy code" });
+    const open = screen.getByRole("button", { name: "Open Boat to sign in" });
+    expect(copy).toHaveClass("button--primary");
+    expect(open).toHaveClass("button--secondary");
+    expect(openBoatSignInPage).not.toHaveBeenCalled();
+
+    fireEvent.click(copy);
+    await waitFor(() => expect(copy).toHaveTextContent("Copied"));
+    expect(copyText).toHaveBeenCalledWith("DADA-MAMA");
+    expect(screen.getByRole("status")).toHaveTextContent("Code copied.");
+    expect(copy).toHaveClass("button--secondary");
+    expect(open).toHaveClass("button--primary");
+
+    fireEvent.click(open);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open Boat again" })).toBeInTheDocument());
+    expect(openBoatSignInPage).toHaveBeenCalledOnce();
+
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
     await waitFor(() => expect(cancelBoatSignIn).toHaveBeenCalledOnce());
   });

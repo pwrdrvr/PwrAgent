@@ -94,6 +94,7 @@ export function scopeDesktopApiToFederationTarget(
     connectBoat: undefined,
     startBoatSignIn: undefined,
     cancelBoatSignIn: undefined,
+    openBoatSignInPage: undefined,
     setBoatSandboxPolicy: undefined,
     setBoatCleanupOnPrClose: undefined,
     openBoatLink: undefined,

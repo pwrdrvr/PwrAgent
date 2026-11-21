@@ -82,8 +82,14 @@ describe("BoatSignIn", () => {
     const h = harness();
     const progress = await h.signIn.start("github");
     expect(progress).toEqual({ state: "waiting", method: "github", userCode: CODE, expiresAt: NOW + 60_000 });
-    expect(h.opened).toEqual(["https://boat.dev/api/boat/auth/github?state=contrived"]);
+    // The code comes first: nothing opens until the operator asks.
+    expect(h.opened).toEqual([]);
+    await h.signIn.openPage();
+    await h.signIn.openPage();
+    expect(h.opened).toEqual(Array(2).fill("https://boat.dev/api/boat/auth/github?state=contrived"));
     await h.idle;
+    // A finished sign-in has no page left to open.
+    await expect(h.signIn.openPage()).rejects.toThrow("no longer waiting");
 
     expect(h.stored).toEqual([KEY]);
     expect(h.calls.map((call) => call.args)).toEqual([
@@ -114,6 +120,8 @@ describe("BoatSignIn", () => {
   ])("opens nothing when the CLI answers %s", async (_name, patch) => {
     const h = harness({ login: async () => loginLine(patch) });
     await expect(h.signIn.start("github")).rejects.toThrow();
+    // No attempt is left holding a link that could be opened later.
+    await expect(h.signIn.openPage()).rejects.toThrow("no longer waiting");
     expect(h.opened).toEqual([]);
     expect(h.removed).toEqual(h.homes);
     expect(h.signIn.progress()).toBeUndefined();
