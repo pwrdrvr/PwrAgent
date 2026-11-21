@@ -47,6 +47,7 @@ import {
   SettingsSectionStack,
 } from "./SettingsLayout";
 import { FederationShortNameField } from "./FederationShortNameField";
+import { FormSecretInput } from "./FormSecretInput";
 import { SecretStatusLine, useSecretRemoveConfirm } from "./SecretStatusLine";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { describeFormSecret } from "./secret-field-state";
@@ -209,7 +210,8 @@ export function FederationSettings(props: FederationSettingsProps) {
     edgePolicy.set("cloudflareAccessClientSecret", value);
   // Clearing deletes four stored credentials at once, none of which can be
   // shown again, so it asks first like every secret's Remove.
-  const clearCredentials = useSecretRemoveConfirm();
+  // It also turns the policy off, so it stays offered with nothing stored.
+  const clearCredentials = useSecretRemoveConfirm(true);
 
   const loadHealth = async () => {
     const diagnosticsReader = props.desktopApi?.readFederationDiagnostics;
@@ -1925,16 +1927,17 @@ export function FederationSettings(props: FederationSettingsProps) {
                   Clear credentials
                 </button>
               )}
+              {/* In the row, which wraps it under the buttons it asks about. */}
+              {clearCredentials.confirming ? (
+                <SecretStatusLine
+                  announce
+                  view={{
+                    tone: "draft",
+                    status: "Remove the saved Cloudflare credentials and turn the edge policy off? You would have to paste them again.",
+                  }}
+                />
+              ) : null}
             </div>
-            {clearCredentials.confirming ? (
-              <SecretStatusLine
-                announce
-                view={{
-                  tone: "draft",
-                  status: "Remove all four Cloudflare credentials and turn the edge policy off? You would have to paste them again.",
-                }}
-              />
-            ) : null}
           </div>
         }
       />
@@ -1985,37 +1988,18 @@ function EdgePolicySecret(props: {
   value: string;
   onChange: (value: string) => void;
 }) {
-  const statusId = useId();
-  const view = describeFormSecret(
-    props.state,
-    { dirty: props.value.trim().length > 0 },
-    "save the edge policy",
-  );
-  const shared = {
-    "aria-describedby": statusId,
-    "aria-label": props.label,
-    placeholder: view.placeholder,
-    value: props.value,
-  };
   return (
-    <div className="settings-secret settings-secret--status">
-      {props.multiline ? (
-        <textarea
-          {...shared}
-          className="settings-input settings-input--multiline"
-          rows={3}
-          onChange={(event) => props.onChange(event.target.value)}
-        />
-      ) : (
-        <input
-          {...shared}
-          className="settings-input"
-          type="password"
-          onChange={(event) => props.onChange(event.target.value)}
-        />
+    <FormSecretInput
+      label={props.label}
+      multiline={props.multiline}
+      value={props.value}
+      view={describeFormSecret(
+        props.state,
+        { dirty: props.value.trim().length > 0 },
+        "save the edge policy",
       )}
-      <SecretStatusLine id={statusId} view={view} />
-    </div>
+      onChange={props.onChange}
+    />
   );
 }
 

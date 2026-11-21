@@ -257,7 +257,9 @@ export function LocalCommandFields(props: {
             const secretView = entry.secret
               ? describeFormSecret(
                   secretStoreState(entry.stored),
-                  { dirty: entry.value.trim().length > 0 },
+                  // Exactly what the launch input keeps: anything but "" is
+                  // written, spaces included, since an env value may hold them.
+                  { dirty: entry.value !== "" },
                   props.commit,
                 )
               : undefined;

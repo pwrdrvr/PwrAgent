@@ -14,8 +14,10 @@ import {
   GithubConnectionFields,
   emptyGithubConnectionDraft,
 } from "../GithubConnectionForm";
+import { FormSecretInput } from "../FormSecretInput";
 import { LocalCommandFields, emptyLocalCommandDraft } from "../LocalCommandConnectionForm";
 import { SecretField } from "../SecretField";
+import { describeFormSecret, secretStoreState } from "../secret-field-state";
 
 // The rule, from PR #4076's design review, for every secret input in the
 // renderer and not only the shared Settings row: the line under the input
@@ -148,9 +150,11 @@ describe("every secret input states its stored value the same way", () => {
     );
   });
 
+  // A blank value keeps the stored secret; anything else, spaces included,
+  // is written, since an environment value may hold them.
   it("a local command's secret environment variable", () => {
     fc.assert(
-      fc.property(fc.boolean(), arbDraft, (stored, draft) => {
+      fc.property(fc.boolean(), fc.constantFrom("", " ", "fixture-token"), (stored, draft) => {
         cleanup();
         render(
           <LocalCommandFields
@@ -165,7 +169,7 @@ describe("every secret input states its stored value the same way", () => {
         );
         expectSecretRow(screen.getByLabelText("API_TOKEN value"), {
           stored,
-          draft: Boolean(draft),
+          draft: draft !== "",
         });
       }),
       { numRuns: 20 },
@@ -317,7 +321,128 @@ describe("removing a stored secret", () => {
   });
 });
 
+describe("a secret in a form that writes on its own Save", () => {
+  // The box the model provider, GitHub, MCP and Federation forms share. Remove
+  // only marks the value, so it never asks; Keep undoes the mark.
+  it("offers Remove for a stored value and Keep while it is marked", () => {
+    fc.assert(
+      fc.property(fc.boolean(), arbDraft, fc.boolean(), (stored, draft, removing) => {
+        fc.pre(!(removing && (!stored || draft)));
+        cleanup();
+        const onRemove = vi.fn();
+        render(
+          <FormSecretInput
+            label="Fixture key"
+            removing={removing}
+            value={draft}
+            view={describeFormSecret(secretStoreState(stored), { dirty: Boolean(draft), removing })}
+            onChange={() => undefined}
+            onRemove={onRemove}
+          />,
+        );
+        const input = screen.getByLabelText("Fixture key");
+        if (removing) {
+          expect(input).toBeDisabled();
+          expect(statusLine(input)).toHaveTextContent("Not removed yet. Removed when you save.");
+          fireEvent.click(screen.getByRole("button", { name: "Keep saved Fixture key" }));
+          expect(onRemove).toHaveBeenLastCalledWith(false);
+          return;
+        }
+        expectSecretRow(input, { stored, draft: Boolean(draft), removeName: "Remove saved Fixture key" });
+        const remove = screen.queryByRole("button", { name: "Remove saved Fixture key" });
+        if (remove) {
+          fireEvent.click(remove);
+          expect(onRemove).toHaveBeenLastCalledWith(true);
+        }
+      }),
+      { numRuns: 30 },
+    );
+  });
+});
+
+describe("a removal question", () => {
+  it("is dropped when the value goes away, and does not come back with a new one", () => {
+    const row = (configured: boolean) => (
+      <SecretField
+        label="Fixture key"
+        secret="telegramBotToken"
+        state={{ configured, source: configured ? "keychain" : "unset", writable: true }}
+        onClearSecret={async () => true}
+        onReplaceSecret={async () => true}
+      />
+    );
+    const view = render(row(true));
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved Fixture key" }));
+    expect(screen.getByRole("button", { name: "Keep saved Fixture key" })).toBeInTheDocument();
+    // Removed from another window, then stored again there.
+    view.rerender(row(false));
+    view.rerender(row(true));
+    expect(screen.queryByRole("button", { name: "Keep saved Fixture key" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove saved Fixture key" })).toBeInTheDocument();
+    expect(statusLine(screen.getByLabelText("Fixture key"))).toHaveTextContent(/^Saved in keychain$/);
+  });
+});
+
 describe("onboarding", () => {
+  // The buffer is filled before the live write and kept when it fails, so it
+  // is no evidence that anything reached the keychain.
+  it("does not claim a keychain write that failed", async () => {
+    let buffered = "";
+    const row = () => (
+      <SecretFieldRow
+        field={{ kind: "secret", name: "telegramBotToken", label: "Bot token" }}
+        snapshot={snapshotWithTelegramToken({ configured: false, source: "unset", writable: true })}
+        bufferedValue={buffered}
+        onBuffer={(value) => { buffered = value; }}
+        replaceSecret={async () => false}
+        clearSecret={async () => true}
+      />
+    );
+    const view = render(row());
+    const input = screen.getByLabelText("Bot token");
+    expect(statusLine(input)).toHaveTextContent(/^Not set$/);
+    fireEvent.change(input, { target: { value: "0000:AA-fixture" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    view.rerender(row());
+    expect(screen.getByText("Could not enable this provider — try again.")).toBeInTheDocument();
+    // The value stays in the box to retry, as a draft, not as a write.
+    expect(statusLine(input)).toHaveClass("is-draft");
+    expect(statusLine(input)).not.toHaveTextContent(/New value saved/);
+    // Cleared, the line says what Finish will do with the buffer.
+    fireEvent.change(input, { target: { value: "" } });
+    expect(statusLine(input)).toHaveTextContent(/^Saved in keychain when you finish setup$/);
+  });
+
+  it("removes a value it just wrote, before the snapshot reports it", async () => {
+    const clearSecret = vi.fn(async () => true);
+    let buffered = "";
+    const row = () => (
+      <SecretFieldRow
+        field={{ kind: "secret", name: "telegramBotToken", label: "Bot token" }}
+        snapshot={snapshotWithTelegramToken({ configured: false, source: "unset", writable: true })}
+        bufferedValue={buffered}
+        onBuffer={(value) => { buffered = value; }}
+        replaceSecret={async () => true}
+        clearSecret={clearSecret}
+      />
+    );
+    const view = render(row());
+    const input = screen.getByLabelText("Bot token");
+    fireEvent.change(input, { target: { value: "0000:AA-fixture" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    view.rerender(row());
+    expect(statusLine(input)).toHaveTextContent("New value saved in keychain");
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token now" }));
+    });
+    expect(clearSecret).toHaveBeenCalledWith("telegramBotToken");
+  });
+
   // Every messaging secret is written as soon as it is taken, so the runtime
   // can pair mid-setup. Any other secret waits for Finish, and must say so.
   it("says a value held for Finish is not in the keychain yet", () => {

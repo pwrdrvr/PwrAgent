@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   BONSAI_2_27B_MODEL_ID,
   CODEX_MODEL_PROVIDER_LIMIT,
@@ -22,7 +22,7 @@ import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import { formatRelativeTime } from "../navigation/thread-time";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
-import { SecretStatusLine } from "./SecretStatusLine";
+import { FormSecretInput } from "./FormSecretInput";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { describeFormSecret, secretStoreState } from "./secret-field-state";
 import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
@@ -479,7 +479,6 @@ function ProviderEditor(props: {
   const keyHelp = !props.editing?.hasApiKey && draft.imported?.needsApiKey
     ? `Codex ${draft.imported.apiKeyEnv ? `read it from $${draft.imported.apiKeyEnv}` : "sent a key"}. Keys are not copied from files, so paste it here.`
     : "Codex receives it in its environment; commands a model runs do not.";
-  const keyStatusId = useId();
   const keyView = describeFormSecret(
     secretStoreState(Boolean(props.editing?.hasApiKey)),
     { dirty: draft.apiKey.trim().length > 0, removing: draft.removeKey },
@@ -571,44 +570,17 @@ function ProviderEditor(props: {
         sub={keyHelp}
         control={
           <>
-            <div className="settings-secret settings-secret--status">
-              <input
-                aria-describedby={keyStatusId}
-                aria-label="API key"
-                autoComplete="off"
-                className="settings-input"
-                disabled={props.disabled || draft.removeKey}
-                placeholder={keyView.placeholder}
-                spellCheck={false}
-                type="password"
-                value={draft.apiKey}
-                onChange={(event) => props.onChange({ apiKey: event.currentTarget.value })}
-              />
-              {/* Marks the key for removal; Save is the confirmation, so
-                  the mark needs no second question, and Keep undoes it. */}
-              {keyView.canRemove ? (
-                <button
-                  aria-label="Remove saved API key"
-                  className="button button--ghost"
-                  disabled={props.disabled}
-                  type="button"
-                  onClick={() => props.onChange({ removeKey: true, apiKey: "" })}
-                >
-                  Remove
-                </button>
-              ) : draft.removeKey ? (
-                <button
-                  aria-label="Keep saved API key"
-                  className="button button--ghost"
-                  disabled={props.disabled}
-                  type="button"
-                  onClick={() => props.onChange({ removeKey: false })}
-                >
-                  Keep
-                </button>
-              ) : null}
-              <SecretStatusLine id={keyStatusId} view={keyView} />
-            </div>
+            {/* Remove marks the key; Save is the confirmation, so the mark
+                needs no second question, and Keep undoes it. */}
+            <FormSecretInput
+              disabled={props.disabled}
+              label="API key"
+              removing={draft.removeKey}
+              value={draft.apiKey}
+              view={keyView}
+              onChange={(apiKey) => props.onChange({ apiKey })}
+              onRemove={(removeKey) => props.onChange({ removeKey, apiKey: "" })}
+            />
             {props.canTest && testModels.length ? (
               <Select
                 aria-label="Model to test"

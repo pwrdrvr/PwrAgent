@@ -1353,6 +1353,32 @@ describe("PluginsSettings", () => {
       expect(api.listMcpConnectionTools).toHaveBeenCalledTimes(3);
     });
 
+    // The line under the box says a blank box keeps the stored token. Main
+    // trims, so spaces alone sent as a token deleted it instead.
+    it("keeps a stored IPC token when only spaces were typed", async () => {
+      const connection = managed({
+        id: "native-app", displayName: "Native app", authMode: "none",
+        serverUrl: "unix:///tmp/private/server.sock#/mcp", updatedAt: 1,
+      });
+      const api = managedApi([connection]);
+      api.listMcpConnections = vi.fn(async () => ({ connections: [connection] }));
+      api.updateMcpConnection = vi.fn(async () => ({ connectionId: connection.id, connection }));
+      await act(async () => {
+        render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      });
+      const article = (await screen.findByText("Native app", { exact: true })).closest("article")!;
+      fireEvent.click(within(article).getByRole("button", { name: "Edit" }));
+      const dialog = within(screen.getByRole("dialog", { name: "Edit connection" }));
+      const token = dialog.getByLabelText("Session bearer token");
+      fireEvent.change(token, { target: { value: "   " } });
+      expect(token).toHaveAccessibleDescription("A saved value is never shown. Leave this blank to keep one.");
+      fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+      await screen.findByText("Native app was updated.");
+      expect(api.updateMcpConnection).toHaveBeenCalledWith(
+        expect.not.objectContaining({ ipcBearerToken: expect.anything() }),
+      );
+    });
+
     it.each([
       { token: "replacement-ticket", pending: false },
       { token: "", pending: false },

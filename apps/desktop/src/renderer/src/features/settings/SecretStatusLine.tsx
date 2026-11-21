@@ -83,8 +83,16 @@ function SecretStatusMark(props: { tone: SecretFieldTone }) {
  * Forms that only mark a value for removal until their own Save do not use
  * this: Save is their confirmation, and Keep undoes the mark before it.
  */
-export function useSecretRemoveConfirm() {
+export function useSecretRemoveConfirm(
+  /**
+   * Something is stored to remove. A question left open when the value goes
+   * away (removed from another window) is dropped, so it cannot come back
+   * by itself over a value stored later.
+   */
+  removable: boolean,
+) {
   const [confirming, setConfirming] = useState(false);
+  if (confirming && !removable) setConfirming(false);
   const keepRef = useRef<HTMLButtonElement>(null);
   const removeRef = useRef<HTMLButtonElement>(null);
   // Keep unmounts the button that had focus; Remove gets it back.

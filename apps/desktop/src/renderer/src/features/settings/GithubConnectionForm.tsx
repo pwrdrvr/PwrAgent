@@ -19,7 +19,7 @@ import {
   type TestGithubMcpConnectionResponse,
 } from "@pwragent/shared/github-mcp";
 import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
-import { SecretStatusLine } from "./SecretStatusLine";
+import { FormSecretInput } from "./FormSecretInput";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { describeFormSecret, secretStoreState } from "./secret-field-state";
 
@@ -301,22 +301,13 @@ export function GithubConnectionFields(props: {
             </button>
           ) : null}
           {draft.account === "token" ? (
-            <div className="settings-secret settings-secret--status">
-              <input
-                aria-describedby={`${id}-token-status`}
-                aria-label="Personal access token"
-                autoCapitalize="off"
-                autoComplete="off"
-                className="settings-input"
-                disabled={disabled}
-                placeholder={tokenView.placeholder}
-                spellCheck={false}
-                type="password"
-                value={draft.token}
-                onChange={(event) => change({ token: event.target.value })}
-              />
-              <SecretStatusLine id={`${id}-token-status`} view={tokenView} />
-            </div>
+            <FormSecretInput
+              disabled={disabled}
+              label="Personal access token"
+              value={draft.token}
+              view={tokenView}
+              onChange={(token) => change({ token })}
+            />
           ) : null}
         </div>
       </div>

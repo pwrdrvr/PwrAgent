@@ -42,7 +42,6 @@ export function SecretField(props: {
   const [invalid, setInvalid] = useState<string | undefined>(undefined);
   const [writing, setWriting] = useState(false);
   const [saved, setSaved] = useState(false);
-  const removal = useSecretRemoveConfirm();
   const statusId = useId();
   // Blur and a Save click land together when the click moves focus out of the
   // input; state would not show the first write until the next render.
@@ -55,6 +54,10 @@ export function SecretField(props: {
     setWasConfigured(props.state.configured);
     if (!props.state.configured) setSaved(false);
   }
+  // As `describeSecretField` decides `canRemove`.
+  const removal = useSecretRemoveConfirm(
+    (props.state.configured || saved) && props.state.source !== "env",
+  );
   const view = describeSecretField(props.state, {
     dirty: value.trim().length > 0,
     saved,

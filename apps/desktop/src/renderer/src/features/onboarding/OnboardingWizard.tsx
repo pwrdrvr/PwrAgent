@@ -4495,24 +4495,38 @@ export function SecretFieldRow(props: {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [liveError, setLiveError] = useState<string | undefined>(undefined);
-  const removal = useSecretRemoveConfirm();
+  // This row's own live write succeeded. The buffer is not evidence of one:
+  // it is filled before the write and kept when the write fails.
+  const [wrote, setWrote] = useState(false);
   const statusId = useId();
   const state = readSecretState(props.snapshot, props.field.name);
   const configured = state?.configured ?? false;
+  // A value removed elsewhere stops this row's write from vouching for it.
+  const [wasConfigured, setWasConfigured] = useState(configured);
+  if (wasConfigured !== configured) {
+    setWasConfigured(configured);
+    if (!configured) setWrote(false);
+  }
   const buffered = props.bufferedValue.length > 0;
   const isRuntimeSecret = isMessagingRuntimeSecret(props.field.name);
   const dirty = value.trim().length > 0;
-  // The same words as Settings. A runtime secret was written to the keychain
-  // when it was taken; any other is held until setup finishes.
+  // The same words as Settings. A runtime secret is written to the keychain
+  // when it is taken. Anything else in the buffer, including a runtime
+  // secret whose live write failed, is written when setup finishes.
+  const saved = isRuntimeSecret && wrote;
+  const held = buffered && !saved;
+  // Onboarding removes only what it holds or what the runtime reads now.
+  const removable = (configured || saved || held)
+    && state?.source !== "env"
+    && (buffered || isRuntimeSecret);
+  const removal = useSecretRemoveConfirm(removable);
   const view = describeSecretField(state ?? secretStoreState(false), {
     dirty,
-    saved: buffered && isRuntimeSecret,
-    held: buffered && !isRuntimeSecret,
+    saved,
+    held,
     confirmingRemove: removal.confirming,
   });
-  // Onboarding removes only what it holds or what the runtime reads now.
-  const canRemove = view.canRemove && (buffered || isRuntimeSecret);
-  const confirming = removal.confirming && canRemove && !dirty;
+  const confirming = removal.confirming && removable && !dirty;
   const save = async (): Promise<void> => {
     // What is checked is what is stored: a copy often brings a newline.
     const nextValue = value.trim();
@@ -4533,6 +4547,7 @@ export function SecretFieldRow(props: {
       setBusy(true);
       try {
         const ok = await props.replaceSecret(props.field.name, nextValue);
+        setWrote(ok);
         if (!ok) {
           setLiveError("Could not enable this provider — try again.");
           return;
@@ -4546,7 +4561,10 @@ export function SecretFieldRow(props: {
   const clear = async (): Promise<void> => {
     if (busy) return;
     props.onBuffer("");
-    if (isRuntimeSecret && configured) {
+    setWrote(false);
+    // A value this row just wrote is in the keychain before the snapshot
+    // says so, and must not survive a confirmed Remove.
+    if (isRuntimeSecret && (configured || wrote)) {
       setBusy(true);
       setLiveError(undefined);
       try {
@@ -4632,7 +4650,7 @@ export function SecretFieldRow(props: {
               Keep
             </button>
           </>
-        ) : canRemove ? (
+        ) : removable ? (
           <button
             ref={removal.removeRef}
             aria-label={`Remove saved ${props.field.label}`}
