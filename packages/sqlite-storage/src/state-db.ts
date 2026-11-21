@@ -39,8 +39,9 @@ import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
+import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 
-export const CURRENT_STATE_DB_USER_VERSION = 82;
+export const CURRENT_STATE_DB_USER_VERSION = 83;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2206,6 +2207,21 @@ export class StateDb {
           if ((db.pragma("user_version", { simple: true }) as number) >= 82) return;
           ensureThreadSearchIdentityIndexes(db);
           db.pragma("user_version = 82");
+        }).immediate();
+      }
+      // Other builds may already have stamped v83. The column and its three
+      // triggers are installed atomically, so the column identifies this migration.
+      const pricingSummaryColumns = readTableInfo(db, "thread_pricing_summaries");
+      const pricingDeltasMissing = pricingSummaryColumns.length > 0
+        && !pricingSummaryColumns.some((column) => column.name === "ledger_delta_ready");
+      if ((db.pragma("user_version", { simple: true }) as number) < 83 || pricingDeltasMissing) {
+        db.transaction(() => {
+          // Install capture only. Legacy summaries become delta-ready from
+          // the existing scoped summary read, inside a normal ledger write.
+          ensureThreadPricingSummaryDeltas(db);
+          if ((db.pragma("user_version", { simple: true }) as number) < 83) {
+            db.pragma("user_version = 83");
+          }
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);

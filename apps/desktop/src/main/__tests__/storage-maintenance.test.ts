@@ -210,6 +210,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // Each change separately budgeted 360 frames; their combined schema requires 362.
     // The WITHOUT ROWID sub-agent dismissal table adds one VACUUM page.
     // The six operator-request scope indexes add six VACUUM frames.
+    // The pricing summary triggers add one more schema page.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));
