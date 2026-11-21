@@ -42402,11 +42402,8 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* Thread-level gate result, above the turn rows. It borrows the pricing
-   summary card wholesale — same shell, same eyebrow, same key/value rows, and
-   the section action the Tool calls tab already uses — so the two read as one
-   stack rather than as a summary and a widget. The figure and its percentage
-   wear the verdict; before pricing lands there is no verdict, and the figure
-   keeps the card's own text color. */
+   summary card shell, eyebrow and key/value rows. The figure and its
+   percentage use the verdict color when pricing is available. */
 .token-miser-summary-card__figure {
   color: var(--savings-verdict, var(--text-primary));
 }
@@ -42511,45 +42508,18 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.35;
 }
 
-.tool-call-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.tool-call-groups h4 {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.tool-call-alert,
-.tool-call-instance--noisy {
-  border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
-  box-shadow: inset 2px 0 0 0 var(--status-warning);
-}
-
-.tool-calls-panel__heading {
+.context-panel__section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.tool-calls-panel__heading h3 {
+.context-panel__section-heading h3 {
   margin: 0;
 }
 
-/* A rail heading's action, at rail scale. The shared `.button` is 34px at
-   13px, which outweighed the 14px heading it sat beside; these are the same
-   measurements as `.tool-call-row__details`, the other in-rail control. Both
-   entry points to the tool-output explorer wear this class, so the Pricing
-   card's action and the Tool calls heading's action are one control with two
-   destinations. */
+/* Compact actions for rail headings and summary cards. */
 .context-panel__section-action {
   display: inline-flex;
   flex: 0 0 auto;
@@ -42891,88 +42861,6 @@ button.pricing-token-miser__folded:focus-visible {
 
 .context-panel__section-action svg {
   flex: 0 0 auto;
-}
-
-.tool-call-alert .rail-card__title {
-  color: var(--text-primary);
-}
-
-.tool-call-row__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.tool-call-row__header > :first-child {
-  min-width: 0;
-}
-
-.tool-call-row__details {
-  flex: 0 0 auto;
-  min-height: 24px;
-  padding: 2px 7px;
-  font-size: 11px;
-}
-
-.tool-call-instance-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 10px 0 0;
-  padding: 0;
-  border-top: 1px solid var(--border-subtle);
-  list-style: none;
-}
-
-.tool-call-instances__status {
-  margin: 10px 0 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.tool-call-instance {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.tool-call-instance:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
-}
-
-.tool-call-instance__command {
-  margin: 0;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.tool-call-instance__detail {
-  margin-top: 4px;
-}
-
-.tool-call-instance__detail .transcript-command {
-  margin: 0;
-}
-
-.tool-call-instance__detail-status {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.tool-call-instances__empty {
-  margin-top: 10px;
 }
 
 /* The in-progress turn: a calm accent left-stripe + slightly firmer border,

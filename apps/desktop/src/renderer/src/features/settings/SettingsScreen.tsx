@@ -1234,11 +1234,6 @@ function SettingsSectionBody(props: {
             experimental: { diffCondensation: { enabled } },
           });
         }}
-        onThreadToolAccountingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { threadToolAccounting: enabled },
-          });
-        }}
         onTokenMiserEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserEnabled: enabled },

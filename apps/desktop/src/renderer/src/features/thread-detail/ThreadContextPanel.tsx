@@ -18,11 +18,9 @@ import {
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  AppServerThreadEntry,
   CodexEnvironmentActionRun,
   ThreadCompactionRecord,
-  ThreadToolAccounting,
-  ThreadToolInvocationRecord,
+  ThreadTokenMiserAccounting,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
 import type { EditGroupCommitState, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -49,7 +47,6 @@ import {
   ResearchIcon,
   TerminalIcon,
   TodoIcon,
-  ToolCallsIcon,
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -78,7 +75,6 @@ import { WaitingForPanel } from "./context-panels/WaitingForPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
-import { ToolCallsPanel } from "./context-panels/ToolCallsPanel";
 import { DecisionsPanel } from "./context-panels/DecisionsPanel";
 import { decisionsRailHasContent } from "./context-panels/decisions-format";
 import { useDecisionsRail } from "./context-panels/useDecisionsRail";
@@ -114,7 +110,6 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
-  { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
   { id: "decisions", label: "Decisions", Icon: DecisionsIcon },
   { id: "actions", label: "Actions", Icon: TerminalIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
@@ -188,11 +183,7 @@ type ThreadContextPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
-  toolAccounting?: ThreadToolAccounting;
-  toolCallEntries?: AppServerThreadEntry[];
-  loadingToolCallDetailItemId?: string;
-  onRequestToolCallDetails?: (invocation: ThreadToolInvocationRecord) => void;
-  onAnalyzeToolHistory?: () => void;
+  tokenMiserAccounting?: ThreadTokenMiserAccounting;
   onOpenToolOutputIncidentExplorer?: (
     lens?: ToolOutputIncidentExplorerLens,
   ) => void;
@@ -201,7 +192,6 @@ type ThreadContextPanelProps = {
     usd: boolean;
   };
   threadPricingSummaryEnabled?: boolean;
-  threadToolAccountingEnabled?: boolean;
   researchEnabled?: boolean;
   /** Absent on the new-thread launchpad, where only provider context applies. */
   thread?: NavigationPresentedThread;
@@ -248,7 +238,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     onActionRunsDockChange,
     onShowActionRunsAboveComposer,
   } = props;
-  const threadBackend = props.thread?.source;
   const openIncidentExplorer = useCallback(() => {
     onOpenToolOutputIncidentExplorer?.();
   }, [onOpenToolOutputIncidentExplorer]);
@@ -274,17 +263,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   // The Waiting for tab counts every pending wake, so a waiting thread says
   // so before the tab opens. Unknown (an older owner) draws no badge.
   const dependencyContext = useThreadDependencyIndicatorsContext();
-  const toolCallsFederationTarget = props.thread?.federation?.ref.target
-    ?? readRendererFederationTarget();
-  const toolCallsInstanceId = toolCallsFederationTarget?.scope === "remote"
-    ? toolCallsFederationTarget.instanceId
-    : undefined;
-  const threadLinkSource = useMemo(() =>
-    threadBackend && toolCallsInstanceId
-      ? { backend: threadBackend, instanceId: toolCallsInstanceId }
-      : undefined,
-    [threadBackend, toolCallsInstanceId],
-  );
   const openTokenMiserSavings = useCallback(() => {
     onOpenToolOutputIncidentExplorer?.("savings");
   }, [onOpenToolOutputIncidentExplorer]);
@@ -325,7 +303,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
-  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   // Research is for every local backend; a federated thread's runs live on its owning instance.
   const researchEnabled = props.researchEnabled === true && Boolean(props.thread) && !props.thread?.federation?.ref.target;
   // The tab shows once the thread can see a decision or has run a batch.
@@ -358,8 +335,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : "providers"
     : props.activeTab === "pricing" && !threadPricingSummaryEnabled
       ? "info"
-      : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
-        ? "info"
       : props.activeTab === "todos" && !props.todos
         ? "info"
       : props.activeTab === "research" && !researchEnabled
@@ -379,13 +354,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     subAgentLens,
     desktopApi: props.desktopApi,
     thread: props.thread,
-    resource: open && activeTab === "pricing" ? "pricing" : open && activeTab === "tool-calls" ? "tools" : open && activeTab === "subagents" ? "subagents" : undefined,
+    resource: open && (activeTab === "pricing" || activeTab === "subagents")
+      ? activeTab
+      : undefined,
   });
   const visibleTabs = CONTEXT_TABS.filter((tab) =>
     props.thread
       ? tab.id !== "connections"
         && (tab.id !== "pricing" || threadPricingSummaryEnabled)
-        && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
         && (tab.id !== "todos" || props.todos !== undefined)
         && (tab.id !== "research" || researchEnabled)
         && (tab.id !== "decisions" || decisionsVisible)
@@ -910,6 +886,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             backends={props.backends}
             platform={props.platform}
             desktopApi={props.desktopApi}
+            onOpenToolOutputIncidentExplorer={
+              onOpenToolOutputIncidentExplorer ? openIncidentExplorer : undefined
+            }
             onRefreshNavigation={props.onRefreshNavigation}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
@@ -975,38 +954,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             }
             onScrollToTurn={props.onScrollToTurn}
             subAgents={props.thread.subAgents}
-            tokenMiserAccounting={props.toolAccounting?.tokenMiser}
+            tokenMiserAccounting={props.tokenMiserAccounting}
             threadReasoningEffort={props.thread.reasoningEffort}
             turnFailures={props.thread.turnFailureLog}
           />
         );
-      case "tool-calls": {
-        if (!props.thread) return null;
-        return (
-          <ToolCallsPanel
-            desktopApi={props.desktopApi}
-            totals={displayResource.data?.toolTotals}
-            entries={props.toolCallEntries}
-            loadingDetailItemId={props.loadingToolCallDetailItemId}
-            onAnalyzeHistory={props.onAnalyzeToolHistory}
-            /* No lens: this button opens the window by the window's own name,
-               so a thread that gated still gets the opening lens its
-               accounting chooses. Only the Pricing rail's button, which names
-               a lens inside the window, asks for one. */
-            onOpenIncidentExplorer={
-              props.onOpenToolOutputIncidentExplorer
-                ? openIncidentExplorer
-                : undefined
-            }
-            onRequestInvocationDetails={props.onRequestToolCallDetails}
-            onScrollToTurn={props.onScrollToTurn}
-            threadLinkSource={threadLinkSource}
-            toolAccounting={displayResource.data?.toolsPage ?? props.toolAccounting}
-            onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
-            loading={displayResource.loading}
-          />
-        );
-      }
       case "decisions":
         if (!props.thread) return null;
         return (

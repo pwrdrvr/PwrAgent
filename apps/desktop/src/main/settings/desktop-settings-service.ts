@@ -1274,10 +1274,6 @@ export class DesktopSettingsService {
           config.experimental?.tokenMiserDefaultEnabled,
           true,
         ),
-        threadToolAccounting: this.resolveConfigBoolean(
-          config.experimental?.threadToolAccounting,
-          false,
-        ),
         codexToolDiscovery: this.resolveConfigBoolean(
           config.experimental?.codexToolDiscovery,
           true,

@@ -146,10 +146,6 @@ describe("desktop settings contracts", () => {
           value: true,
           source: "default",
         },
-        threadToolAccounting: {
-          value: false,
-          source: "default",
-        },
         codexDefaultModeRequestUserInput: {
           value: false,
           source: "default",

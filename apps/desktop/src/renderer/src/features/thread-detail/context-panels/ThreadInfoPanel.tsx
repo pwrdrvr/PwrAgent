@@ -3,6 +3,7 @@ import type { AgentMemoryArgs } from "@pwragent/shared/contracts/agent-memory";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
+import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { formatOwnerProviderLabel } from "../../../lib/thread-provider-label";
@@ -27,6 +28,7 @@ type ThreadInfoPanelProps = {
   platform?: string;
   desktopApi?: DesktopApi;
   initialLoadDurationMs?: number;
+  onOpenToolOutputIncidentExplorer?: () => void;
   onRefreshNavigation?: () => Promise<void>;
   showTooltip: ShowRailTooltip;
   hideTooltip: HideRailTooltip;
@@ -152,7 +154,19 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
       </section>
 
       <section className="context-panel__section">
-        <h3>Execution context</h3>
+        <div className="context-panel__section-heading">
+          <h3>Execution context</h3>
+          {props.onOpenToolOutputIncidentExplorer ? (
+            <button
+              className="context-panel__section-action"
+              onClick={props.onOpenToolOutputIncidentExplorer}
+              type="button"
+            >
+              <PopoutIcon size={11} aria-hidden="true" />
+              Tool Output Incidents
+            </button>
+          ) : null}
+        </div>
         <dl className="context-grid">
           <div>
             <dt>Backend</dt>

@@ -7,12 +7,9 @@ import type { AgentEvent, StartReviewRequest } from "@pwragent/shared/contracts/
 import type {
   AppServerBackendKind,
   AppServerNotification,
-  AppServerReadThreadRequest,
-  AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerPendingRequestNotification,
-  ThreadToolAccounting,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { MessagingPlatformStatus } from "@pwragent/shared/contracts/messaging";
@@ -22,7 +19,6 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
-import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
 import { SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
@@ -1853,160 +1849,6 @@ describe("ThreadView", () => {
     await waitFor(() => {
       expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
     });
-  });
-
-  it("loads historical Codex tool output directly despite a same-turn usage overlay", async () => {
-    const targetTime = 1_800_000_000_000;
-    const loadOlder = vi.fn();
-    const recentEntries: AppServerThreadEntry[] = [
-      {
-        type: "activity",
-        id: "live-turn-usage-turn-target",
-        createdAt: targetTime,
-        details: [],
-        status: "completed",
-        summary: "Turn usage: 1,000 uncached in · 2,000 cached · 100 out",
-        turn: {
-          id: "turn-target",
-          status: "completed",
-          completedAt: targetTime,
-        },
-      },
-      ...Array.from({ length: 5 }, (_, index) => ({
-        type: "message" as const,
-        id: `recent-message-${index}`,
-        role: "assistant" as const,
-        text: `Recent history ${index}`,
-        turn: {
-          id: `turn-recent-${index}`,
-          status: "completed" as const,
-          completedAt: targetTime + index + 1,
-        },
-      })),
-    ];
-    const selectedThread = buildTimestampTargetThread(
-      "thread-tool-history",
-      "Historical tool output",
-    );
-    const toolAccounting: ThreadToolAccounting = {
-      alerts: [],
-      invocations: [
-        {
-          backend: "codex",
-          category: "shell",
-          debugLines: 0,
-          errorLines: 0,
-          estimatedOutputTokens: 50,
-          infoLines: 2,
-          invocationId: "invocation-old-1",
-          itemId: "tool-old-1",
-          noisy: false,
-          normalizedCommand: "old historical command",
-          observedAt: targetTime,
-          outputChars: 200,
-          outputLines: 2,
-          outputTruncated: false,
-          status: "completed",
-          threadId: selectedThread.id,
-          toolName: "commandExecution",
-          turnId: "turn-target",
-          updatedAt: targetTime,
-          warningLines: 0,
-        },
-      ],
-      summaries: [
-        {
-          category: "shell",
-          debugLines: 0,
-          errorLines: 0,
-          estimatedOutputTokens: 50,
-          infoLines: 2,
-          invocationCount: 1,
-          lastObservedAt: targetTime,
-          noisyInvocationCount: 0,
-          outputChars: 200,
-          outputLines: 2,
-          toolName: "commandExecution",
-          warningLines: 0,
-        },
-      ],
-    };
-
-    const readThread = vi.fn(async (request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> => ({
-      backend: "codex",
-      threadId: selectedThread.id,
-      fetchedAt: targetTime,
-      replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
-      ...(request.display?.resource === "activity" ? {
-        toolInvocationDetails: {
-          turnId: "turn-target",
-          itemId: "tool-old-1",
-          details: [{
-            id: "tool-old-1-1",
-            kind: "command",
-            label: "old historical command",
-            command: {
-              displayCommand: "old historical command",
-              rawCommand: "/bin/zsh -lc 'old historical command'",
-              output: "historical captured output",
-              exitCode: 0,
-            },
-          }],
-        },
-      } : {
-        display: { pricing: buildThreadPricingDisplay({}), revision: "tools-1", toolsPage: toolAccounting },
-      }),
-    }));
-    const { container } = render(
-      <ThreadView
-        activeContextTab="tool-calls"
-        addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
-        clearPendingRequest={() => undefined}
-        composerDisabled={false}
-        contextRailPinned
-        desktopApi={{ readThread }}
-        loading={false}
-        loadingMore={false}
-        messageCount={recentEntries.length}
-        onLoadOlder={loadOlder}
-        removeOptimisticMessage={(_id) => undefined}
-        selectedThread={selectedThread}
-        skills={[]}
-        threadToolAccountingEnabled
-        toolAccounting={toolAccounting}
-        transcriptEntries={recentEntries}
-        transcriptPagination={{
-          supportsPagination: true,
-          hasPreviousPage: true,
-          previousCursor: "cursor-1",
-        }}
-      />,
-    );
-    const transcriptRows = () => Array.from(container.querySelectorAll(".transcript-list [data-entry-id]"), (row) => ({
-      id: row.getAttribute("data-entry-id"), turnId: row.getAttribute("data-turn-id"),
-      turnTime: row.getAttribute("data-turn-time"), text: row.textContent,
-    }));
-    const summaryDetails = await screen.findByRole("button", { name: "Details" });
-    const transcriptBefore = transcriptRows();
-
-    fireEvent.click(summaryDetails);
-    const instances = screen.getByRole("list", { name: "Command instances" });
-    fireEvent.click(within(instances).getByRole("button", { name: "Details" }));
-
-    expect(screen.getByText("Loading captured output…")).toBeInTheDocument();
-    expect(await screen.findByText(/historical captured output/)).toBeInTheDocument();
-    expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
-    expect(readThread.mock.calls.filter(([request]) => request.display?.resource === "activity").map(([request]) => request))
-      .toEqual([{
-        backend: "codex", threadId: selectedThread.id, viewOnly: true,
-        display: { resource: "activity", activity: {
-          turnId: "turn-target", entryId: "activity-tool-old-1", invocationItemId: "tool-old-1",
-        } },
-      }]);
-    expect(loadOlder).not.toHaveBeenCalled();
-    expect(transcriptBefore.length).toBeGreaterThan(0);
-    expect(transcriptRows()).toEqual(transcriptBefore);
   });
 
   it("pages manual find through hidden in-memory transcript history", async () => {

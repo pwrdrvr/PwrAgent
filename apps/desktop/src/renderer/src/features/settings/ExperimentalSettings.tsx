@@ -24,11 +24,6 @@ const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   source: "default" as const,
 };
 
-const DEFAULT_THREAD_TOOL_ACCOUNTING = {
-  value: false,
-  source: "default" as const,
-};
-
 const DEFAULT_TOKEN_MISER_ENABLED = {
   value: false,
   source: "default" as const,
@@ -98,7 +93,6 @@ export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
-  onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDiagnosticsEnabledChange: (enabled: boolean) => Promise<void>;
@@ -118,9 +112,6 @@ export function ExperimentalSettings(props: {
     ?? { value: true, source: "default" as const };
   const researchEnabled = props.snapshot.experimental.researchEnabled
     ?? { value: false, source: "default" as const };
-  const threadToolAccounting =
-    props.snapshot.experimental.threadToolAccounting ??
-    DEFAULT_THREAD_TOOL_ACCOUNTING;
   const tokenMiserEnabled =
     props.snapshot.experimental.tokenMiserEnabled ??
     DEFAULT_TOKEN_MISER_ENABLED;
@@ -355,28 +346,6 @@ export function ExperimentalSettings(props: {
               }
             />
           ) : null}
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="Experimental"
-        title="Tool Call Tracking"
-        description="Show tool-call volume, command instances, output, and replay-risk history in a dedicated thread panel. Safety notices remain active while this is off."
-        chip={threadToolAccounting.value ? "On" : "Off"}
-        chipKind={threadToolAccounting.value ? "ok" : "default"}
-      >
-        <div className="settings-fields">
-          <ToggleField
-            checked={threadToolAccounting.value}
-            disabled={props.saving}
-            label="Display tool call tracking"
-            sub="Show the experimental Tool calls tab in the thread context rail."
-            help="Collection stays on either way; this only controls the operator-facing tab."
-            source={sourceBadge(threadToolAccounting)}
-            onChange={(enabled) => {
-              return props.onThreadToolAccountingChange(enabled);
-            }}
-          />
         </div>
       </SettingsSection>
 

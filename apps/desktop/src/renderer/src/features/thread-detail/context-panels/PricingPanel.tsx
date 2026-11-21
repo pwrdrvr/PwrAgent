@@ -93,12 +93,7 @@ type PricingPanelProps = {
   loading?: boolean;
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
-  /**
-   * Opens the Explorer on its savings lens. The Pricing rail is where an
-   * operator asks what a thread cost, so it is where the full savings
-   * breakdown has to be reachable — until now that window could only be
-   * opened from Tool calls, a tab the tool-accounting experiment gates off.
-   */
+  /** Opens the explorer directly to the Token Miser savings lens. */
   onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {

@@ -12,8 +12,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
-  AppServerThreadEntry,
-  ThreadToolAccounting,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
@@ -23,7 +21,7 @@ import {
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
-import type { ContextTabId } from "../context-panels/context-tab";
+import { DEFAULT_CONTEXT_TAB, isContextTabId, type ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
 import {
   CODEX_AGENT_THREAD_CHANGE_NOTE,
@@ -202,14 +200,11 @@ type PanelOverrides = Partial<
     | "editedFileGroups"
     | "editedFilesDock"
     | "onEditedFilesDockChange"
-    | "onAnalyzeToolHistory"
     | "onOpenToolOutputIncidentExplorer"
     | "pricing"
-    | "toolAccounting"
-    | "toolCallEntries"
+    | "tokenMiserAccounting"
     | "pricingDisplayOptions"
     | "threadPricingSummaryEnabled"
-    | "threadToolAccountingEnabled"
     | "researchEnabled"
   >
 >;
@@ -931,240 +926,29 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 
-  it("renders tool call groups and full command output in a dedicated tab", () => {
-    const toolAccounting: ThreadToolAccounting = {
-      alerts: [
-        {
-          alertId: "alert-1",
-          averageIntervalMs: 30_000,
-          backend: "codex",
-          createdAt: 1_800_000_060_000,
-          estimatedOutputTokens: 6_000,
-          firstObservedAt: 1_800_000_000_000,
-          invocationCount: 3,
-          kind: "noisy-polling",
-          lastObservedAt: 1_800_000_060_000,
-          message:
-            "Repeated write_stdin polling on session 40500 produced 24,000 chars (~6,000 output tokens) across 3 checks.",
-          sessionId: "40500",
-          severity: "warning",
-          suggestedPrompt: "Use create_monitor_delegation.",
-          threadId: "thread-1",
-          toolName: "write_stdin",
-          totalOutputChars: 24_000,
-          updatedAt: 1_800_000_060_000,
-        },
-      ],
-      invocations: [
-        {
-          backend: "codex",
-          category: "polling",
-          debugLines: 0,
-          errorLines: 1,
-          estimatedOutputTokens: 3_000,
-          infoLines: 120,
-          invocationId: "tool-1",
-          itemId: "tool-1",
-          noisy: true,
-          normalizedCommand: "poll session 40500",
-          observedAt: 1_800_000_060_000,
-          outputChars: 12_000,
-          outputLines: 120,
-          outputTruncated: false,
-          sessionId: "40500",
-          status: "completed",
-          threadId: "thread-1",
-          toolName: "write_stdin",
-          turnId: "turn-1",
-          updatedAt: 1_800_000_060_000,
-          warningLines: 2,
-        },
-      ],
-      summaries: [
-        {
-          category: "polling",
-          debugLines: 0,
-          errorLines: 1,
-          estimatedOutputTokens: 6_000,
-          infoLines: 240,
-          invocationCount: 3,
-          lastObservedAt: 1_800_000_060_000,
-          noisyInvocationCount: 3,
-          outputChars: 24_000,
-          outputLines: 240,
-          toolName: "write_stdin",
-          warningLines: 4,
-        },
-      ],
-    };
-    const toolCallEntries: AppServerThreadEntry[] = [
-      {
-        type: "activity",
-        id: "activity-tool-1",
-        summary: "Ran 1 command",
-        details: [
-          {
-            id: "tool-1-1",
-            kind: "command",
-            label: "poll session 40500",
-            status: "completed",
-            command: {
-              displayCommand: "poll session 40500",
-              rawCommand: "write_stdin --session 40500 --yield-time-ms 30000",
-              output: "first line\nfull captured output",
-              exitCode: 0,
-            },
-          },
-        ],
-      },
-    ];
-
+  it("falls back to Thread info for a saved Tool calls tab", () => {
+    const savedTab: unknown = "tool-calls";
+    expect(isContextTabId(savedTab)).toBe(false);
     renderPanel({
-      activeTab: "tool-calls",
+      activeTab: isContextTabId(savedTab) ? savedTab : DEFAULT_CONTEXT_TAB,
       pinned: true,
-      threadToolAccountingEnabled: true,
-      toolAccounting,
-      toolCallEntries,
     });
 
-    expect(screen.getByRole("heading", { level: 3, name: "Tool calls" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
-    expect(screen.getByText("Tool output")).toBeInTheDocument();
-    expect(screen.getByText("3 invocations")).toBeInTheDocument();
-    expect(screen.getByText("6k est. tokens")).toBeInTheDocument();
-    expect(screen.getByText("Diagnostics")).toBeInTheDocument();
-    expect(screen.getByText("Warning-like lines")).toBeInTheDocument();
-    expect(screen.getByText("Error-like lines")).toBeInTheDocument();
-    expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
-    expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
-    expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
-    expect(screen.queryByText("poll session 40500")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
-    expect(screen.getByText("poll session 40500")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
-
-    expect(
-      screen.getByText("$ write_stdin --session 40500 --yield-time-ms 30000"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/full captured output/)).toBeInTheDocument();
-    expect(screen.getAllByText(/6,000/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("tab", { name: "Thread info" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Tool calls" })).not.toBeInTheDocument();
   });
 
-  it("matches ACP transcript command details to their accounting item", () => {
-    const toolAccounting: ThreadToolAccounting = {
-      alerts: [],
-      invocations: [
-        {
-          backend: "acp:grok",
-          category: "search",
-          debugLines: 0,
-          errorLines: 0,
-          estimatedOutputTokens: 25,
-          infoLines: 1,
-          invocationId: "invocation-acp-1",
-          itemId: "tool-acp-1",
-          noisy: false,
-          normalizedCommand: "search source tree",
-          observedAt: 1_800_000_060_000,
-          outputChars: 100,
-          outputLines: 1,
-          outputTruncated: false,
-          status: "completed",
-          threadId: "thread-1",
-          toolName: "code_search",
-          turnId: "turn-1",
-          updatedAt: 1_800_000_060_000,
-          warningLines: 0,
-        },
-      ],
-      summaries: [
-        {
-          category: "search",
-          debugLines: 0,
-          errorLines: 0,
-          estimatedOutputTokens: 25,
-          infoLines: 1,
-          invocationCount: 1,
-          lastObservedAt: 1_800_000_060_000,
-          noisyInvocationCount: 0,
-          outputChars: 100,
-          outputLines: 1,
-          toolName: "code_search",
-          warningLines: 0,
-        },
-      ],
-    };
-    const toolCallEntries: AppServerThreadEntry[] = [
-      {
-        type: "activity",
-        id: "tool-acp-1",
-        summary: "Searched code",
-        details: [
-          {
-            id: "tool-acp-1:detail",
-            kind: "read",
-            label: "Searched code",
-            command: {
-              displayCommand: "search source tree",
-              source: "tool",
-              output: "ACP captured output",
-              exitCode: 0,
-            },
-          },
-        ],
-      },
-    ];
-
-    renderPanel({
-      activeTab: "tool-calls",
-      pinned: true,
-      threadToolAccountingEnabled: true,
-      toolAccounting,
-      toolCallEntries,
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
-    const instances = screen.getByRole("list", { name: "Command instances" });
-    fireEvent.click(within(instances).getByRole("button", { name: "Details" }));
-
-    expect(screen.getByText(/ACP captured output/)).toBeInTheDocument();
-    expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
-  });
-
-  it("offers history analysis and the explorer from an empty Tool Calls panel", () => {
-    const onAnalyzeToolHistory = vi.fn();
+  it.each([false, true])("opens the incident explorer from Thread info with pricing enabled=%s", (pricingEnabled) => {
     const onOpenToolOutputIncidentExplorer = vi.fn();
     renderPanel({
-      activeTab: "tool-calls",
-      onAnalyzeToolHistory,
+      activeTab: "info",
       onOpenToolOutputIncidentExplorer,
       pinned: true,
-      threadToolAccountingEnabled: true,
+      threadPricingSummaryEnabled: pricingEnabled,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Analyze history" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Tool Output Incidents" }),
-    );
-    expect(onAnalyzeToolHistory).toHaveBeenCalledOnce();
-    /* No lens: the button opens the window by the window's own name and
-       leaves the opening lens to the thread's accounting. */
-    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledWith();
-  });
-
-  it("hides the Tool calls tab while its experimental flag is off", () => {
-    renderPanel({
-      activeTab: "tool-calls",
-      pinned: true,
-      threadToolAccountingEnabled: false,
-    });
-
-    expect(screen.queryByRole("tab", { name: "Tool calls" })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { level: 3, name: "Tool calls" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Tool Output Incidents" }));
+    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledExactlyOnceWith();
   });
 
   it("keeps a failed turn's price and shows its usage-limit error on the pricing card", () => {
@@ -1479,10 +1263,6 @@ describe("ThreadContextPanel", () => {
   });
 
   it("summarizes Token Miser above the turn rows on the Pricing tab", () => {
-    /* The savings window used to be reachable only from Tool calls, a tab the
-       tool-accounting experiment hides by default — so this card is built from
-       the per-gate records the Pricing rail always has, and is asserted here
-       with that experiment off. */
     const onOpenToolOutputIncidentExplorer = vi.fn();
     const gateSubAgents: ThreadSubAgentSummary[] = [
       {
@@ -1597,12 +1377,8 @@ describe("ThreadContextPanel", () => {
       },
       thread: { ...baseThread, subAgents: gateSubAgents },
       threadPricingSummaryEnabled: true,
-      threadToolAccountingEnabled: false,
     });
 
-    expect(
-      screen.queryByRole("tab", { name: "Tool calls" }),
-    ).not.toBeInTheDocument();
     const card = container.querySelector(".token-miser-summary-card");
     expect(card).not.toBeNull();
     const miser = within(card as HTMLElement);
@@ -1660,7 +1436,6 @@ describe("ThreadContextPanel", () => {
       pricing: { lines: [], summaries: [] },
       thread: { ...baseThread, subAgents: gateSubAgents },
       threadPricingSummaryEnabled: true,
-      threadToolAccountingEnabled: false,
     });
 
     const card = container.querySelector(".token-miser-summary-card");
@@ -3413,27 +3188,22 @@ describe("ThreadContextPanel", () => {
         ],
         summaries: [],
       },
-      toolAccounting: {
-        alerts: [],
-        invocations: [],
-        summaries: [],
-        tokenMiser: {
-          interceptionCount: 3,
-          passThroughCount: 2,
-          policyPassThroughCount: 1,
-          helperPassThroughCount: 1,
-          helperDecisionCount: 2,
-          originalCharacters: 120_000,
-          baselineParentTokens: 30_000,
-          replacementTokens: 20_300,
-          retrievedTokens: 0,
-          estimatedParentTokensSaved: 9_700,
-          interceptions: [
-            interception("summary", "summarized", "helper"),
-            interception("helper-pass", "passed_through", "helper"),
-            interception("policy-pass", "passed_through", "policy"),
-          ],
-        },
+      tokenMiserAccounting: {
+        interceptionCount: 3,
+        passThroughCount: 2,
+        policyPassThroughCount: 1,
+        helperPassThroughCount: 1,
+        helperDecisionCount: 2,
+        originalCharacters: 120_000,
+        baselineParentTokens: 30_000,
+        replacementTokens: 20_300,
+        retrievedTokens: 0,
+        estimatedParentTokensSaved: 9_700,
+        interceptions: [
+          interception("summary", "summarized", "helper"),
+          interception("helper-pass", "passed_through", "helper"),
+          interception("policy-pass", "passed_through", "policy"),
+        ],
       },
       threadPricingSummaryEnabled: true,
     });
@@ -3539,27 +3309,22 @@ describe("ThreadContextPanel", () => {
         ],
         summaries: [],
       },
-      toolAccounting: {
-        alerts: [],
-        invocations: [],
-        summaries: [],
-        tokenMiser: {
-          interceptionCount: 3,
-          passThroughCount: 3,
-          policyPassThroughCount: 2,
-          helperPassThroughCount: 1,
-          helperDecisionCount: 1,
-          originalCharacters: 120_000,
-          baselineParentTokens: 30_000,
-          replacementTokens: 900,
-          retrievedTokens: 0,
-          estimatedParentTokensSaved: 0,
-          interceptions: [
-            interception("pending-a", "helper"),
-            interception("pending-b", "policy"),
-            interception("pending-c", "policy"),
-          ],
-        },
+      tokenMiserAccounting: {
+        interceptionCount: 3,
+        passThroughCount: 3,
+        policyPassThroughCount: 2,
+        helperPassThroughCount: 1,
+        helperDecisionCount: 1,
+        originalCharacters: 120_000,
+        baselineParentTokens: 30_000,
+        replacementTokens: 900,
+        retrievedTokens: 0,
+        estimatedParentTokensSaved: 0,
+        interceptions: [
+          interception("pending-a", "helper"),
+          interception("pending-b", "policy"),
+          interception("pending-c", "policy"),
+        ],
       },
       threadPricingSummaryEnabled: true,
     });
@@ -5136,14 +4901,14 @@ describe("ThreadContextPanel Decisions tab", () => {
   };
 
   // Rule: the tab shows only once the thread can see a decision or has run
-  // a batch, sits right after Tool calls, and a saved Decisions tab on a
+  // a batch, sits right after Pricing, and a saved Decisions tab on a
   // thread with neither falls back to Thread info.
-  it("shows only for a thread with a decision or a batch, after Tool calls", async () => {
+  it("shows only for a thread with a decision or a batch, after Pricing", async () => {
     const readDecisionsRail = vi.fn(async () => railWithDecision);
-    renderPanel({ threadToolAccountingEnabled: true, desktopApi: { readDecisionsRail } });
+    renderPanel({ desktopApi: { readDecisionsRail } });
     const tab = await screen.findByRole("tab", { name: "Decisions" });
     const names = screen.getAllByRole("tab").map((element) => element.getAttribute("aria-label") ?? element.textContent);
-    expect(names.indexOf("Decisions")).toBe(names.indexOf("Tool calls") + 1);
+    expect(names.indexOf("Decisions")).toBe(names.indexOf("Pricing") + 1);
     expect(tab).toBeInTheDocument();
     expect(readDecisionsRail).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" });
   });

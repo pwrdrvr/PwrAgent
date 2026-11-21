@@ -244,10 +244,6 @@ function createSnapshot(
         value: true,
         source: "default",
       },
-      threadToolAccounting: {
-        value: false,
-        source: "default",
-      },
       codexDefaultModeRequestUserInput: {
         value: false,
         source: "default",
@@ -2578,8 +2574,8 @@ describe("SettingsScreen", () => {
     });
 
     expect(
-      getLabeledSwitch("Display tool call tracking"),
-    ).not.toBeDisabled();
+      screen.queryByRole("heading", { name: "Tool Call Tracking" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Thread pricing" }),
     ).not.toBeInTheDocument();
@@ -3177,7 +3173,6 @@ describe("SettingsScreen", () => {
           threadPricingSummary: { value: true, source: "config" },
           threadPricingDisplayUsd: { value: true, source: "default" },
           threadPricingDisplayCodexCredits: { value: false, source: "default" },
-          threadToolAccounting: { value: false, source: "default" },
         },
       }),
     );
@@ -3209,19 +3204,9 @@ describe("SettingsScreen", () => {
         experimental: { threadPricingDisplayCodexCredits: true },
       });
     });
-
-    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Display tool call tracking" }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { threadToolAccounting: true },
-      });
-    });
   });
 
-  it("disables pricing units but keeps tool accounting independent", () => {
+  it("disables pricing units when thread pricing is off", () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -3230,7 +3215,6 @@ describe("SettingsScreen", () => {
           threadPricingSummary: { value: false, source: "config" },
           threadPricingDisplayUsd: { value: true, source: "default" },
           threadPricingDisplayCodexCredits: { value: false, source: "default" },
-          threadToolAccounting: { value: false, source: "default" },
         },
       }),
     );
@@ -3243,11 +3227,6 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("button", { name: "Codex Credits" }),
     ).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
-    expect(
-      screen.getByRole("switch", { name: "Display tool call tracking" }),
-    ).toBeEnabled();
   });
 
   it("saves hot CPU profiling delay and trigger mode presets", async () => {

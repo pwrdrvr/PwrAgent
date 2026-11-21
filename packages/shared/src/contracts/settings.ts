@@ -1513,13 +1513,6 @@ export type DesktopSettingsSnapshot = {
     tokenMiserPollingReviewsEnabled?: DesktopSettingsValue<boolean>;
     tokenMiserDiagnosticsEnabled?: DesktopSettingsValue<boolean>;
     /**
-     * Shows the experimental Tool calls tab in the thread context rail.
-     * The desktop app may still collect tool metrics while this is disabled;
-     * this only gates the operator-facing panel. Replay-risk safety notices
-     * remain active because their cost grows while the turn is running.
-     */
-    threadToolAccounting?: DesktopSettingsValue<boolean>;
-    /**
      * Enables Codex's upstream default-mode request_user_input feature for
      * ordinary turns, allowing skills to pause and ask structured questions
      * outside Plan mode when the installed Codex build supports it.
@@ -1899,7 +1892,6 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;
-    threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
     codexConfigWarningsDismissed?: string[];

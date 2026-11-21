@@ -519,8 +519,9 @@ The generated ownership, reference, restart and snapshot model lives in
   the renderer derives its message list from those entries. Historical pricing
   lines, tool invocations, Code Mode observations, and duplicate last-message
   fields are absent from this response.
-- Pricing, tool-call, and sub-agent panels request their own display resource
-  when opened. Pages contain up to 50 top-level rows (20 by default), with
+- Pricing and sub-agent panels request their own display resource when
+  opened. The owner also serves the `tools` resource for older federated
+  viewers. Pages contain up to 50 top-level rows (20 by default), with
   totals computed over the complete owner history. Sub-agent categories have
   independent pages and counts over their full history. Cursors are tied to a
   resource revision. A stale cursor requires a refresh; an open panel refreshes
