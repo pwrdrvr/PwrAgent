@@ -3,7 +3,9 @@
 [Resources](resource-checkouts-ui.md) uses the same owner service as the
 `pwragent` agent tools. The owner derives a local operator from its main
 window and an agent from its authenticated thread. Request keys are scoped
-to the actor. A retry returns the recorded result. Status combines that
+to the actor. The profile mints a Federation instance ID once if it has
+none, giving operator and agent receipts a stable owner across restarts.
+A retry returns the recorded result. Status combines that
 receipt with the current allocation or queue position.
 
 ## Machine capacity

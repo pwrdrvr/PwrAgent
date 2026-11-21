@@ -448,6 +448,19 @@ vi.mock("../shell/ipc/operator-requests-ipc", () => ({
   registerOperatorRequestIpcHandlers: vi.fn(),
 }));
 
+vi.mock("../shell/ipc/resource-checkout-ipc", () => ({
+  registerResourceCheckoutIpcHandlers: vi.fn(),
+}));
+
+vi.mock("../resource-checkouts/checkout-runtime", () => {
+  const service = { read: vi.fn(), subscribe: vi.fn() };
+  return {
+    initializeResourceCheckouts: vi.fn(async () => service),
+    getResourceCheckoutService: vi.fn(() => service),
+    disposeResourceCheckouts: vi.fn(),
+  };
+});
+
 vi.mock("../shell/ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
   disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,
@@ -755,6 +768,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setLocalPullRequestAuthorityResolver: vi.fn(),
     setThreadMaintenanceToolHandler: vi.fn(),
     setResearchHandler: vi.fn(),
+    setResourceCheckoutHandler: vi.fn(),
     setThreadDependencyToolHandler: vi.fn(),
     setThreadDependenciesPeerHandler: vi.fn(),
     setThreadPrWatchesPeerHandler: vi.fn(),
@@ -943,9 +957,12 @@ describe("bootstrapApp", () => {
       || ["setBundledGitLfsAdvisory", "setNavigationDetailPendingWakesProjector", "setManagedGrokSignatureRejectionReporter",
         "setFederationMessagingPlatformStatusReader", "setInboundPreviewSink"].includes(name);
     const legacyHandlers = legacy.filter(isHandler);
-    // The owner now also binds research and the To-do runtime.
-    const coreHandlers = legacyHandlers.flatMap((name) => name === "registry.setPwrAgentOpenAIDecisionsHandler"
-      ? [name, "registry.setResearchHandler"] : [name]);
+    // The owner also binds checkout, research, and To-do services.
+    const coreHandlers = legacyHandlers.flatMap((name) => {
+      if (name === "registry.setPwrAgentAppManagementHandler") return ["registry.setResourceCheckoutHandler", name];
+      if (name === "registry.setPwrAgentOpenAIDecisionsHandler") return [name, "registry.setResearchHandler"];
+      return [name];
+    });
     const handlers = [...coreHandlers, "registry.setPwrAgentThreadTodoHandler"];
     expect(events.filter(isHandler)).toEqual(handlers);
     // Core subscribers retain their recorded order.
