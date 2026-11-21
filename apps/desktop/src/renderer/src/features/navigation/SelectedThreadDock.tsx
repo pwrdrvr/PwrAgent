@@ -30,8 +30,9 @@ const DOCK_PLATE_PX = 6;
 // The card's height before it has been drawn once: two lines at the default
 // density. The first layout pass after it mounts replaces this.
 const DOCK_HEIGHT_GUESS_PX = 46;
-// Set on the region while the dock is at the top. Everything that sticks to
-// the top of the list sticks this far down instead, under the dock.
+// On the region while the dock is at the top. Everything that sticks to the
+// top of the list then sticks lower by the reserve, under the dock.
+const TOP_DOCK_CLASS = "has-selected-thread-dock-top";
 const RESERVE_PROPERTY = "--selected-thread-dock-reserve";
 
 type DockState = {
@@ -242,6 +243,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const rowRef = useRef<HTMLElement | undefined>(undefined);
   const cardRef = useRef<HTMLButtonElement>(null);
   // The region that carries the reserve, to take it back from on unmount.
+  // The property stays on it between top docks; only the class comes and goes.
   const reservedRegionRef = useRef<HTMLElement | undefined>(undefined);
   // The thread whose hidden row the dock was asked to reveal. Focus follows
   // to that row when it arrives, as it does for a row the dock scrolls to.
@@ -250,9 +252,14 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const sync = useCallback((): void => {
     const region = regionRef.current;
     // Lifted for the measure, which reads the list with its headers in
-    // their own places, and put back below before anything paints.
-    reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
-    reservedRegionRef.current = undefined;
+    // their own places, and put back below before anything paints. The
+    // class goes, not the property: see `.selected-thread-dock-band`.
+    const reserved = reservedRegionRef.current;
+    reserved?.classList.remove(TOP_DOCK_CLASS);
+    if (reserved && reserved !== region) {
+      reserved.style.removeProperty(RESERVE_PROPERTY);
+      reservedRegionRef.current = undefined;
+    }
     const measured = region && threadKey
       ? measure(region, threadKey, {
         ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
@@ -264,7 +271,11 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       ? (cardRef.current?.offsetHeight || DOCK_HEIGHT_GUESS_PX) + 2 * DOCK_PLATE_PX
       : 0;
     if (region && reserve > 0) {
-      region.style.setProperty(RESERVE_PROPERTY, `${reserve}px`);
+      const value = `${reserve}px`;
+      if (region.style.getPropertyValue(RESERVE_PROPERTY) !== value) {
+        region.style.setProperty(RESERVE_PROPERTY, value);
+      }
+      region.classList.add(TOP_DOCK_CLASS);
       reservedRegionRef.current = region;
     }
     if (focusOnArrivalRef.current !== undefined) {
@@ -295,6 +306,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // Only on unmount. A cleanup tied to the thread or the region would take
   // the reserve back after the layout pass above had just set it.
   useLayoutEffect(() => () => {
+    reservedRegionRef.current?.classList.remove(TOP_DOCK_CLASS);
     reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
     reservedRegionRef.current = undefined;
   }, []);

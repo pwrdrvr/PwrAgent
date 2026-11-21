@@ -5680,11 +5680,18 @@ textarea,
 }
 
 /* The top dock sits above the stuck project header, not under it. While it
-   is up, `--selected-thread-dock-reserve` on the region (the card plus its
-   6px plate above and below) moves every sticky header in the list down by
-   that much, and this band fills the strip they left so rows do not show
-   around the card. It spans the lane inset to inset, as the rows do, and
-   leaves the scrollbar's column alone. */
+   is up, the region carries `.has-selected-thread-dock-top`, and every
+   sticky header in the list sticks lower by
+   `--selected-thread-dock-reserve` (the card plus its 6px plate above and
+   below). This band fills the strip they left so rows do not show around
+   the card. It spans the lane inset to inset, as the rows do, and leaves
+   the scrollbar's column alone.
+
+   The shift hangs on the class, not on the property's value. The dock
+   takes the class off to measure the list with its headers in their own
+   places, on every scroll frame. Changing an inherited custom property
+   there restyles every row under the region (38ms a frame at 360 rows);
+   a class with these four descendant selectors restyles the headers. */
 .selected-thread-dock-band {
   position: absolute;
   z-index: 7;
@@ -5693,6 +5700,19 @@ textarea,
   left: var(--sidebar-lane-inset);
   height: var(--selected-thread-dock-reserve, 0px);
   background: var(--bg-sidebar);
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-row__header,
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-group__header {
+  top: var(--selected-thread-dock-reserve, 0px);
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directories-pin-slot {
+  top: calc(2px + var(--selected-thread-dock-reserve, 0px));
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-row__thread-divider {
+  top: calc(var(--directory-row-header-height, 24px) + var(--selected-thread-dock-reserve, 0px));
 }
 
 .selected-thread-dock--bottom {
@@ -9569,8 +9589,7 @@ a.button {
 .directory-row__header {
   display: grid;
   position: sticky;
-  /* Under the selected thread's dock while it is at the top. */
-  top: var(--selected-thread-dock-reserve, 0px);
+  top: 0;
   /* One above the Directory threads divider, which sticks under it and
      slides beneath it as its list scrolls out. */
   z-index: 6;
@@ -9711,7 +9730,7 @@ a.button {
 
 .directories-pin-slot {
   position: sticky;
-  top: calc(2px + var(--selected-thread-dock-reserve, 0px));
+  top: 2px;
   z-index: 6;
   flex: none;
   height: 34px;
@@ -10357,7 +10376,7 @@ a.button {
      is the header's measured height, published on the section by
      DirectoriesList; 24px is the summary's floor, for the first frame. */
   position: sticky;
-  top: calc(var(--directory-row-header-height, 24px) + var(--selected-thread-dock-reserve, 0px));
+  top: var(--directory-row-header-height, 24px);
   z-index: 5;
   /* Opaque and as wide as the header: out to the section edges over the
      lane's 8px insets (`.directory-row__threads`), so a selected row's
@@ -10616,7 +10635,7 @@ a.button {
 .directory-group__header {
   display: flex;
   position: sticky;
-  top: var(--selected-thread-dock-reserve, 0px);
+  top: 0;
   z-index: 2;
   justify-content: space-between;
   gap: 12px;

@@ -149,6 +149,7 @@ describe("SelectedThreadDock", () => {
     expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("0px");
     // The stuck headers move down by the card plus its plate.
     expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("58px");
+    expect(region.classList.contains("has-selected-thread-dock-top")).toBe(true);
     expect(region.querySelector(".selected-thread-dock-band")).not.toBeNull();
   });
 
@@ -158,9 +159,10 @@ describe("SelectedThreadDock", () => {
     place(region.querySelector("[data-row='open']")!, 900, 60);
     view.rerender(dockElement(region, "open", {}));
     expect(dock()?.dataset.edge).toBe("bottom");
-    expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("");
+    expect(region.classList.contains("has-selected-thread-dock-top")).toBe(false);
     expect(region.querySelector(".selected-thread-dock-band")).toBeNull();
     view.unmount();
+    expect(region.classList.contains("has-selected-thread-dock-top")).toBe(false);
     expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("");
   });
 
@@ -176,7 +178,7 @@ describe("SelectedThreadDock", () => {
         const header = region.querySelector<HTMLElement>("[data-header='pwrgit']")!;
         // The header sticks to the list's top, as far down as the reserve says.
         vi.spyOn(header, "getBoundingClientRect").mockImplementation(() => {
-          const top = 100 + (Number.parseFloat(region.style.getPropertyValue("--selected-thread-dock-reserve")) || 0);
+          const top = 100 + (region.classList.contains("has-selected-thread-dock-top") ? 58 : 0);
           return { x: 0, y: top, top, bottom: top + 30, left: 0, right: 300, width: 300, height: 30, toJSON: () => ({}) } as DOMRect;
         });
         // Docked at the top (60) or not docked (250), then the row moves.
@@ -189,7 +191,7 @@ describe("SelectedThreadDock", () => {
         }
         const expected = shown(rowTop) >= 39 ? undefined : "top";
         expect(seen, `from ${start}, row at ${rowTop}`).toEqual([expected, expected, expected, expected]);
-        expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe(expected ? "58px" : "");
+        expect(region.classList.contains("has-selected-thread-dock-top")).toBe(expected === "top");
         view.unmount();
         region.remove();
       }
