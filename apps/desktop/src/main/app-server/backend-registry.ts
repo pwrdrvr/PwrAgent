@@ -6796,8 +6796,10 @@ export class DesktopBackendRegistry {
 
   /**
    * Whether any thread on this machine that works in `worktreePath` has a
-   * turn, a reserved turn start, or a review running. Threads can share a
-   * worktree, so the thread that asks is not the only possible writer.
+   * turn, a reserved turn start, or a review running, or Codex work that
+   * outlives a turn: a background terminal, a live tool call, or a
+   * sub-agent. Threads can share a worktree, so the thread that asks is not
+   * the only possible writer.
    */
   async workspaceHasActiveTurn(worktreePath: string): Promise<boolean> {
     const threads = await this.listThreads({
@@ -6805,7 +6807,9 @@ export class DesktopBackendRegistry {
     });
     for (const thread of threads) {
       // Few threads run at once, so only those pay for an overlay read.
-      if (!this.threadHasActiveTurn(thread.id, thread.source)) continue;
+      const working = this.threadHasActiveTurn(thread.id, thread.source)
+        || (thread.source === "codex" && this.codexRuntimeSupervisor.codexThreadBoundToAppServer(thread.id));
+      if (!working) continue;
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend: thread.source,
         threadId: thread.id,

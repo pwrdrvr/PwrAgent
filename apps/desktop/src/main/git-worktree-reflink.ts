@@ -151,6 +151,8 @@ export type WorktreeReflinkServiceDependencies<Identity extends GitRuntimeIdenti
 
 export const WORKTREE_TURN_RUNNING_REASON =
   "A turn is running in this worktree. Share its storage when the turn finishes.";
+export const WORKTREE_BUSY_UNKNOWN_REASON =
+  "PwrAgent could not check whether a turn is running in this worktree. Try again.";
 
 function runtimeOf(result: { identity: GitRuntimeIdentity; capabilities: WorktreeReflinkCapabilities }): WorktreeReflinkRuntime {
   return { capabilities: result.capabilities, runtimeKey: result.identity.key };
@@ -186,7 +188,12 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
     const probed = await this.dependencies.probe.read(params.cwd);
     const runtime = runtimeOf(probed);
     if (!probed.answered) {
-      return { status: "failed", reason: "The selected Git could not be run in this worktree." };
+      return {
+        status: "failed",
+        reason: probed.identity.executable
+          ? "The selected Git could not be run in this worktree."
+          : "The selected Git is unavailable.",
+      };
     }
     if (params.mode === "share" && probed.identity.key !== params.runtimeKey) {
       return { status: "runtime-changed", ...runtime };
@@ -212,8 +219,15 @@ export class WorktreeReflinkService<Identity extends GitRuntimeIdentity = GitRun
     }
     try {
       // Checked after the claim above, so two shares cannot both pass it.
-      if (params.mode === "share" && await params.isBusy?.()) {
-        return { status: "failed", reason: WORKTREE_TURN_RUNNING_REASON };
+      if (params.mode === "share" && params.isBusy) {
+        let busy: boolean;
+        try {
+          busy = await params.isBusy();
+        } catch {
+          // Not knowing is not a reason to replace files under a turn.
+          return { status: "failed", reason: WORKTREE_BUSY_UNKNOWN_REASON };
+        }
+        if (busy) return { status: "failed", reason: WORKTREE_TURN_RUNNING_REASON };
       }
       const reader = new WorktreeReflinkOutputReader();
       let outcome: WorktreeReflinkOutcome;

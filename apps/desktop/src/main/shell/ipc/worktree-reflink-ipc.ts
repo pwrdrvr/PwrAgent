@@ -20,8 +20,8 @@ const UNLINKED_REASON = "This directory is not linked to the thread.";
 /**
  * The directory Git runs in is the thread's own record of it, never the
  * renderer's string: sharing rewrites files, so a path must be one this
- * instance linked to a thread that is not archived. A federation window shows another machine's
- * paths, which name nothing here.
+ * instance linked to a thread that is not archived. A federation window
+ * shows another machine's paths, which name nothing here.
  */
 async function resolveTarget(
   sender: Electron.WebContents | undefined,

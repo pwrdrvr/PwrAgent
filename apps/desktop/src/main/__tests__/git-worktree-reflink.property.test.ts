@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  WORKTREE_BUSY_UNKNOWN_REASON,
   WORKTREE_TURN_RUNNING_REASON,
   WorktreeReflinkOutputReader,
   WorktreeReflinkService,
@@ -328,6 +329,29 @@ describe("WorktreeReflinkService", () => {
     await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey, isBusy }))
       .resolves.toMatchObject({ status: "runtime-changed" });
     expect(asked).toBe(0);
+  });
+
+  it("does not share when it cannot learn whether the worktree is busy, and still estimates", async () => {
+    const { runs, service } = harness("pwrgit.2");
+    const runtimeKey = (await service.readCapabilities("/repo")).runtimeKey;
+    const isBusy = async (): Promise<boolean> => { throw new Error("backend unavailable"); };
+    await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey, isBusy }))
+      .resolves.toEqual({ status: "failed", reason: WORKTREE_BUSY_UNKNOWN_REASON });
+    expect(runs).toHaveLength(0);
+    await expect(service.run({ cwd: "/repo", mode: "estimate", runtimeKey, isBusy }))
+      .resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("names the Git, not the worktree, when the selected Git cannot be resolved", async () => {
+    const service = new WorktreeReflinkService<Identity>({
+      probe: new WorktreeReflinkCapabilityProbe<Identity>({
+        identify: async () => ({ key: "k", version: "pwrgit.2" }),
+        readHelp: async () => { throw new Error("must not run"); },
+      }),
+      run: async () => { throw new Error("must not run"); },
+    });
+    await expect(service.run({ cwd: "/repo", mode: "estimate", runtimeKey: "k" }))
+      .resolves.toEqual({ status: "failed", reason: "The selected Git is unavailable." });
   });
 
   it("says Git could not be run, rather than that it cannot share, when the worktree gives no usage", async () => {

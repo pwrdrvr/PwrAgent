@@ -18,21 +18,22 @@ import { openInMemoryStateDb } from "./sqlite-test-utils";
 // - A directory may be changed for a thread only if that thread is not
 //   archived and works there.
 // - A worktree is busy when any unarchived thread working there has a turn,
-//   whichever thread asks.
+//   or Codex work that outlives one, whichever thread asks.
 const WORKTREES = ["fixture-worktree-a", "fixture-worktree-b"].map((name) => path.join(os.tmpdir(), name));
 
 type ThreadModel = {
   worktree: 0 | 1;
   pathSource: "project" | "provider" | "overlay";
   archived: boolean;
-  active: boolean;
+  /** A reserved turn start, or a background terminal left by a finished turn. */
+  work: "none" | "turn" | "terminal";
 };
 
 const threadArbitrary: fc.Arbitrary<ThreadModel> = fc.record({
   worktree: fc.constantFrom(0 as const, 1 as const),
   pathSource: fc.constantFrom("project" as const, "provider" as const, "overlay" as const),
   archived: fc.boolean(),
-  active: fc.boolean(),
+  work: fc.constantFrom("none" as const, "turn" as const, "terminal" as const),
 });
 
 function directoryFor(worktreePath: string): LinkedDirectorySummary {
@@ -73,7 +74,11 @@ async function checkWorkspaceRules(models: ThreadModel[]) {
         state: "passing", lifecycleState: "open", headSha: "a".repeat(40),
         url: `https://github.com/fixture/project/pull/${index + 1}`,
       }] });
-      if (model.active) registryModules(registry).turnState.reserveStart(identity.threadId, "agent");
+      if (model.work === "turn") registryModules(registry).turnState.reserveStart(identity.threadId, "agent");
+      if (model.work === "terminal") {
+        (registryModules(registry).codexRuntimeSupervisor.backgroundTerminalRecords as Map<string, unknown[]>)
+          .set(identity.threadId, []);
+      }
     }
 
     for (const [index, model] of models.entries()) {
@@ -89,7 +94,7 @@ async function checkWorkspaceRules(models: ThreadModel[]) {
     }
 
     for (const [which, worktreePath] of WORKTREES.entries()) {
-      const busy = models.some((model) => model.active && !model.archived && model.worktree === which);
+      const busy = models.some((model) => model.work !== "none" && !model.archived && model.worktree === which);
       expect(await registry.workspaceHasActiveTurn(worktreePath)).toBe(busy);
       // However the caller spells the directory.
       expect(await registry.workspaceHasActiveTurn(`${worktreePath}${path.sep}`)).toBe(busy);
@@ -104,13 +109,17 @@ async function checkWorkspaceRules(models: ThreadModel[]) {
 describe("thread linked workspaces", () => {
   it("finds a turn running in a worktree from another thread that shares it", async () => {
     await checkWorkspaceRules([
-      { worktree: 0, pathSource: "provider", archived: false, active: false },
-      { worktree: 0, pathSource: "overlay", archived: false, active: true },
+      { worktree: 0, pathSource: "provider", archived: false, work: "none" },
+      { worktree: 0, pathSource: "overlay", archived: false, work: "turn" },
     ]);
   });
 
   it("does not authorize an archived thread's retained checkout for a change", async () => {
-    await checkWorkspaceRules([{ worktree: 1, pathSource: "overlay", archived: true, active: false }]);
+    await checkWorkspaceRules([{ worktree: 1, pathSource: "overlay", archived: true, work: "none" }]);
+  });
+
+  it("counts a background terminal left running after its turn ended", async () => {
+    await checkWorkspaceRules([{ worktree: 0, pathSource: "project", archived: false, work: "terminal" }]);
   });
 
   it("authorizes changes only for unarchived owners, and reports a worktree busy for every thread that shares it", async () => {
