@@ -18,6 +18,7 @@ export function createChromiumTraceSession(): ChromiumTraceSession {
   const targets = new Map<string, Promise<void>>();
   let closed = false;
   let started = false;
+  let trackingTargets = false;
   let ownTargetId: string | undefined;
   let complete!: (handle?: string) => void;
   const completion = new Promise<string | undefined>((resolve) => { complete = resolve; });
@@ -35,7 +36,7 @@ export function createChromiumTraceSession(): ChromiumTraceSession {
 
   function message(_event: unknown, method: string, params: Record<string, unknown>, sessionId?: string): void {
     if (closed || sessionId) return;
-    if (method === "Target.targetCreated" && started) {
+    if (method === "Target.targetCreated" && trackingTargets) {
       void attach(params.targetInfo as TargetInfo | undefined)?.catch(() => {});
     }
     if (method === "Target.targetDestroyed" && typeof params.targetId === "string") {
@@ -53,25 +54,28 @@ export function createChromiumTraceSession(): ChromiumTraceSession {
       debuggerApi.attach("1.3");
       debuggerApi.on("message", message);
       debuggerApi.on("detach", detached);
-      await debuggerApi.sendCommand("Tracing.start", {
-        transferMode: "ReturnAsStream", streamFormat: "json", streamCompression: "none",
-        traceConfig: config,
-      });
-      if (closed) return;
-      started = true;
-      // Chromium 152 scopes page-level traces to the debugger's session tree.
+      // Chromium snapshots the debugger's session tree at Tracing.start.
+      // Attach existing pages first so their producers participate in startup.
       const own = await debuggerApi.sendCommand("Target.getTargetInfo");
       if (closed) return;
       ownTargetId = own.targetInfo.targetId;
+      trackingTargets = true;
       await debuggerApi.sendCommand("Target.setDiscoverTargets", { discover: true });
       if (closed) return;
       const { targetInfos } = await debuggerApi.sendCommand("Target.getTargets");
       await Promise.allSettled((targetInfos as TargetInfo[]).map(attach));
+      if (closed) return;
+      await debuggerApi.sendCommand("Tracing.start", {
+        transferMode: "ReturnAsStream", streamFormat: "json", streamCompression: "none",
+        traceConfig: config,
+      });
+      started = !closed;
     },
 
     async *read(signal: AbortSignal): AsyncIterable<ChromiumTraceChunk> {
       if (closed || !started) throw new Error("Chromium trace session is not recording");
       started = false;
+      trackingTargets = false;
       await debuggerApi.sendCommand("Tracing.end");
       const handle = await completion;
       if (!handle) throw new Error("Chromium trace stream unavailable");
