@@ -139,7 +139,9 @@ function invalidateNavigationEvent(event: AgentEvent): void {
   if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
   const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
   const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
-  navigationQueryPool.invalidateQueryOwner(event.federationTarget, navigationDiagnosticCause(event), navigationDiagnosticTrigger(event));
+  if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) {
+    navigationQueryPool.invalidateQueryOwner(event.federationTarget, navigationDiagnosticCause(event), navigationDiagnosticTrigger(event), event);
+  }
   navigationQueryPool.invalidateExactOwner(event.federationTarget,
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }

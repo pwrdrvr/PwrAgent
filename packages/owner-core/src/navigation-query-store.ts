@@ -10,6 +10,7 @@ import {
   explainMissingNavigationAnchor,
   navigationQueryKey,
   projectNavigationQuery,
+  navigationQuerySnapshotRowOwners,
   projectNavigationPullRequests,
   navigationQuerySnapshotToken,
   type NavigationQueryIndex,
@@ -422,6 +423,9 @@ export class NavigationQueryStore {
         attentionOrder,
         deferPullRequests: Boolean(pullRequests) && !needsPullRequestMembership,
       });
+      if (params.request.inventory === "viewer" && params.request.consumer === "main-sidebar") {
+        materialization.viewerRowOwners = navigationQuerySnapshotRowOwners(index);
+      }
       const { revision, retainedBytes } = fingerprintNavigationMaterialization(materialization);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
@@ -775,6 +779,11 @@ export class NavigationQueryStore {
   private finishPage(page: NavigationQueryPage, generation: NavigationQueryGeneration): void {
     // Owner exclusion proofs are optional. Fit the same rows and cursor even
     // when adding the proof would force another page or reject a large row.
+    if (generation.materialization.viewerRowOwners) {
+      page.viewerRowOwners = generation.materialization.viewerRowOwners;
+      if (serializedBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return;
+      delete page.viewerRowOwners;
+    }
     const proof = generation.materialization.metadataDependencies;
     if (proof?.workingStatePaths) {
       page.metadataDependencies = proof;

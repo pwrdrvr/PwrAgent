@@ -31,6 +31,15 @@ import {
   navigationFallbackAnchor, navigationIdentitiesEqual, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
+// Changes to one owner's threads. A PR status can affect a local thread
+// through its forge identity and therefore does not belong in this set.
+const OWNER_ROW_CHANGES = new Set([
+  "thread/started", "thread/archived", "thread/unarchived", "thread/deleted", "thread/parent/set", "thread/parent/cleared",
+  "thread/pin/added", "thread/pin/removed", "thread/pin/reordered", "thread/subthreadsCollapsed/updated", "thread/subthreadOrder/updated",
+  "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
+  "thread/backgroundTasks/updated", "thread/turnQueue/updated", "navigation/thread/seen", "federation/peerStatus/changed",
+  "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+]);
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
 const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
@@ -569,6 +578,16 @@ export class NavigationWindowQueries {
     if (method === "federation/eventStream/changed" && event.federationTarget?.scope === "remote"
       && (!navigationQueryEventRequiresRefresh(method, params)
         || (request.inventory === "viewer" && request.federationTarget?.scope !== "remote"))) return false;
+    // Remote subscriptions can be wider than this machine's mounts. Only
+    // the serving viewer inventory can exclude an owner across pages. A
+    // pending membership read may discover a new mount; keep its fence.
+    const sourceOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
+    if (sourceOwner && request.federationTarget?.scope !== "remote" && request.inventory === "viewer"
+      && !resource.membershipUncertain && page?.coverage.state === "complete"
+      && page.viewerRowOwners && !page.viewerRowOwners.includes(sourceOwner)
+      && typeof method === "string" && OWNER_ROW_CHANGES.has(method)
+      && !(request.query.kind === "exact" && request.query.resolveFromOwners
+        && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner))) return false;
     if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
       const workingState = method === "navigation/threadGitWorkingState/updated";
       // The index holds directory Git status and counts. Working-state probes

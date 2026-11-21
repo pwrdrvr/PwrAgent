@@ -4531,10 +4531,8 @@ export function useThreadNavigation(
           // The dimming was patched here, not read, so an owner whose
           // revision did not move would answer `unchanged` and keep it.
           // Invalidating first makes every page read in full.
-          invalidateNavigation();
-          scheduleEventRefresh(undefined, undefined, false, {
-            forceRefresh: true,
-          });
+          invalidateNavigation(owners, event);
+          scheduleRefresh(undefined, undefined, false, { owners, invalidatedOnly: true });
           return;
         }
         setState((current) => ({

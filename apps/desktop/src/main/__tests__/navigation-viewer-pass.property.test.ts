@@ -185,6 +185,37 @@ it("materializes viewer pins once per immutable owner pass, whatever the number 
   }), { numRuns: 25 });
 });
 
+it("admits births from a mounted owner outside the visible page and fences a newly mounting owner", async () => {
+  const f = await fixture(4);
+  const birth = (instanceId: string): AgentEvent => ({ backend: "codex", federationTarget: { scope: "remote", instanceId },
+    notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/started", threadId: "unseen-child" } } });
+  try {
+    f.queries.setDemand(f.requests);
+    await until(f.idle);
+    f.reset();
+    const attempt = (instanceId: string) => f.queries.invalidate(undefined, undefined, birth(instanceId));
+    attempt("other");
+    await f.queries.refresh(undefined, undefined, true);
+    expect(f.read).not.toHaveBeenCalled();
+    attempt("peer");
+    await f.queries.refresh(undefined, undefined, true);
+    expect(f.read).toHaveBeenCalledTimes(f.requests.size);
+    f.reset();
+    f.queries.invalidate(undefined, undefined, { backend: "codex", notification: { method: "navigation/remoteThreadPins/changed",
+      params: { instanceId: "other", pinned: true } } });
+    const next = f.read.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.read.mockImplementationOnce(async (request) => { await gate; return next(request); });
+    const pending = f.queries.refresh(undefined, undefined, true);
+    await until(() => f.read.mock.calls.length > 0);
+    attempt("other");
+    release();
+    await pending;
+    expect(f.read.mock.calls.length).toBeGreaterThan(f.requests.size);
+  } finally { f.close(); }
+});
+
 it("shares the physical owner scan with viewers while retaining separate inventories", async () => {
   const f = await fixture(4);
   try {

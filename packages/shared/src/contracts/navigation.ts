@@ -2587,6 +2587,9 @@ export type NavigationQueryPage = {
   /** Complete projection dependencies, before pagination. Omitted when
    * coverage or the bounded metadata budget cannot establish an exclusion. */
   metadataDependencies?: NavigationMetadataDependencies;
+  /** Peer owners of rows and parents in the complete viewer inventory.
+   * A local mount publication or an uncertain baseline withdraws this proof. */
+  viewerRowOwners?: readonly string[];
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   /** Offset of this page in its immutable owner generation. Omitted means zero. */

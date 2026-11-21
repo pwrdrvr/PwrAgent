@@ -55,6 +55,33 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("does not list the local viewer for repeated births or reconnects from an unmounted owner", async () => {
+  const f = fixture();
+  const read = f.read.getMockImplementation()!;
+  f.read.mockImplementation(async (request, consumer) => ({ ...await read(request, consumer), viewerRowOwners: [] }));
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const api: DesktopApi = { ...f.api, onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  vi.useFakeTimers();
+  try {
+    f.read.mockClear();
+    const federationTarget = { scope: "remote" as const, instanceId: "peer" };
+    await act(async () => {
+      for (const notification of [
+        { method: "navigation/invalidated", params: { sourceMethod: "thread/started", threadId: "new" } },
+        { method: "federation/peerStatus/changed", params: { instanceId: "peer", status: "connected" } },
+        { method: "navigation/invalidated", params: { sourceMethod: "thread/started", threadId: "new" } },
+        { method: "navigation/invalidated", params: { sourceMethod: "turn/completed", threadId: "new" } },
+        { method: "navigation/invalidated", params: { sourceMethod: "thread/archived", threadId: "new" } },
+        { method: "navigation/invalidated", params: { sourceMethod: "thread/unarchived", threadId: "new" } },
+      ] as const) for (const listener of listeners) listener({ backend: "codex", federationTarget, notification });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(f.read).not.toHaveBeenCalled();
+  } finally { unmount(); vi.useRealTimers(); }
+});
+
 it("retains unchanged row projections while still publishing changed titles", async () => {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;
