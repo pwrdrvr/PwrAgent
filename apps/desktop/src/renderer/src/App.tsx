@@ -3249,7 +3249,7 @@ function DesktopAppShell(props: {
     thread: NavigationThreadSummary;
     returnFocus?: RefObject<HTMLElement | null>;
   }>();
-  // Thread maintenance: File → Thread Maintenance…, Settings → Review…, or
+  // Thread maintenance: File → Thread Maintenance…, Settings → Thread Maintenance…, or
   // an agent. It works on this machine's threads, so a remote window has none.
   // One session per window: each launch reopens it, minimized or not, and only
   // the dialog's Close or the notice's Discard ends it.

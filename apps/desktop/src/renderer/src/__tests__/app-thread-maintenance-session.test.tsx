@@ -94,7 +94,7 @@ function installDesktopApi() {
   return {
     scanThreadMaintenance,
     applyThreadMaintenance,
-    /** File → Thread Maintenance…, or Settings → Review… with a project. */
+    /** File → Thread Maintenance…, or Settings → Thread Maintenance… with a project. */
     launch: async (request: { projectKey?: string } = {}) => {
       await waitFor(() => expect(openListener).toBeDefined());
       await act(async () => {
@@ -134,7 +134,7 @@ describe("thread maintenance session in App", () => {
     expect(dialog()).toBeNull();
     expect(notice()).toHaveTextContent("Your plan is kept");
 
-    // Settings → Review… names a project; the open session still wins.
+    // Settings → Thread Maintenance… names a project; the open session still wins.
     await api.launch({ projectKey: "/src/harbor-web" });
     const reopened = await screen.findByRole("dialog", { name: "Thread maintenance" });
     expect(within(reopened).getByRole("radio", { name: "Idle checkouts" })).toBeChecked();

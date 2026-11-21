@@ -185,7 +185,7 @@ export function ArchiveSweepField(props: { desktopApi?: DesktopApi }) {
   const unlisted = finished ? Math.max(0, status.failed - failures.length) : 0;
   return (
     <SettingsField label="Last sweep"
-      sub="Sweeps run hourly. They hibernate idle checkouts and clean up after archived threads. They never archive a thread."
+      sub="Sweeps run hourly. They hibernate idle checkouts and clean up after archived threads. They never archive a thread. Thread Maintenance… lists idle threads to archive."
       control={
         <div className="settings-archive-sweep">
           <div className="settings-archive-sweep__line">
@@ -196,6 +196,7 @@ export function ArchiveSweepField(props: { desktopApi?: DesktopApi }) {
                   {status.startedAt !== undefined ? <span className="settings-archive-sweep__text">Started {time(status.startedAt)}.</span> : null}
                   {status.worktrees ? <span className="settings-archive-sweep__text">Worktrees: {status.worktrees.processed} of {status.worktrees.candidates} checked, {status.worktrees.removed} cleaned, {status.worktrees.protected} protected.</span> : null}
                   {status.worktrees?.emptyContainers ? <span className="settings-archive-sweep__text">Folders: {status.worktrees.processedContainers ?? 0} of {status.worktrees.emptyContainers} checked, {status.worktrees.removedContainers ?? 0} cleaned.</span> : null}
+                  {status.hibernation && !status.hibernation.skipped ? <span className="settings-archive-sweep__text">Checkouts: {status.hibernation.checked} checked, {status.hibernation.hibernated} hibernated.</span> : null}
                 </>
               ) : status.finishedAt === undefined ? (
                 <span className="settings-pathrow__chip">Not run yet</span>
@@ -214,13 +215,13 @@ export function ArchiveSweepField(props: { desktopApi?: DesktopApi }) {
               {openThreadMaintenance ? (
                 <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
                   type="button" onClick={() => openThreadMaintenance()}>
-                  Review…
+                  Thread Maintenance…
                 </button>
               ) : null}
               {api.runThreadArchiveSweep ? (
                 <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
                   type="button" aria-disabled={busy || undefined} onClick={() => { void run(); }}>
-                  Run now
+                  Sweep now
                 </button>
               ) : null}
             </span>
