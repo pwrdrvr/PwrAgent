@@ -4,6 +4,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  contentTracing,
   Menu,
   shell,
   type ContextMenuParams,
@@ -33,6 +34,7 @@ import { MainProcessHeapMonitor } from "../diagnostics/main-process-heap-monitor
 import { RendererHeapMonitor } from "../diagnostics/renderer-heap-monitor";
 import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-cpu-target";
 import { SharedHotCpuProfiler } from "../diagnostics/shared-hot-cpu-profiler";
+import { ChromiumTrace } from "../diagnostics/chromium-trace";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
@@ -128,6 +130,7 @@ const sharedMainHotCpuProfiler = new SharedHotCpuProfiler();
 type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmListingDiagnostics">;
 
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
+const chromiumTrace = new ChromiumTrace(() => contentTracing, (message) => hotCpuLog.warn(message));
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
 const windowDiagnosticsStopHandlers = new Map<number, (reason: string) => Promise<void>>();
 
@@ -599,6 +602,7 @@ export function createMainWindow(options?: {
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
     target: "main" | "renderer",
     getListingsAtStop?: () => ReturnType<typeof listingDiagnostics.snapshot> | undefined,
+    trace?: ChromiumTrace,
   ): Promise<HotCpuProfiler | null> => {
     const appBuildMetadata = await resolveAppBuildMetadata();
     const created = await createHotCpuProfileSession({
@@ -625,6 +629,7 @@ export function createMainWindow(options?: {
     });
 
     return new HotCpuProfiler({
+      chromiumTrace: trace,
       config: hotCpuConfig,
       getAppMetrics: () => app.getAppMetrics(),
       onHeapSnapshotLimitReached: async () => {
@@ -658,9 +663,12 @@ export function createMainWindow(options?: {
 
   const createHotCpuProfiler = async (
     config: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    captureChromiumTrace: boolean,
   ): Promise<HotCpuProfilerLifecycle> => {
     let listingsAtStop: ReturnType<typeof listingDiagnostics.snapshot> | undefined;
-    const renderer = await createTargetHotCpuProfiler(config, "renderer", () => listingsAtStop);
+    const renderer = await createTargetHotCpuProfiler(
+      config, "renderer", () => listingsAtStop, captureChromiumTrace ? chromiumTrace : undefined,
+    );
     const owner = Symbol("main-hot-cpu-window");
     let stopped = false;
     return {
@@ -714,6 +722,7 @@ export function createMainWindow(options?: {
 
   const hotCpuConfigKey = (
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    captureChromiumTrace = false,
   ): string => {
     return JSON.stringify({
       startDelayMs: hotCpuConfig.startDelayMs,
@@ -725,6 +734,7 @@ export function createMainWindow(options?: {
       profileDurationMs: hotCpuConfig.profileDurationMs,
       cooldownMs: hotCpuConfig.cooldownMs,
       maxProfiles: hotCpuConfig.maxProfiles,
+      captureChromiumTrace,
       captureHeapSnapshot: hotCpuConfig.captureHeapSnapshot,
       heapSnapshotLimit: hotCpuConfig.heapSnapshotLimit,
     });
@@ -776,7 +786,8 @@ export function createMainWindow(options?: {
         return;
       }
 
-      const nextConfigKey = hotCpuConfigKey(hotCpuConfig);
+      const captureChromiumTrace = settings.hotCpuProfilingCaptureChromiumTrace ?? false;
+      const nextConfigKey = hotCpuConfigKey(hotCpuConfig, captureChromiumTrace);
       if (hotCpuProfilerPromise) {
         if (hotCpuProfilerConfigKey === nextConfigKey) {
           if (reloaded) {
@@ -790,7 +801,7 @@ export function createMainWindow(options?: {
 
       const generation = hotCpuProfilerGeneration;
       hotCpuProfilerConfigKey = nextConfigKey;
-      hotCpuProfilerPromise = createHotCpuProfiler(hotCpuConfig);
+      hotCpuProfilerPromise = createHotCpuProfiler(hotCpuConfig, captureChromiumTrace);
       const profiler = await hotCpuProfilerPromise;
       if (generation !== hotCpuProfilerGeneration) {
         await profiler.stop("settings-changed");

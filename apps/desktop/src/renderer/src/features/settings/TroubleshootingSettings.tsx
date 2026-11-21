@@ -86,6 +86,7 @@ export function TroubleshootingSettings(props: {
   onHotCpuProfilingTriggerModeChange: (
     value: DesktopHotCpuProfileTriggerMode,
   ) => Promise<void>;
+  onHotCpuProfilingCaptureChromiumTraceChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingCaptureHeapSnapshotChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingHeapSnapshotLimitChange: (value: number) => Promise<void>;
 }) {
@@ -117,6 +118,8 @@ export function TroubleshootingSettings(props: {
     props.snapshot.general.hotCpuProfilingTriggerMode;
   const hotCpuProfilingSlowburnThresholdPercent =
     props.snapshot.general.hotCpuProfilingSlowburnThresholdPercent;
+  const hotCpuProfilingCaptureChromiumTrace =
+    props.snapshot.general.hotCpuProfilingCaptureChromiumTrace;
   const hotCpuProfilingCaptureHeapSnapshot =
     props.snapshot.general.hotCpuProfilingCaptureHeapSnapshot;
   const hotCpuProfilingHeapSnapshotLimit =
@@ -533,6 +536,16 @@ export function TroubleshootingSettings(props: {
             value={hotCpuProfilingTriggerMode.value}
             onChange={(value) => {
               return props.onHotCpuProfilingTriggerModeChange(value);
+            }}
+          />
+          <ToggleField
+            checked={hotCpuProfilingCaptureChromiumTrace.value}
+            disabled={props.saving}
+            label="Chromium trace"
+            sub="Keep a rolling history of layout, paint, and compositor timing while hot CPU profiling is armed. Save a filtered trace with each eligible renderer profile."
+            source={sourceBadge(hotCpuProfilingCaptureChromiumTrace)}
+            onChange={(next) => {
+              return props.onHotCpuProfilingCaptureChromiumTraceChange(next);
             }}
           />
           <ToggleField

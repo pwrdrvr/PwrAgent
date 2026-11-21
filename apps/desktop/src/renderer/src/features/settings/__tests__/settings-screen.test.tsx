@@ -169,6 +169,7 @@ function createSnapshot(
         value: 15,
         source: "default",
       },
+      hotCpuProfilingCaptureChromiumTrace: { value: false, source: "default" },
       hotCpuProfilingCaptureHeapSnapshot: {
         value: false,
         source: "default",
@@ -2299,6 +2300,14 @@ describe("SettingsScreen", () => {
       ).getByRole("radio", { name: /5 seconds/ }),
     ).not.toBeDisabled();
     expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
+    const chromiumTrace = getLabeledSwitch("Chromium trace");
+    expect(chromiumTrace).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(chromiumTrace);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { hotCpuProfilingCaptureChromiumTrace: true },
+      });
+    });
     expect(
       getLabeledSwitch("Smart heap snapshots"),
     ).toHaveAttribute("aria-checked", "false");

@@ -160,6 +160,7 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
+    hotCpuProfilingCaptureChromiumTrace?: boolean;
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
@@ -843,6 +844,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "hot_cpu_profiling_slowburn_threshold_percent"],
       patch.general.hotCpuProfilingSlowburnThresholdPercent,
+    );
+  }
+  if (typeof patch.general?.hotCpuProfilingCaptureChromiumTrace === "boolean") {
+    set(
+      ["general", "hot_cpu_profiling_capture_chromium_trace"],
+      patch.general.hotCpuProfilingCaptureChromiumTrace,
     );
   }
   if (patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined) {
@@ -2532,6 +2539,9 @@ function normalizeDesktopConfig(
       hotCpuProfilingSlowburnThresholdPercent: readNumber(
         general?.hot_cpu_profiling_slowburn_threshold_percent,
       ),
+      hotCpuProfilingCaptureChromiumTrace: readBoolean(
+        general?.hot_cpu_profiling_capture_chromium_trace,
+      ),
       hotCpuProfilingCaptureHeapSnapshot: readBoolean(
         general?.hot_cpu_profiling_capture_heap_snapshot,
       ),
@@ -3035,6 +3045,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.hotCpuProfilingTriggerMode;
   const hotCpuProfilingSlowburnThresholdPercent =
     config.general?.hotCpuProfilingSlowburnThresholdPercent;
+  const hotCpuProfilingCaptureChromiumTrace =
+    config.general?.hotCpuProfilingCaptureChromiumTrace;
   const hotCpuProfilingCaptureHeapSnapshot =
     config.general?.hotCpuProfilingCaptureHeapSnapshot;
   const hotCpuProfilingHeapSnapshotLimit =
@@ -3067,6 +3079,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingStartDelayMs !== undefined ||
     hotCpuProfilingTriggerMode !== undefined ||
     hotCpuProfilingSlowburnThresholdPercent !== undefined ||
+    hotCpuProfilingCaptureChromiumTrace !== undefined ||
     hotCpuProfilingCaptureHeapSnapshot !== undefined ||
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
@@ -3102,6 +3115,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (hotCpuProfilingSlowburnThresholdPercent !== undefined) {
       pruned.general.hotCpuProfilingSlowburnThresholdPercent =
         hotCpuProfilingSlowburnThresholdPercent;
+    }
+    if (hotCpuProfilingCaptureChromiumTrace !== undefined) {
+      pruned.general.hotCpuProfilingCaptureChromiumTrace = hotCpuProfilingCaptureChromiumTrace;
     }
     if (hotCpuProfilingCaptureHeapSnapshot !== undefined) {
       pruned.general.hotCpuProfilingCaptureHeapSnapshot =

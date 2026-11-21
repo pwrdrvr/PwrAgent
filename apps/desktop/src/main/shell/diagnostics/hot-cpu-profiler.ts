@@ -8,6 +8,7 @@ import type {
 } from "../../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "../../diagnostics/hot-cpu-profile-session";
+import type { ChromiumTrace } from "../../diagnostics/chromium-trace";
 import { getMainLogger } from "../../log";
 import { joinCpuProfiles } from "../../diagnostics/cpu-profile-history";
 import { acquireDebuggerLease, type DebuggerLease } from "../../diagnostics/debugger-lease";
@@ -35,6 +36,7 @@ type ActiveProfileTrigger = Pick<
   | "triggerMode"
   | "triggerThresholdPercent"
 >;
+type ActiveTraceTrigger = { capturedAt: string; monotonicMs: number };
 
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -63,6 +65,7 @@ export class HotCpuProfiler {
   };
 
   private readonly config: Extract<HotCpuProfileConfig, { enabled: true }>;
+  private readonly chromiumTrace?: ChromiumTrace;
   private readonly getAppMetrics: () => ProcessMetric[];
   private readonly logger: Logger;
   private readonly now: () => Date;
@@ -97,6 +100,7 @@ export class HotCpuProfiler {
   private profiling = false;
   private samplingPausedForProfile = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
+  private activeTraceTrigger: ActiveTraceTrigger | undefined;
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
@@ -104,6 +108,7 @@ export class HotCpuProfiler {
 
   constructor(options: {
     config: Extract<HotCpuProfileConfig, { enabled: true }>;
+    chromiumTrace?: ChromiumTrace;
     getAppMetrics: () => ProcessMetric[];
     session: HotCpuProfileSession;
     target: HotCpuTarget;
@@ -124,6 +129,7 @@ export class HotCpuProfiler {
     onSampleCaptured?: () => void;
   }) {
     this.config = options.config;
+    this.chromiumTrace = options.chromiumTrace;
     this.getAppMetrics = options.getAppMetrics;
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
@@ -170,6 +176,7 @@ export class HotCpuProfiler {
       },
     });
     await this.ensureRecording(startedAt.getTime());
+    if (!this.stopped) await this.chromiumTrace?.arm(this);
     await this.setListingDiagnosticsEnabled(true);
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
       target: this.session.target ?? "renderer",
@@ -190,7 +197,10 @@ export class HotCpuProfiler {
     }
 
     this.stopped = true;
-    this.shutdownPromise = this.stopInner(reason).finally(() => this.setListingDiagnosticsEnabled(false));
+    this.shutdownPromise = this.stopInner(reason).finally(async () => {
+      await this.chromiumTrace?.release(this);
+      await this.setListingDiagnosticsEnabled(false);
+    });
     await this.shutdownPromise;
   }
 
@@ -268,6 +278,7 @@ export class HotCpuProfiler {
     }
 
     const capturedAtDate = this.now();
+    const capturedAtMonotonicMs = performance.now();
     const capturedAt = capturedAtDate.toISOString();
     const capturedAtMs = capturedAtDate.getTime();
     try {
@@ -320,6 +331,7 @@ export class HotCpuProfiler {
       if (this.shouldStartProfile(cpuPercent, capturedAt)) {
         await this.startProfile({
           capturedAt,
+          capturedAtMonotonicMs,
           cpuPercent,
           pid,
         });
@@ -512,6 +524,7 @@ export class HotCpuProfiler {
 
   private async startProfile(options: {
     capturedAt: string;
+    capturedAtMonotonicMs: number;
     cpuPercent: number;
     pid: number;
   }): Promise<void> {
@@ -543,6 +556,9 @@ export class HotCpuProfiler {
         return;
       }
       this.activeProfileHeapSnapshots = [];
+      this.activeTraceTrigger = this.chromiumTrace
+        ? { capturedAt: options.capturedAt, monotonicMs: options.capturedAtMonotonicMs }
+        : undefined;
       this.activeProfileTrigger = {
         triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
         triggerCpuPercent: options.cpuPercent,
@@ -595,6 +611,7 @@ export class HotCpuProfiler {
       );
     } catch (error) {
       this.activeProfileTrigger = null;
+      this.activeTraceTrigger = undefined;
       this.profiling = false;
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
@@ -604,6 +621,7 @@ export class HotCpuProfiler {
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to start", error);
       await this.discardRecording();
       this.detachDebugger();
+      if (this.profileCount >= this.config.maxProfiles) await this.chromiumTrace?.release(this);
     }
   }
 
@@ -641,6 +659,24 @@ export class HotCpuProfiler {
     }
   }
 
+  private async writeChromiumTrace(profilePath: string): Promise<string | undefined> {
+    if (!this.chromiumTrace || !this.activeTraceTrigger) return;
+    const tracePath = profilePath.replace(/\.cpuprofile$/, ".trace.json");
+    const filename = artifactFilename(tracePath);
+    try {
+      const result = await this.chromiumTrace.capture(this, tracePath, this.activeTraceTrigger.monotonicMs);
+      if (result.status === "written") await this.session.registerArtifact(filename);
+      await this.session.appendEvent({
+        capturedAt: this.now().toISOString(),
+        type: `chromium-trace-${result.status}`,
+        detail: { filename, triggeredAt: this.activeTraceTrigger.capturedAt, ...result },
+      });
+      if (result.status === "written") return tracePath;
+    } catch {
+      this.logger.warn("[pwragent:hot-cpu] Chromium trace bookkeeping failed");
+    }
+  }
+
   private async stopProfileInner(reason: string): Promise<void> {
     this.profiling = false;
     this.clearProfileDurationTimer();
@@ -667,6 +703,7 @@ export class HotCpuProfiler {
         "utf8",
       );
       await this.session.registerArtifact(profileFilename);
+      const chromiumTracePath = await this.writeChromiumTrace(profilePath);
       await this.writeDiagnostics(profilePath);
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
@@ -688,6 +725,7 @@ export class HotCpuProfiler {
       await this.drainActiveHeapSnapshotCaptures();
       await this.onProfileWritten?.({
         capturedAt: this.now().toISOString(),
+        ...(chromiumTracePath ? { chromiumTracePath } : {}),
         heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
         profileFilename,
         profilePath,
@@ -709,11 +747,17 @@ export class HotCpuProfiler {
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
       this.activeProfileTrigger = null;
+      this.activeTraceTrigger = undefined;
       this.activeProfileHeapSnapshots = [];
       this.activeProfileHeapSnapshotCaptures.clear();
       this.previousRecording = null;
       this.recording = false;
       this.detachDebugger();
+      if (!this.stopped && this.profileCount < this.config.maxProfiles) {
+        await this.chromiumTrace?.arm(this);
+      } else {
+        await this.chromiumTrace?.release(this);
+      }
       await this.ensureRecording(this.now().getTime());
       this.resumeSamplingAfterProfile();
     }

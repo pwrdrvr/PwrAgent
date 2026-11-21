@@ -16,6 +16,7 @@ export type HotCpuProfileCapturedEvent = {
   appBuildMetadata?: AppBuildMetadata;
   target?: "main" | "renderer";
   capturedAt: string;
+  chromiumTracePath?: string;
   heapSnapshotArtifacts?: HotCpuProfileHeapSnapshotArtifact[];
   profileFilename: string;
   profilePath: string;
@@ -89,6 +90,7 @@ export function buildHotCpuProfileHandoffMessage(
     `Session directory path: ${event.sessionDirectory}`,
     `CPU profile basename: ${event.profileFilename}`,
     `CPU profile path: ${event.profilePath}`,
+    ...(event.chromiumTracePath ? [`Chromium trace path: ${event.chromiumTracePath}`] : []),
     ...heapSnapshotLines,
     "Open the .cpuprofile in Chrome DevTools Performance, or inspect the full session directory for samples, events, and optional heap snapshots.",
   ].join("\n");

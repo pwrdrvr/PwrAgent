@@ -969,6 +969,7 @@ export type DesktopGeneralSettingsSnapshot = {
   hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
   hotCpuProfilingTriggerMode: DesktopSettingsValue<DesktopHotCpuProfileTriggerMode>;
   hotCpuProfilingSlowburnThresholdPercent: DesktopSettingsValue<number>;
+  hotCpuProfilingCaptureChromiumTrace: DesktopSettingsValue<boolean>;
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
@@ -1858,6 +1859,7 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
+    hotCpuProfilingCaptureChromiumTrace?: boolean;
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;

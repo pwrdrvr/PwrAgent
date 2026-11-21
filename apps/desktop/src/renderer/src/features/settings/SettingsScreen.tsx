@@ -1169,6 +1169,11 @@ function SettingsSectionBody(props: {
             general: { hotCpuProfilingTriggerMode },
           });
         }}
+        onHotCpuProfilingCaptureChromiumTraceChange={async (hotCpuProfilingCaptureChromiumTrace) => {
+          await props.settings.writeConfig({
+            general: { hotCpuProfilingCaptureChromiumTrace },
+          });
+        }}
         onHotCpuProfilingCaptureHeapSnapshotChange={async (
           hotCpuProfilingCaptureHeapSnapshot: boolean,
         ) => {
