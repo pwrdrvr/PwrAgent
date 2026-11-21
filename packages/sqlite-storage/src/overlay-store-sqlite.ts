@@ -4660,14 +4660,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   /** The PR URLs attached to a thread, read synchronously for a merge check. */
   readThreadPullRequestUrls(params: { backend: AppServerBackendKind; threadId: string }): string[] {
-    const row = this.stateDb.raw.prepare(`
+    const [prs] = this.readNavigationPullRequests([params]);
+    return prs!.flatMap((pr) => typeof pr?.url === "string" ? [pr.url] : []);
+  }
+
+  /** Ordered attachment lists for a page, without loading or migrating thread overlays. */
+  readNavigationPullRequests(threads: readonly { backend: AppServerBackendKind; threadId: string }[]): PrSummary[][] {
+    const statement = this.stateDb.raw.prepare(`
       SELECT CASE WHEN json_valid(payload) THEN json_extract(payload, '$.prs') END AS prs
-      FROM threads WHERE thread_id = ?`).get(encodeThreadIdentityKeyForStorage(
-      buildThreadIdentityKey(params.backend, params.threadId),
-    )) as { prs: string | null } | undefined;
-    if (!row?.prs) return [];
-    const prs = JSON.parse(row.prs) as unknown;
-    return Array.isArray(prs) ? prs.flatMap((pr) => typeof (pr as PrSummary | null)?.url === "string" ? [(pr as PrSummary).url] : []) : [];
+      FROM threads WHERE thread_id = ?`);
+    return threads.map(({ backend, threadId }) => {
+      const key = encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(backend, threadId));
+      const row = statement.get(key) as { prs: string | null } | undefined;
+      const prs = row?.prs ? JSON.parse(row.prs) as unknown : undefined;
+      return Array.isArray(prs) ? prs as PrSummary[] : [];
+    });
   }
 
   /**

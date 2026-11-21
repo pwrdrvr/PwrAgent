@@ -299,7 +299,11 @@ retained for the protected npm job; failure prevents desktop packaging.
 3. `macOS unit tests (lane N of 4)` runs the complete workspace suite split
    with `pnpm test --shard=<lane>/4`. All lanes select Xcode with actool 26 and
    set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
-   Each lane retains its JSON test timings as a seven-day workflow artifact.
+   Each lane uses the same completion check and targeted retry as macOS CI.
+   A run that shuts down cleanly with up to 20 failed tests can retry those
+   tests once. The retry must also shut down cleanly.
+   Incomplete runs, errors outside individual tests, and failed retries block
+   release. The lane retains JSON timings and retry reports for seven days.
 4. `Prepare macOS signing input` runs
    `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
    It runs alongside lint/typecheck and the unit test lanes after cache setup.

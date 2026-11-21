@@ -38,6 +38,7 @@ export function planUnitRetry(report, budget) {
   if (!report?.complete || report.unhandledErrors !== 0 || !Array.isArray(report.suites)) {
     throw new Error("The first run did not finish cleanly enough to select retries");
   }
+  if (report.shutdownComplete !== true) throw new Error("The first unit run did not shut down cleanly");
   const tests = [];
   const ids = new Set();
   for (const suite of report.suites) {
@@ -64,7 +65,7 @@ export function planUnitRetry(report, budget) {
 }
 
 export function verifyInitialUnitRun(report) {
-  return report?.reason === "passed" && report.complete === true && report.unhandledErrors === 0
+  return report?.reason === "passed" && report.complete === true && report.shutdownComplete === true && report.unhandledErrors === 0
     && Array.isArray(report.suites) && report.suites.length > 0
     && report.suites.every((suite) => suite.errors === 0 && Array.isArray(suite.tests)
       && suite.tests.every((test) => test.state === "passed" || test.state === "skipped"))
@@ -128,7 +129,7 @@ export function verifyE2eRetry(plan, report) {
 }
 
 export function verifyUnitRetry(plan, report) {
-  if (!report?.complete || report.unhandledErrors !== 0 || !Array.isArray(report.suites)) return false;
+  if (!report?.complete || report.shutdownComplete !== true || report.unhandledErrors !== 0 || !Array.isArray(report.suites)) return false;
   const expected = new Set(plan.tests.map((test) => test.id));
   const seen = new Set();
   for (const suite of report.suites) {

@@ -81,6 +81,7 @@ import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
+import { installDisclosureAnchor } from "./transcript-scroll-fit";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { TranscriptError } from "./TranscriptError";
 import type { PendingQuestionnaireState } from "./questionnaire";
@@ -1480,6 +1481,17 @@ export function TranscriptList(props: TranscriptListProps) {
       observer.disconnect();
     };
   }, [hasScrollContainer]);
+
+  // A disclosure the operator clicks stays where it was clicked, whether it
+  // was pinned to the top of the pane or was the last row of a transcript
+  // following its bottom.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return undefined;
+    }
+    return installDisclosureAnchor(container, disableBottomGlue);
+  }, [disableBottomGlue, hasScrollContainer]);
 
   // When a sidebar drag ends, the pane has settled at its final width but the
   // ResizeObserver/onScroll handlers were paused throughout — re-sync the

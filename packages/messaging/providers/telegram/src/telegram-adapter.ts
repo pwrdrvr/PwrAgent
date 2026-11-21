@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { Bot, InputFile } from "grammy";
+import { setTimeout as wait } from "node:timers/promises";
+import { Bot, GrammyError, HttpError, InputFile } from "grammy";
 import type {
   MessagingPrivateConversationResolveResult,
   MessagingAdapterState,
@@ -48,6 +49,7 @@ import {
   notifyEachListenerAsync,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
+import { scrubBotToken } from "./telegram-error.ts";
 import {
   actionsForTelegramIntent,
   richMessageForTelegramIntent,
@@ -70,6 +72,8 @@ import {
 } from "./validate-ids.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
+const TELEGRAM_STARTUP_RETRY_DELAYS_MS = [1_000, 3_000];
+const TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS = 5_000;
 const TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const TELEGRAM_TYPING_SIGNAL_INTERVAL_MS = 4_000;
 const TELEGRAM_STREAM_DM_MIN_INTERVAL_MS = 1_000;
@@ -337,7 +341,7 @@ export type TelegramBotApi = {
   }): Promise<boolean>;
   closeForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   createForumTopic(request: TelegramCreateForumTopicRequest): Promise<TelegramForumTopic>;
-  deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+  deleteWebhook(params?: { drop_pending_updates?: boolean }, signal?: AbortSignal): Promise<boolean>;
   deleteForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   deleteMessage?(request: TelegramDeleteMessageRequest): Promise<boolean>;
   editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
@@ -346,14 +350,14 @@ export type TelegramBotApi = {
     userId: number | string,
   ): Promise<TelegramChatMember>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
-  getMe(): Promise<{
+  getMe(signal?: AbortSignal): Promise<{
     id: number;
     is_bot: boolean;
     username?: string;
     can_read_all_group_messages?: boolean;
   }>;
   reopenForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
-  getWebhookInfo(): Promise<{ url: string }>;
+  getWebhookInfo(signal?: AbortSignal): Promise<{ url: string }>;
   getFile(fileId: string): Promise<{ file_path?: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
   sendChatAction(request: TelegramSendChatActionRequest): Promise<boolean>;
@@ -363,7 +367,7 @@ export type TelegramBotApi = {
   sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage>;
   setMyCommands(params: {
     commands: Array<{ command: string; description: string }>;
-  }): Promise<boolean>;
+  }, signal?: AbortSignal): Promise<boolean>;
   unpinChatMessage(request: TelegramUnpinChatMessageRequest): Promise<boolean>;
 };
 
@@ -390,7 +394,7 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       name: string,
     ): Promise<TelegramForumTopic>;
-    deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+    deleteWebhook(params?: { drop_pending_updates?: boolean }, signal?: AbortSignal): Promise<boolean>;
     deleteForumTopic(
       chatId: number | string,
       messageThreadId: number,
@@ -415,7 +419,7 @@ export type TelegramGrammyBotLike = {
     // it set for bot accounts, but we keep the type optional here to
     // match `TelegramBotApi.getMe` and avoid a structural narrowing
     // surprise if grammy ever loosens the type.
-    getMe(): Promise<{
+    getMe(signal?: AbortSignal): Promise<{
       id: number;
       is_bot: boolean;
       username?: string;
@@ -429,7 +433,7 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       userId: number | string,
     ): Promise<TelegramChatMember>;
-    getWebhookInfo(): Promise<{ url: string }>;
+    getWebhookInfo(signal?: AbortSignal): Promise<{ url: string }>;
     getFile(fileId: string): Promise<{ file_path?: string }>;
     pinChatMessage(
       chatId: number | string,
@@ -463,6 +467,8 @@ export type TelegramGrammyBotLike = {
     ): Promise<TelegramSentMessage>;
     setMyCommands(
       commands: Array<{ command: string; description: string }>,
+      other?: undefined,
+      signal?: AbortSignal,
     ): Promise<boolean>;
     unpinChatMessage(
       chatId: number | string,
@@ -643,9 +649,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     now?: () => number;
     pollOnStart?: boolean;
     store?: MessagingCallbackHandleStore;
+    waitForStartupDelay?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   };
   private startPromise?: Promise<void>;
   private lifecycleGeneration = 0;
+  private startupAbort?: AbortController;
   /**
    * `true` once `stop()` has been called; suppresses the runtime-error
    * fan-out for the polling-loop rejection that grammy raises as part
@@ -793,7 +801,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
-    const lifecycleGeneration = ++this.lifecycleGeneration;
+    this.lifecycleGeneration += 1;
+    this.startupAbort?.abort();
+    const startup = new AbortController();
+    this.startupAbort = startup;
+    const { signal } = startup;
     this.listener = listener;
     this.streamCleanupStopped = false;
 
@@ -803,60 +815,36 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const tokenDiagnostics = telegramBotTokenDiagnostics(this.options.config.botToken);
     this.options.logger?.debug("telegram startup token diagnostics", tokenDiagnostics);
 
-    // Capture the bot's `@username` so the inbound path can recognize
-    // `@<botusername> <verb>` text mentions. Telegram usernames live
-    // on the bot profile (not the token), so this requires an actual
-    // API call. Failure isn't fatal — slash commands still work; we
-    // just skip mention parsing.
+    const { api } = this.bot;
     try {
-      const me = await this.bot.api.getMe();
-      if (me.username) {
+      const me = await this.readStartupIdentity(api, signal, tokenDiagnostics);
+      if (signal.aborted) return;
+      if (me?.username) {
         this.botUsername = me.username.toLowerCase();
         this.options.logger?.debug(
           `telegram captured bot username for mention parsing: @${this.botUsername}`,
         );
       }
-      if (me.can_read_all_group_messages !== undefined) {
+      if (me?.can_read_all_group_messages !== undefined) {
         this.canReadAllGroupMessages = me.can_read_all_group_messages;
         this.warnIfPrivacyHidesObservedGroups();
       }
+      await this.runStartupRequest("getWebhookInfo", () => api.getWebhookInfo(signal), signal, tokenDiagnostics);
+      await this.runStartupRequest("deleteWebhook", () => api.deleteWebhook({
+        drop_pending_updates: false,
+      }, signal), signal, tokenDiagnostics);
+      await this.runStartupRequest("setMyCommands", () => api.setMyCommands({
+        commands: MESSAGING_COMMAND_CATALOG.map(({ verb }) => ({
+          command: verb,
+          description: TELEGRAM_COMMAND_DESCRIPTIONS[verb],
+        })),
+      }, signal), signal, tokenDiagnostics);
     } catch (error) {
-      this.options.logger?.warn?.("telegram getMe failed; @-mention commands disabled", {
-        error: errorMessage(error),
-      });
+      if (!signal.aborted) throw error;
+    } finally {
+      if (this.startupAbort === startup) this.startupAbort = undefined;
     }
-    if (lifecycleGeneration !== this.lifecycleGeneration) {
-      return;
-    }
-
-    try {
-      await this.bot.api.getWebhookInfo();
-    } catch (error) {
-      this.options.logger?.warn?.("telegram getWebhookInfo failed", {
-        error: errorMessage(error),
-        ...telegramHttpErrorDiagnostics(error),
-        token: tokenDiagnostics,
-      });
-      throw error;
-    }
-    if (lifecycleGeneration !== this.lifecycleGeneration) {
-      return;
-    }
-    await this.bot.api.deleteWebhook({
-      drop_pending_updates: false,
-    });
-    if (lifecycleGeneration !== this.lifecycleGeneration) {
-      return;
-    }
-    await this.bot.api.setMyCommands({
-      commands: MESSAGING_COMMAND_CATALOG.map(({ verb }) => ({
-        command: verb,
-        description: TELEGRAM_COMMAND_DESCRIPTIONS[verb],
-      })),
-    });
-    if (lifecycleGeneration !== this.lifecycleGeneration) {
-      return;
-    }
+    if (signal.aborted) return;
 
     if (this.options.pollOnStart !== false) {
       this.startPromise = this.bot.start?.({
@@ -883,6 +871,70 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     this.scheduleStreamCleanup();
   }
 
+  private async readStartupIdentity(
+    api: TelegramBotApi,
+    startupSignal: AbortSignal,
+    tokenDiagnostics: Record<string, unknown>,
+  ) {
+    const lookup = new AbortController();
+    const signal = AbortSignal.any([startupSignal, lookup.signal]);
+    // Identity enables mention parsing. Bound the request and its retries
+    // together so the remaining setup can proceed if identity is unavailable.
+    try {
+      return await Promise.race([
+        this.runStartupRequest("getMe", () => api.getMe(signal), signal, tokenDiagnostics)
+          .catch(() => undefined),
+        this.waitForStartupDelay(TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS, signal).then(() => {
+          if (!startupSignal.aborted) {
+            this.options.logger?.warn?.("telegram getMe timed out; @-mention commands disabled", {
+              timeoutMs: TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS,
+            });
+          }
+          return undefined;
+        }),
+      ]);
+    } finally {
+      lookup.abort();
+    }
+  }
+
+  private waitForStartupDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+    return this.options.waitForStartupDelay?.(delayMs, signal)
+      ?? wait(delayMs, undefined, { signal });
+  }
+
+  private async runStartupRequest<T>(
+    method: "getMe" | "getWebhookInfo" | "deleteWebhook" | "setMyCommands",
+    request: () => Promise<T>,
+    signal: AbortSignal,
+    tokenDiagnostics: Record<string, unknown>,
+  ): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      signal.throwIfAborted();
+      try {
+        return await request();
+      } catch (error) {
+        signal.throwIfAborted();
+        const delayMs = TELEGRAM_STARTUP_RETRY_DELAYS_MS[attempt];
+        if (delayMs === undefined || !isRetryableStartupError(error)) {
+          const diagnostics = telegramHttpErrorDiagnostics(error);
+          // The nested fetch error can contain the original credential URL.
+          const failure = new Error(errorMessage(error), { cause: diagnostics.cause });
+          const warning = method === "getMe"
+            ? "telegram getMe failed; @-mention commands disabled"
+            : `telegram ${method} failed`;
+          this.options.logger?.warn?.(warning, {
+            error: failure.message,
+            ...diagnostics,
+            token: tokenDiagnostics,
+          });
+          throw failure;
+        }
+        await this.waitForStartupDelay(delayMs, signal);
+      }
+    }
+  }
+
   onRuntimeError(listener: (reason: string) => void): () => void {
     this.runtimeErrorListeners.add(listener);
     return () => {
@@ -900,6 +952,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   async stop(): Promise<void> {
     this.lifecycleGeneration += 1;
+    this.startupAbort?.abort();
     this.stopping = true;
     this.stopTypingSignals();
     this.streamCleanupStopped = true;
@@ -2511,7 +2564,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: errorMessage(error),
         outcome: "failed",
       };
     }
@@ -2927,7 +2980,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     // Log only the event kind and reason, never the actor or conversation ids.
     void notifyEachListenerAsync(this.inboundRejectedListeners, event, (error) => {
       this.options.logger?.warn?.("telegram inbound-rejected listener failed", {
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
         kind: event.kind,
         reason: event.reason,
       });
@@ -3204,7 +3257,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         ),
       createForumTopic: async (request) =>
         await bot.api.createForumTopic(request.chat_id, request.name),
-      deleteWebhook: async (params) => await bot.api.deleteWebhook(params),
+      deleteWebhook: async (params, signal) => await bot.api.deleteWebhook(params, signal),
       deleteForumTopic: async (request) =>
         await bot.api.deleteForumTopic(
           request.chat_id,
@@ -3230,13 +3283,13 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
           request,
         );
       },
-      getMe: async () => await bot.api.getMe(),
+      getMe: async (signal) => await bot.api.getMe(signal),
       reopenForumTopic: async (request) =>
         await bot.api.reopenForumTopic(
           request.chat_id,
           request.message_thread_id,
         ),
-      getWebhookInfo: async () => await bot.api.getWebhookInfo(),
+      getWebhookInfo: async (signal) => await bot.api.getWebhookInfo(signal),
       getFile: async (fileId) => await bot.api.getFile(fileId),
       pinChatMessage: async (request) => {
         const { chat_id, message_id, ...other } = request;
@@ -3270,8 +3323,8 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
           typeof photo === "string" ? photo : new InputFile(Buffer.from(photo), filename);
         return await bot.api.sendPhoto(chat_id, upload, other);
       },
-      setMyCommands: async (params) =>
-        await bot.api.setMyCommands(params.commands),
+      setMyCommands: async (params, signal) =>
+        await bot.api.setMyCommands(params.commands, undefined, signal),
       unpinChatMessage: async (request) => {
         const { chat_id, message_id, ...other } = request;
         return await bot.api.unpinChatMessage(chat_id, message_id, other);
@@ -3464,7 +3517,7 @@ function telegramGroupStreamMinIntervalMs(deliveriesInWindow: number): number {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return scrubBotToken(error instanceof Error ? error.message : String(error));
 }
 
 function isTelegramMessageNotModifiedError(error: unknown): boolean {
@@ -3538,7 +3591,14 @@ function telegramBotTokenDiagnostics(token: string): Record<string, unknown> {
   };
 }
 
-function telegramHttpErrorDiagnostics(error: unknown): Record<string, unknown> {
+function isRetryableStartupError(error: unknown): boolean {
+  if (error instanceof GrammyError) return error.error_code >= 500 && error.error_code < 600;
+  if (!(error instanceof HttpError)) return false;
+  const status = readNumberProperty(error.error, "status");
+  return status === undefined || (status >= 500 && status < 600);
+}
+
+function telegramHttpErrorDiagnostics(error: unknown) {
   const inner = readErrorProperty(error);
   const status = readNumberProperty(inner, "status") ?? readNumberProperty(error, "status");
   const statusText =
@@ -3547,9 +3607,9 @@ function telegramHttpErrorDiagnostics(error: unknown): Record<string, unknown> {
   const innerMessage = diagnosticErrorMessage(inner);
   return {
     ...(status !== undefined ? { status } : {}),
-    ...(statusText !== undefined ? { statusText } : {}),
-    ...(code !== undefined ? { code } : {}),
-    ...(inner !== undefined ? { cause: innerMessage } : {}),
+    ...(statusText !== undefined ? { statusText: scrubBotToken(statusText) } : {}),
+    ...(code !== undefined ? { code: scrubBotToken(code) } : {}),
+    ...(innerMessage !== undefined ? { cause: scrubBotToken(innerMessage) } : {}),
   };
 }
 

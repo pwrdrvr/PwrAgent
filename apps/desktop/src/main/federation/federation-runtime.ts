@@ -459,6 +459,7 @@ import {
   awaitStartupProviderCoverage,
   getNavigationDirectorySetAnnouncer,
   loadLocalNavigationQueryIndex,
+  navigationPullRequestProjection,
 } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -497,6 +498,7 @@ import {
   validateArchivedThreadLookup,
 } from "./federation-collection-reads";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { FederationAccountingStream, FEDERATION_EVENT_STREAM_METHOD, type FederationEventStreamCursor } from "./federation-event-stream";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
@@ -7311,16 +7313,19 @@ export class DesktopFederationRuntime {
             sequence: ++subscription.stream.sequence,
           })
         : unsequencedFederationEventPayload(event);
+      const id = `federation-event:${randomUUID()}`;
+      const owner = this.ensureLocalInstanceId();
       this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
-        id: `federation-event:${randomUUID()}`,
+        id,
         kind: "notification",
         method: FEDERATION_BACKEND_EVENT_METHOD,
         params: payload,
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: this.ensureLocalInstanceId(),
+        sourceInstanceId: owner,
         targetInstanceId: subscriberInstanceId,
         createdAt: Date.now(),
       });
+      listingDiagnostics.recordLaunchDelivery("send", event, owner, subscriberInstanceId, id);
     } catch {
       // Connection teardown clears the subscription. A route that vanished
       // between iteration and send simply misses this live notification.
@@ -7453,11 +7458,13 @@ export class DesktopFederationRuntime {
       this.notifyRemoteBackendEventListeners(event);
       return true;
     }
+    listingDiagnostics.recordLaunchDelivery("receive", event, sourceInstanceId, sourcePeerId, envelope.id);
     // Subscribed pin snapshots stay fresh through owner events, not a TTL.
     // Every navigation invalidation can change membership, counts or row metadata;
     // transcript deltas still never trigger a collection fetch.
     if (event.notification.method === "navigation/invalidated"
-      || NAVIGATION_EVENT_METHODS.has(event.notification.method)) {
+      || (NAVIGATION_EVENT_METHODS.has(event.notification.method)
+        && !(event.notification.method === "thread/subAgents/updated" && event.notification.params.navigationChanged === false))) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId, event);
     }
     this.publishReceivedBackendEvent(event);
@@ -7576,6 +7583,7 @@ async function mountRemoteParentForLocalChild(
         }
         return await getDesktopNavigationQueryStore().readPage({
           request: query, scopeKey: "renderer-local",
+          pullRequests: navigationPullRequestProjection({ kind: query.query.kind, signal }),
           loadIndex: async () => {
             const index = await loadLocalNavigationQueryIndex({ backend: query.backend, callerReason: "created-child-parent" });
             signal.throwIfAborted();
@@ -7729,6 +7737,7 @@ function localBackendOperations(): FederationBackendOperations {
           request: { ...request, deadlineAt: rpcOptions?.deadlineAt === undefined ? request.deadlineAt
             : Math.min(request.deadlineAt ?? rpcOptions.deadlineAt, rpcOptions.deadlineAt) },
           load: ({ signal, deadlineAt }) => getDesktopNavigationQueryStore().readPage({
+            pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal }),
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
               return loadLocalNavigationQueryIndex({ backend: request.backend,
@@ -7762,7 +7771,7 @@ function localBackendOperations(): FederationBackendOperations {
           identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
           operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true,
             request.includeWorkspaceConfiguration === true, request.collection ?? null, request.lookup ?? null]), deadlineAt: rpcOptions?.deadlineAt,
-          load: () => getDesktopNavigationDetailService().readSelectedDetail(request, { includePendingWakes: true }),
+          load: ({ signal }) => getDesktopNavigationDetailService().readSelectedDetail(request, { includePendingWakes: true, signal }),
         }));
     },
     async getNavigationQueueProjection(request, rpcOptions) {

@@ -200,11 +200,13 @@ async function createThreadTitleRevealFixture(): Promise<{
   };
 }
 
-async function launchThreadTitleRevealApp() {
+async function launchThreadTitleRevealApp(
+  windowSize: { width: number; height: number } = { width: 1280, height: 760 },
+) {
   const fixture = await createThreadTitleRevealFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    windowSize: { width: 1280, height: 760 },
+    windowSize,
     preLaunchHook: async (homeRoot) => {
       const stateDb = StateDb.open(
         path.join(
@@ -365,6 +367,126 @@ test("thread title reveals a linked child hidden by collapsed directory sections
     expect(childBox!.y + childBox!.height).toBeLessThanOrEqual(
       scrollBox!.y + scrollBox!.height + GEOMETRY_TOLERANCE_PX,
     );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("the selected thread docks at the list's edge when its row scrolls away", async () => {
+  // A short window, so eleven rows overflow the list by several rows.
+  const { app, fixture } = await launchThreadTitleRevealApp({ width: 1280, height: 460 });
+
+  try {
+    const threadBrowser = app.window.getByRole("region", {
+      name: "Thread browser",
+    });
+    const scrollRegion = threadBrowser.locator(".sidebar__scroll-region");
+    const selectedRow = threadBrowser
+      .locator(".thread-row.is-selected")
+      .filter({ hasText: "Pinned anchor thread" });
+    const dock = threadBrowser.getByTestId("selected-thread-dock");
+    await expect(selectedRow).toBeInViewport({ ratio: 1 });
+    await expect(dock).toHaveCount(0);
+
+    // The lane inside the region scrolls; the region only clips it.
+    const scrollLaneOf = (row: typeof selectedRow, to: "end" | "start") =>
+      row.evaluate((element, edge) => {
+        let lane = element.parentElement;
+        while (lane && !/auto|scroll/.test(getComputedStyle(lane).overflowY)) {
+          lane = lane.parentElement;
+        }
+        lane!.scrollTo({ top: edge === "end" ? lane!.scrollHeight : 0 });
+      }, to);
+
+    await scrollLaneOf(selectedRow, "end");
+    await expect(dock).toBeVisible();
+    await expect(dock).toHaveAttribute("data-edge", "top");
+    await expect(dock).toContainText("Pinned anchor thread");
+    // The project, since the row's own header is not what is on screen.
+    await expect(dock).toContainText("RevealFixture");
+    await expect(selectedRow).not.toBeInViewport({ ratio: 0.9 });
+    // The dock slides in over 140ms; measure where it comes to rest.
+    await dock.evaluate((element) =>
+      Promise.all(element.getAnimations().map((animation) => animation.finished)));
+    const [dockBox, scrollBox] = await Promise.all([
+      dock.boundingBox(),
+      scrollRegion.boundingBox(),
+    ]);
+    expect(dockBox).not.toBeNull();
+    expect(scrollBox).not.toBeNull();
+    // At the top edge, inside the list, ring included (4px reach).
+    expect(dockBox!.y - 4).toBeGreaterThanOrEqual(scrollBox!.y);
+    expect(dockBox!.y).toBeLessThan(scrollBox!.y + scrollBox!.height / 2);
+    // Above every stuck project header, which moves down to make room: a
+    // header or divider arriving under the dock cannot move it.
+    const stuckHeaderTops = await threadBrowser.locator(".directory-row__header").evaluateAll(
+      (headers, top) => headers.map((header) => header.getBoundingClientRect())
+        .filter((box) => box.bottom > top && box.top < top + 120).map((box) => box.top),
+      scrollBox!.y,
+    );
+    for (const headerTop of stuckHeaderTops) {
+      expect(headerTop).toBeGreaterThanOrEqual(dockBox!.y + dockBox!.height);
+    }
+    expect(dockBox!.x - 4).toBeGreaterThanOrEqual(scrollBox!.x);
+    expect(dockBox!.x + dockBox!.width + 4).toBeLessThanOrEqual(
+      scrollBox!.x + scrollBox!.width + GEOMETRY_TOLERANCE_PX,
+    );
+    await scrollRegion.screenshot({ path: test.info().outputPath("selected-thread-dock-top.png") });
+
+    await dock.click();
+    await expect(dock).toHaveCount(0);
+    await expect(selectedRow).toBeInViewport({ ratio: 1 });
+    await expect(selectedRow.locator(".thread-row__open")).toBeFocused();
+
+    // The last row, selected, then scrolled out the other way.
+    await threadBrowser
+      .getByRole("button", { name: "Parent thread with child link", exact: true })
+      .click();
+    const lastRow = threadBrowser
+      .locator(".thread-row.is-selected")
+      .filter({ hasText: "Parent thread with child link" });
+    await expect(lastRow).toBeInViewport({ ratio: 1 });
+    await scrollLaneOf(lastRow, "start");
+    await expect(dock).toBeVisible();
+    await expect(dock).toHaveAttribute("data-edge", "bottom");
+    await expect(dock).toContainText("Parent thread with child link");
+
+    // A thread with no row docks for what holds it. Collapse the parent's
+    // sub-threads, open the child from the parent's transcript, and scroll
+    // the parent out: the dock stands in, and a click brings the child back.
+    await threadBrowser.getByRole("tab", { name: "Directories" }).click();
+    await threadBrowser
+      .getByRole("button", { name: "Collapse sub-threads for Parent thread with child link" })
+      .click();
+    await expect(
+      threadBrowser.getByRole("button", {
+        name: "Expand sub-threads for Parent thread with child link",
+      }),
+    ).toBeVisible();
+    await app.window
+      .getByRole("button", { name: "Open thread Hidden linked child thread" })
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "Hidden linked child thread" }),
+    ).toBeVisible();
+    const parentRow = threadBrowser
+      .locator(".thread-row-shell")
+      .filter({ hasText: "Parent thread with child link" })
+      .first()
+      .locator(".thread-row")
+      .first();
+    await scrollLaneOf(parentRow, "start");
+    await expect(dock).toBeVisible();
+    await expect(dock).toHaveAttribute("data-edge", "bottom");
+    await expect(dock).toContainText("Hidden linked child thread");
+    await expect(dock).toContainText("RevealFixture");
+    await dock.click();
+    const childRow = threadBrowser
+      .locator(".thread-row.is-selected")
+      .filter({ hasText: "Hidden linked child thread" });
+    await expect(childRow).toBeInViewport({ ratio: 1 });
+    await expect(dock).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

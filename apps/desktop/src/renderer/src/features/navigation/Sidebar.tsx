@@ -4,6 +4,7 @@ import {
   getThreadPrimaryDirectory,
   type SubthreadMachine,
   type SubthreadWorktreeBase,
+  type ThreadWorktreeAvailability,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
@@ -20,7 +21,6 @@ import {
   type ProjectHeaderCardHandle,
 } from "./ProjectHeaderCard";
 import { useMousePress } from "../../lib/useMousePress";
-import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { LENS_KEYBINDING_ACTIONS } from "./useLensHotkeys";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
@@ -181,7 +181,10 @@ import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapsho
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatReviewThreadCount,
+  getThreadRowStatus,
+  isThreadRemoteWorkHere,
 } from "./ThreadRowStatus";
+import { SelectedThreadDock } from "./SelectedThreadDock";
 import {
   AttentionReviewReadout,
   AttentionTurnReadouts,
@@ -337,6 +340,12 @@ type SidebarProps = {
   revealSelectedThreadRequest?: number;
   onRevealSelectedThreadComplete?: (request: number) => void;
   /**
+   * Asks for the selected thread's row to be shown: the request comes back
+   * as a new `revealSelectedThreadRequest`. The selected thread's dock asks
+   * when the thread has no row to scroll to.
+   */
+  onRevealSelectedThread?: () => void;
+  /**
    * Set (to a fresh object) when the thread header's project name asks the
    * Directories lens to show that project. The caller switches the lens.
    */
@@ -401,7 +410,7 @@ type SidebarProps = {
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
-  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<ThreadWorktreeAvailability>;
   /**
    * Where a sub-thread's new worktree would start on a machine other than
    * the parent's (undefined is this machine): undefined when that machine
@@ -423,6 +432,8 @@ type SidebarProps = {
   ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenThreadSearch?: () => void;
+  /** ⌘K's "search all": run this query in the search screen. */
+  onSearchAllThreads?: (query: string) => void;
   /** Quick-jump popup (⌘F while the sidebar is focused), owned by App. */
   threadJumpOpen?: boolean;
   onThreadJumpOpenChange?: (open: boolean) => void;
@@ -756,6 +767,7 @@ export function Sidebar(props: SidebarProps) {
     onForkThread: useStableRowCallback(props.onForkThread),
     onOpenAutomations: useStableRowCallback(props.onOpenAutomations),
     onOpenThreadSearch: useStableRowCallback(props.onOpenThreadSearch),
+    onSearchAllThreads: useStableRowCallback(props.onSearchAllThreads),
     onOpenLaunchpad: useEventCallback(props.onOpenLaunchpad),
     onOpenSettings: useStableRowCallback(props.onOpenSettings),
     onOpenUsageActivity: useStableRowCallback(props.onOpenUsageActivity),
@@ -1049,7 +1061,6 @@ function SidebarContent(props: SidebarProps) {
   const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-  const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
   // A starting thread renders where its thread will land, and a sub-thread
   // being written renders in the same slot. Drafts holds only threads with
   // unsent replies, which a new thread never is, so neither lands there.
@@ -1132,14 +1143,8 @@ function SidebarContent(props: SidebarProps) {
   ) : props.error && !props.loaded ? (
     <p className="sidebar-error">{props.error}</p>
   ) : null;
-  const lensScroll = useLensScrollRestoration(
-    JSON.stringify([federationTarget, props.browseMode]),
-    !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
-      && [...props.pagedNavigation.resources.values()].every(({ state }) =>
-        (state.page?.entries.every((entry) => presentedByKey.has(navigationThreadSelectionKey(entry.row.ref))) ?? true)
-        && (props.browseMode !== "directories"
-          || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
-  );
+  // The lens region. It only clips; the lane inside it scrolls.
+  const scrollRegionRef = useRef<HTMLDivElement>(null);
   // The project index: every project in the order Directories draws them,
   // pinned first. It stays in every lens, so the list keeps one width when
   // the lens changes; only Directories is in project order to follow.
@@ -1357,6 +1362,44 @@ function SidebarContent(props: SidebarProps) {
   const visitingThread = browseMode !== "directories" && jumpedThreadKey && jumpedThreadKey === selectedItemKey
     ? navigationThreadByKey.get(jumpedThreadKey) ?? jumpedThread
     : undefined;
+
+  // The open thread, for the dock that stands in for its row once the row
+  // has scrolled out of the list or has no place in it. The row's project
+  // header scrolls away with it, so the dock names the project: the one
+  // that row sits under in Directories, the thread's first project in the
+  // flat lenses.
+  const dockedThread = selectedItemKey
+    ? presentedByKey.get(selectedItemKey) ?? navigationThreadByKey.get(selectedItemKey)
+    : undefined;
+  const dockedThreadProjectLabel = (directoryKey: string | undefined): string | undefined => {
+    const key = directoryKey ?? props.selectedThreadDirectoryKeys?.[0];
+    return (key ? props.directories.find((directory) => directory.key === key)?.label : undefined)
+      ?? dockedThread?.linkedDirectories[0]?.label;
+  };
+  // Its parents, nearest first: a collapsed one hides the row, and the dock
+  // then stands in for the parent's.
+  const dockedThreadAncestorKeys: string[] = [];
+  for (let current = dockedThread; current?.parentThreadId;) {
+    const parentKey = resolveThreadParentKey(current, navigationThreadByKey);
+    if (!parentKey || dockedThreadAncestorKeys.includes(parentKey)) {
+      break;
+    }
+    dockedThreadAncestorKeys.push(parentKey);
+    current = navigationThreadByKey.get(parentKey);
+  }
+  const revealSelectedThread = props.onRevealSelectedThread;
+  const revealDockedThread = useEventCallback((): void => {
+    // A flat lens can open only what it lists. Directories lists every
+    // thread under its project, so a thread this lens does not hold is
+    // shown there, as a project picked from the index is.
+    const listedHere = browseMode === "directories"
+      || [selectedItemKey, ...dockedThreadAncestorKeys].some((key) =>
+        renderedThreads.some((thread) => threadSummaryIdentityKey(thread) === key));
+    if (!listedHere) {
+      onBrowseModeChange("directories");
+    }
+    revealSelectedThread?.();
+  });
 
   // A direct navigation change (history, search, a thread link, etc.) starts a
   // fresh selection. Modified clicks deliberately do not navigate, so they can
@@ -2925,7 +2968,7 @@ function SidebarContent(props: SidebarProps) {
   const actionsMenuThreadKey = contextMenu?.pullRequest
     ? undefined
     : contextMenuThreadKey;
-  const [worktreeAvailability, setWorktreeAvailability] = useState<{ key: string; available: boolean }>();
+  const [worktreeAvailability, setWorktreeAvailability] = useState<{ key: string; available: boolean; thread?: NavigationThreadSummary }>();
   const readThreadWorktreeAvailability = props.readThreadWorktreeAvailability;
   const contextMenuThread = contextMenu?.thread;
   useEffect(() => {
@@ -2935,8 +2978,8 @@ function SidebarContent(props: SidebarProps) {
     let cancelled = false;
     setWorktreeAvailability(undefined);
     void readThreadWorktreeAvailability(contextMenuThread).then(
-      (available) => {
-        if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, available });
+      (availability) => {
+        if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, ...availability });
       },
       () => {
         if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, available: false });
@@ -3018,11 +3061,13 @@ function SidebarContent(props: SidebarProps) {
     },
     [contextMenuThreadKey],
   );
-  const contextMenuParentBranch = contextMenuThread
-    ? getThreadNamedBranch(contextMenuThread)
+  const worktreeParent = (worktreeAvailability?.key === contextMenuThreadKey ? worktreeAvailability?.thread : undefined)
+    ?? contextMenuThread;
+  const contextMenuParentBranch = worktreeParent
+    ? getThreadNamedBranch(worktreeParent)
     : undefined;
-  const subthreadProject = contextMenuThread
-    ? getSubthreadProjectIdentity(contextMenuThread, props.directories)
+  const subthreadProject = worktreeParent
+    ? getSubthreadProjectIdentity(worktreeParent, props.directories)
     : undefined;
   // Read through a ref: the provider changes identity whenever this
   // window's directories do, and a new check callback would ask every
@@ -3441,6 +3486,7 @@ function SidebarContent(props: SidebarProps) {
               setJumpedThread(thread);
               props.onJumpToRemoteThread?.(thread);
             } : undefined}
+            onSearchAllThreads={props.onSearchAllThreads}
             onClose={() => props.onThreadJumpOpenChange?.(false)}
           />
         ) : null}
@@ -3698,7 +3744,7 @@ function SidebarContent(props: SidebarProps) {
           {projectIndexShown && onProjectIndexWidthChange ? (
             <ProjectIndex
               projects={projectIndexEntries}
-              scrollRegionRef={lensScroll.ref}
+              scrollRegionRef={scrollRegionRef}
               scrollRegionId={scrollRegionId}
               spy={props.browseMode === "directories" && !listStatus}
               width={props.projectIndexWidth ?? null}
@@ -3711,10 +3757,9 @@ function SidebarContent(props: SidebarProps) {
             />
           ) : null}
           <div
-            ref={lensScroll.ref}
+            ref={scrollRegionRef}
             id={scrollRegionId}
             className="sidebar__scroll-region"
-            onScroll={lensScroll.onScroll}
             onClickCapture={hoverStableSnapshot.onClickCapture}
             onPointerCancel={hoverStableSnapshot.onPointerCancel}
             onPointerLeave={hoverStableSnapshot.onPointerLeave}
@@ -3876,6 +3921,19 @@ function SidebarContent(props: SidebarProps) {
                   onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
                 />
               )
+            )}
+            {listStatus ? null : (
+              <SelectedThreadDock
+                regionRef={scrollRegionRef}
+                thread={dockedThread}
+                threadKey={dockedThread ? selectedItemKey : undefined}
+                status={dockedThread ? getThreadRowStatus(dockedThread, props.thinkingThreadKeys) : undefined}
+                remoteWork={dockedThread ? isThreadRemoteWorkHere(dockedThread) : false}
+                projectLabel={dockedThreadProjectLabel}
+                ancestorThreadKeys={dockedThreadAncestorKeys}
+                directoryKeys={props.selectedThreadDirectoryKeys ?? []}
+                onRevealHiddenThread={revealDockedThread}
+              />
             )}
           </div>
         </section>

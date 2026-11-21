@@ -3690,18 +3690,20 @@ export const ComposerTiptapInput = forwardRef<
   }, [commandChipText, commandChipTooltip, editor]);
 
   useImperativeHandle(ref, () => ({
-    appendPlainText: (text) => {
+    appendPlainText: (text, options) => {
       if (!editor?.isEditable || propsRef.current.readOnly || !text) return false;
       const paragraph = editor.schema.nodes.paragraph;
       const content = paragraph.create(null, splitTextContent(text).map((node) => editor.schema.nodeFromJSON(node)));
       // Insert a separate paragraph so marks, inline chips and the active
       // selection in the existing draft keep their meaning.
-      if (editor.isEmpty) {
-        return editor.commands.setContent(content.toJSON());
-      }
-      return editor.commands.insertContentAt(editor.state.doc.content.size, content.toJSON(), {
-        updateSelection: false,
-      });
+      const appended = editor.isEmpty
+        ? editor.commands.setContent(content.toJSON())
+        : editor.commands.insertContentAt(editor.state.doc.content.size, content.toJSON(), {
+          updateSelection: false,
+        });
+      // Dictation hands the keyboard back with the caret after its text.
+      if (appended && options?.focusEnd) editor.commands.focus("end");
+      return appended;
     },
     deleteSelection: () => {
       if (propsRef.current.readOnly) return;

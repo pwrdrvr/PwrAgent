@@ -142,6 +142,7 @@ import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
+import { pluginsConnectionRoute } from "./features/settings/plugins-route";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import { encodeEnvironmentsRoute } from "./features/settings/environments-route";
 import { encodeForgeRulesRoute } from "./features/settings/forge-rules-route";
@@ -799,8 +800,11 @@ function DesktopAppShell(props: {
     const openMessagingSettings = useCallback(() => {
       openSettingsSection("messaging");
     }, [openSettingsSection]);
-    const openPluginSettings = useCallback(() => {
-      openSettingsSection("plugins");
+    const openPluginSettings = useCallback((connectionId?: string) => {
+      openSettingsSection(
+        "plugins",
+        connectionId ? pluginsConnectionRoute(connectionId) : undefined,
+      );
     }, [openSettingsSection]);
     const handleEditEnvironments = useCallback((workspacePath: string) => {
       openSettingsSection("environments", encodeEnvironmentsRoute({ project: workspacePath }));
@@ -4667,6 +4671,7 @@ function DesktopAppShell(props: {
             composerSourceThreadKey={navigation.composerSourceThreadKey}
             revealSelectedThreadRequest={revealSelectedThreadRequest}
             onRevealSelectedThreadComplete={threadJump.completePeekRestore}
+            onRevealSelectedThread={revealSelectedThreadInList}
             projectRevealRequest={projectRevealRequest}
             projectIndexHidden={projectIndexHidden}
             onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
@@ -4722,6 +4727,10 @@ function DesktopAppShell(props: {
             }}
             onOpenThreadSearch={() => {
               toggleGlobalThreadSearch();
+            }}
+            onSearchAllThreads={(query) => {
+              threadSearchState.requestSearch(query);
+              setMainView("search");
             }}
             onOpenLaunchpad={async (directory, preferredBackend) => {
               setMainView("thread");

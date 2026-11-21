@@ -3,6 +3,10 @@ import type {
   ThreadSandboxRecord,
   ThreadSandboxStorage,
 } from "@pwragent/owner-core/mcp-connection-storage";
+import {
+  MCP_CONNECTION_DISPLAY_NAMES,
+  isBuiltInMcpConnectionId,
+} from "@pwragent/shared/contracts/mcp-connections";
 
 /**
  * Releases the Sandboxer sandboxes a thread created, once every PR attached
@@ -15,6 +19,10 @@ import type {
  * `stop_sandbox`, which ends compute billing but keeps the snapshot. A
  * stopped sandbox stays pending, and a later cleanup deletes it once the
  * connection lists `delete_sandbox`.
+ *
+ * Boat's sandboxes are released the same way, through PwrAgent's own Boat
+ * server, which lists the same two tool names. Each connection has its own
+ * cleanup switch.
  *
  * Only ids recorded from this thread's own `create_sandbox` results are ever
  * touched. "Not found" counts as already gone. Any other failure leaves the
@@ -68,8 +76,8 @@ export type SandboxerPrCleanupOptions = {
     threadId: string;
     signal: AbortSignal;
   }) => Promise<SandboxerCleanupTransport>;
-  /** The operator's switch in Settings → Plugins → MCPs. */
-  isEnabled: () => boolean;
+  /** The operator's switch for that connection in Settings → Plugins → MCPs. */
+  isEnabled: (connectionId: string) => boolean;
   onReport?: (report: SandboxCleanupReport) => void;
   now?: () => number;
   timeoutMs?: number;
@@ -160,12 +168,6 @@ export class SandboxerPrCleanupService {
       entries: [],
     };
     if (pending.length === 0) return report;
-    if (!this.options.isEnabled()) {
-      report.entries = pending.map((record) => entry(record, "skipped",
-        "Automatic cleanup is off in Settings → Plugins → MCPs; left in place."));
-      this.options.onReport?.(report);
-      return report;
-    }
     const signal = AbortSignal.timeout(this.options.timeoutMs ?? CLEANUP_TIMEOUT_MS);
     const byConnection = new Map<string, ThreadSandboxRecord[]>();
     for (const record of pending) {
@@ -176,13 +178,19 @@ export class SandboxerPrCleanupService {
     }
     let changed = false;
     for (const [connectionId, records] of byConnection) {
+      if (!this.options.isEnabled(connectionId)) {
+        changed = true;
+        report.entries.push(...records.map((record) => entry(record, "skipped",
+          "Automatic cleanup is off in Settings → Plugins → MCPs; left in place.")));
+        continue;
+      }
       if (
         records.every((record) => record.status === "stopped")
         && (this.noDeleteToolUntil.get(connectionId) ?? 0) > this.now()
       ) {
         // Nothing to do until the connection can delete: skip the session.
         report.entries.push(...records.map((record) => entry(record, "pending-delete",
-          PENDING_DELETE_DETAIL)));
+          pendingDeleteDetail(connectionId))));
         continue;
       }
       changed = true;
@@ -206,18 +214,19 @@ export class SandboxerPrCleanupService {
   }): Promise<SandboxCleanupEntry[]> {
     let transport: SandboxerCleanupTransport;
     let tools: string[];
+    const service = serviceName(params.connectionId);
     try {
       transport = await this.options.openTransport(params);
     } catch (error) {
       return params.records.map((record) => entry(record, "failed",
-        `Sandboxer was unavailable (${describeError(error)}); left in place.`));
+        `${service} was unavailable (${describeError(error)}); left in place.`));
     }
     try {
       tools = await transport.listToolNames();
     } catch (error) {
       await closeQuietly(transport);
       return params.records.map((record) => entry(record, "failed",
-        `Sandboxer's tools could not be listed (${describeError(error)}); left in place.`));
+        `${service}'s tools could not be listed (${describeError(error)}); left in place.`));
     }
     const canDelete = tools.includes(SANDBOXER_DELETE_TOOL);
     const canStop = tools.includes(SANDBOXER_STOP_TOOL);
@@ -236,12 +245,12 @@ export class SandboxerPrCleanupService {
         if (canDelete) {
           entries.push(await this.release(transport, record, "delete"));
         } else if (record.status === "stopped") {
-          entries.push(entry(record, "pending-delete", PENDING_DELETE_DETAIL));
+          entries.push(entry(record, "pending-delete", pendingDeleteDetail(params.connectionId)));
         } else if (canStop) {
           entries.push(await this.release(transport, record, "stop"));
         } else {
           entries.push(entry(record, "failed",
-            "Sandboxer lists neither delete_sandbox nor stop_sandbox; left in place."));
+            `${service} lists neither delete_sandbox nor stop_sandbox; left in place.`));
         }
       }
     } finally {
@@ -265,8 +274,9 @@ export class SandboxerPrCleanupService {
       return entry(record, "failed", `${describeError(error)}; left in place.`);
     }
     const text = resultText(result);
+    const service = serviceName(record.connectionId);
     if (result.isError && !isNotFound(text) && !(mode === "stop" && isAlreadyStopped(text))) {
-      return entry(record, "failed", `${truncate(text) || "Sandboxer reported an error"}; left in place.`);
+      return entry(record, "failed", `${truncate(text) || `${service} reported an error`}; left in place.`);
     }
     const now = this.now();
     if (result.isError && isNotFound(text)) {
@@ -274,10 +284,10 @@ export class SandboxerPrCleanupService {
         connectionId: record.connectionId,
         sandboxId: record.sandboxId,
         status: "deleted",
-        note: "Sandboxer reported it no longer exists.",
+        note: `${service} reported it no longer exists.`,
         now,
       });
-      return entry(record, "already-gone", "Sandboxer reported it no longer exists.");
+      return entry(record, "already-gone", `${service} reported it no longer exists.`);
     }
     if (mode === "delete") {
       this.options.store.markOutcome({
@@ -288,7 +298,7 @@ export class SandboxerPrCleanupService {
       });
       return entry(record, "deleted");
     }
-    const note = "Stopped; compute billing ended and its snapshot remains. Deletion is pending: Sandboxer's MCP has no delete_sandbox tool.";
+    const note = `Stopped; compute billing ended and its snapshot remains. Deletion is pending: ${service}'s MCP has no delete_sandbox tool.`;
     this.options.store.markOutcome({
       connectionId: record.connectionId,
       sandboxId: record.sandboxId,
@@ -310,7 +320,7 @@ export function formatSandboxCleanupLines(
   if (!report || report.entries.length === 0) return [];
   return [
     "",
-    "Sandboxer cleanup by PwrAgent (sandboxes this thread created)",
+    "Sandbox cleanup by PwrAgent (sandboxes this thread created)",
     ...report.entries.map((item) =>
       `- ${item.sandboxId}${item.name ? ` (${item.name})` : ""}: ${
         ACTION_LABELS[item.action]
@@ -327,8 +337,13 @@ export function summarizeSandboxCleanup(report: SandboxCleanupReport): string {
     `${ACTION_LABELS[action]} ${count}`).join(", ");
 }
 
-const PENDING_DELETE_DETAIL =
-  "Already stopped. Deletion is pending: Sandboxer's MCP has no delete_sandbox tool.";
+function serviceName(connectionId: string): string {
+  return isBuiltInMcpConnectionId(connectionId) ? MCP_CONNECTION_DISPLAY_NAMES[connectionId] : "The sandbox service";
+}
+
+function pendingDeleteDetail(connectionId: string): string {
+  return `Already stopped. Deletion is pending: ${serviceName(connectionId)}'s MCP has no delete_sandbox tool.`;
+}
 
 const ACTION_LABELS: Record<SandboxCleanupAction, string> = {
   deleted: "deleted",

@@ -3,11 +3,15 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   MCP_CONNECTION_IDS,
+  BOAT_API_URL,
+  BOAT_MCP_CONNECTION_ID,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
   SANDBOXER_MCP_URL,
   isSandboxerTransport,
+  normalizeBoatSandboxPolicy,
+  type BoatSandboxPolicy,
   type SandboxerTransport,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
@@ -50,13 +54,28 @@ const BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_select_for_new_threads",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_select_for_new_threads",
   [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_select_for_new_threads",
+  [BOAT_MCP_CONNECTION_ID]: "boat_select_for_new_threads",
 } as const;
 // And the tool approval mode, the third.
 const BUILT_IN_TOOL_APPROVAL_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_tool_approval",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_tool_approval",
   [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_tool_approval",
+  [BOAT_MCP_CONNECTION_ID]: "boat_tool_approval",
 } as const;
+// Selecting a paid compute connection in a thread is the consent, so its
+// stored-as-absence default is `approve` rather than `auto`.
+const APPROVE_BY_DEFAULT_IDS: ReadonlySet<string> = new Set([
+  SANDBOXER_MCP_CONNECTION_ID,
+  BOAT_MCP_CONNECTION_ID,
+]);
+const BOAT_POLICY_KEYS = {
+  keepCredentialsOut: "boat_keep_credentials_out",
+  defaultType: "boat_default_type",
+  defaultTtlMinutes: "boat_default_ttl_minutes",
+  maxType: "boat_max_type",
+  maxTtlMinutes: "boat_max_ttl_minutes",
+} as const satisfies Record<keyof BoatSandboxPolicy, string>;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 // PwrSnap has no URL: PwrAgent starts the `pwrsnap-mcp` relay inside the
 // PwrSnap install. This names it the way a local command row is named.
@@ -95,6 +114,7 @@ export class McpConnectionRegistry {
       this.pwrSnapConnection(table),
       this.pwrGitConnection(table),
       this.sandboxerConnection(table),
+      this.boatConnection(table),
       ...this.readStoredConnections(table),
     ].map((connection) => {
       const entries = projects.get(connection.id);
@@ -117,6 +137,10 @@ export class McpConnectionRegistry {
     if (connectionId === SANDBOXER_MCP_CONNECTION_ID) {
       this.writeScalar(["mcp_connections", "sandboxer_enabled"], enabled);
       return this.sandboxerConnection();
+    }
+    if (connectionId === BOAT_MCP_CONNECTION_ID) {
+      this.writeScalar(["mcp_connections", "boat_enabled"], enabled);
+      return this.boatConnection();
     }
     if (connectionId === PWRGIT_MCP_CONNECTION_ID) {
       this.writeScalar(["mcp_connections", "pwrgit_enabled"], enabled);
@@ -199,6 +223,28 @@ export class McpConnectionRegistry {
     return this.sandboxerConnection();
   }
 
+  /** Boat's own switch for the same cleanup. The default is on. */
+  setBoatCleanupOnPrClose(enabled: boolean): McpConnectionRecord {
+    this.writeScalar(["mcp_connections", "boat_cleanup_on_pr_close"], enabled);
+    return this.boatConnection();
+  }
+
+  /**
+   * Change what Boat's tools may do. The stored result always satisfies the
+   * policy's own rules: a default above its cap is lowered to the cap.
+   */
+  setBoatSandboxPolicy(change: Partial<BoatSandboxPolicy>): McpConnectionRecord {
+    const policy = normalizeBoatSandboxPolicy({ ...this.boatConnection().boatPolicy, ...change });
+    this.writeConfig((source) =>
+      applyTomlEdits(source, (Object.keys(BOAT_POLICY_KEYS) as Array<keyof BoatSandboxPolicy>).map((key) => ({
+        op: "set" as const,
+        path: ["mcp_connections", BOAT_POLICY_KEYS[key]],
+        value: policy[key],
+      }))),
+    );
+    return this.boatConnection();
+  }
+
   /**
    * Choose whether images in text pasted from Linear are fetched through a
    * Linear connection and attached to the message.
@@ -230,7 +276,7 @@ export class McpConnectionRegistry {
     if (isBuiltInMcpConnectionId(connectionId)) {
       const path = ["mcp_connections", BUILT_IN_TOOL_APPROVAL_KEYS[connectionId]];
       this.writeConfig((source) =>
-        applyTomlEdits(source, [toolApproval === (connectionId === SANDBOXER_MCP_CONNECTION_ID ? "approve" : "auto")
+        applyTomlEdits(source, [toolApproval === (APPROVE_BY_DEFAULT_IDS.has(connectionId) ? "approve" : "auto")
           ? { op: "delete", path }
           : { op: "set", path, value: toolApproval }]),
         connectionId === SANDBOXER_MCP_CONNECTION_ID,
@@ -363,6 +409,35 @@ export class McpConnectionRegistry {
     };
   }
 
+  /**
+   * PwrAgent's own server for Boat's API. `serverUrl` is Boat's API address,
+   * which is also what its stored key is bound to. Off until the operator
+   * connects and offers it: it costs money.
+   */
+  private boatConnection(table = this.readConnectionsTable()): McpConnectionRecord {
+    return {
+      id: BOAT_MCP_CONNECTION_ID,
+      displayName: "Boat",
+      serverUrl: BOAT_API_URL,
+      authMode: "api_key",
+      kind: "boat",
+      enabled: table?.boat_enabled === true,
+      selectForNewThreads: table?.boat_select_for_new_threads === true,
+      toolApproval: isMcpConnectionToolApproval(table?.boat_tool_approval)
+        ? table.boat_tool_approval : "approve",
+      boatCleanupOnPrClose: table?.boat_cleanup_on_pr_close !== false,
+      boatPolicy: normalizeBoatSandboxPolicy({
+        keepCredentialsOut: table?.[BOAT_POLICY_KEYS.keepCredentialsOut],
+        defaultType: table?.[BOAT_POLICY_KEYS.defaultType],
+        defaultTtlMinutes: table?.[BOAT_POLICY_KEYS.defaultTtlMinutes],
+        maxType: table?.[BOAT_POLICY_KEYS.maxType],
+        maxTtlMinutes: table?.[BOAT_POLICY_KEYS.maxTtlMinutes],
+      }),
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+
   setSandboxerTransport(transport: SandboxerTransport): McpConnectionRecord {
     if (!isSandboxerTransport(transport)) throw new Error("Choose a Sandboxer transport.");
     this.writeConfig((source) => applyTomlEdits(source, [{
@@ -461,6 +536,7 @@ export class McpConnectionRegistry {
       this.pwrSnapConnection(table),
       this.pwrGitConnection(table),
       this.sandboxerConnection(table),
+      this.boatConnection(table),
       ...current,
     ].find((connection) => connection.serverUrl === serverUrl);
     if (duplicate) {

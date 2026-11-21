@@ -36,7 +36,8 @@ if (kind === "unit") {
     if (specs.length) {
       await ctx.standalone();
       const { testModules, unhandledErrors } = await ctx.runTestSpecifications(specs);
-      if (unhandledErrors.length || testModules.some((module) => !module.ok())) process.exitCode = 1;
+      // Preserve the CI reporter's distinct test failure code until close.
+      if (unhandledErrors.length || testModules.some((module) => !module.ok())) process.exitCode ||= 1;
     }
   } finally {
     await ctx.close();

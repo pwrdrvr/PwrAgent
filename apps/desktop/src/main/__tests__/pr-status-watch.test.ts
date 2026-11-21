@@ -1371,7 +1371,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
     }));
     const prepareTerminalWake = vi.fn(async () => [
       "",
-      "Sandboxer cleanup by PwrAgent (sandboxes this thread created)",
+      "Sandbox cleanup by PwrAgent (sandboxes this thread created)",
       "- sb_one: deleted",
     ]);
     const coordinator = new PrStatusWatchCoordinator({

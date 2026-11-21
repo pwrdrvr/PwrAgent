@@ -1,9 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatArchiveCleanupNotice } from "../../../lib/archive-cleanup-notice";
+import { threadActionErrorContext } from "../../../lib/thread-action-error-context";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { ThreadRow } from "../../navigation/ThreadRow";
+import { AppNoticeToast } from "../../notifications/AppNoticeToast";
 import { ThreadHeader } from "../ThreadHeader";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
@@ -59,6 +63,15 @@ const OTHER_LINK = `[other](pwragent://thread/${OTHER_THREAD_ID})`;
 const CHIP_NAME = "Open thread RELATED query deranking issue";
 const OTHER_CHIP_NAME = "Open thread Unrelated thread";
 const TITLE_LINK_NAME = /^Show selected thread in thread list: /;
+const MOUSE_POINTER = { pointerId: 1, pointerType: "mouse" };
+
+function enterMouse(element: Element): void {
+  fireEvent.pointerOver(element, MOUSE_POINTER);
+}
+
+function leaveMouse(element: Element, relatedTarget?: Element): void {
+  fireEvent.pointerOut(element, { ...MOUSE_POINTER, relatedTarget });
+}
 
 function rowFor(thread: NavigationThreadSummary) {
   return (
@@ -90,10 +103,19 @@ function rowElement(title: string): HTMLElement {
  */
 function scene(options: {
   headerThread?: NavigationThreadSummary;
+  openArchiveWarningThread?: () => void;
   text?: string;
   threads?: NavigationThreadSummary[];
 }) {
   const threads = options.threads ?? [targetThread, otherThread];
+  const archiveNotice = options.openArchiveWarningThread
+    ? formatArchiveCleanupNotice([{
+        removedWorktree: false,
+        deletedBranch: false,
+        worktreeState: "present",
+        skippedReason: "The worktree folder still exists, but its .git entry is missing. The folder was kept.",
+      }], threadActionErrorContext(otherThread))
+    : undefined;
   return (
     <ThreadLinkProvider onShowThread={vi.fn()} threads={threads}>
       {options.headerThread ? (
@@ -103,6 +125,13 @@ function scene(options: {
         />
       ) : null}
       {options.text ? <ThreadMarkdown text={options.text} /> : null}
+      {archiveNotice ? (
+        <AppNoticeToast
+          notice={archiveNotice}
+          onDismiss={vi.fn()}
+          onOpenThread={options.openArchiveWarningThread}
+        />
+      ) : null}
       <div className="sidebar">
         {threads.map((thread) => (
           <div key={thread.id}>{rowFor(thread)}</div>
@@ -151,11 +180,11 @@ describe("thread link hover target", () => {
 
     expect(targetRow).not.toHaveClass("is-link-target");
 
-    fireEvent.mouseEnter(chip);
+    enterMouse(chip);
     expect(targetRow).toHaveClass("is-link-target");
     expect(otherRow).not.toHaveClass("is-link-target");
 
-    fireEvent.mouseLeave(chip);
+    leaveMouse(chip);
     expect(targetRow).not.toHaveClass("is-link-target");
   });
 
@@ -194,7 +223,7 @@ describe("thread link hover target", () => {
     const chip = screen.getByRole("button", { name: CHIP_NAME });
     const targetRow = rowElement("RELATED query deranking issue");
 
-    fireEvent.mouseEnter(chip);
+    enterMouse(chip);
     expect(targetRow).toHaveClass("is-link-target");
 
     fireEvent.click(chip);
@@ -203,7 +232,7 @@ describe("thread link hover target", () => {
 
   it("releases the highlight when a hovered chip unmounts without a mouseleave", () => {
     const view = renderScene({ text: `See ${TARGET_LINK}` });
-    fireEvent.mouseEnter(screen.getByRole("button", { name: CHIP_NAME }));
+    enterMouse(screen.getByRole("button", { name: CHIP_NAME }));
     expect(rowElement("RELATED query deranking issue")).toHaveClass("is-link-target");
 
     // Same provider, chip gone: the message re-rendered under the pointer.
@@ -225,13 +254,13 @@ describe("thread link hover target", () => {
     expect(targetRow).toHaveClass("is-link-target");
 
     // The most recent link wins while the pointer rests on it…
-    fireEvent.mouseEnter(passingChip);
+    enterMouse(passingChip);
     expect(otherRow).toHaveClass("is-link-target");
     expect(targetRow).not.toHaveClass("is-link-target");
 
     // …and leaving it hands the highlight back to the link that still holds
     // focus, rather than wiping the slot.
-    fireEvent.mouseLeave(passingChip);
+    leaveMouse(passingChip);
     expect(otherRow).not.toHaveClass("is-link-target");
     expect(targetRow).toHaveClass("is-link-target");
   });
@@ -244,7 +273,7 @@ describe("thread link hover target", () => {
     const chip = screen.getByRole("button", { name: CHIP_NAME });
     const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
 
-    fireEvent.mouseEnter(chip);
+    enterMouse(chip);
     await focus(titleLink);
     expect(rowElement("Unrelated thread")).toHaveClass("is-link-target");
 
@@ -266,11 +295,9 @@ describe("thread link hover target", () => {
 
     // Enter the group through the chip; leaving the chip for its sibling
     // pop-out stays inside the group, so no leave fires on the group.
-    fireEvent.mouseEnter(chip.parentElement!);
-    fireEvent.mouseEnter(chip);
+    enterMouse(chip);
     expect(targetRow).toHaveClass("is-link-target");
-    fireEvent.mouseLeave(chip);
-    fireEvent.mouseEnter(popout);
+    leaveMouse(chip, popout);
     expect(targetRow).toHaveClass("is-link-target");
 
     // Tab from chip to pop-out likewise stays lit; releasing needs BOTH the
@@ -280,7 +307,7 @@ describe("thread link hover target", () => {
     expect(targetRow).toHaveClass("is-link-target");
     await blur(popout);
     expect(targetRow).toHaveClass("is-link-target");
-    fireEvent.mouseLeave(popout.parentElement!);
+    leaveMouse(popout);
     expect(targetRow).not.toHaveClass("is-link-target");
   });
 
@@ -293,7 +320,7 @@ describe("thread link hover target", () => {
     const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
     const targetRow = rowElement("RELATED query deranking issue");
 
-    fireEvent.mouseEnter(titleLink);
+    enterMouse(titleLink);
     await focus(titleLink);
     expect(targetRow).toHaveClass("is-link-target");
 
@@ -301,7 +328,7 @@ describe("thread link hover target", () => {
     await blur(titleLink);
     expect(targetRow).toHaveClass("is-link-target");
 
-    fireEvent.mouseLeave(titleLink);
+    leaveMouse(titleLink);
     expect(targetRow).not.toHaveClass("is-link-target");
   });
 
@@ -311,11 +338,11 @@ describe("thread link hover target", () => {
     const targetRow = rowElement("RELATED query deranking issue");
 
     await focus(titleLink);
-    fireEvent.mouseEnter(titleLink);
+    enterMouse(titleLink);
     expect(targetRow).toHaveClass("is-link-target");
 
     // Pointer wanders off while the link still wears the focus ring.
-    fireEvent.mouseLeave(titleLink);
+    leaveMouse(titleLink);
     expect(targetRow).toHaveClass("is-link-target");
 
     await blur(titleLink);
@@ -328,11 +355,11 @@ describe("thread link hover target", () => {
     const targetRow = rowElement("RELATED query deranking issue");
     const otherRow = rowElement("Unrelated thread");
 
-    fireEvent.mouseEnter(titleLink);
+    enterMouse(titleLink);
     expect(targetRow).toHaveClass("is-link-target");
     expect(otherRow).not.toHaveClass("is-link-target");
 
-    fireEvent.mouseLeave(titleLink);
+    leaveMouse(titleLink);
     expect(targetRow).not.toHaveClass("is-link-target");
 
     await focus(titleLink);
@@ -343,7 +370,7 @@ describe("thread link hover target", () => {
 
   it("follows a thread switch under a resting pointer on the title-bar link", () => {
     const view = renderScene({ headerThread: targetThread });
-    fireEvent.mouseEnter(screen.getByRole("button", { name: TITLE_LINK_NAME }));
+    enterMouse(screen.getByRole("button", { name: TITLE_LINK_NAME }));
     expect(rowElement("RELATED query deranking issue")).toHaveClass("is-link-target");
 
     // ⌘K / sidebar click while the pointer rests on the title: the header
@@ -356,15 +383,80 @@ describe("thread link hover target", () => {
     );
     expect(rowElement("Unrelated thread")).toHaveClass("is-link-target");
 
-    fireEvent.mouseLeave(screen.getByRole("button", { name: TITLE_LINK_NAME }));
+    leaveMouse(screen.getByRole("button", { name: TITLE_LINK_NAME }));
     expect(rowElement("Unrelated thread")).not.toHaveClass("is-link-target");
+  });
+
+  it("ends title-link hover only when its own pointer leaves", () => {
+    fc.assert(fc.property(
+      fc.constantFrom(targetThread, otherThread),
+      fc.constantFrom("mouse", "pen"),
+      fc.array(fc.record({
+        next: fc.constantFrom(targetThread, otherThread),
+        deliveredLeave: fc.boolean(),
+        outsideEvent: fc.constantFrom("pointerDown", "pointerOver"),
+        otherPointers: fc.array(fc.record({
+          pointerType: fc.constantFrom("touch", "pen"),
+          pointerId: fc.integer({ min: 2, max: 20 }),
+        }), { minLength: 1, maxLength: 4 }),
+      }), { minLength: 1, maxLength: 5 }),
+      (initial, pointerType, selections) => {
+        const owner = { pointerId: 1, pointerType };
+        const view = renderScene({ headerThread: initial });
+        try {
+          for (const { next, deliveredLeave, outsideEvent, otherPointers } of selections) {
+            const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
+            fireEvent.pointerOver(titleLink, owner);
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(1);
+
+            const row = rowElement(next.title);
+            for (const pointer of otherPointers) {
+              fireEvent.pointerOver(row, pointer);
+              fireEvent.pointerDown(row, pointer);
+              expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(1);
+            }
+            fireEvent[outsideEvent](titleLink, owner);
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(1);
+            if (deliveredLeave) fireEvent.pointerOut(titleLink, owner);
+            // The renderer can still receive a pointer event from the sidebar
+            // when the title link missed its leave.
+            fireEvent[outsideEvent](row, owner);
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(0);
+            // A subsequent selection reuses the same title link.
+            view.rerenderScene({ headerThread: next });
+            expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(0);
+          }
+        } finally {
+          view.unmount();
+        }
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("clears a stale title-link hover when opening a thread from an archive warning", () => {
+    const openArchiveWarningThread = vi.fn(() => {
+      view.rerenderScene({ headerThread: otherThread, openArchiveWarningThread });
+    });
+    const view = renderScene({ headerThread: targetThread, openArchiveWarningThread });
+    enterMouse(screen.getByRole("button", { name: TITLE_LINK_NAME }));
+    expect(rowElement(targetThread.title)).toHaveClass("is-link-target");
+
+    const warningLink = screen.getByRole("button", { name: OTHER_CHIP_NAME });
+    fireEvent.pointerDown(warningLink, MOUSE_POINTER);
+    fireEvent.click(warningLink);
+
+    expect(openArchiveWarningThread).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", {
+      name: `Show selected thread in thread list: ${otherThread.title}`,
+    })).toBeInTheDocument();
+    expect(view.container.querySelectorAll(".is-link-target")).toHaveLength(0);
   });
 
   it("keeps the title-bar highlight across a thread-membership change", () => {
     // The provider's context value is rebuilt whenever the set of threads
     // changes; the hover store must not be reset by that.
     const view = renderScene({ headerThread: targetThread });
-    fireEvent.mouseEnter(screen.getByRole("button", { name: TITLE_LINK_NAME }));
+    enterMouse(screen.getByRole("button", { name: TITLE_LINK_NAME }));
     expect(rowElement("RELATED query deranking issue")).toHaveClass("is-link-target");
 
     view.rerenderScene({
@@ -387,7 +479,7 @@ describe("thread link hover target", () => {
       </>,
     );
     const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
-    expect(() => fireEvent.mouseEnter(titleLink)).not.toThrow();
+    expect(() => enterMouse(titleLink)).not.toThrow();
     expect(rowElement("RELATED query deranking issue")).not.toHaveClass(
       "is-link-target",
     );

@@ -420,7 +420,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -477,6 +477,7 @@ import {
   type PullRequestReferenceIdentity,
 } from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import {
   PrStatusWatchCoordinator,
   getPrStatusWatchOutcome,
@@ -2032,6 +2033,7 @@ class DesktopAppServerService {
         ? { ...page, remoteOwner: { ...page.remoteOwner!, directoryThreadsCollapsed } } : page;
     }
     return await getDesktopNavigationQueryStore().readPage({
+      pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal }),
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
         await awaitStartupProviderCoverage({ query: request.query,
@@ -2136,7 +2138,7 @@ class DesktopAppServerService {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);
           }
-          return getDesktopNavigationDetailService().readSelectedDetail(request);
+          return getDesktopNavigationDetailService().readSelectedDetail(request, { signal: options.signal });
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
@@ -2355,6 +2357,7 @@ class DesktopAppServerService {
       backend === "all" && !request.filter?.trim();
     await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
       replace: replaceThreadPrAttachments,
+      resolveUnattached: true,
     });
     const threadsWithPrimaryGitRepositories =
       this.applyPrimaryGitRepositories(canonicalSnapshot.threads);
@@ -2780,20 +2783,20 @@ class DesktopAppServerService {
 
   private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
-    options: { replace: boolean; isCurrent?: () => boolean },
+    options: { replace: boolean; isCurrent?: () => boolean; resolveUnattached?: boolean },
   ): Promise<void> {
     const primaryRepoResolutionByPath = new Map<
       string,
       Promise<string | undefined>
     >();
-    const primaryRepoKeys = await Promise.all(
-      threads.map(async (thread) =>
-        await resolvePrimaryThreadRepoKey(
-          thread,
-          primaryRepoResolutionByPath,
-        ),
-      ),
-    );
+    // The complete inventory still clears candidates for threads with no PRs.
+    // Only an attachment needs a primary key for polling or dispatch. Selected
+    // detail and forge rules resolve their own checkout when needed.
+    const primaryRepoKeys = await Promise.all(threads.map((thread) =>
+      thread.prs?.length || options.resolveUnattached
+        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
+        : undefined,
+    ));
     const liveThreadKeys = new Set<string>();
     const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
     for (const [index, thread] of threads.entries()) {
@@ -2849,7 +2852,7 @@ class DesktopAppServerService {
         prs: params.prs,
       },
     );
-    if (!current?.primaryRepoKey) {
+    if (params.prs.length > 0 && !current?.primaryRepoKey) {
       const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
       // Patch only the key onto whatever list is now current. A refresh may
       // have supplied a key, or dropped the thread, while this resolved.
@@ -3562,6 +3565,9 @@ class DesktopAppServerService {
     const abort = new AbortController();
     this.ownerNavigationMetadataAbort = abort;
     const read = (async () => {
+      // Registry event dispatch is synchronous. Let the shared index's
+      // listener fence the old snapshot before this consumer joins a read.
+      await Promise.resolve();
       while (this.ownerNavigationActive) {
         const version = this.ownerNavigationMetadataVersion;
         const isCurrent = () => this.ownerNavigationActive && this.ownerNavigationMetadataVersion === version;
@@ -3574,8 +3580,10 @@ class DesktopAppServerService {
         }
         await Promise.all([this.loadPrStatusRegistry(), this.threadPullRequestLookup.loadPrLookupRegistry()]);
         if (!isCurrent()) continue;
-        this.seedPrStatusRegistryFromThreads(index.threads);
-        const canonical = this.applyCanonicalPrStatuses(index.threads);
+        const verified = await getDesktopBackendRegistry().canonicalizeNavigationThreadPullRequests(index.threads, { signal: abort.signal });
+        if (!isCurrent()) continue;
+        this.seedPrStatusRegistryFromThreads(verified);
+        const canonical = this.applyCanonicalPrStatuses(verified);
         const complete = !index.coverage || index.coverage.state === "complete";
         await this.rememberThreadPrAttachments(canonical.threads, { replace: complete, isCurrent });
         if (!isCurrent()) continue;
@@ -5238,9 +5246,12 @@ class DesktopAppServerService {
    */
   async canonicalizeStoredPullRequests(
     prs: PrSummary[],
+    demand?: PrMetadataDemand,
+    verifyAttachments = true,
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs));
+    const canonical = this.canonicalizePrs(prs);
+    return verifyAttachments ? await this.filterStoredDiscoveredPrs(canonical, demand) : canonical;
   }
 
   private mergePrHistory(
@@ -5446,8 +5457,9 @@ class DesktopAppServerService {
    * still carry the old name, so a stored PR no remote names asks GitHub what
    * that remote is called now before it is dropped.
    */
-  private async filterStoredDiscoveredPrs(prs: PrSummary[]): Promise<PrSummary[]> {
+  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrMetadataDemand): Promise<PrSummary[]> {
     return await filterStoredDiscoveredPullRequests(prs, {
+      demand,
       resolveRepositoryNames: async (repos) => {
         if (!getDesktopSettingsService().isForgeEnabled("github")) return;
         await this.getPrGraphqlClient().resolveRepositoryNames(repos);
@@ -6312,8 +6324,8 @@ class DesktopAppServerService {
             ]),
             signal: params.signal,
           }),
-        isEnabled: () =>
-          getMcpConnectionGatewayService().isSandboxerCleanupOnPrCloseEnabled(),
+        isEnabled: (connectionId) =>
+          getMcpConnectionGatewayService().isSandboxCleanupOnPrCloseEnabled(connectionId),
         onReport: (report) => this.recordSandboxCleanup(report),
       });
     }
@@ -6542,8 +6554,9 @@ class DesktopAppServerService {
     }
     await this.loadPrStatusRegistry();
     await this.threadPullRequestLookup.loadPrLookupRegistry();
-    this.seedPrStatusRegistryFromThreads(index.threads);
-    const canonical = this.applyCanonicalPrStatuses(index.threads);
+    const verified = await getDesktopBackendRegistry().canonicalizeNavigationThreadPullRequests(index.threads);
+    this.seedPrStatusRegistryFromThreads(verified);
+    const canonical = this.applyCanonicalPrStatuses(verified);
     await this.rememberThreadPrAttachments(canonical.threads, { replace: true });
     const eligibleThreads = canonical.threads.filter((thread) => {
       const attachment = this.attachedPrsByThreadKey.get(
@@ -8407,7 +8420,7 @@ class DesktopAppServerService {
           if (report === "timeout") {
             return [
               "",
-              "Sandboxer cleanup by PwrAgent is still running; its result will appear in PR activity.",
+              "Sandbox cleanup by PwrAgent is still running; its result will appear in PR activity.",
             ];
           }
           return formatSandboxCleanupLines(report);

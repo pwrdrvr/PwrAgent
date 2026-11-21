@@ -42,7 +42,7 @@ export function orderManagedMcpConnections<T extends McpConnectionStatus>(
 /**
  * A built-in that Settings lists under Suggested, with its next step, until
  * it works: PwrSnap or PwrGit before their app's relay is found, Sandboxer
- * before it is signed in. GitHub is suggested by the window while no GitHub
+ * and Boat before they are signed in. GitHub is suggested by the window while no GitHub
  * connection exists, since it has no record until one is added. Every other
  * connection is one the operator added, so it is always listed as installed.
  */
@@ -51,5 +51,6 @@ export function isSuggestedMcpConnection(connection: McpConnectionStatus): boole
     connection.kind === "pwrsnap"
     || connection.kind === "pwrgit"
     || connection.kind === "sandboxer"
+    || connection.kind === "boat"
   ) && !connection.configured;
 }

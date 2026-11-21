@@ -10,7 +10,7 @@ import {
   DICTATION_START_CHANNEL,
   type DictationEvent,
 } from "../../../shared/audio-transcription";
-import { isLocalMainWindowWebContents } from "../window-channels";
+import { isMainWindowWebContents } from "../window-channels";
 
 type Owner = { sender: WebContents; id: string; connection?: AudioDictationSession; detach: () => void };
 const DICTATION_DISABLED = "Audio transcription is turned off in Settings → AI Providers.";
@@ -21,7 +21,10 @@ export function dictationActive(): boolean {
 }
 
 export function allowsDictationMicrophone(owner: number): boolean {
-  return active?.sender.id === owner && active.connection?.listening === true;
+  // The microphone opens while the provider session is still connecting, so
+  // capture is already running when the session reports ready. A connection
+  // that closes releases its owner, which revokes this.
+  return active?.sender.id === owner && active.connection !== undefined;
 }
 
 function findOwner(event: IpcMainInvokeEvent, id: string): Owner | undefined {
@@ -45,9 +48,11 @@ function publish(owner: Owner, event: DictationEvent): void {
 export function registerAudioTranscriptionIpc(voiceBusy: () => boolean): void {
   ipcMain.handle(DICTATION_START_CHANNEL, async (event, id: string) => {
     const sender = event.sender;
-    if (!event.senderFrame || event.senderFrame.parent || !isLocalMainWindowWebContents(sender)
+    if (!event.senderFrame || event.senderFrame.parent || !isMainWindowWebContents(sender)
       || typeof id !== "string" || !/^[a-z0-9-]{1,80}$/.test(id)) {
-      throw new Error("Dictation is available in a local PwrAgent composer.");
+      // Dictation belongs to the viewer: this machine's microphone and key
+      // fill a local draft, whichever instance owns the thread.
+      throw new Error("Dictation is available in a PwrAgent composer.");
     }
     if (active || voiceBusy()) throw new Error("End the current microphone session before dictating.");
     const configStore = getDesktopConfigStore();
@@ -81,6 +86,7 @@ export function registerAudioTranscriptionIpc(voiceBusy: () => boolean): void {
         delta: (text) => publish(owner, { id, kind: "delta", text }),
         close: (error) => release(owner, error),
       });
+      publish(owner, { id, kind: "connecting" });
       await owner.connection.waitUntilReady();
     } catch (error) {
       release(owner);

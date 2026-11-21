@@ -154,12 +154,23 @@ test("rejects a release test matrix that omits half the suite", () => {
   expect(result.stderr).toContain("test must contain \"lane: [1, 2, 3, 4]\"");
 });
 
-test("rejects release unit tests that may skip the macOS icon compile", () => {
+// A valid actool setting on another step cannot satisfy either unit step.
+test.each([
+  ["Test (unit)", 'PWRAGENT_REQUIRE_ACTOOL: "1"', 'PWRAGENT_REQUIRE_ACTOOL: "0"'],
+  ["Retry failed unit tests", 'PWRAGENT_REQUIRE_ACTOOL: "1"', 'PWRAGENT_REQUIRE_ACTOOL: "0"'],
+  ["Test (unit)", "DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}", "DEVELOPER_DIR: /wrong/xcode"],
+  ["Retry failed unit tests", "DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}", "DEVELOPER_DIR: /wrong/xcode"],
+])("rejects release step %s with an incorrect %s setting", (stepName, required, changed) => {
   const root = fixture();
-  replace(root, ".github/workflows/release.yml", "PWRAGENT_REQUIRE_ACTOOL: \"1\"", "PWRAGENT_REQUIRE_ACTOOL: \"0\"");
+  const path = ".github/workflows/release.yml";
+  const workflow = readFileSync(join(root, path), "utf8");
+  const heading = `      - name: ${stepName}\n`;
+  const step = workflow.split(heading)[1].split("\n      - ")[0];
+  expect(step).toContain(required);
+  replace(root, path, heading + step, heading + step.replace(required, changed));
   const result = check(root);
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain("test must contain \"PWRAGENT_REQUIRE_ACTOOL:");
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain(`test ${stepName} must contain ${JSON.stringify(required)}`);
 });
 
 test.each([

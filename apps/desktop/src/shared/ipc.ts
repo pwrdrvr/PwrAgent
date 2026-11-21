@@ -404,6 +404,15 @@ export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
   "mcp-connection:set-sandboxer-transport";
 export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
   "mcp-connection:set-sandboxer-cleanup-on-pr-close";
+export const MCP_CONNECTION_BOAT_CONNECT_CHANNEL = "mcp-connection:boat-connect";
+export const MCP_CONNECTION_BOAT_OPEN_CHANNEL = "mcp-connection:boat-open";
+export const MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL = "mcp-connection:boat-sign-in";
+export const MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL = "mcp-connection:boat-sign-in-cancel";
+export const MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL = "mcp-connection:boat-sign-in-open";
+export const MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL =
+  "mcp-connection:set-boat-sandbox-policy";
+export const MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL =
+  "mcp-connection:set-boat-cleanup-on-pr-close";
 export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
   "mcp-connection:set-linear-paste-images";
 export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =
@@ -529,6 +538,8 @@ export const NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL =
   "navigation:get-worktree-unpublished-commit-diff";
 export const NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL =
   "navigation:read-worktree-image";
+export const WORKTREE_REFLINK_CAPABILITIES_CHANNEL = "worktree-reflink:capabilities";
+export const WORKTREE_REFLINK_RUN_CHANNEL = "worktree-reflink:run";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =

@@ -64,18 +64,30 @@ export const PROJECT_INDEX_KEYBOARD_STEP = 16;
  * most visible" section, which flips back and forth inside a tall project.
  */
 export function spyProjects(
-  blocks: readonly ProjectBlockBox[],
+  count: number,
+  readBlock: (index: number) => ProjectBlockBox,
   viewportHeight: number,
 ): ProjectSpy {
-  let current: string | null = null;
+  // The Directories list lays out its project sections in DOM order with
+  // non-overlapping, increasing bounds. Only their headers are sticky.
+  // Find the first section past the existing 1px cutoff, then read through
+  // the viewport. The reader samples the live layout even after a jump or
+  // resize, so there are no cached offsets to invalidate.
+  let first = 0;
+  let end = count;
+  while (first < end) {
+    const middle = first + Math.floor((end - first) / 2);
+    if (readBlock(middle).bottom <= 1) first = middle + 1;
+    else end = middle;
+  }
+
   const inView: string[] = [];
-  for (const block of blocks) {
-    if (block.bottom <= 1) continue;
+  for (let index = first; index < count; index += 1) {
+    const block = readBlock(index);
     if (block.top >= viewportHeight) break;
-    if (current === null) current = block.key;
     inView.push(block.key);
   }
-  return { current, inView };
+  return { current: inView[0] ?? null, inView };
 }
 
 export function sameProjectSpy(a: ProjectSpy, b: ProjectSpy): boolean {

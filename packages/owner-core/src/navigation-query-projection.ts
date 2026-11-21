@@ -65,6 +65,8 @@ export type NavigationQueryMaterialization = {
   directories: NavigationDirectoryRow[];
   collectionKind?: "directories";
   entries: NavigationQueryEntry[];
+  /** Entry positions whose owner attachments are read on demand. */
+  pullRequestPositions?: number[];
   modelGroups?: NavigationModelInventoryRow[];
   queryKey: string;
 };
@@ -95,7 +97,7 @@ export type NavigationProjectionWork = (stage: "index" | "children", threads: nu
 // Only detached, deeply frozen snapshots enter this table. A mutable provider
 // array (or a caller reusing its index object after a mutation) never does.
 // The existing index pool owns their lifetime; this is not another index pool.
-const snapshots = new WeakMap<NavigationQueryIndex, { token: symbol; projection?: ProjectionIndex; bytes: number; onWork?: NavigationProjectionWork }>();
+const snapshots = new WeakMap<NavigationQueryIndex, { token: symbol; sharedThreads: readonly NavigationThreadSummary[]; rowOwners?: readonly string[]; projection?: ProjectionIndex; bytes: number; onWork?: NavigationProjectionWork }>();
 const SNAPSHOT_SET_READ_METHODS = new Set([
   "has", "keys", "values", "entries", "union", "intersection",
   "difference", "symmetricDifference", "isSubsetOf", "isSupersetOf", "isDisjointFrom",
@@ -115,10 +117,21 @@ function freezeSnapshot(value: unknown): boolean {
 }
 
 /** A detached immutable inventory, admitted under the index pool's byte budget. */
-export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWork?: NavigationProjectionWork): NavigationQueryIndex {
+export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWork?: NavigationProjectionWork,
+  owner?: NavigationQueryIndex): NavigationQueryIndex {
+  if (owner === index && snapshots.has(owner)) return owner;
+  const prefix = owner && snapshots.get(owner)?.sharedThreads;
+  // Viewer pins append to the certified native rows. Only reuse the exact
+  // immutable prefix. Unknown or independently replaced rows are detached.
+  const shared = prefix && prefix.length <= index.threads.length
+    && prefix.every((row, position) => row === index.threads[position]) ? prefix : undefined;
   const { inputRequestThreadKeys, ...json } = index;
-  const copy: NavigationQueryIndex = structuredClone(json);
+  const copy: NavigationQueryIndex = structuredClone(shared ? { ...json, threads: json.threads.slice(shared.length) } : json);
   for (const child of Object.values(copy)) if (!freezeSnapshot(child)) return index;
+  if (shared) {
+    copy.threads = [...shared, ...copy.threads];
+    Object.freeze(copy.threads);
+  }
   if (inputRequestThreadKeys) {
     // Object.freeze(Set) still permits add/delete. Expose only read operations
     // on a private copy so the certification also covers approval membership.
@@ -153,13 +166,34 @@ export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWor
   const projection = buildProjectionIndex(copy, onWork);
   let bytes = 1_024 + 512 * copy.threads.length + 256 * copy.directories.length;
   for (const map of Object.values(projection)) for (const key of map.keys()) bytes += 2 * key.length;
-  snapshots.set(copy, { token: Symbol("navigation-index"), projection, bytes, onWork });
+  // Off-page rows and foreign parents are dependencies too. Keep the proof
+  // optional and bounded even when the viewer has links across a large fleet.
+  const owners = new Set<string>();
+  for (const thread of copy.threads) {
+    const target = thread.federation?.ref.target;
+    if (target?.scope === "remote") owners.add(target.instanceId);
+    if (thread.parentThreadInstanceId) owners.add(thread.parentThreadInstanceId);
+    if (owners.size > 8) break;
+  }
+  const rowOwners = owners.size <= 8 && [...owners].every((id) => id.length <= 120)
+    ? Object.freeze([...owners].sort()) : undefined;
+  snapshots.set(copy, { sharedThreads: shared ?? copy.threads, rowOwners, token: Symbol("navigation-index"), projection, bytes, onWork });
   return copy;
 }
 
 /** Identity only: Attention views must not extend an inventory's retention. */
 export function navigationQuerySnapshotToken(index: NavigationQueryIndex): symbol | undefined {
   return snapshots.get(index)?.token;
+}
+
+/** Only a complete, certified serving inventory can exclude off-page owners. */
+export function navigationQuerySnapshotRowOwners(index: NavigationQueryIndex): readonly string[] | undefined {
+  return index.coverage?.state === "complete" ? snapshots.get(index)?.rowOwners : undefined;
+}
+
+/** Immutable prefix charged once across retained owner and viewer snapshots. */
+export function navigationQuerySnapshotSharedThreads(index: NavigationQueryIndex): readonly NavigationThreadSummary[] | undefined {
+  return snapshots.get(index)?.sharedThreads;
 }
 
 export function navigationQuerySnapshotAuxiliaryBytes(index: NavigationQueryIndex): number {
@@ -440,6 +474,14 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
     .map((index) => prs[index]!);
 }
 
+export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
+  const preview = previewPullRequests(prs);
+  return {
+    ...(preview?.length ? { prs: preview } : {}),
+    ...(prs && prs.length > MAX_ROW_NESTED_RECORDS ? { prsTruncated: true, prCount: prs.length } : {}),
+  };
+}
+
 function projectNavigationRow(params: {
   childCount: number;
   viewerChildCount?: number;
@@ -448,6 +490,7 @@ function projectNavigationRow(params: {
   thread: NavigationThreadSummary & { nativeSubAgentCount?: number };
   homeProject?: NavigationRowHomeProject;
   checkoutProject?: NavigationDirectorySummary;
+  omitPullRequests?: boolean;
 }): NavigationRow {
   const { thread } = params;
   const linkedDirectories = limitRecords(thread.federation
@@ -456,8 +499,6 @@ function projectNavigationRow(params: {
     ? thread.linkedDirectories
     : withRepositoryIdentities(thread.linkedDirectories, params.repositories));
   const reactions = limitRecords(thread.reactions);
-  const prs = previewPullRequests(thread.prs);
-  const prsTruncated = (thread.prs?.length ?? 0) > MAX_ROW_NESTED_RECORDS;
   const messagingBindings = limitRecords(thread.messagingBindings);
   const prCiWatches = limitRecords(thread.prCiWatches);
   const nativeSubAgentCount = thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0;
@@ -539,8 +580,7 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(prs?.length ? { prs } : {}),
-    ...(prsTruncated ? { prsTruncated: true, prCount: thread.prs!.length } : {}),
+    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }
       : {}),
@@ -1321,6 +1361,7 @@ export function projectNavigationQuery(params: {
   request: NavigationQueryRequest;
   attentionOrder?: NavigationAttentionOrder;
   onIndexWork?: NavigationProjectionWork;
+  deferPullRequests?: boolean;
 }): NavigationQueryMaterialization {
   const query = params.request.query;
   if (query.kind === "model-inventory") {
@@ -1422,7 +1463,12 @@ export function projectNavigationQuery(params: {
       sortSubthreadSummaries(parents.get(key)!, children).forEach((thread, order) => siblingOrders.set(threadKey(thread), order));
     }
   }
+  const pullRequestPositions: number[] = [];
+  const membershipOnly = (query.kind === "group-members" && query.membershipOnly)
+    || query.kind === "directory-index" || query.kind === "star-map-geometry";
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
+    const defer = params.deferPullRequests && !thread.federation && Boolean(thread.prs?.length);
+    if (defer && !membershipOnly) pullRequestPositions.push(index);
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
       ? undefined
@@ -1440,6 +1486,7 @@ export function projectNavigationQuery(params: {
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
         homeProject: homeProjects?.get(thread),
         checkoutProject: checkoutProjectForThread(thread, checkoutProjects),
+        omitPullRequests: membershipOnly || defer,
       }),
       orderKey: rowOrderKey(index),
       ...(siblingOrders.has(threadKey(thread)) ? { siblingOrder: siblingOrders.get(threadKey(thread))! } : {}),
@@ -1507,6 +1554,7 @@ export function projectNavigationQuery(params: {
         parentCandidates,
       }) : [],
     entries,
+    ...(pullRequestPositions.length ? { pullRequestPositions } : {}),
     queryKey: navigationQueryKey(params.request),
   };
 }

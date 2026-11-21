@@ -27,6 +27,7 @@ import {
 } from "@pwragent/shared/project-forge-automation";
 import { type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadForkParams as CodexThreadForkParams,
@@ -544,6 +545,8 @@ export type ThreadPullRequestStatusToolHandler = (
 
 export type ThreadPullRequestCanonicalizer = (
   prs: PrSummary[],
+  demand?: PrMetadataDemand,
+  verifyAttachments?: boolean,
 ) => PrSummary[] | Promise<PrSummary[]>;
 
 export type LocalPullRequestAuthorityResolver = (prKey: string) => boolean;

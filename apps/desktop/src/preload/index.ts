@@ -72,6 +72,13 @@ import {
 } from "../shared/ipc";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../shared/federation-receiving-folder";
 import { SETTINGS_RECEIVING_FOLDER_CHANNEL, SETTINGS_WORKTREE_FOLDER_CHECK_CHANNEL } from "../shared/ipc";
+import { WORKTREE_REFLINK_CAPABILITIES_CHANNEL, WORKTREE_REFLINK_RUN_CHANNEL } from "../shared/ipc";
+import type {
+  ReadWorktreeReflinkCapabilitiesRequest,
+  ReadWorktreeReflinkCapabilitiesResponse,
+  RunWorktreeReflinkRequest,
+  RunWorktreeReflinkResponse,
+} from "@pwragent/shared/contracts/worktree-reflink";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
   NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
@@ -325,6 +332,12 @@ import type {
   SetMcpConnectionProjectToolApprovalRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  BoatLinkTarget,
+  BoatSignInMethod,
+  ConnectBoatRequest,
+  OpenBoatLinkResponse,
+  SetBoatCleanupOnPrCloseRequest,
+  SetBoatSandboxPolicyRequest,
   SetLinearPasteImagesRequest,
   FetchLinearPastedImagesRequest,
   FetchLinearPastedImagesResponse,
@@ -1128,6 +1141,13 @@ import {
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_CONNECT_CHANNEL,
+  MCP_CONNECTION_BOAT_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
+  MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
+  MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CREATE_CHANNEL,
@@ -1577,6 +1597,24 @@ const desktopApi = Object.freeze({
       MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
       request,
     ),
+  connectBoat: async (request: ConnectBoatRequest): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_CONNECT_CHANNEL, request),
+  startBoatSignIn: async (method: BoatSignInMethod): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL, { method }),
+  cancelBoatSignIn: async (): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL),
+  openBoatSignInPage: async (): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL),
+  setBoatSandboxPolicy: async (
+    request: SetBoatSandboxPolicyRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL, request),
+  setBoatCleanupOnPrClose: async (
+    request: SetBoatCleanupOnPrCloseRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL, request),
+  openBoatLink: async (target: BoatLinkTarget): Promise<OpenBoatLinkResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_OPEN_CHANNEL, { target }),
   setLinearPasteImages: async (request: SetLinearPasteImagesRequest): Promise<void> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL, request),
   fetchLinearPastedImages: async (
@@ -3355,6 +3393,14 @@ const desktopApi = Object.freeze({
     request: ReadWorktreeImageRequest,
   ): Promise<ReadWorktreeImageResponse> =>
     await ipcRenderer.invoke(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL, request),
+  readWorktreeReflinkCapabilities: async (
+    request: ReadWorktreeReflinkCapabilitiesRequest,
+  ): Promise<ReadWorktreeReflinkCapabilitiesResponse> =>
+    await ipcRenderer.invoke(WORKTREE_REFLINK_CAPABILITIES_CHANNEL, request),
+  runWorktreeReflink: async (
+    request: RunWorktreeReflinkRequest,
+  ): Promise<RunWorktreeReflinkResponse> =>
+    await ipcRenderer.invoke(WORKTREE_REFLINK_RUN_CHANNEL, request),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
     await invokeWithStartupProfileTiming(
       "getGhStatus",

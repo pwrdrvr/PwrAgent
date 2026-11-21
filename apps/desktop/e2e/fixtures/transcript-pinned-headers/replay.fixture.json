@@ -1,0 +1,369 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "transcript-pinned-headers",
+    "threadId": "thread-transcript-pinned-headers"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-pinned-headers",
+          "title": "Transcript pinned headers",
+          "titleSource": "explicit",
+          "summary": "Open work stays one click from closed",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000100000
+        },
+        {
+          "id": "thread-transcript-bottom-follow",
+          "title": "Transcript bottom follow",
+          "titleSource": "explicit",
+          "summary": "Opening the last row keeps it in place",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000099000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-pinned-headers",
+          "title": "Transcript pinned headers",
+          "titleSource": "explicit",
+          "summary": "Open work stays one click from closed",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000100000
+        },
+        {
+          "id": "thread-transcript-bottom-follow",
+          "title": "Transcript bottom follow",
+          "titleSource": "explicit",
+          "summary": "Opening the last row keeps it in place",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000099000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Bump the retry budgets in the atlas step scripts, then run the route tests."
+          },
+          {
+            "type": "activity",
+            "id": "activity-1",
+            "summary": "rg -n \"retries\" scripts/atlas (212ms)",
+            "details": [
+              {
+                "id": "call-1",
+                "kind": "command",
+                "label": "rg -n \"retries\" scripts/atlas (212ms)",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "rg -n \"retries\" scripts/atlas",
+                  "rawCommand": "rg -n \"retries\" scripts/atlas",
+                  "cwd": "/work/atlas",
+                  "output": "scripts/atlas/step_01.mjs:12:const retries = 1;\nscripts/atlas/step_02.mjs:12:const retries = 2;\nscripts/atlas/step_03.mjs:12:const retries = 3;\nscripts/atlas/step_04.mjs:12:const retries = 4;\nscripts/atlas/step_05.mjs:12:const retries = 5;\nscripts/atlas/step_06.mjs:12:const retries = 6;\nscripts/atlas/step_07.mjs:12:const retries = 7;\nscripts/atlas/step_08.mjs:12:const retries = 8;\nscripts/atlas/step_09.mjs:12:const retries = 9;\nscripts/atlas/step_10.mjs:12:const retries = 10;\nscripts/atlas/step_11.mjs:12:const retries = 11;\nscripts/atlas/step_12.mjs:12:const retries = 12;\nscripts/atlas/step_13.mjs:12:const retries = 13;\nscripts/atlas/step_14.mjs:12:const retries = 14;\nscripts/atlas/step_15.mjs:12:const retries = 15;\nscripts/atlas/step_16.mjs:12:const retries = 16;\nscripts/atlas/step_17.mjs:12:const retries = 17;\nscripts/atlas/step_18.mjs:12:const retries = 18;\nscripts/atlas/step_19.mjs:12:const retries = 19;\nscripts/atlas/step_20.mjs:12:const retries = 20;\nscripts/atlas/step_21.mjs:12:const retries = 21;\nscripts/atlas/step_22.mjs:12:const retries = 22;\nscripts/atlas/step_23.mjs:12:const retries = 23;\nscripts/atlas/step_24.mjs:12:const retries = 24;",
+                  "exitCode": 0,
+                  "durationMs": 212
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-pinned",
+              "status": "completed",
+              "durationMs": 184000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "activity-2",
+            "summary": "python3 - <<'EOF' import pathlib def edit(path, pairs): text = pathlib.Path(path).read_text() for old, new in pairs (1.4s)",
+            "details": [
+              {
+                "id": "call-2",
+                "kind": "command",
+                "label": "python3 - <<'EOF' import pathlib def edit(path, pairs): text = pathlib.Path(path).read_text() for old, new in pairs (1.4s)",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "python3 - <<'EOF'\nimport pathlib\n\ndef edit(path, pairs):\n    text = pathlib.Path(path).read_text()\n    for old, new in pairs:\n        assert text.count(old) == 1, (path, old)\n        text = text.replace(old, new)\n    pathlib.Path(path).write_text(text)\n\nedit(\"scripts/atlas/step_01.mjs\", [\n    (\"const retries = 1;\", \"const retries = 2;\"),\n    (\"timeoutMs: 100\", \"timeoutMs: 150\"),\n])\n\nedit(\"scripts/atlas/step_02.mjs\", [\n    (\"const retries = 2;\", \"const retries = 3;\"),\n    (\"timeoutMs: 200\", \"timeoutMs: 300\"),\n])\n\nedit(\"scripts/atlas/step_03.mjs\", [\n    (\"const retries = 3;\", \"const retries = 4;\"),\n    (\"timeoutMs: 300\", \"timeoutMs: 450\"),\n])\n\nedit(\"scripts/atlas/step_04.mjs\", [\n    (\"const retries = 4;\", \"const retries = 5;\"),\n    (\"timeoutMs: 400\", \"timeoutMs: 600\"),\n])\n\nedit(\"scripts/atlas/step_05.mjs\", [\n    (\"const retries = 5;\", \"const retries = 6;\"),\n    (\"timeoutMs: 500\", \"timeoutMs: 750\"),\n])\n\nedit(\"scripts/atlas/step_06.mjs\", [\n    (\"const retries = 6;\", \"const retries = 7;\"),\n    (\"timeoutMs: 600\", \"timeoutMs: 900\"),\n])\n\nedit(\"scripts/atlas/step_07.mjs\", [\n    (\"const retries = 7;\", \"const retries = 8;\"),\n    (\"timeoutMs: 700\", \"timeoutMs: 1050\"),\n])\n\nedit(\"scripts/atlas/step_08.mjs\", [\n    (\"const retries = 8;\", \"const retries = 9;\"),\n    (\"timeoutMs: 800\", \"timeoutMs: 1200\"),\n])\n\nedit(\"scripts/atlas/step_09.mjs\", [\n    (\"const retries = 9;\", \"const retries = 10;\"),\n    (\"timeoutMs: 900\", \"timeoutMs: 1350\"),\n])\n\nedit(\"scripts/atlas/step_10.mjs\", [\n    (\"const retries = 10;\", \"const retries = 11;\"),\n    (\"timeoutMs: 1000\", \"timeoutMs: 1500\"),\n])\n\nedit(\"scripts/atlas/step_11.mjs\", [\n    (\"const retries = 11;\", \"const retries = 12;\"),\n    (\"timeoutMs: 1100\", \"timeoutMs: 1650\"),\n])\n\nedit(\"scripts/atlas/step_12.mjs\", [\n    (\"const retries = 12;\", \"const retries = 13;\"),\n    (\"timeoutMs: 1200\", \"timeoutMs: 1800\"),\n])\n\nedit(\"scripts/atlas/step_13.mjs\", [\n    (\"const retries = 13;\", \"const retries = 14;\"),\n    (\"timeoutMs: 1300\", \"timeoutMs: 1950\"),\n])\n\nedit(\"scripts/atlas/step_14.mjs\", [\n    (\"const retries = 14;\", \"const retries = 15;\"),\n    (\"timeoutMs: 1400\", \"timeoutMs: 2100\"),\n])\n\nedit(\"scripts/atlas/step_15.mjs\", [\n    (\"const retries = 15;\", \"const retries = 16;\"),\n    (\"timeoutMs: 1500\", \"timeoutMs: 2250\"),\n])\n\nedit(\"scripts/atlas/step_16.mjs\", [\n    (\"const retries = 16;\", \"const retries = 17;\"),\n    (\"timeoutMs: 1600\", \"timeoutMs: 2400\"),\n])\n\nedit(\"scripts/atlas/step_17.mjs\", [\n    (\"const retries = 17;\", \"const retries = 18;\"),\n    (\"timeoutMs: 1700\", \"timeoutMs: 2550\"),\n])\n\nedit(\"scripts/atlas/step_18.mjs\", [\n    (\"const retries = 18;\", \"const retries = 19;\"),\n    (\"timeoutMs: 1800\", \"timeoutMs: 2700\"),\n])\n\nedit(\"scripts/atlas/step_19.mjs\", [\n    (\"const retries = 19;\", \"const retries = 20;\"),\n    (\"timeoutMs: 1900\", \"timeoutMs: 2850\"),\n])\n\nedit(\"scripts/atlas/step_20.mjs\", [\n    (\"const retries = 20;\", \"const retries = 21;\"),\n    (\"timeoutMs: 2000\", \"timeoutMs: 3000\"),\n])\n\nedit(\"scripts/atlas/step_21.mjs\", [\n    (\"const retries = 21;\", \"const retries = 22;\"),\n    (\"timeoutMs: 2100\", \"timeoutMs: 3150\"),\n])\n\nedit(\"scripts/atlas/step_22.mjs\", [\n    (\"const retries = 22;\", \"const retries = 23;\"),\n    (\"timeoutMs: 2200\", \"timeoutMs: 3300\"),\n])\n\nedit(\"scripts/atlas/step_23.mjs\", [\n    (\"const retries = 23;\", \"const retries = 24;\"),\n    (\"timeoutMs: 2300\", \"timeoutMs: 3450\"),\n])\n\nedit(\"scripts/atlas/step_24.mjs\", [\n    (\"const retries = 24;\", \"const retries = 25;\"),\n    (\"timeoutMs: 2400\", \"timeoutMs: 3600\"),\n])\n\nEOF",
+                  "rawCommand": "python3 - <<'EOF'\nimport pathlib\n\ndef edit(path, pairs):\n    text = pathlib.Path(path).read_text()\n    for old, new in pairs:\n        assert text.count(old) == 1, (path, old)\n        text = text.replace(old, new)\n    pathlib.Path(path).write_text(text)\n\nedit(\"scripts/atlas/step_01.mjs\", [\n    (\"const retries = 1;\", \"const retries = 2;\"),\n    (\"timeoutMs: 100\", \"timeoutMs: 150\"),\n])\n\nedit(\"scripts/atlas/step_02.mjs\", [\n    (\"const retries = 2;\", \"const retries = 3;\"),\n    (\"timeoutMs: 200\", \"timeoutMs: 300\"),\n])\n\nedit(\"scripts/atlas/step_03.mjs\", [\n    (\"const retries = 3;\", \"const retries = 4;\"),\n    (\"timeoutMs: 300\", \"timeoutMs: 450\"),\n])\n\nedit(\"scripts/atlas/step_04.mjs\", [\n    (\"const retries = 4;\", \"const retries = 5;\"),\n    (\"timeoutMs: 400\", \"timeoutMs: 600\"),\n])\n\nedit(\"scripts/atlas/step_05.mjs\", [\n    (\"const retries = 5;\", \"const retries = 6;\"),\n    (\"timeoutMs: 500\", \"timeoutMs: 750\"),\n])\n\nedit(\"scripts/atlas/step_06.mjs\", [\n    (\"const retries = 6;\", \"const retries = 7;\"),\n    (\"timeoutMs: 600\", \"timeoutMs: 900\"),\n])\n\nedit(\"scripts/atlas/step_07.mjs\", [\n    (\"const retries = 7;\", \"const retries = 8;\"),\n    (\"timeoutMs: 700\", \"timeoutMs: 1050\"),\n])\n\nedit(\"scripts/atlas/step_08.mjs\", [\n    (\"const retries = 8;\", \"const retries = 9;\"),\n    (\"timeoutMs: 800\", \"timeoutMs: 1200\"),\n])\n\nedit(\"scripts/atlas/step_09.mjs\", [\n    (\"const retries = 9;\", \"const retries = 10;\"),\n    (\"timeoutMs: 900\", \"timeoutMs: 1350\"),\n])\n\nedit(\"scripts/atlas/step_10.mjs\", [\n    (\"const retries = 10;\", \"const retries = 11;\"),\n    (\"timeoutMs: 1000\", \"timeoutMs: 1500\"),\n])\n\nedit(\"scripts/atlas/step_11.mjs\", [\n    (\"const retries = 11;\", \"const retries = 12;\"),\n    (\"timeoutMs: 1100\", \"timeoutMs: 1650\"),\n])\n\nedit(\"scripts/atlas/step_12.mjs\", [\n    (\"const retries = 12;\", \"const retries = 13;\"),\n    (\"timeoutMs: 1200\", \"timeoutMs: 1800\"),\n])\n\nedit(\"scripts/atlas/step_13.mjs\", [\n    (\"const retries = 13;\", \"const retries = 14;\"),\n    (\"timeoutMs: 1300\", \"timeoutMs: 1950\"),\n])\n\nedit(\"scripts/atlas/step_14.mjs\", [\n    (\"const retries = 14;\", \"const retries = 15;\"),\n    (\"timeoutMs: 1400\", \"timeoutMs: 2100\"),\n])\n\nedit(\"scripts/atlas/step_15.mjs\", [\n    (\"const retries = 15;\", \"const retries = 16;\"),\n    (\"timeoutMs: 1500\", \"timeoutMs: 2250\"),\n])\n\nedit(\"scripts/atlas/step_16.mjs\", [\n    (\"const retries = 16;\", \"const retries = 17;\"),\n    (\"timeoutMs: 1600\", \"timeoutMs: 2400\"),\n])\n\nedit(\"scripts/atlas/step_17.mjs\", [\n    (\"const retries = 17;\", \"const retries = 18;\"),\n    (\"timeoutMs: 1700\", \"timeoutMs: 2550\"),\n])\n\nedit(\"scripts/atlas/step_18.mjs\", [\n    (\"const retries = 18;\", \"const retries = 19;\"),\n    (\"timeoutMs: 1800\", \"timeoutMs: 2700\"),\n])\n\nedit(\"scripts/atlas/step_19.mjs\", [\n    (\"const retries = 19;\", \"const retries = 20;\"),\n    (\"timeoutMs: 1900\", \"timeoutMs: 2850\"),\n])\n\nedit(\"scripts/atlas/step_20.mjs\", [\n    (\"const retries = 20;\", \"const retries = 21;\"),\n    (\"timeoutMs: 2000\", \"timeoutMs: 3000\"),\n])\n\nedit(\"scripts/atlas/step_21.mjs\", [\n    (\"const retries = 21;\", \"const retries = 22;\"),\n    (\"timeoutMs: 2100\", \"timeoutMs: 3150\"),\n])\n\nedit(\"scripts/atlas/step_22.mjs\", [\n    (\"const retries = 22;\", \"const retries = 23;\"),\n    (\"timeoutMs: 2200\", \"timeoutMs: 3300\"),\n])\n\nedit(\"scripts/atlas/step_23.mjs\", [\n    (\"const retries = 23;\", \"const retries = 24;\"),\n    (\"timeoutMs: 2300\", \"timeoutMs: 3450\"),\n])\n\nedit(\"scripts/atlas/step_24.mjs\", [\n    (\"const retries = 24;\", \"const retries = 25;\"),\n    (\"timeoutMs: 2400\", \"timeoutMs: 3600\"),\n])\n\nEOF",
+                  "cwd": "/work/atlas",
+                  "output": "scripts/atlas/step_01.mjs: replaced 2 of 2 (37 ms)\nscripts/atlas/step_02.mjs: replaced 2 of 2 (74 ms)\nscripts/atlas/step_03.mjs: replaced 2 of 2 (14 ms)\nscripts/atlas/step_04.mjs: replaced 2 of 2 (51 ms)\nscripts/atlas/step_05.mjs: replaced 2 of 2 (88 ms)\nscripts/atlas/step_06.mjs: replaced 2 of 2 (28 ms)\nscripts/atlas/step_07.mjs: replaced 2 of 2 (65 ms)\nscripts/atlas/step_08.mjs: replaced 2 of 2 (5 ms)\nscripts/atlas/step_09.mjs: replaced 2 of 2 (42 ms)\nscripts/atlas/step_10.mjs: replaced 2 of 2 (79 ms)\nscripts/atlas/step_11.mjs: replaced 2 of 2 (19 ms)\nscripts/atlas/step_12.mjs: replaced 2 of 2 (56 ms)\nscripts/atlas/step_13.mjs: replaced 2 of 2 (93 ms)\nscripts/atlas/step_14.mjs: replaced 2 of 2 (33 ms)\nscripts/atlas/step_15.mjs: replaced 2 of 2 (70 ms)\nscripts/atlas/step_16.mjs: replaced 2 of 2 (10 ms)\nscripts/atlas/step_17.mjs: replaced 2 of 2 (47 ms)\nscripts/atlas/step_18.mjs: replaced 2 of 2 (84 ms)\nscripts/atlas/step_19.mjs: replaced 2 of 2 (24 ms)\nscripts/atlas/step_20.mjs: replaced 2 of 2 (61 ms)\nscripts/atlas/step_21.mjs: replaced 2 of 2 (1 ms)\nscripts/atlas/step_22.mjs: replaced 2 of 2 (38 ms)\nscripts/atlas/step_23.mjs: replaced 2 of 2 (75 ms)\nscripts/atlas/step_24.mjs: replaced 2 of 2 (15 ms)\nscripts/atlas/step_25.mjs: replaced 2 of 2 (52 ms)\nscripts/atlas/step_26.mjs: replaced 2 of 2 (89 ms)\nscripts/atlas/step_27.mjs: replaced 2 of 2 (29 ms)\nscripts/atlas/step_28.mjs: replaced 2 of 2 (66 ms)\nscripts/atlas/step_29.mjs: replaced 2 of 2 (6 ms)\nscripts/atlas/step_30.mjs: replaced 2 of 2 (43 ms)\nscripts/atlas/step_31.mjs: replaced 2 of 2 (80 ms)\nscripts/atlas/step_32.mjs: replaced 2 of 2 (20 ms)\nscripts/atlas/step_33.mjs: replaced 2 of 2 (57 ms)\nscripts/atlas/step_34.mjs: replaced 2 of 2 (94 ms)\nscripts/atlas/step_35.mjs: replaced 2 of 2 (34 ms)\nscripts/atlas/step_36.mjs: replaced 2 of 2 (71 ms)\nscripts/atlas/step_37.mjs: replaced 2 of 2 (11 ms)\nscripts/atlas/step_38.mjs: replaced 2 of 2 (48 ms)\nscripts/atlas/step_39.mjs: replaced 2 of 2 (85 ms)\nscripts/atlas/step_40.mjs: replaced 2 of 2 (25 ms)\nscripts/atlas/step_41.mjs: replaced 2 of 2 (62 ms)\nscripts/atlas/step_42.mjs: replaced 2 of 2 (2 ms)\nscripts/atlas/step_43.mjs: replaced 2 of 2 (39 ms)\nscripts/atlas/step_44.mjs: replaced 2 of 2 (76 ms)\nscripts/atlas/step_45.mjs: replaced 2 of 2 (16 ms)\nscripts/atlas/step_46.mjs: replaced 2 of 2 (53 ms)\nscripts/atlas/step_47.mjs: replaced 2 of 2 (90 ms)\nscripts/atlas/step_48.mjs: replaced 2 of 2 (30 ms)\nscripts/atlas/step_49.mjs: replaced 2 of 2 (67 ms)\nscripts/atlas/step_50.mjs: replaced 2 of 2 (7 ms)\nscripts/atlas/step_51.mjs: replaced 2 of 2 (44 ms)\nscripts/atlas/step_52.mjs: replaced 2 of 2 (81 ms)\nscripts/atlas/step_53.mjs: replaced 2 of 2 (21 ms)\nscripts/atlas/step_54.mjs: replaced 2 of 2 (58 ms)\nscripts/atlas/step_55.mjs: replaced 2 of 2 (95 ms)\nscripts/atlas/step_56.mjs: replaced 2 of 2 (35 ms)\nscripts/atlas/step_57.mjs: replaced 2 of 2 (72 ms)\nscripts/atlas/step_58.mjs: replaced 2 of 2 (12 ms)\nscripts/atlas/step_59.mjs: replaced 2 of 2 (49 ms)\nscripts/atlas/step_60.mjs: replaced 2 of 2 (86 ms)\nscripts/atlas/step_61.mjs: replaced 2 of 2 (26 ms)\nscripts/atlas/step_62.mjs: replaced 2 of 2 (63 ms)\nscripts/atlas/step_63.mjs: replaced 2 of 2 (3 ms)\nscripts/atlas/step_64.mjs: replaced 2 of 2 (40 ms)\nscripts/atlas/step_65.mjs: replaced 2 of 2 (77 ms)\nscripts/atlas/step_66.mjs: replaced 2 of 2 (17 ms)\nscripts/atlas/step_67.mjs: replaced 2 of 2 (54 ms)\nscripts/atlas/step_68.mjs: replaced 2 of 2 (91 ms)\nscripts/atlas/step_69.mjs: replaced 2 of 2 (31 ms)\nscripts/atlas/step_70.mjs: replaced 2 of 2 (68 ms)\nscripts/atlas/step_71.mjs: replaced 2 of 2 (8 ms)\nscripts/atlas/step_72.mjs: replaced 2 of 2 (45 ms)\nscripts/atlas/step_73.mjs: replaced 2 of 2 (82 ms)\nscripts/atlas/step_74.mjs: replaced 2 of 2 (22 ms)\nscripts/atlas/step_75.mjs: replaced 2 of 2 (59 ms)\nscripts/atlas/step_76.mjs: replaced 2 of 2 (96 ms)\nscripts/atlas/step_77.mjs: replaced 2 of 2 (36 ms)\nscripts/atlas/step_78.mjs: replaced 2 of 2 (73 ms)\nscripts/atlas/step_79.mjs: replaced 2 of 2 (13 ms)\nscripts/atlas/step_80.mjs: replaced 2 of 2 (50 ms)\nscripts/atlas/step_81.mjs: replaced 2 of 2 (87 ms)\nscripts/atlas/step_82.mjs: replaced 2 of 2 (27 ms)\nscripts/atlas/step_83.mjs: replaced 2 of 2 (64 ms)\nscripts/atlas/step_84.mjs: replaced 2 of 2 (4 ms)\nscripts/atlas/step_85.mjs: replaced 2 of 2 (41 ms)\nscripts/atlas/step_86.mjs: replaced 2 of 2 (78 ms)\nscripts/atlas/step_87.mjs: replaced 2 of 2 (18 ms)\nscripts/atlas/step_88.mjs: replaced 2 of 2 (55 ms)\nscripts/atlas/step_89.mjs: replaced 2 of 2 (92 ms)\nscripts/atlas/step_90.mjs: replaced 2 of 2 (32 ms)\nscripts/atlas/step_91.mjs: replaced 2 of 2 (69 ms)\nscripts/atlas/step_92.mjs: replaced 2 of 2 (9 ms)\nscripts/atlas/step_93.mjs: replaced 2 of 2 (46 ms)\nscripts/atlas/step_94.mjs: replaced 2 of 2 (83 ms)\nscripts/atlas/step_95.mjs: replaced 2 of 2 (23 ms)\nscripts/atlas/step_96.mjs: replaced 2 of 2 (60 ms)\nscripts/atlas/step_97.mjs: replaced 2 of 2 (0 ms)\nscripts/atlas/step_98.mjs: replaced 2 of 2 (37 ms)\nscripts/atlas/step_99.mjs: replaced 2 of 2 (74 ms)\nscripts/atlas/step_100.mjs: replaced 2 of 2 (14 ms)\nscripts/atlas/step_101.mjs: replaced 2 of 2 (51 ms)\nscripts/atlas/step_102.mjs: replaced 2 of 2 (88 ms)\nscripts/atlas/step_103.mjs: replaced 2 of 2 (28 ms)\nscripts/atlas/step_104.mjs: replaced 2 of 2 (65 ms)\nscripts/atlas/step_105.mjs: replaced 2 of 2 (5 ms)\nscripts/atlas/step_106.mjs: replaced 2 of 2 (42 ms)\nscripts/atlas/step_107.mjs: replaced 2 of 2 (79 ms)\nscripts/atlas/step_108.mjs: replaced 2 of 2 (19 ms)\nscripts/atlas/step_109.mjs: replaced 2 of 2 (56 ms)\nscripts/atlas/step_110.mjs: replaced 2 of 2 (93 ms)\nscripts/atlas/step_111.mjs: replaced 2 of 2 (33 ms)\nscripts/atlas/step_112.mjs: replaced 2 of 2 (70 ms)\nscripts/atlas/step_113.mjs: replaced 2 of 2 (10 ms)\nscripts/atlas/step_114.mjs: replaced 2 of 2 (47 ms)\nscripts/atlas/step_115.mjs: replaced 2 of 2 (84 ms)\nscripts/atlas/step_116.mjs: replaced 2 of 2 (24 ms)\nscripts/atlas/step_117.mjs: replaced 2 of 2 (61 ms)\nscripts/atlas/step_118.mjs: replaced 2 of 2 (1 ms)\nscripts/atlas/step_119.mjs: replaced 2 of 2 (38 ms)\nscripts/atlas/step_120.mjs: replaced 2 of 2 (75 ms)\nscripts/atlas/step_121.mjs: replaced 2 of 2 (15 ms)\nscripts/atlas/step_122.mjs: replaced 2 of 2 (52 ms)\nscripts/atlas/step_123.mjs: replaced 2 of 2 (89 ms)\nscripts/atlas/step_124.mjs: replaced 2 of 2 (29 ms)\nscripts/atlas/step_125.mjs: replaced 2 of 2 (66 ms)\nscripts/atlas/step_126.mjs: replaced 2 of 2 (6 ms)\nscripts/atlas/step_127.mjs: replaced 2 of 2 (43 ms)\nscripts/atlas/step_128.mjs: replaced 2 of 2 (80 ms)\nscripts/atlas/step_129.mjs: replaced 2 of 2 (20 ms)\nscripts/atlas/step_130.mjs: replaced 2 of 2 (57 ms)\nscripts/atlas/step_131.mjs: replaced 2 of 2 (94 ms)\nscripts/atlas/step_132.mjs: replaced 2 of 2 (34 ms)\nscripts/atlas/step_133.mjs: replaced 2 of 2 (71 ms)\nscripts/atlas/step_134.mjs: replaced 2 of 2 (11 ms)\nscripts/atlas/step_135.mjs: replaced 2 of 2 (48 ms)\nscripts/atlas/step_136.mjs: replaced 2 of 2 (85 ms)\nscripts/atlas/step_137.mjs: replaced 2 of 2 (25 ms)\nscripts/atlas/step_138.mjs: replaced 2 of 2 (62 ms)\nscripts/atlas/step_139.mjs: replaced 2 of 2 (2 ms)\nscripts/atlas/step_140.mjs: replaced 2 of 2 (39 ms)\nscripts/atlas/step_141.mjs: replaced 2 of 2 (76 ms)\nscripts/atlas/step_142.mjs: replaced 2 of 2 (16 ms)\nscripts/atlas/step_143.mjs: replaced 2 of 2 (53 ms)\nscripts/atlas/step_144.mjs: replaced 2 of 2 (90 ms)\nscripts/atlas/step_145.mjs: replaced 2 of 2 (30 ms)\nscripts/atlas/step_146.mjs: replaced 2 of 2 (67 ms)\nscripts/atlas/step_147.mjs: replaced 2 of 2 (7 ms)\nscripts/atlas/step_148.mjs: replaced 2 of 2 (44 ms)\nscripts/atlas/step_149.mjs: replaced 2 of 2 (81 ms)\nscripts/atlas/step_150.mjs: replaced 2 of 2 (21 ms)\nscripts/atlas/step_151.mjs: replaced 2 of 2 (58 ms)\nscripts/atlas/step_152.mjs: replaced 2 of 2 (95 ms)\nscripts/atlas/step_153.mjs: replaced 2 of 2 (35 ms)\nscripts/atlas/step_154.mjs: replaced 2 of 2 (72 ms)\nscripts/atlas/step_155.mjs: replaced 2 of 2 (12 ms)\nscripts/atlas/step_156.mjs: replaced 2 of 2 (49 ms)\nscripts/atlas/step_157.mjs: replaced 2 of 2 (86 ms)\nscripts/atlas/step_158.mjs: replaced 2 of 2 (26 ms)\nscripts/atlas/step_159.mjs: replaced 2 of 2 (63 ms)\nscripts/atlas/step_160.mjs: replaced 2 of 2 (3 ms)\nscripts/atlas/step_161.mjs: replaced 2 of 2 (40 ms)\nscripts/atlas/step_162.mjs: replaced 2 of 2 (77 ms)\nscripts/atlas/step_163.mjs: replaced 2 of 2 (17 ms)\nscripts/atlas/step_164.mjs: replaced 2 of 2 (54 ms)\nscripts/atlas/step_165.mjs: replaced 2 of 2 (91 ms)\nscripts/atlas/step_166.mjs: replaced 2 of 2 (31 ms)\nscripts/atlas/step_167.mjs: replaced 2 of 2 (68 ms)\nscripts/atlas/step_168.mjs: replaced 2 of 2 (8 ms)\nscripts/atlas/step_169.mjs: replaced 2 of 2 (45 ms)\nscripts/atlas/step_170.mjs: replaced 2 of 2 (82 ms)\nscripts/atlas/step_171.mjs: replaced 2 of 2 (22 ms)\nscripts/atlas/step_172.mjs: replaced 2 of 2 (59 ms)\nscripts/atlas/step_173.mjs: replaced 2 of 2 (96 ms)\nscripts/atlas/step_174.mjs: replaced 2 of 2 (36 ms)\nscripts/atlas/step_175.mjs: replaced 2 of 2 (73 ms)\nscripts/atlas/step_176.mjs: replaced 2 of 2 (13 ms)\nscripts/atlas/step_177.mjs: replaced 2 of 2 (50 ms)\nscripts/atlas/step_178.mjs: replaced 2 of 2 (87 ms)\nscripts/atlas/step_179.mjs: replaced 2 of 2 (27 ms)\nscripts/atlas/step_180.mjs: replaced 2 of 2 (64 ms)\nscripts/atlas/step_181.mjs: replaced 2 of 2 (4 ms)\nscripts/atlas/step_182.mjs: replaced 2 of 2 (41 ms)\nscripts/atlas/step_183.mjs: replaced 2 of 2 (78 ms)\nscripts/atlas/step_184.mjs: replaced 2 of 2 (18 ms)\nscripts/atlas/step_185.mjs: replaced 2 of 2 (55 ms)\nscripts/atlas/step_186.mjs: replaced 2 of 2 (92 ms)\nscripts/atlas/step_187.mjs: replaced 2 of 2 (32 ms)\nscripts/atlas/step_188.mjs: replaced 2 of 2 (69 ms)\nscripts/atlas/step_189.mjs: replaced 2 of 2 (9 ms)\nscripts/atlas/step_190.mjs: replaced 2 of 2 (46 ms)\nscripts/atlas/step_191.mjs: replaced 2 of 2 (83 ms)\nscripts/atlas/step_192.mjs: replaced 2 of 2 (23 ms)\nscripts/atlas/step_193.mjs: replaced 2 of 2 (60 ms)\nscripts/atlas/step_194.mjs: replaced 2 of 2 (0 ms)\nscripts/atlas/step_195.mjs: replaced 2 of 2 (37 ms)\nscripts/atlas/step_196.mjs: replaced 2 of 2 (74 ms)\nscripts/atlas/step_197.mjs: replaced 2 of 2 (14 ms)\nscripts/atlas/step_198.mjs: replaced 2 of 2 (51 ms)\nscripts/atlas/step_199.mjs: replaced 2 of 2 (88 ms)\nscripts/atlas/step_200.mjs: replaced 2 of 2 (28 ms)\nscripts/atlas/step_201.mjs: replaced 2 of 2 (65 ms)\nscripts/atlas/step_202.mjs: replaced 2 of 2 (5 ms)\nscripts/atlas/step_203.mjs: replaced 2 of 2 (42 ms)\nscripts/atlas/step_204.mjs: replaced 2 of 2 (79 ms)\nscripts/atlas/step_205.mjs: replaced 2 of 2 (19 ms)\nscripts/atlas/step_206.mjs: replaced 2 of 2 (56 ms)\nscripts/atlas/step_207.mjs: replaced 2 of 2 (93 ms)\nscripts/atlas/step_208.mjs: replaced 2 of 2 (33 ms)\nscripts/atlas/step_209.mjs: replaced 2 of 2 (70 ms)\nscripts/atlas/step_210.mjs: replaced 2 of 2 (10 ms)\nscripts/atlas/step_211.mjs: replaced 2 of 2 (47 ms)\nscripts/atlas/step_212.mjs: replaced 2 of 2 (84 ms)\nscripts/atlas/step_213.mjs: replaced 2 of 2 (24 ms)\nscripts/atlas/step_214.mjs: replaced 2 of 2 (61 ms)\nscripts/atlas/step_215.mjs: replaced 2 of 2 (1 ms)\nscripts/atlas/step_216.mjs: replaced 2 of 2 (38 ms)\nscripts/atlas/step_217.mjs: replaced 2 of 2 (75 ms)\nscripts/atlas/step_218.mjs: replaced 2 of 2 (15 ms)\nscripts/atlas/step_219.mjs: replaced 2 of 2 (52 ms)\nscripts/atlas/step_220.mjs: replaced 2 of 2 (89 ms)\nscripts/atlas/step_221.mjs: replaced 2 of 2 (29 ms)\nscripts/atlas/step_222.mjs: replaced 2 of 2 (66 ms)\nscripts/atlas/step_223.mjs: replaced 2 of 2 (6 ms)\nscripts/atlas/step_224.mjs: replaced 2 of 2 (43 ms)\nscripts/atlas/step_225.mjs: replaced 2 of 2 (80 ms)\nscripts/atlas/step_226.mjs: replaced 2 of 2 (20 ms)\nscripts/atlas/step_227.mjs: replaced 2 of 2 (57 ms)\nscripts/atlas/step_228.mjs: replaced 2 of 2 (94 ms)\nscripts/atlas/step_229.mjs: replaced 2 of 2 (34 ms)\nscripts/atlas/step_230.mjs: replaced 2 of 2 (71 ms)\nscripts/atlas/step_231.mjs: replaced 2 of 2 (11 ms)\nscripts/atlas/step_232.mjs: replaced 2 of 2 (48 ms)\nscripts/atlas/step_233.mjs: replaced 2 of 2 (85 ms)\nscripts/atlas/step_234.mjs: replaced 2 of 2 (25 ms)\nscripts/atlas/step_235.mjs: replaced 2 of 2 (62 ms)\nscripts/atlas/step_236.mjs: replaced 2 of 2 (2 ms)\nscripts/atlas/step_237.mjs: replaced 2 of 2 (39 ms)\nscripts/atlas/step_238.mjs: replaced 2 of 2 (76 ms)\nscripts/atlas/step_239.mjs: replaced 2 of 2 (16 ms)\nscripts/atlas/step_240.mjs: replaced 2 of 2 (53 ms)",
+                  "exitCode": 0,
+                  "durationMs": 1400
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-pinned",
+              "status": "completed",
+              "durationMs": 184000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "activity-multi",
+            "summary": "Ran 2 commands",
+            "details": [
+              {
+                "id": "call-m1",
+                "kind": "command",
+                "label": "pnpm lint:atlas",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "pnpm lint:atlas",
+                  "rawCommand": "pnpm lint:atlas",
+                  "output": "atlas/rule_001.ts  0 problems\natlas/rule_002.ts  0 problems\natlas/rule_003.ts  0 problems\natlas/rule_004.ts  0 problems\natlas/rule_005.ts  0 problems\natlas/rule_006.ts  0 problems\natlas/rule_007.ts  0 problems\natlas/rule_008.ts  0 problems\natlas/rule_009.ts  0 problems\natlas/rule_010.ts  0 problems\natlas/rule_011.ts  0 problems\natlas/rule_012.ts  0 problems\natlas/rule_013.ts  0 problems\natlas/rule_014.ts  0 problems\natlas/rule_015.ts  0 problems\natlas/rule_016.ts  0 problems\natlas/rule_017.ts  0 problems\natlas/rule_018.ts  0 problems\natlas/rule_019.ts  0 problems\natlas/rule_020.ts  0 problems\natlas/rule_021.ts  0 problems\natlas/rule_022.ts  0 problems\natlas/rule_023.ts  0 problems\natlas/rule_024.ts  0 problems\natlas/rule_025.ts  0 problems\natlas/rule_026.ts  0 problems\natlas/rule_027.ts  0 problems\natlas/rule_028.ts  0 problems\natlas/rule_029.ts  0 problems\natlas/rule_030.ts  0 problems\natlas/rule_031.ts  0 problems\natlas/rule_032.ts  0 problems\natlas/rule_033.ts  0 problems\natlas/rule_034.ts  0 problems\natlas/rule_035.ts  0 problems\natlas/rule_036.ts  0 problems\natlas/rule_037.ts  0 problems\natlas/rule_038.ts  0 problems\natlas/rule_039.ts  0 problems\natlas/rule_040.ts  0 problems\natlas/rule_041.ts  0 problems\natlas/rule_042.ts  0 problems\natlas/rule_043.ts  0 problems\natlas/rule_044.ts  0 problems\natlas/rule_045.ts  0 problems\natlas/rule_046.ts  0 problems\natlas/rule_047.ts  0 problems\natlas/rule_048.ts  0 problems\natlas/rule_049.ts  0 problems\natlas/rule_050.ts  0 problems\natlas/rule_051.ts  0 problems\natlas/rule_052.ts  0 problems\natlas/rule_053.ts  0 problems\natlas/rule_054.ts  0 problems\natlas/rule_055.ts  0 problems\natlas/rule_056.ts  0 problems\natlas/rule_057.ts  0 problems\natlas/rule_058.ts  0 problems\natlas/rule_059.ts  0 problems\natlas/rule_060.ts  0 problems\natlas/rule_061.ts  0 problems\natlas/rule_062.ts  0 problems\natlas/rule_063.ts  0 problems\natlas/rule_064.ts  0 problems\natlas/rule_065.ts  0 problems\natlas/rule_066.ts  0 problems\natlas/rule_067.ts  0 problems\natlas/rule_068.ts  0 problems\natlas/rule_069.ts  0 problems\natlas/rule_070.ts  0 problems\natlas/rule_071.ts  0 problems\natlas/rule_072.ts  0 problems\natlas/rule_073.ts  0 problems\natlas/rule_074.ts  0 problems\natlas/rule_075.ts  0 problems\natlas/rule_076.ts  0 problems\natlas/rule_077.ts  0 problems\natlas/rule_078.ts  0 problems\natlas/rule_079.ts  0 problems\natlas/rule_080.ts  0 problems\natlas/rule_081.ts  0 problems\natlas/rule_082.ts  0 problems\natlas/rule_083.ts  0 problems\natlas/rule_084.ts  0 problems\natlas/rule_085.ts  0 problems\natlas/rule_086.ts  0 problems\natlas/rule_087.ts  0 problems\natlas/rule_088.ts  0 problems\natlas/rule_089.ts  0 problems\natlas/rule_090.ts  0 problems\natlas/rule_091.ts  0 problems\natlas/rule_092.ts  0 problems\natlas/rule_093.ts  0 problems\natlas/rule_094.ts  0 problems\natlas/rule_095.ts  0 problems\natlas/rule_096.ts  0 problems\natlas/rule_097.ts  0 problems\natlas/rule_098.ts  0 problems\natlas/rule_099.ts  0 problems\natlas/rule_100.ts  0 problems\natlas/rule_101.ts  0 problems\natlas/rule_102.ts  0 problems\natlas/rule_103.ts  0 problems\natlas/rule_104.ts  0 problems\natlas/rule_105.ts  0 problems\natlas/rule_106.ts  0 problems\natlas/rule_107.ts  0 problems\natlas/rule_108.ts  0 problems\natlas/rule_109.ts  0 problems\natlas/rule_110.ts  0 problems\natlas/rule_111.ts  0 problems\natlas/rule_112.ts  0 problems\natlas/rule_113.ts  0 problems\natlas/rule_114.ts  0 problems\natlas/rule_115.ts  0 problems\natlas/rule_116.ts  0 problems\natlas/rule_117.ts  0 problems\natlas/rule_118.ts  0 problems\natlas/rule_119.ts  0 problems\natlas/rule_120.ts  0 problems\natlas/rule_121.ts  0 problems\natlas/rule_122.ts  0 problems\natlas/rule_123.ts  0 problems\natlas/rule_124.ts  0 problems\natlas/rule_125.ts  0 problems\natlas/rule_126.ts  0 problems\natlas/rule_127.ts  0 problems\natlas/rule_128.ts  0 problems\natlas/rule_129.ts  0 problems\natlas/rule_130.ts  0 problems\natlas/rule_131.ts  0 problems\natlas/rule_132.ts  0 problems\natlas/rule_133.ts  0 problems\natlas/rule_134.ts  0 problems\natlas/rule_135.ts  0 problems\natlas/rule_136.ts  0 problems\natlas/rule_137.ts  0 problems\natlas/rule_138.ts  0 problems\natlas/rule_139.ts  0 problems\natlas/rule_140.ts  0 problems\natlas/rule_141.ts  0 problems\natlas/rule_142.ts  0 problems\natlas/rule_143.ts  0 problems\natlas/rule_144.ts  0 problems\natlas/rule_145.ts  0 problems\natlas/rule_146.ts  0 problems\natlas/rule_147.ts  0 problems\natlas/rule_148.ts  0 problems\natlas/rule_149.ts  0 problems\natlas/rule_150.ts  0 problems\natlas/rule_151.ts  0 problems\natlas/rule_152.ts  0 problems\natlas/rule_153.ts  0 problems\natlas/rule_154.ts  0 problems\natlas/rule_155.ts  0 problems\natlas/rule_156.ts  0 problems\natlas/rule_157.ts  0 problems\natlas/rule_158.ts  0 problems\natlas/rule_159.ts  0 problems\natlas/rule_160.ts  0 problems",
+                  "exitCode": 0,
+                  "durationMs": 8200
+                }
+              },
+              {
+                "id": "call-m2",
+                "kind": "command",
+                "label": "pnpm typecheck:atlas",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "pnpm typecheck:atlas",
+                  "rawCommand": "pnpm typecheck:atlas",
+                  "output": "Found 0 errors.\n",
+                  "exitCode": 0,
+                  "durationMs": 21400
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-pinned",
+              "status": "completed",
+              "durationMs": 184000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "activity-3",
+            "summary": "pnpm test:atlas-routes (41s)",
+            "details": [
+              {
+                "id": "call-3",
+                "kind": "command",
+                "label": "pnpm test:atlas-routes (41s)",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "pnpm test:atlas-routes",
+                  "rawCommand": "pnpm test:atlas-routes",
+                  "cwd": "/work/atlas",
+                  "output": " ✓ atlas/route_001.test.ts (14 tests) 11ms\n ✓ atlas/route_002.test.ts (27 tests) 18ms\n ✓ atlas/route_003.test.ts (11 tests) 25ms\n ✓ atlas/route_004.test.ts (24 tests) 32ms\n ✓ atlas/route_005.test.ts (8 tests) 39ms\n ✓ atlas/route_006.test.ts (21 tests) 46ms\n ✓ atlas/route_007.test.ts (5 tests) 53ms\n ✓ atlas/route_008.test.ts (18 tests) 60ms\n ✓ atlas/route_009.test.ts (2 tests) 67ms\n ✓ atlas/route_010.test.ts (15 tests) 74ms\n ✓ atlas/route_011.test.ts (28 tests) 81ms\n ✓ atlas/route_012.test.ts (12 tests) 88ms\n ✓ atlas/route_013.test.ts (25 tests) 5ms\n ✓ atlas/route_014.test.ts (9 tests) 12ms\n ✓ atlas/route_015.test.ts (22 tests) 19ms\n ✓ atlas/route_016.test.ts (6 tests) 26ms\n ✓ atlas/route_017.test.ts (19 tests) 33ms\n ✓ atlas/route_018.test.ts (3 tests) 40ms\n ✓ atlas/route_019.test.ts (16 tests) 47ms\n ✓ atlas/route_020.test.ts (29 tests) 54ms\n ✓ atlas/route_021.test.ts (13 tests) 61ms\n ✓ atlas/route_022.test.ts (26 tests) 68ms\n ✓ atlas/route_023.test.ts (10 tests) 75ms\n ✓ atlas/route_024.test.ts (23 tests) 82ms\n ✓ atlas/route_025.test.ts (7 tests) 89ms\n ✓ atlas/route_026.test.ts (20 tests) 6ms\n ✓ atlas/route_027.test.ts (4 tests) 13ms\n ✓ atlas/route_028.test.ts (17 tests) 20ms\n ✓ atlas/route_029.test.ts (1 tests) 27ms\n ✓ atlas/route_030.test.ts (14 tests) 34ms\n ✓ atlas/route_031.test.ts (27 tests) 41ms\n ✓ atlas/route_032.test.ts (11 tests) 48ms\n ✓ atlas/route_033.test.ts (24 tests) 55ms\n ✓ atlas/route_034.test.ts (8 tests) 62ms\n ✓ atlas/route_035.test.ts (21 tests) 69ms\n ✓ atlas/route_036.test.ts (5 tests) 76ms\n ✓ atlas/route_037.test.ts (18 tests) 83ms\n ✓ atlas/route_038.test.ts (2 tests) 90ms\n ✓ atlas/route_039.test.ts (15 tests) 7ms\n ✓ atlas/route_040.test.ts (28 tests) 14ms\n ✓ atlas/route_041.test.ts (12 tests) 21ms\n ✓ atlas/route_042.test.ts (25 tests) 28ms\n ✓ atlas/route_043.test.ts (9 tests) 35ms\n ✓ atlas/route_044.test.ts (22 tests) 42ms\n ✓ atlas/route_045.test.ts (6 tests) 49ms\n ✓ atlas/route_046.test.ts (19 tests) 56ms\n ✓ atlas/route_047.test.ts (3 tests) 63ms\n ✓ atlas/route_048.test.ts (16 tests) 70ms\n ✓ atlas/route_049.test.ts (29 tests) 77ms\n ✓ atlas/route_050.test.ts (13 tests) 84ms\n ✓ atlas/route_051.test.ts (26 tests) 91ms\n ✓ atlas/route_052.test.ts (10 tests) 8ms\n ✓ atlas/route_053.test.ts (23 tests) 15ms\n ✓ atlas/route_054.test.ts (7 tests) 22ms\n ✓ atlas/route_055.test.ts (20 tests) 29ms\n ✓ atlas/route_056.test.ts (4 tests) 36ms\n ✓ atlas/route_057.test.ts (17 tests) 43ms\n ✓ atlas/route_058.test.ts (1 tests) 50ms\n ✓ atlas/route_059.test.ts (14 tests) 57ms\n ✓ atlas/route_060.test.ts (27 tests) 64ms\n ✓ atlas/route_061.test.ts (11 tests) 71ms\n ✓ atlas/route_062.test.ts (24 tests) 78ms\n ✓ atlas/route_063.test.ts (8 tests) 85ms\n ✓ atlas/route_064.test.ts (21 tests) 92ms\n ✓ atlas/route_065.test.ts (5 tests) 9ms\n ✓ atlas/route_066.test.ts (18 tests) 16ms\n ✓ atlas/route_067.test.ts (2 tests) 23ms\n ✓ atlas/route_068.test.ts (15 tests) 30ms\n ✓ atlas/route_069.test.ts (28 tests) 37ms\n ✓ atlas/route_070.test.ts (12 tests) 44ms\n ✓ atlas/route_071.test.ts (25 tests) 51ms\n ✓ atlas/route_072.test.ts (9 tests) 58ms\n ✓ atlas/route_073.test.ts (22 tests) 65ms\n ✓ atlas/route_074.test.ts (6 tests) 72ms\n ✓ atlas/route_075.test.ts (19 tests) 79ms\n ✓ atlas/route_076.test.ts (3 tests) 86ms\n ✓ atlas/route_077.test.ts (16 tests) 93ms\n ✓ atlas/route_078.test.ts (29 tests) 10ms\n ✓ atlas/route_079.test.ts (13 tests) 17ms\n ✓ atlas/route_080.test.ts (26 tests) 24ms\n ✓ atlas/route_081.test.ts (10 tests) 31ms\n ✓ atlas/route_082.test.ts (23 tests) 38ms\n ✓ atlas/route_083.test.ts (7 tests) 45ms\n ✓ atlas/route_084.test.ts (20 tests) 52ms\n ✓ atlas/route_085.test.ts (4 tests) 59ms\n ✓ atlas/route_086.test.ts (17 tests) 66ms\n ✓ atlas/route_087.test.ts (1 tests) 73ms\n ✓ atlas/route_088.test.ts (14 tests) 80ms\n ✓ atlas/route_089.test.ts (27 tests) 87ms\n ✓ atlas/route_090.test.ts (11 tests) 4ms\n ✓ atlas/route_091.test.ts (24 tests) 11ms\n ✓ atlas/route_092.test.ts (8 tests) 18ms\n ✓ atlas/route_093.test.ts (21 tests) 25ms\n ✓ atlas/route_094.test.ts (5 tests) 32ms\n ✓ atlas/route_095.test.ts (18 tests) 39ms\n ✓ atlas/route_096.test.ts (2 tests) 46ms\n ✓ atlas/route_097.test.ts (15 tests) 53ms\n ✓ atlas/route_098.test.ts (28 tests) 60ms\n ✓ atlas/route_099.test.ts (12 tests) 67ms\n ✓ atlas/route_100.test.ts (25 tests) 74ms\n ✓ atlas/route_101.test.ts (9 tests) 81ms\n ✓ atlas/route_102.test.ts (22 tests) 88ms\n ✓ atlas/route_103.test.ts (6 tests) 5ms\n ✓ atlas/route_104.test.ts (19 tests) 12ms\n ✓ atlas/route_105.test.ts (3 tests) 19ms\n ✓ atlas/route_106.test.ts (16 tests) 26ms\n ✓ atlas/route_107.test.ts (29 tests) 33ms\n ✓ atlas/route_108.test.ts (13 tests) 40ms\n ✓ atlas/route_109.test.ts (26 tests) 47ms\n ✓ atlas/route_110.test.ts (10 tests) 54ms\n ✓ atlas/route_111.test.ts (23 tests) 61ms\n ✓ atlas/route_112.test.ts (7 tests) 68ms\n ✓ atlas/route_113.test.ts (20 tests) 75ms\n ✓ atlas/route_114.test.ts (4 tests) 82ms\n ✓ atlas/route_115.test.ts (17 tests) 89ms\n ✓ atlas/route_116.test.ts (1 tests) 6ms\n ✓ atlas/route_117.test.ts (14 tests) 13ms\n ✓ atlas/route_118.test.ts (27 tests) 20ms\n ✓ atlas/route_119.test.ts (11 tests) 27ms\n ✓ atlas/route_120.test.ts (24 tests) 34ms\n ✓ atlas/route_121.test.ts (8 tests) 41ms\n ✓ atlas/route_122.test.ts (21 tests) 48ms\n ✓ atlas/route_123.test.ts (5 tests) 55ms\n ✓ atlas/route_124.test.ts (18 tests) 62ms\n ✓ atlas/route_125.test.ts (2 tests) 69ms\n ✓ atlas/route_126.test.ts (15 tests) 76ms\n ✓ atlas/route_127.test.ts (28 tests) 83ms\n ✓ atlas/route_128.test.ts (12 tests) 90ms\n ✓ atlas/route_129.test.ts (25 tests) 7ms\n ✓ atlas/route_130.test.ts (9 tests) 14ms\n ✓ atlas/route_131.test.ts (22 tests) 21ms\n ✓ atlas/route_132.test.ts (6 tests) 28ms\n ✓ atlas/route_133.test.ts (19 tests) 35ms\n ✓ atlas/route_134.test.ts (3 tests) 42ms\n ✓ atlas/route_135.test.ts (16 tests) 49ms\n ✓ atlas/route_136.test.ts (29 tests) 56ms\n ✓ atlas/route_137.test.ts (13 tests) 63ms\n ✓ atlas/route_138.test.ts (26 tests) 70ms\n ✓ atlas/route_139.test.ts (10 tests) 77ms\n ✓ atlas/route_140.test.ts (23 tests) 84ms\n ✓ atlas/route_141.test.ts (7 tests) 91ms\n ✓ atlas/route_142.test.ts (20 tests) 8ms\n ✓ atlas/route_143.test.ts (4 tests) 15ms\n ✓ atlas/route_144.test.ts (17 tests) 22ms\n ✓ atlas/route_145.test.ts (1 tests) 29ms\n ✓ atlas/route_146.test.ts (14 tests) 36ms\n ✓ atlas/route_147.test.ts (27 tests) 43ms\n ✓ atlas/route_148.test.ts (11 tests) 50ms\n ✓ atlas/route_149.test.ts (24 tests) 57ms\n ✓ atlas/route_150.test.ts (8 tests) 64ms\n ✓ atlas/route_151.test.ts (21 tests) 71ms\n ✓ atlas/route_152.test.ts (5 tests) 78ms\n ✓ atlas/route_153.test.ts (18 tests) 85ms\n ✓ atlas/route_154.test.ts (2 tests) 92ms\n ✓ atlas/route_155.test.ts (15 tests) 9ms\n ✓ atlas/route_156.test.ts (28 tests) 16ms\n ✓ atlas/route_157.test.ts (12 tests) 23ms\n ✓ atlas/route_158.test.ts (25 tests) 30ms\n ✓ atlas/route_159.test.ts (9 tests) 37ms\n ✓ atlas/route_160.test.ts (22 tests) 44ms\n ✓ atlas/route_161.test.ts (6 tests) 51ms\n ✓ atlas/route_162.test.ts (19 tests) 58ms\n ✓ atlas/route_163.test.ts (3 tests) 65ms\n ✓ atlas/route_164.test.ts (16 tests) 72ms\n ✓ atlas/route_165.test.ts (29 tests) 79ms\n ✓ atlas/route_166.test.ts (13 tests) 86ms\n ✓ atlas/route_167.test.ts (26 tests) 93ms\n ✓ atlas/route_168.test.ts (10 tests) 10ms\n ✓ atlas/route_169.test.ts (23 tests) 17ms\n ✓ atlas/route_170.test.ts (7 tests) 24ms\n ✓ atlas/route_171.test.ts (20 tests) 31ms\n ✓ atlas/route_172.test.ts (4 tests) 38ms\n ✓ atlas/route_173.test.ts (17 tests) 45ms\n ✓ atlas/route_174.test.ts (1 tests) 52ms\n ✓ atlas/route_175.test.ts (14 tests) 59ms\n ✓ atlas/route_176.test.ts (27 tests) 66ms\n ✓ atlas/route_177.test.ts (11 tests) 73ms\n ✓ atlas/route_178.test.ts (24 tests) 80ms\n ✓ atlas/route_179.test.ts (8 tests) 87ms\n ✓ atlas/route_180.test.ts (21 tests) 4ms\n\n Test Files  180 passed (180)\n      Tests  2,412 passed (2,412)\n",
+                  "exitCode": 0,
+                  "durationMs": 41000
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-pinned",
+              "status": "completed",
+              "durationMs": 184000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "activity-4",
+            "summary": "git status --short (38ms)",
+            "details": [
+              {
+                "id": "call-4",
+                "kind": "command",
+                "label": "git status --short (38ms)",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "git status --short",
+                  "rawCommand": "git status --short",
+                  "cwd": "/work/atlas",
+                  "output": " M scripts/atlas/step_01.mjs\n M scripts/atlas/step_02.mjs\n M scripts/atlas/step_03.mjs\n M scripts/atlas/step_04.mjs\n M scripts/atlas/step_05.mjs\n M scripts/atlas/step_06.mjs\n M scripts/atlas/step_07.mjs\n M scripts/atlas/step_08.mjs\n M scripts/atlas/step_09.mjs\n M scripts/atlas/step_10.mjs\n M scripts/atlas/step_11.mjs\n M scripts/atlas/step_12.mjs\n M scripts/atlas/step_13.mjs\n M scripts/atlas/step_14.mjs\n M scripts/atlas/step_15.mjs\n M scripts/atlas/step_16.mjs\n M scripts/atlas/step_17.mjs\n M scripts/atlas/step_18.mjs\n M scripts/atlas/step_19.mjs\n M scripts/atlas/step_20.mjs\n M scripts/atlas/step_21.mjs\n M scripts/atlas/step_22.mjs\n M scripts/atlas/step_23.mjs\n M scripts/atlas/step_24.mjs",
+                  "exitCode": 0,
+                  "durationMs": 38
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-pinned",
+              "status": "completed",
+              "durationMs": 184000
+            }
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Bumped the retry budget in all 24 atlas step scripts and reran the route suite.\n\nRoute tests: 180 files, 2,412 tests, all passing.\n\nChanged files:\n\n- `scripts/atlas/step_01.mjs`: `retries` 1 to 2, `timeoutMs` 100 to 150\n- `scripts/atlas/step_02.mjs`: `retries` 2 to 3, `timeoutMs` 200 to 300\n- `scripts/atlas/step_03.mjs`: `retries` 3 to 4, `timeoutMs` 300 to 450\n- `scripts/atlas/step_04.mjs`: `retries` 4 to 5, `timeoutMs` 400 to 600\n- `scripts/atlas/step_05.mjs`: `retries` 5 to 6, `timeoutMs` 500 to 750\n- `scripts/atlas/step_06.mjs`: `retries` 6 to 7, `timeoutMs` 600 to 900\n- `scripts/atlas/step_07.mjs`: `retries` 7 to 8, `timeoutMs` 700 to 1050\n- `scripts/atlas/step_08.mjs`: `retries` 8 to 9, `timeoutMs` 800 to 1200\n- `scripts/atlas/step_09.mjs`: `retries` 9 to 10, `timeoutMs` 900 to 1350\n- `scripts/atlas/step_10.mjs`: `retries` 10 to 11, `timeoutMs` 1000 to 1500\n- `scripts/atlas/step_11.mjs`: `retries` 11 to 12, `timeoutMs` 1100 to 1650\n- `scripts/atlas/step_12.mjs`: `retries` 12 to 13, `timeoutMs` 1200 to 1800\n- `scripts/atlas/step_13.mjs`: `retries` 13 to 14, `timeoutMs` 1300 to 1950\n- `scripts/atlas/step_14.mjs`: `retries` 14 to 15, `timeoutMs` 1400 to 2100\n- `scripts/atlas/step_15.mjs`: `retries` 15 to 16, `timeoutMs` 1500 to 2250\n- `scripts/atlas/step_16.mjs`: `retries` 16 to 17, `timeoutMs` 1600 to 2400\n- `scripts/atlas/step_17.mjs`: `retries` 17 to 18, `timeoutMs` 1700 to 2550\n- `scripts/atlas/step_18.mjs`: `retries` 18 to 19, `timeoutMs` 1800 to 2700\n- `scripts/atlas/step_19.mjs`: `retries` 19 to 20, `timeoutMs` 1900 to 2850\n- `scripts/atlas/step_20.mjs`: `retries` 20 to 21, `timeoutMs` 2000 to 3000\n- `scripts/atlas/step_21.mjs`: `retries` 21 to 22, `timeoutMs` 2100 to 3150\n- `scripts/atlas/step_22.mjs`: `retries` 22 to 23, `timeoutMs` 2200 to 3300\n- `scripts/atlas/step_23.mjs`: `retries` 23 to 24, `timeoutMs` 2300 to 3450\n- `scripts/atlas/step_24.mjs`: `retries` 24 to 25, `timeoutMs` 2400 to 3600\n\nThe lint and typecheck runs are clean. Nothing else changed."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Bump the retry budgets in the atlas step scripts, then run the route tests."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Bumped the retry budget in all 24 atlas step scripts and reran the route suite.\n\nRoute tests: 180 files, 2,412 tests, all passing.\n\nChanged files:\n\n- `scripts/atlas/step_01.mjs`: `retries` 1 to 2, `timeoutMs` 100 to 150\n- `scripts/atlas/step_02.mjs`: `retries` 2 to 3, `timeoutMs` 200 to 300\n- `scripts/atlas/step_03.mjs`: `retries` 3 to 4, `timeoutMs` 300 to 450\n- `scripts/atlas/step_04.mjs`: `retries` 4 to 5, `timeoutMs` 400 to 600\n- `scripts/atlas/step_05.mjs`: `retries` 5 to 6, `timeoutMs` 500 to 750\n- `scripts/atlas/step_06.mjs`: `retries` 6 to 7, `timeoutMs` 600 to 900\n- `scripts/atlas/step_07.mjs`: `retries` 7 to 8, `timeoutMs` 700 to 1050\n- `scripts/atlas/step_08.mjs`: `retries` 8 to 9, `timeoutMs` 800 to 1200\n- `scripts/atlas/step_09.mjs`: `retries` 9 to 10, `timeoutMs` 900 to 1350\n- `scripts/atlas/step_10.mjs`: `retries` 10 to 11, `timeoutMs` 1000 to 1500\n- `scripts/atlas/step_11.mjs`: `retries` 11 to 12, `timeoutMs` 1100 to 1650\n- `scripts/atlas/step_12.mjs`: `retries` 12 to 13, `timeoutMs` 1200 to 1800\n- `scripts/atlas/step_13.mjs`: `retries` 13 to 14, `timeoutMs` 1300 to 1950\n- `scripts/atlas/step_14.mjs`: `retries` 14 to 15, `timeoutMs` 1400 to 2100\n- `scripts/atlas/step_15.mjs`: `retries` 15 to 16, `timeoutMs` 1500 to 2250\n- `scripts/atlas/step_16.mjs`: `retries` 16 to 17, `timeoutMs` 1600 to 2400\n- `scripts/atlas/step_17.mjs`: `retries` 17 to 18, `timeoutMs` 1700 to 2550\n- `scripts/atlas/step_18.mjs`: `retries` 18 to 19, `timeoutMs` 1800 to 2700\n- `scripts/atlas/step_19.mjs`: `retries` 19 to 20, `timeoutMs` 1900 to 2850\n- `scripts/atlas/step_20.mjs`: `retries` 20 to 21, `timeoutMs` 2000 to 3000\n- `scripts/atlas/step_21.mjs`: `retries` 21 to 22, `timeoutMs` 2100 to 3150\n- `scripts/atlas/step_22.mjs`: `retries` 22 to 23, `timeoutMs` 2200 to 3300\n- `scripts/atlas/step_23.mjs`: `retries` 23 to 24, `timeoutMs` 2300 to 3450\n- `scripts/atlas/step_24.mjs`: `retries` 24 to 25, `timeoutMs` 2400 to 3600\n\nThe lint and typecheck runs are clean. Nothing else changed."
+          }
+        ],
+        "lastUserMessage": "Bump the retry budgets in the atlas step scripts, then run the route tests.",
+        "lastAssistantMessage": "Bumped the retry budget in all 24 atlas step scripts and reran the route suite.\n\nRoute tests: 180 files, 2,412 tests, all passing.\n\nChanged files:\n\n- `scripts/atlas/step_01.mjs`: `retries` 1 to 2, `timeoutMs` 100 to 150\n- `scripts/atlas/step_02.mjs`: `retries` 2 to 3, `timeoutMs` 200 to 300\n- `scripts/atlas/step_03.mjs`: `retries` 3 to 4, `timeoutMs` 300 to 450\n- `scripts/atlas/step_04.mjs`: `retries` 4 to 5, `timeoutMs` 400 to 600\n- `scripts/atlas/step_05.mjs`: `retries` 5 to 6, `timeoutMs` 500 to 750\n- `scripts/atlas/step_06.mjs`: `retries` 6 to 7, `timeoutMs` 600 to 900\n- `scripts/atlas/step_07.mjs`: `retries` 7 to 8, `timeoutMs` 700 to 1050\n- `scripts/atlas/step_08.mjs`: `retries` 8 to 9, `timeoutMs` 800 to 1200\n- `scripts/atlas/step_09.mjs`: `retries` 9 to 10, `timeoutMs` 900 to 1350\n- `scripts/atlas/step_10.mjs`: `retries` 10 to 11, `timeoutMs` 1000 to 1500\n- `scripts/atlas/step_11.mjs`: `retries` 11 to 12, `timeoutMs` 1100 to 1650\n- `scripts/atlas/step_12.mjs`: `retries` 12 to 13, `timeoutMs` 1200 to 1800\n- `scripts/atlas/step_13.mjs`: `retries` 13 to 14, `timeoutMs` 1300 to 1950\n- `scripts/atlas/step_14.mjs`: `retries` 14 to 15, `timeoutMs` 1400 to 2100\n- `scripts/atlas/step_15.mjs`: `retries` 15 to 16, `timeoutMs` 1500 to 2250\n- `scripts/atlas/step_16.mjs`: `retries` 16 to 17, `timeoutMs` 1600 to 2400\n- `scripts/atlas/step_17.mjs`: `retries` 17 to 18, `timeoutMs` 1700 to 2550\n- `scripts/atlas/step_18.mjs`: `retries` 18 to 19, `timeoutMs` 1800 to 2700\n- `scripts/atlas/step_19.mjs`: `retries` 19 to 20, `timeoutMs` 1900 to 2850\n- `scripts/atlas/step_20.mjs`: `retries` 20 to 21, `timeoutMs` 2000 to 3000\n- `scripts/atlas/step_21.mjs`: `retries` 21 to 22, `timeoutMs` 2100 to 3150\n- `scripts/atlas/step_22.mjs`: `retries` 22 to 23, `timeoutMs` 2200 to 3300\n- `scripts/atlas/step_23.mjs`: `retries` 23 to 24, `timeoutMs` 2300 to 3450\n- `scripts/atlas/step_24.mjs`: `retries` 24 to 25, `timeoutMs` 2400 to 3600\n\nThe lint and typecheck runs are clean. Nothing else changed.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      },
+      "threadId": "thread-transcript-pinned-headers"
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "threadId": "thread-transcript-bottom-follow",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "b-message-1",
+            "role": "user",
+            "text": "Run the atlas route tests."
+          },
+          {
+            "type": "activity",
+            "id": "activity-3",
+            "summary": "pnpm test:atlas-routes (41s)",
+            "details": [
+              {
+                "id": "call-3",
+                "kind": "command",
+                "label": "pnpm test:atlas-routes (41s)",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "pnpm test:atlas-routes",
+                  "rawCommand": "pnpm test:atlas-routes",
+                  "cwd": "/work/atlas",
+                  "output": " ✓ atlas/route_001.test.ts (14 tests) 11ms\n ✓ atlas/route_002.test.ts (27 tests) 18ms\n ✓ atlas/route_003.test.ts (11 tests) 25ms\n ✓ atlas/route_004.test.ts (24 tests) 32ms\n ✓ atlas/route_005.test.ts (8 tests) 39ms\n ✓ atlas/route_006.test.ts (21 tests) 46ms\n ✓ atlas/route_007.test.ts (5 tests) 53ms\n ✓ atlas/route_008.test.ts (18 tests) 60ms\n ✓ atlas/route_009.test.ts (2 tests) 67ms\n ✓ atlas/route_010.test.ts (15 tests) 74ms\n ✓ atlas/route_011.test.ts (28 tests) 81ms\n ✓ atlas/route_012.test.ts (12 tests) 88ms\n ✓ atlas/route_013.test.ts (25 tests) 5ms\n ✓ atlas/route_014.test.ts (9 tests) 12ms\n ✓ atlas/route_015.test.ts (22 tests) 19ms\n ✓ atlas/route_016.test.ts (6 tests) 26ms\n ✓ atlas/route_017.test.ts (19 tests) 33ms\n ✓ atlas/route_018.test.ts (3 tests) 40ms\n ✓ atlas/route_019.test.ts (16 tests) 47ms\n ✓ atlas/route_020.test.ts (29 tests) 54ms\n ✓ atlas/route_021.test.ts (13 tests) 61ms\n ✓ atlas/route_022.test.ts (26 tests) 68ms\n ✓ atlas/route_023.test.ts (10 tests) 75ms\n ✓ atlas/route_024.test.ts (23 tests) 82ms\n ✓ atlas/route_025.test.ts (7 tests) 89ms\n ✓ atlas/route_026.test.ts (20 tests) 6ms\n ✓ atlas/route_027.test.ts (4 tests) 13ms\n ✓ atlas/route_028.test.ts (17 tests) 20ms\n ✓ atlas/route_029.test.ts (1 tests) 27ms\n ✓ atlas/route_030.test.ts (14 tests) 34ms\n ✓ atlas/route_031.test.ts (27 tests) 41ms\n ✓ atlas/route_032.test.ts (11 tests) 48ms\n ✓ atlas/route_033.test.ts (24 tests) 55ms\n ✓ atlas/route_034.test.ts (8 tests) 62ms\n ✓ atlas/route_035.test.ts (21 tests) 69ms\n ✓ atlas/route_036.test.ts (5 tests) 76ms\n ✓ atlas/route_037.test.ts (18 tests) 83ms\n ✓ atlas/route_038.test.ts (2 tests) 90ms\n ✓ atlas/route_039.test.ts (15 tests) 7ms\n ✓ atlas/route_040.test.ts (28 tests) 14ms\n ✓ atlas/route_041.test.ts (12 tests) 21ms\n ✓ atlas/route_042.test.ts (25 tests) 28ms\n ✓ atlas/route_043.test.ts (9 tests) 35ms\n ✓ atlas/route_044.test.ts (22 tests) 42ms\n ✓ atlas/route_045.test.ts (6 tests) 49ms\n ✓ atlas/route_046.test.ts (19 tests) 56ms\n ✓ atlas/route_047.test.ts (3 tests) 63ms\n ✓ atlas/route_048.test.ts (16 tests) 70ms\n ✓ atlas/route_049.test.ts (29 tests) 77ms\n ✓ atlas/route_050.test.ts (13 tests) 84ms\n ✓ atlas/route_051.test.ts (26 tests) 91ms\n ✓ atlas/route_052.test.ts (10 tests) 8ms\n ✓ atlas/route_053.test.ts (23 tests) 15ms\n ✓ atlas/route_054.test.ts (7 tests) 22ms\n ✓ atlas/route_055.test.ts (20 tests) 29ms\n ✓ atlas/route_056.test.ts (4 tests) 36ms\n ✓ atlas/route_057.test.ts (17 tests) 43ms\n ✓ atlas/route_058.test.ts (1 tests) 50ms\n ✓ atlas/route_059.test.ts (14 tests) 57ms\n ✓ atlas/route_060.test.ts (27 tests) 64ms\n ✓ atlas/route_061.test.ts (11 tests) 71ms\n ✓ atlas/route_062.test.ts (24 tests) 78ms\n ✓ atlas/route_063.test.ts (8 tests) 85ms\n ✓ atlas/route_064.test.ts (21 tests) 92ms\n ✓ atlas/route_065.test.ts (5 tests) 9ms\n ✓ atlas/route_066.test.ts (18 tests) 16ms\n ✓ atlas/route_067.test.ts (2 tests) 23ms\n ✓ atlas/route_068.test.ts (15 tests) 30ms\n ✓ atlas/route_069.test.ts (28 tests) 37ms\n ✓ atlas/route_070.test.ts (12 tests) 44ms\n ✓ atlas/route_071.test.ts (25 tests) 51ms\n ✓ atlas/route_072.test.ts (9 tests) 58ms\n ✓ atlas/route_073.test.ts (22 tests) 65ms\n ✓ atlas/route_074.test.ts (6 tests) 72ms\n ✓ atlas/route_075.test.ts (19 tests) 79ms\n ✓ atlas/route_076.test.ts (3 tests) 86ms\n ✓ atlas/route_077.test.ts (16 tests) 93ms\n ✓ atlas/route_078.test.ts (29 tests) 10ms\n ✓ atlas/route_079.test.ts (13 tests) 17ms\n ✓ atlas/route_080.test.ts (26 tests) 24ms\n ✓ atlas/route_081.test.ts (10 tests) 31ms\n ✓ atlas/route_082.test.ts (23 tests) 38ms\n ✓ atlas/route_083.test.ts (7 tests) 45ms\n ✓ atlas/route_084.test.ts (20 tests) 52ms\n ✓ atlas/route_085.test.ts (4 tests) 59ms\n ✓ atlas/route_086.test.ts (17 tests) 66ms\n ✓ atlas/route_087.test.ts (1 tests) 73ms\n ✓ atlas/route_088.test.ts (14 tests) 80ms\n ✓ atlas/route_089.test.ts (27 tests) 87ms\n ✓ atlas/route_090.test.ts (11 tests) 4ms\n ✓ atlas/route_091.test.ts (24 tests) 11ms\n ✓ atlas/route_092.test.ts (8 tests) 18ms\n ✓ atlas/route_093.test.ts (21 tests) 25ms\n ✓ atlas/route_094.test.ts (5 tests) 32ms\n ✓ atlas/route_095.test.ts (18 tests) 39ms\n ✓ atlas/route_096.test.ts (2 tests) 46ms\n ✓ atlas/route_097.test.ts (15 tests) 53ms\n ✓ atlas/route_098.test.ts (28 tests) 60ms\n ✓ atlas/route_099.test.ts (12 tests) 67ms\n ✓ atlas/route_100.test.ts (25 tests) 74ms\n ✓ atlas/route_101.test.ts (9 tests) 81ms\n ✓ atlas/route_102.test.ts (22 tests) 88ms\n ✓ atlas/route_103.test.ts (6 tests) 5ms\n ✓ atlas/route_104.test.ts (19 tests) 12ms\n ✓ atlas/route_105.test.ts (3 tests) 19ms\n ✓ atlas/route_106.test.ts (16 tests) 26ms\n ✓ atlas/route_107.test.ts (29 tests) 33ms\n ✓ atlas/route_108.test.ts (13 tests) 40ms\n ✓ atlas/route_109.test.ts (26 tests) 47ms\n ✓ atlas/route_110.test.ts (10 tests) 54ms\n ✓ atlas/route_111.test.ts (23 tests) 61ms\n ✓ atlas/route_112.test.ts (7 tests) 68ms\n ✓ atlas/route_113.test.ts (20 tests) 75ms\n ✓ atlas/route_114.test.ts (4 tests) 82ms\n ✓ atlas/route_115.test.ts (17 tests) 89ms\n ✓ atlas/route_116.test.ts (1 tests) 6ms\n ✓ atlas/route_117.test.ts (14 tests) 13ms\n ✓ atlas/route_118.test.ts (27 tests) 20ms\n ✓ atlas/route_119.test.ts (11 tests) 27ms\n ✓ atlas/route_120.test.ts (24 tests) 34ms\n ✓ atlas/route_121.test.ts (8 tests) 41ms\n ✓ atlas/route_122.test.ts (21 tests) 48ms\n ✓ atlas/route_123.test.ts (5 tests) 55ms\n ✓ atlas/route_124.test.ts (18 tests) 62ms\n ✓ atlas/route_125.test.ts (2 tests) 69ms\n ✓ atlas/route_126.test.ts (15 tests) 76ms\n ✓ atlas/route_127.test.ts (28 tests) 83ms\n ✓ atlas/route_128.test.ts (12 tests) 90ms\n ✓ atlas/route_129.test.ts (25 tests) 7ms\n ✓ atlas/route_130.test.ts (9 tests) 14ms\n ✓ atlas/route_131.test.ts (22 tests) 21ms\n ✓ atlas/route_132.test.ts (6 tests) 28ms\n ✓ atlas/route_133.test.ts (19 tests) 35ms\n ✓ atlas/route_134.test.ts (3 tests) 42ms\n ✓ atlas/route_135.test.ts (16 tests) 49ms\n ✓ atlas/route_136.test.ts (29 tests) 56ms\n ✓ atlas/route_137.test.ts (13 tests) 63ms\n ✓ atlas/route_138.test.ts (26 tests) 70ms\n ✓ atlas/route_139.test.ts (10 tests) 77ms\n ✓ atlas/route_140.test.ts (23 tests) 84ms\n ✓ atlas/route_141.test.ts (7 tests) 91ms\n ✓ atlas/route_142.test.ts (20 tests) 8ms\n ✓ atlas/route_143.test.ts (4 tests) 15ms\n ✓ atlas/route_144.test.ts (17 tests) 22ms\n ✓ atlas/route_145.test.ts (1 tests) 29ms\n ✓ atlas/route_146.test.ts (14 tests) 36ms\n ✓ atlas/route_147.test.ts (27 tests) 43ms\n ✓ atlas/route_148.test.ts (11 tests) 50ms\n ✓ atlas/route_149.test.ts (24 tests) 57ms\n ✓ atlas/route_150.test.ts (8 tests) 64ms\n ✓ atlas/route_151.test.ts (21 tests) 71ms\n ✓ atlas/route_152.test.ts (5 tests) 78ms\n ✓ atlas/route_153.test.ts (18 tests) 85ms\n ✓ atlas/route_154.test.ts (2 tests) 92ms\n ✓ atlas/route_155.test.ts (15 tests) 9ms\n ✓ atlas/route_156.test.ts (28 tests) 16ms\n ✓ atlas/route_157.test.ts (12 tests) 23ms\n ✓ atlas/route_158.test.ts (25 tests) 30ms\n ✓ atlas/route_159.test.ts (9 tests) 37ms\n ✓ atlas/route_160.test.ts (22 tests) 44ms\n ✓ atlas/route_161.test.ts (6 tests) 51ms\n ✓ atlas/route_162.test.ts (19 tests) 58ms\n ✓ atlas/route_163.test.ts (3 tests) 65ms\n ✓ atlas/route_164.test.ts (16 tests) 72ms\n ✓ atlas/route_165.test.ts (29 tests) 79ms\n ✓ atlas/route_166.test.ts (13 tests) 86ms\n ✓ atlas/route_167.test.ts (26 tests) 93ms\n ✓ atlas/route_168.test.ts (10 tests) 10ms\n ✓ atlas/route_169.test.ts (23 tests) 17ms\n ✓ atlas/route_170.test.ts (7 tests) 24ms\n ✓ atlas/route_171.test.ts (20 tests) 31ms\n ✓ atlas/route_172.test.ts (4 tests) 38ms\n ✓ atlas/route_173.test.ts (17 tests) 45ms\n ✓ atlas/route_174.test.ts (1 tests) 52ms\n ✓ atlas/route_175.test.ts (14 tests) 59ms\n ✓ atlas/route_176.test.ts (27 tests) 66ms\n ✓ atlas/route_177.test.ts (11 tests) 73ms\n ✓ atlas/route_178.test.ts (24 tests) 80ms\n ✓ atlas/route_179.test.ts (8 tests) 87ms\n ✓ atlas/route_180.test.ts (21 tests) 4ms\n\n Test Files  180 passed (180)\n      Tests  2,412 passed (2,412)\n",
+                  "exitCode": 0,
+                  "durationMs": 41000
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-bottom",
+              "status": "completed",
+              "durationMs": 43000
+            }
+          },
+          {
+            "type": "message",
+            "id": "b-message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "The route suite passes: 180 files, 2,412 tests."
+          }
+        ],
+        "messages": [
+          {
+            "id": "b-message-1",
+            "role": "user",
+            "text": "Run the atlas route tests."
+          },
+          {
+            "id": "b-message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "The route suite passes: 180 files, 2,412 tests."
+          }
+        ],
+        "lastUserMessage": "Run the atlas route tests.",
+        "lastAssistantMessage": "The route suite passes: 180 files, 2,412 tests.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

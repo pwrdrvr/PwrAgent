@@ -27,20 +27,19 @@ import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 describe("project index rules", () => {
   it("names the project at the top of the list current, not the one with the most rows on screen", () => {
     // meridian's section is mostly scrolled away; northwind fills the list.
-    const spy = spyProjects(
-      [
-        { key: "atlas", top: -400, bottom: -20 },
-        { key: "meridian", top: -300, bottom: 40 },
-        { key: "northwind", top: 40, bottom: 600 },
-        { key: "orchard", top: 600, bottom: 700 },
-      ],
-      560,
-    );
+    const blocks = [
+      { key: "atlas", top: -400, bottom: -20 },
+      { key: "meridian", top: -300, bottom: 40 },
+      { key: "northwind", top: 40, bottom: 600 },
+      { key: "orchard", top: 600, bottom: 700 },
+    ];
+    const spy = spyProjects(blocks.length, (index) => blocks[index]!, 560);
     expect(spy).toEqual({ current: "meridian", inView: ["meridian", "northwind"] });
   });
 
   it("has no current project when nothing is listed", () => {
-    expect(spyProjects([], 560)).toEqual({ current: null, inView: [] });
+    expect(spyProjects(0, () => { throw new Error("No blocks to read"); }, 560))
+      .toEqual({ current: null, inView: [] });
   });
 
   it("cycles typeahead through names sharing a first letter, and extends a typed prefix", () => {
@@ -357,7 +356,9 @@ describe("Sidebar project index", () => {
     vi.spyOn(relay, "getBoundingClientRect").mockImplementation(() => rect(1700 - scrollTop, 300));
     vi.spyOn(tail, "getBoundingClientRect").mockImplementation(() => rect(2000 - scrollTop, parseFloat(tail.style.height) || 0));
 
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Project index" })).getByRole("button", { name: /^Jump to relay/ }));
+    const index = screen.getByRole("navigation", { name: "Project index" });
+    const relayButton = within(index).getByRole("button", { name: /^Jump to relay/ });
+    fireEvent.click(relayButton);
     await act(async () => {
       for (let frame = 0; frame < 3; frame += 1) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -371,6 +372,7 @@ describe("Sidebar project index", () => {
     fireEvent.scroll(list);
     await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
     expect(tail.style.height).toBe("200px");
+    expect(relayButton).toHaveAttribute("aria-current", "location");
     scrollTop = 1400;
     fireEvent.scroll(list);
     await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });

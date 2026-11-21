@@ -16,6 +16,7 @@ import type {
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import * as backendRegistry from "../app-server/backend-registry";
+import { runGitCommand } from "../app-server/git-executable";
 import * as navigationDetail from "../app-server/navigation-detail-service";
 import { readThreadSubAgentPanel } from "../app-server/thread-display";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
@@ -158,14 +159,16 @@ describe("NavigationDetailService", () => {
     vi.restoreAllMocks();
   });
 
-  async function selectedWithSubAgents({ gitStatus, backend = "codex" }: {
+  async function selectedWithSubAgents({ gitStatus, backend = "codex", linkedDirectories }: {
     gitStatus?: NavigationDirectoryGitStatus;
     backend?: AppServerBackendKind;
+    linkedDirectories?: NavigationThreadSummary["linkedDirectories"];
   } = {}) {
     const selected = { ...thread("selected"), source: backend, executionMode: "full-access" as const };
     if (gitStatus) selected.linkedDirectories = ["primary", "secondary", "tools"].map((name) => ({
       id: name, kind: "local", label: name, path: `/repo/${name}`,
     }));
+    if (linkedDirectories) selected.linkedDirectories = linkedDirectories;
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const service = new NavigationDetailService({
       getThreadInfo: () => undefined,
@@ -185,6 +188,20 @@ describe("NavigationDetailService", () => {
     expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
     return { service, detail, request };
   }
+
+  it("reads the selected PR-less thread's primary repository from its checkout", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "pwragent-selected-repo-"));
+    try {
+      await runGitCommand(cwd, ["init", "-b", "main"]);
+      await runGitCommand(cwd, ["remote", "add", "origin", "https://github.com/fixture/current.git"]);
+      const { detail } = await selectedWithSubAgents({ linkedDirectories: [
+        { id: "primary", kind: "local", label: "Primary", path: cwd },
+      ] });
+      expect(detail.thread?.primaryGitRepository).toBe("github.com/fixture/current");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 
   const liveMonitor: ThreadSubAgentSummary = {
     monitorId: "monitor-live", task: "Watch the release", status: "running", createdAt: 0, updatedAt: 1,

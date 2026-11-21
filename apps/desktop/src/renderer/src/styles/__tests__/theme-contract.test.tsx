@@ -631,6 +631,12 @@ describe("Tangerine Terminal theme contract", () => {
       // Live run strip row height — defined on `.live-strip`, not `:root`.
       // The four-row scroll cap is derived from it, so the two cannot drift.
       "live-strip-row-h",
+      // Transcript pinned headers and fitted command panes — defined on
+      // `.transcript-list__items` and the command card's panes, not `:root`.
+      // The step each open disclosure level adds to the pinned stack, and
+      // the surface a pane's overflow fades paint. Layout, not theme.
+      "transcript-pin-step",
+      "transcript-pane-surface",
       // Toast stack inset — defined on `.app-toast-stack`, not `:root`. Both
       // of its edges and `useToastStackPlacement` read it. Layout, not theme.
       "app-toast-stack-edge",

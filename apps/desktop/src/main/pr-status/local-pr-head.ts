@@ -1,4 +1,4 @@
-import { runGitCommand } from "../app-server/git-executable";
+import { runPrMetadataGit } from "./pr-metadata-process";
 
 const GIT_OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
@@ -23,7 +23,7 @@ export async function readLocalHeadPastPrHead(params: {
   for (const cwd of params.directories) {
     let head: string;
     try {
-      const { stdout } = await runGitCommand(
+      const { stdout } = await runPrMetadataGit(
         cwd,
         ["rev-parse", "HEAD", "--abbrev-ref", "HEAD"],
         options,
@@ -39,7 +39,7 @@ export async function readLocalHeadPastPrHead(params: {
     try {
       // Exits 0 only when the cached head is an ancestor of HEAD. A checkout
       // behind the PR, or one that never fetched its head, is not ahead.
-      await runGitCommand(
+      await runPrMetadataGit(
         cwd,
         ["merge-base", "--is-ancestor", cachedHeadSha, head],
         options,
@@ -72,7 +72,7 @@ async function isOnRemoteTrackingRef(params: {
   options: { timeout: number };
 }): Promise<boolean> {
   try {
-    const { stdout } = await runGitCommand(
+    const { stdout } = await runPrMetadataGit(
       params.cwd,
       ["for-each-ref", "--contains", params.head, "--format=%(refname)", "refs/remotes/"],
       params.options,

@@ -8077,7 +8077,7 @@ export class CodexAppServerClient {
   >();
   private readonly archivedThreadMetadataInFlightByFilter = new Map<
     string,
-    Promise<RawCodexThreadSummary[]>
+    { generation: number; pending: Promise<RawCodexThreadSummary[]> }
   >();
   private readonly archivedThreadMetadataScheduledByFilter = new Set<string>();
   private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
@@ -10215,7 +10215,7 @@ export class CodexAppServerClient {
     const hasCachedMetadata = this.archivedThreadMetadataByFilter.has(cacheKey);
     if (
       this.archivedThreadMetadataScheduledByFilter.has(cacheKey) ||
-      this.archivedThreadMetadataInFlightByFilter.has(cacheKey) ||
+      this.archivedThreadMetadataInFlightByFilter.get(cacheKey)?.generation === this.archivedThreadListingGeneration ||
       (hasCachedMetadata &&
         Date.now() - lastRefreshAt < ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS)
     ) {
@@ -10243,38 +10243,37 @@ export class CodexAppServerClient {
     diagnostics?: JsonRpcObserverDiagnostics,
   ): Promise<RawCodexThreadSummary[]> {
     const cacheKey = buildThreadMetadataCacheKey(filter);
+    const generation = this.archivedThreadListingGeneration;
     const inFlight = this.archivedThreadMetadataInFlightByFilter.get(cacheKey);
-    if (inFlight) {
-      return await inFlight;
+    if (inFlight?.generation === generation) {
+      return await inFlight.pending;
     }
 
-    const requestPromise = requestThreadListPages({
-      listingDiagnostics: this.host.listingDiagnostics,
-      logger: this.host.logger,
-      textCache: this.threadListTextCache,
-      archived: true,
-      client: this.connection,
-      diagnostics: diagnostics
+    // Messaging's archive-membership reconciliation can join these exact
+    // provider pages. It still owns its independent cleanup admission fence.
+    const pending = this.readThreadInventory({ archived: true, filter },
+      diagnostics
         ? {
             ...diagnostics,
             callerReason: `${diagnostics.callerReason ?? "thread-list"}:archived-metadata`,
           }
-        : undefined,
-      filter,
-      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    })
+        : undefined)
       .then(filterVisibleCodexThreads)
       .then((threads) => {
-        this.archivedThreadMetadataByFilter.set(cacheKey, threads);
-        this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
+        if (generation === this.archivedThreadListingGeneration) {
+          this.archivedThreadMetadataByFilter.set(cacheKey, threads);
+          this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
+        }
         return threads;
       })
       .finally(() => {
-        this.archivedThreadMetadataInFlightByFilter.delete(cacheKey);
+        if (this.archivedThreadMetadataInFlightByFilter.get(cacheKey)?.pending === pending) {
+          this.archivedThreadMetadataInFlightByFilter.delete(cacheKey);
+        }
       });
 
-    this.archivedThreadMetadataInFlightByFilter.set(cacheKey, requestPromise);
-    return await requestPromise;
+    this.archivedThreadMetadataInFlightByFilter.set(cacheKey, { generation, pending });
+    return await pending;
   }
 
   /** `listArchiveCleanupThreadsPage` honors `sortKey: "updated_at"`. */

@@ -3,6 +3,7 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   NavigationQueryRequest,
+  PrSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
@@ -18,6 +19,27 @@ function snapshot(threads: NavigationThreadSummary[]): NavigationSnapshot {
 }
 
 describe("owner-filtered navigation descendants", () => {
+  it("retains owner-validated PR chips in remote pin and watched-thread summaries", async () => {
+    const pr: PrSummary = { provider: "github.com", org: "fixture", repo: "app", number: 41,
+      url: "https://github.com/fixture/app/pull/41", state: "pending" };
+    const rows = snapshot([thread("root", { prs: [pr] }), thread("draft", { parentThreadId: "root", prs: [pr] })]);
+    const store = new NavigationQueryStore();
+    const loadPullRequests = vi.fn(async (batches: PrSummary[][]) => batches.map((prs) => prs.map((row) => ({ ...row, state: "passing" as const }))));
+    const read = (request: NavigationQueryRequest) => store.readPage({
+      scopeKey: "viewer", loadIndex: async () => rows, request,
+      pullRequests: {
+        verify: loadPullRequests,
+        read: (refs) => loadPullRequests(refs.map((ref) => rows.threads.find((row) => row.id === ref.threadId)?.prs ?? [])),
+      },
+    });
+    const result = await readFederationPinnedSnapshot({ getNavigationQueryPage: read } as FederationBackendOperations, ["codex:root"]);
+    expect(result.threads.map((row) => [row.id, row.prs?.[0]?.state])).toEqual([["draft", "passing"], ["root", "passing"]]);
+    const plan = await read({ protocol: 2, consumer: "main-sidebar",
+      query: { kind: "group-members", roots: [{ backend: "codex", threadId: "root" }], membershipOnly: true } });
+    expect(plan.entries.every(({ row }) => row.prs === undefined)).toBe(true);
+    expect(loadPullRequests).toHaveBeenCalledTimes(1);
+  });
+
   it("protocol-2 pin queries preserve descendants without unrelated rows", async () => {
     const parent = thread("parent");
     const child = thread("child", { parentThreadId: "parent", parentThreadBackend: "codex" });

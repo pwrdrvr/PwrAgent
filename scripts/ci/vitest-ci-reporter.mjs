@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isUnitRunComplete } from "./retry-failures.mjs";
 
+const testFailureBeforeShutdown = 2;
+
 // Keep this report separate from the JSON timings report and from console logs.
 export default class CiRetryReporter {
   planned = [];
@@ -63,8 +65,9 @@ export default class CiRetryReporter {
     }));
     mkdirSync(path.dirname(destination), { recursive: true });
     const completedModules = new Set(this.finished);
-    writeFileSync(destination, JSON.stringify({
+    const report = {
       complete: isUnitRunComplete({ reason, planned: this.planned, finished: this.finished, modules: suites, collected: this.collected }),
+      shutdownComplete: false,
       reason,
       completion: {
         plannedModules: this.planned.length,
@@ -75,6 +78,25 @@ export default class CiRetryReporter {
       },
       unhandledErrors: unhandledErrors.length,
       suites,
-    }));
+    };
+    writeFileSync(destination, JSON.stringify(report));
+
+    // Vitest sets exitCode to 1 for both a failing test and a later close
+    // error. Give the test failure a distinct code until shutdown finishes.
+    const expectedExitCode = reason === "failed" ? 1 : 0;
+    if (this.context.config.watch !== false || !report.complete
+      || (process.exitCode ?? 0) !== expectedExitCode) return;
+    const codeBeforeShutdown = expectedExitCode === 1 ? testFailureBeforeShutdown : 0;
+    if (expectedExitCode === 1) process.exitCode = codeBeforeShutdown;
+
+    // Forced exits still emit 'exit' but skip 'beforeExit'. Require both the
+    // event loop to drain and the code to survive Vitest's close handlers.
+    let drained = false;
+    process.once("beforeExit", () => { drained = true; });
+    process.once("exit", (code) => {
+      if (!drained || code !== codeBeforeShutdown) return;
+      if (expectedExitCode === 1) process.exitCode = expectedExitCode;
+      writeFileSync(destination, JSON.stringify({ ...report, shutdownComplete: true }));
+    });
   }
 }

@@ -2715,6 +2715,40 @@ describe("DesktopBackendRegistry", () => {
     expect(transport.listings.filter((rpc) => rpc.archived && !rpc.cursor)).toHaveLength(budget.archivedProviderListings);
   });
 
+  it("shares the archived wire walk across metadata and messaging cleanup after concurrent navigation reads", async () => {
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.activeIds = ["active", "created"];
+    transport.archivedIds = Array.from({ length: 43 }, (_, index) => `archived-${index}`);
+    transport.holdNextListing(false);
+    transport.holdNextListing(true);
+    const listThreads = vi.fn((...args: Parameters<CodexAppServerClient["listThreads"]>) => provider.listThreads(...args));
+    const codexClient = Object.assign(new MockBackendClient({}), { listThreads });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({ bindings: [{ id: "gone", threadId: "archived-42" }] });
+    const worktreeArchive = vi.fn();
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: { archive: worktreeArchive } as never });
+    onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
+    const readers = ["owner-navigation-metadata", "renderer-navigation-query", "federation-navigation-query"].map((callerReason) =>
+      registry.listThreads({ backend: "codex", enrichDirectories: true, callerReason }));
+    await transport.whenListing(false);
+    transport.releaseListings(false);
+    for (const rows of await Promise.all(readers)) expect(rows.map((row) => row.id).sort()).toEqual(["active", "created"]);
+    await transport.whenListing(true);
+    await waitForCondition(() => listThreads.mock.calls.some(([, diagnostics]) => diagnostics?.callerReason === "archive-cleanup"));
+    // Let both consumers reach the shared paginator while its first page is
+    // held. Only its final archived member has a binding to revoke.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transport.releaseListings(true);
+    await waitForCondition(() => messagingStore.revokedBindingIds.includes("gone"));
+    const archived = transport.listings.filter((row) => row.archived);
+    expect(archived.filter((row) => !row.cursor)).toHaveLength(1);
+    expect(archived).toHaveLength(43);
+    expect(transport.listings.filter((row) => !row.archived)).toHaveLength(1);
+    expect(worktreeArchive).not.toHaveBeenCalled();
+  });
+
   it("bounds archive cleanup scans across related navigation refreshes", async () => {
     const budget = navigationListingBudgets["archive-cleanup-related-refreshes"];
     const provider = new CodexAppServerClient({ directoryResolver: async () => [] });

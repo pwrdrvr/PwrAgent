@@ -1282,6 +1282,11 @@ export type DesktopManagedGitRelease = {
   failure?: string;
 };
 
+export type DesktopManagedGitBlockedRelease = {
+  version: string;
+  reason: string;
+};
+
 /**
  * PwrDrvr Git releases downloaded after this build shipped. Absent on
  * platforms with no custom runtime (Windows keeps Dugite's MinGit).
@@ -1291,8 +1296,13 @@ export type DesktopManagedGitSnapshot = {
   bundledVersion: string;
   /** The build track this profile follows. */
   track: DesktopUpdateChannel;
-  /** Each track's newest release as of the last check, newer than the bundle. */
-  tracks: { latestTag?: string; prereleaseTag?: string };
+  /** Installable and blocked releases newer than the bundle, by track. */
+  tracks: {
+    latestTag?: string;
+    prereleaseTag?: string;
+    latestBlocked?: DesktopManagedGitBlockedRelease;
+    prereleaseBlocked?: DesktopManagedGitBlockedRelease;
+  };
   /** The release chosen with Use, by generation id, when one is. */
   selected?: string;
   /** What Roll back returns to. */
@@ -1307,7 +1317,7 @@ export type DesktopManagedGitSnapshot = {
       generation: string;
       archiveBytes?: number;
     };
-    needsAppUpdate?: { version: string };
+    /** A check-wide failure, such as being offline. */
     error?: string;
   };
   /** Tag downloading in this window, while one is. */

@@ -8,6 +8,9 @@ export const DICTATION_BATCH_SAMPLES = 2_400;
 export const DICTATION_PRICE = "$0.017 per minute ($1.02 per hour)";
 
 export type DictationEvent = { id: string } & (
+  // The provider connection is open, so the microphone may start while the
+  // transcription session is still being configured.
+  | { kind: "connecting" }
   | { kind: "delta"; text: string }
   | { kind: "error"; message: string }
 );

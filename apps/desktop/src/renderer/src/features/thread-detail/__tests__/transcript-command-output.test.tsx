@@ -278,6 +278,84 @@ describe("TranscriptCommandOutput", () => {
       element?.textContent?.includes("line 15") ?? false
     ).length).toBeGreaterThan(0);
     expect(screen.queryByText("... 3 lines omitted")).not.toBeInTheDocument();
+
+    // Opened output can be closed again: the toggle used to vanish with the
+    // truncation it had just lifted.
+    const showLess = screen.getByRole("button", { name: "Show less" });
+    expect(showLess).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(showLess);
+    expect(screen.queryByText("line 15")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show 3 more lines" }))
+      .toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("heads each pane with its length and keeps both panes keyboard-scrollable", () => {
+    const { container } = render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "cmd-1",
+          kind: "command",
+          label: "python3 edit",
+          status: "completed",
+          command: {
+            displayCommand: "python3 - <<'EOF'\nimport pathlib\nprint(1)\nEOF",
+            output: Array.from({ length: 40 }, (_, index) => `row ${index}`).join("\n"),
+          },
+        }}
+      />
+    );
+
+    const heads = [...container.querySelectorAll(".transcript-command__pane-head")]
+      .map((head) => head.textContent);
+    expect(heads[0]).toContain("Command");
+    expect(heads[0]).toContain("4 lines");
+    expect(heads[1]).toContain("Output");
+    expect(heads[1]).toContain("40 lines");
+  });
+
+  it("does not count the newline that ends the output as a line", () => {
+    const { container } = render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "cmd-1",
+          kind: "command",
+          label: "printf",
+          status: "completed",
+          command: { displayCommand: "printf 'a\\nb\\n'", output: "a\nb\n" },
+        }}
+      />
+    );
+
+    const heads = [...container.querySelectorAll(".transcript-command__pane-head")]
+      .map((head) => head.textContent);
+    expect(heads[0]).not.toContain("lines");
+    expect(heads[1]).toContain("2 lines");
+  });
+
+  it("gives each pane a floor of its own lines", () => {
+    const { container } = render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "cmd-1",
+          kind: "command",
+          label: "python3 edit",
+          status: "completed",
+          command: {
+            displayCommand: "python3 - <<'EOF'\nimport pathlib\nprint(1)\nEOF",
+            output: Array.from({ length: 40 }, (_, index) => `row ${index}`).join("\n"),
+          },
+        }}
+      />
+    );
+
+    const command = container.querySelector<HTMLElement>(".transcript-command__block");
+    const output = container.querySelector<HTMLElement>(".transcript-command__output");
+    expect(command).toHaveAttribute("tabindex", "0");
+    expect(output).toHaveAttribute("tabindex", "0");
+    // The floor a pane keeps when the card is cut to the viewport: its own
+    // line count, at most six.
+    expect(command?.style.getPropertyValue("--transcript-pane-lines")).toBe("4");
+    expect(output?.style.getPropertyValue("--transcript-pane-lines")).toBe("6");
   });
 
   it("renders an empty-output state for commands without captured output", () => {

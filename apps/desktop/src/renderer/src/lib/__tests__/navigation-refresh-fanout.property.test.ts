@@ -137,6 +137,39 @@ it("admits exactly the pages allowed by an independent UTF-8 retained-byte oracl
   }), { numRuns: 5 });
 });
 
+it("retains visible viewer rows before owner proofs and refreshes every tray whose proof was evicted", async () => {
+  const trays = 40;
+  const bytesPerPage = Math.floor(8 * 1024 * 1024 / trays);
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    const response = page(sent);
+    const child = response.entries[0]!.row;
+    child.title += "x".repeat(bytesPerPage - Buffer.byteLength(JSON.stringify(response)));
+    response.viewerRowOwners = ["mounted-owner"];
+    return response;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const demand = new Map(Array.from({ length: trays }, (_, i) => [`tray-${i}`, { ...request(i), inventory: "viewer" as const }]));
+  const birth: AgentEvent = { backend: "codex", federationTarget: { scope: "remote", instanceId: "absent-owner" },
+    notification: { method: "thread/started", params: { threadId: "new-child" } } };
+  try {
+    queries.setDemand(new Map([...demand].slice(0, -1)));
+    await until(() => idle(queries));
+    read.mockClear();
+    queries.invalidate(undefined, undefined, birth);
+    await queries.refresh(undefined, undefined, true);
+    expect(read).not.toHaveBeenCalled();
+
+    queries.setDemand(demand);
+    await until(() => idle(queries));
+    const resources = [...queries.getSnapshot().resources.values()];
+    expect(resources.filter((resource) => resource.state.page?.entries.length === 1)).toHaveLength(trays);
+    read.mockClear();
+    queries.invalidate(undefined, undefined, birth);
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(trays);
+  } finally { queries.dispose(); }
+});
+
 it("admits remote rows independently of optional proof volume and still refreshes off-page counts", async () => {
   // Each tray carries a complete dependency set for the same directory-wide
   // descriptor. Those optional bytes must yield to visible rows in the view.

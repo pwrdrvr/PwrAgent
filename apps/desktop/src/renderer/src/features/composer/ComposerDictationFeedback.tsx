@@ -1,5 +1,21 @@
-import { useLayoutEffect, useRef } from "react";
-import type { ComposerDictationView } from "./useComposerDictation";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import type { ComposerDictationView, DictationLevelListener } from "./useComposerDictation";
+
+type LevelSource = (listener: DictationLevelListener) => () => void;
+
+// Draws the microphone level straight to the element: it changes ten times a
+// second, which must not render the composer.
+function InputLevel({ onLevel }: { onLevel: LevelSource }) {
+  const fill = useRef<HTMLSpanElement>(null);
+  useEffect(() => onLevel((level) => {
+    fill.current?.style.setProperty("--dictation-level", level.toFixed(2));
+  }), [onLevel]);
+  return (
+    <span className="composer__dictation-level" aria-hidden="true">
+      <span ref={fill} />
+    </span>
+  );
+}
 
 function TranscriptPreview({ text }: { text: string }) {
   const preview = useRef<HTMLDivElement>(null);
@@ -30,15 +46,18 @@ function TranscriptPreview({ text }: { text: string }) {
   );
 }
 
-export function ComposerDictationFeedback({ phase, text, error }: ComposerDictationView) {
+export function ComposerDictationFeedback({ phase, text, error, onLevel }: ComposerDictationView & {
+  onLevel: LevelSource;
+}) {
   if (phase === "idle" && !text && !error) return null;
   return (
     <div className="composer__dictation-feedback">
       {error ? <p className="composer__meta composer__meta--error" role="alert">{error}</p> : null}
       {phase !== "idle" ? (
-        <p className="composer__meta" aria-live="polite">
-          {phase === "connecting" ? "Connecting to OpenAI…"
-            : phase === "listening" ? "Listening…"
+        <p className="composer__meta composer__dictation-status" aria-live="polite">
+          {phase === "listening" ? <InputLevel onLevel={onLevel} /> : null}
+          {phase === "connecting" ? "Connecting to OpenAI and the microphone…"
+            : phase === "listening" ? "Listening… Enter adds this to the draft. Esc cancels."
               : "Finalizing transcript…"}
         </p>
       ) : null}

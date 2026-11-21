@@ -322,6 +322,8 @@
   --theme-swatch-tangerine-dark-sidebar: #050505;
   --theme-swatch-tangerine-dark-accent: #ff8a1f;
   --theme-swatch-tangerine-dark-text: #f7f3eb;
+  /* Behind a third-party mark published for a light page, in every theme. */
+  --brand-mark-plate: #ffffff;
   --theme-swatch-tangerine-light-app: #ffffff;
   --theme-swatch-tangerine-light-sidebar: #f7f4ef;
   --theme-swatch-tangerine-light-accent: #b74c00;
@@ -2946,11 +2948,59 @@ textarea,
 }
 
 .jump-palette__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
   margin: 0;
   padding: 34px 20px;
   color: var(--text-muted);
   font-size: 13px;
   text-align: center;
+}
+
+.jump-palette__empty p {
+  margin: 0;
+}
+
+/* Hands the query to the search screen, which also reads message content.
+   Enter runs it while the list is empty; the query in its label ends in an
+   ellipsis before the button outgrows the panel. */
+.jump-palette__search-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.jump-palette__search-all svg {
+  flex: none;
+}
+
+.jump-palette__search-all-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jump-palette__search-all kbd {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.jump-palette__search-all:hover {
+  border-color: var(--accent);
 }
 
 /* ⌘K federated section: remote hits append below the instant local rows. */
@@ -2980,12 +3030,39 @@ textarea,
   font-weight: 500;
 }
 
+.jump-palette__foot > * {
+  flex: none;
+  white-space: nowrap;
+}
+
 .jump-palette__foot-spacer {
   flex: 1;
 }
 
-.jump-palette__foot-remote {
+/* The one status that can be long gives way first. */
+.jump-palette__foot > .jump-palette__foot-remote {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-style: italic;
+  text-overflow: ellipsis;
+}
+
+/* A legend entry that is also a button: the footer's type, the accent's
+   colour. The padding gives it a 24px target without moving the legend. */
+.jump-palette__foot-action {
+  margin: -7px -6px;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  cursor: pointer;
+}
+
+.jump-palette__foot-action:hover {
+  background: var(--accent-soft);
 }
 
 .jump-palette__foot-count {
@@ -5546,6 +5623,179 @@ textarea,
      (no lane wrapper) are re-inset just below. */
   margin-inline: calc(-1 * var(--sidebar-rail-inset));
   overflow: hidden;
+  /* The selected thread's dock floats over the lane from here. */
+  position: relative;
+}
+
+/* The open thread, docked at the edge of the list its row scrolled out
+   through (SelectedThreadDock). It floats over the lane instead of taking a
+   slot beside it, so no row moves when it appears, and it is laid out from
+   the region, not from the row's project: a sticky row would stop at the
+   end of its own section.
+
+   It wears the selected row's paint, so it reads as that card: the border,
+   the fill and the accent edge of `.thread-row.is-selected`, and the ring a
+   clicked row draws (`.thread-row:has(.thread-row__open:focus)`). The ring
+   is on at rest here. It is what tells the docked card from the rows
+   passing under it.
+
+   The first two shadows after the edge are a `--bg-sidebar` plate under the
+   ring: without it the rows show through the 2px between card and ring, and
+   run straight into the ring's outer side. 6px is the ring's 4px reach plus
+   2px of air, and the 6px offsets below keep the plate off the lane's
+   inset and clear of a stuck project header. */
+.selected-thread-dock {
+  appearance: none;
+  position: absolute;
+  /* Above the stuck project headers (6) and the rows. */
+  z-index: 7;
+  /* 6px inside the lane inset on both sides. The ring and its plate reach
+     6px out, so they end at the inset: clear of the wall on the left and of
+     the scrollbar on the right. macOS draws an overlay thumb in that inset
+     and reserves no gutter for it; where a gutter is reserved, the dock
+     stops short of it as the rows do. */
+  left: calc(var(--sidebar-lane-inset) + 6px);
+  right: calc(var(--sidebar-lane-inset) + max(6px, var(--selected-thread-dock-gutter, 0px)));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  background: var(--bg-row-active);
+  box-shadow:
+    inset 2px 0 0 0 var(--accent),
+    0 0 0 6px var(--bg-sidebar),
+    0 8px 18px 4px var(--shadow-tint-medium);
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.selected-thread-dock--top {
+  top: calc(var(--selected-thread-dock-top, 0px) + 6px);
+}
+
+/* The top dock sits above the stuck project header, not under it. While it
+   is up, the region carries `.has-selected-thread-dock-top`, and every
+   sticky header in the list sticks lower by
+   `--selected-thread-dock-reserve` (the card plus its 6px plate above and
+   below). This band fills the strip they left so rows do not show around
+   the card. It spans the lane inset to inset, as the rows do, and leaves
+   the scrollbar's column alone.
+
+   The shift hangs on the class, not on the property's value. The dock
+   takes the class off to measure the list with its headers in their own
+   places, on every scroll frame. Changing an inherited custom property
+   there restyles every row under the region (38ms a frame at 360 rows);
+   a class with these four descendant selectors restyles the headers. */
+.selected-thread-dock-band {
+  position: absolute;
+  z-index: 7;
+  top: var(--selected-thread-dock-top, 0px);
+  right: var(--sidebar-lane-inset);
+  left: var(--sidebar-lane-inset);
+  height: var(--selected-thread-dock-reserve, 0px);
+  background: var(--bg-sidebar);
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-row__header,
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-group__header {
+  top: var(--selected-thread-dock-reserve, 0px);
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directories-pin-slot {
+  top: calc(2px + var(--selected-thread-dock-reserve, 0px));
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-row__thread-divider {
+  top: calc(var(--directory-row-header-height, 24px) + var(--selected-thread-dock-reserve, 0px));
+}
+
+.selected-thread-dock--bottom {
+  bottom: calc(var(--selected-thread-dock-bottom, 0px) + 6px);
+}
+
+/* The ring is already there, so keyboard focus adds a second one inside
+   the card. 8.40:1 on `--bg-row-active` in dark, 4.82:1 in light. */
+.selected-thread-dock:focus-visible {
+  box-shadow:
+    inset 0 0 0 2px var(--focus-ring),
+    0 0 0 6px var(--bg-sidebar),
+    0 8px 18px 4px var(--shadow-tint-medium);
+}
+
+.selected-thread-dock__line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.selected-thread-dock__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-thread-dock__line > .thread-row__time {
+  margin-left: 10px;
+}
+
+/* Where the row is: the project its header would name, and which way. */
+.selected-thread-dock__line--where {
+  gap: 8px;
+  min-height: 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.selected-thread-dock__project {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.selected-thread-dock__project-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-thread-dock__direction {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.selected-thread-dock--bottom .selected-thread-dock__direction {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .selected-thread-dock {
+    animation: selected-thread-dock-in 140ms ease-out;
+  }
+
+  .selected-thread-dock--bottom {
+    --selected-thread-dock-from: 6px;
+  }
+}
+
+@keyframes selected-thread-dock-in {
+  from {
+    opacity: 0;
+    translate: 0 var(--selected-thread-dock-from, -6px);
+  }
 }
 
 /* Restore the inset for the region's non-lane children — the lanes
@@ -9141,6 +9391,124 @@ a.button {
   border-color: var(--danger-border);
   background: var(--danger-soft);
   color: var(--danger-text);
+}
+
+/* Share worktree storage: the neutral confirm frame of the detach warning.
+   Nothing here is destructive, so the confirm takes the accent, not danger. */
+.worktree-storage-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim-strong);
+}
+
+.worktree-storage-dialog {
+  box-sizing: border-box;
+  width: min(440px, 100%);
+  max-height: 100%;
+  padding: 18px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.worktree-storage-dialog h2 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.worktree-storage-dialog p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.worktree-storage-dialog p strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.worktree-storage-dialog p.worktree-storage-dialog__status {
+  margin-top: 12px;
+  color: var(--text-primary);
+}
+
+.worktree-storage-dialog p.worktree-storage-dialog__notice {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.worktree-storage-dialog p.worktree-storage-dialog__error {
+  margin-top: 10px;
+  color: var(--danger-text);
+  font-size: 12px;
+}
+
+.worktree-storage-dialog__option.composer__checkbox {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 14px;
+  color: var(--text-primary);
+}
+
+.worktree-storage-dialog__option input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.worktree-storage-dialog__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.worktree-storage-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.worktree-storage-dialog__actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.worktree-storage-dialog__actions button:hover:not(:disabled),
+.worktree-storage-dialog__actions button:focus-visible:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.worktree-storage-dialog__actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.worktree-storage-dialog__actions .worktree-storage-dialog__confirm {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.worktree-storage-dialog__actions button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
 }
 
 .thread-row__chip--muted {
@@ -17381,6 +17749,57 @@ a.button {
 .settings-secret .settings-input {
   flex: 1 1 220px;
   min-width: 0;
+}
+
+/* The row's buttons match the 32px input beside them, not the 34px default. */
+.settings-secret .button {
+  min-height: 32px;
+}
+
+/* A secret's stored state, on its own line under the input it describes. */
+.settings-secret--status {
+  flex-wrap: wrap;
+}
+
+.settings-secret__status {
+  display: flex;
+  flex: 0 0 100%;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.settings-secret__mark {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.settings-secret__mark-tick {
+  stroke: var(--bg-panel);
+}
+
+/* Tone goes on the mark and the words, never on a panel behind them. */
+.settings-secret__status.is-set {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-secret__status.is-set .settings-secret__mark {
+  color: var(--status-ok);
+}
+
+.settings-secret__status.is-draft,
+.settings-secret__status.is-override {
+  color: var(--status-warning-text);
+}
+
+.settings-secret__status.is-draft .settings-secret__mark,
+.settings-secret__status.is-override .settings-secret__mark {
+  color: inherit;
 }
 
 .settings-inline-actions {
@@ -25693,6 +26112,129 @@ a.button {
   box-shadow: 0 6px 16px var(--shadow-tint-medium);
 }
 
+/* A transparent, non-square mark: fitted whole onto a light plate. */
+.mcp-connection__icon--plate,
+.plugin-store__tile-icon--plate {
+  box-sizing: border-box;
+  padding: 5px;
+  background: var(--brand-mark-plate);
+  object-fit: contain;
+}
+
+.plugin-store__tile-icon--plate {
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.settings-boat-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  margin: 4px 0 2px;
+}
+
+.settings-boat-setup__pitch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-boat-setup__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.settings-boat-setup__pitch p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.settings-boat-setup__points {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-boat-setup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-boat-setup__actions .settings-mcp-row__state {
+  flex: 1 1 100%;
+}
+
+.settings-boat-code {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.settings-boat-code__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-boat-code__label,
+.settings-boat-code__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-boat-code__value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  user-select: all;
+}
+
+.settings-boat-key {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-boat-key .settings-input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.settings-boat-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.settings-boat-limit {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .mcp-connection__copy {
   min-width: 0;
 }
@@ -29507,8 +30049,24 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   margin-top: 0;
 }
 
+/* A real box, so the open group's toggle has something to pin within: under
+   `display: contents` its containing block was the whole transcript and it
+   could never unpin. Its children were already flex items of a column with
+   this gap, and the box spans the column, so they dock as they did. */
 .transcript-work-phase-group {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcript-work-phase-group__header {
+  display: flex;
+  min-width: 0;
+}
+
+.transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header .transcript-work-phase-group__toggle {
+  min-width: 0;
 }
 
 .transcript-work-phase-group__toggle,
@@ -36846,10 +37404,31 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
 }
 
+/* A command card never needs two scrolls. Its height is cut to what is left
+   of the transcript scrollport under the headers pinned above it, less a
+   strip that shows the next row, so the whole card is in view whenever its
+   pinned header is. The command and the output scroll inside it and share
+   the height by their length; `--transcript-pane-lines` (a pane's own line
+   count, at most six) is the floor that keeps a one-line command from being
+   squeezed out by ten thousand lines of output. The scrollport height is
+   published on the card by `useTranscriptScrollportHeight`; outside a
+   transcript the viewport-unit fallback applies. */
 .transcript-command {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  max-height: max(
+    220px,
+    min(
+      calc(
+        var(--transcript-scrollport-height, 80vh)
+        - var(--transcript-pin-group, 0px)
+        - var(--transcript-pin-activity, 0px)
+        - var(--transcript-pin-detail, 0px)
+        - 48px
+      ),
+      720px
+    )
+  );
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -36858,11 +37437,12 @@ div.composer-error-row__toggle {
 
 .transcript-command__meta {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  padding: 10px 12px 0;
+  padding: 8px 12px;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -36870,72 +37450,298 @@ div.composer-error-row__toggle {
 .transcript-command__source,
 .transcript-command__status,
 .transcript-command__cwd,
+.transcript-command__pane-count,
 .transcript-command__block code,
 .transcript-command__output code {
   font-family: var(--font-mono);
 }
 
 .transcript-command__cwd {
+  flex: 0 0 auto;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 12px 8px;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.transcript-command__actions {
+/* One row above each pane: what the pane holds, how long it is, and the
+   controls that act on it. The row never scrolls, so Copy and Show less
+   stay reachable however far the pane is scrolled. */
+.transcript-command__pane-head {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  min-height: 32px;
+  padding: 0 6px 0 12px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.transcript-command__copy {
-  min-height: 28px;
-  padding: 0 10px;
+.transcript-command__pane-head--output {
+  background: var(--bg-panel);
+}
+
+.transcript-command__pane-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-command__pane-count {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.transcript-command__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.transcript-command__copy,
+.transcript-command__toggle {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.transcript-command__block,
+.transcript-command__output {
+  flex: 0 1 auto;
+  /* The pane's own lines plus its 10px of bottom padding, and no more: the
+     floor applies to an unconstrained card too. */
+  min-height: calc(var(--transcript-pane-lines, 1) * 12px * 1.55 + 10px);
+  margin: 0;
+  padding: 0 12px 10px;
+  overflow-y: auto;
+  color: var(--text-primary);
   font-size: 12px;
+  line-height: 1.55;
+  container-type: scroll-state;
+  --transcript-pane-surface: var(--bg-panel-elevated);
+}
+
+.transcript-command__output {
+  background: var(--bg-panel);
+  --transcript-pane-surface: var(--bg-panel);
 }
 
 .transcript-command__block,
 .transcript-command__output pre {
-  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.transcript-command__block {
-  padding: 0 12px 10px;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.transcript-command__output {
-  overflow-x: auto;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
 }
 
 .transcript-command__output pre,
 .transcript-command__output p {
   margin: 0;
-  padding: 10px 12px;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.55;
 }
 
 .transcript-command__output p {
   color: var(--text-muted);
 }
 
-.transcript-command__toggle {
-  align-self: flex-start;
-  min-height: 28px;
-  margin: 0 12px 12px;
-  padding: 0 10px;
-  font-size: 12px;
+.transcript-command__block:focus-visible,
+.transcript-command__output:focus-visible,
+.transcript-activity .transcript-diff__rows:focus-visible,
+.transcript-subagent__output:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Overflow cue, as on the composer's bands: macOS draws no scrollbar until
+   the pane is scrolled, so a pane cut mid-line looked complete. Each edge
+   fades into the pane's surface while text lies past it. The fades are
+   sticky to the scrollport edges and take no height. */
+.transcript-command__block::before,
+.transcript-command__block::after,
+.transcript-command__output::before,
+.transcript-command__output::after {
+  content: "";
+  display: block;
+  position: sticky;
+  z-index: 1;
+  height: 20px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.transcript-command__block::before,
+.transcript-command__output::before {
+  top: 0;
+  margin-bottom: -20px;
+  background: linear-gradient(
+    to bottom,
+    var(--transcript-pane-surface) 0%,
+    transparent 100%
+  );
+}
+
+/* Chromium pins inside the pane's padding, so the bottom fade steps back out
+   over the 10px the pane carries there. */
+.transcript-command__block::after,
+.transcript-command__output::after {
+  bottom: -10px;
+  margin-top: -20px;
+  background: linear-gradient(
+    to top,
+    var(--transcript-pane-surface) 0%,
+    transparent 100%
+  );
+}
+
+@container scroll-state(scrollable: top) {
+  .transcript-command__block::before,
+  .transcript-command__output::before {
+    opacity: 1;
+  }
+}
+
+@container scroll-state(scrollable: bottom) {
+  .transcript-command__block::after,
+  .transcript-command__output::after {
+    opacity: 1;
+  }
+}
+
+/* Pinned disclosure headers. While an open work group, activity or detail
+   row is being scrolled through, the control that opened it stays at the top
+   of the transcript, so closing it is one click from anywhere inside it.
+   The three levels stack in the order they nest: each open level adds one
+   `--transcript-pin-step` to the `top` of the levels inside it, and the
+   fitted bodies subtract the same sum from their height.
+
+   A header pins at the scroller's content edge, 12px under the scrollport's
+   top, where the top fade has already thinned out. Its ::before is the
+   surface behind it, the transcript's own background, so the body scrolls
+   under the header and never through it. While stuck the surface also
+   reaches up to the scrollport's top edge and closes with a rule. */
+.transcript-list__items {
+  --transcript-pin-step: 28px;
+}
+
+.transcript-work-phase-group[data-expanded="true"] {
+  --transcript-pin-group: var(--transcript-pin-step);
+}
+
+.transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) {
+  --transcript-pin-activity: var(--transcript-pin-step);
+}
+
+.transcript-activity__detail[data-expanded="true"] {
+  --transcript-pin-detail: var(--transcript-pin-step);
+}
+
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header,
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header),
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row {
+  position: sticky;
+  container-type: scroll-state;
+}
+
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header {
+  top: 0;
+  z-index: 6;
+}
+
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header) {
+  top: var(--transcript-pin-group, 0px);
+  z-index: 5;
+}
+
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row {
+  top: calc(var(--transcript-pin-group, 0px) + var(--transcript-pin-activity, 0px));
+  z-index: 4;
+}
+
+/* An open row's label is one line. A command label wraps to three or four
+   lines, and pinned at that height it would cover the top of the body it
+   heads and overrun the step the levels below are offset by. The body shows
+   the whole command directly underneath. An open group's label is held to
+   one line for the same step: wrapped in a narrow column it covered the row
+   header pinned under it. */
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header .transcript-work-phase-group__toggle > span:last-child,
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > .transcript-activity__header .transcript-activity__label,
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row .transcript-activity__detail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header::before,
+.transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header)::before,
+.transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
+  content: "";
+  position: absolute;
+  /* Opaque always, not only while stuck. The surface is the transcript's own
+     background, so at rest it cannot be seen; it reaches 4px up to close the
+     gap under the level pinned above. Painting it from the stuck query alone
+     left a header with no surface, and text running through its label,
+     wherever that query does not apply. */
+  inset: -4px -4px 0;
+  z-index: -1;
+  background: var(--bg-app);
+  pointer-events: none;
+}
+
+/* A warning row's tint is translucent over the transcript, so an opaque
+   surface inside it would show as a patch. Its detail rows stay in flow. */
+.transcript-list__items .transcript-activity--warning .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row {
+  position: static;
+}
+
+.transcript-list__items .transcript-activity--warning .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
+  content: none;
+}
+
+@container scroll-state(stuck: top) {
+  .transcript-list__items .transcript-work-phase-group[data-expanded="true"] > .transcript-work-phase-group__header::before,
+  .transcript-list__items .transcript-activity[data-expanded="true"]:not(.transcript-activity--warning) > :is(.transcript-activity__header, .transcript-thread-tool__header)::before,
+  .transcript-list__items .transcript-activity__detail[data-expanded="true"] > .transcript-activity__detail-row::before {
+    top: -12px;
+    bottom: -3px;
+    box-shadow: 0 1px 0 var(--border-subtle);
+  }
+}
+
+/* Tab scrolls a control to the scrollport's top edge, where the pinned
+   headers are. It stops below them and the ring's reach. */
+.transcript-list__items :is(
+  .transcript-work-phase-group[data-expanded="true"],
+  .transcript-activity[data-expanded="true"]
+) :where(:focus-visible) {
+  scroll-margin-top: calc(
+    var(--transcript-pin-group, 0px)
+    + var(--transcript-pin-activity, 0px)
+    + var(--transcript-pin-detail, 0px)
+    + 22px
+  );
+}
+
+/* A diff inside the transcript is cut to the scrollport the same way as a
+   command card, less the path and toolbar rows above its lines. The Edits
+   rail scrolls its own body and keeps the diff whole. */
+.transcript-activity .transcript-diff__rows {
+  max-height: max(
+    220px,
+    min(
+      calc(
+        var(--transcript-scrollport-height, 80vh)
+        - var(--transcript-pin-group, 0px)
+        - var(--transcript-pin-activity, 0px)
+        - var(--transcript-pin-detail, 0px)
+        - 140px
+      ),
+      720px
+    )
+  );
+  overflow-y: auto;
 }
 
 /* Delegated-agent lifecycle activity: distinct from a shell transcript so a
@@ -37053,6 +37859,8 @@ div.composer-error-row__toggle {
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
 }
 
 .transcript-diff {
@@ -49476,8 +50284,40 @@ button.composer__subthread-source-parent:hover {
   gap: 4px;
 }
 
+.composer__dictation-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer__dictation-level {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--accent-soft);
+}
+
+.composer__dictation-level > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(var(--dictation-level, 0));
+  transform-origin: left center;
+  transition: transform 90ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__dictation-level > span {
+    transition: none;
+  }
+}
+
 .composer__dictation-preview {
-  max-height: 5em;
+  /* A whole number of lines, so the oldest visible line is never cut in half
+     while the preview follows the newest text. */
+  max-height: calc(1.45em * 6);
   overflow: auto;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

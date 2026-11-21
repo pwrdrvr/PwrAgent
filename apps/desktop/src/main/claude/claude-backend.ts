@@ -1002,10 +1002,12 @@ export class ClaudeBackend {
   }
 
   async renameThread(threadId: string, name: string): Promise<{ threadId: string }> {
-    const session = await this.store.read(threadId);
-    session.thread.title = name.trim();
-    session.thread.titleSource = "explicit";
-    await this.store.save(session);
+    await this.store.withMetadataMutation(threadId, async () => {
+      const session = await this.store.read(threadId);
+      session.thread.title = name.trim();
+      session.thread.titleSource = "explicit";
+      await this.store.save(session);
+    });
     return { threadId };
   }
 
@@ -1058,19 +1060,21 @@ export class ClaudeBackend {
     const live = this.sessions.get(params.threadId);
     // An idle process keeps its launch folder; the next turn relaunches.
     if (live) await this.closeSession(live);
-    const session = await this.store.read(params.threadId);
-    const previous = path.resolve(session.cwd);
-    // Replace the directory the thread worked in; keep its other links.
-    const others = session.thread.linkedDirectories.filter((directory) => {
-      const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
-      return !activePath || path.resolve(activePath) !== previous;
+    await this.store.withMetadataMutation(params.threadId, async () => {
+      const session = await this.store.read(params.threadId);
+      const previous = path.resolve(session.cwd);
+      // Replace the directory the thread worked in; keep its other links.
+      const others = session.thread.linkedDirectories.filter((directory) => {
+        const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
+        return !activePath || path.resolve(activePath) !== previous;
+      });
+      // The session file stays under the folder that created it.
+      if (session.sdkSessionId && !session.sdkSessionDir) session.sdkSessionDir = session.cwd;
+      session.cwd = params.cwd;
+      session.thread.linkedDirectories = [params.linkedDirectory, ...others];
+      session.thread.updatedAt = Date.now();
+      await this.store.save(session);
     });
-    // The session file stays under the folder that created it.
-    if (session.sdkSessionId && !session.sdkSessionDir) session.sdkSessionDir = session.cwd;
-    session.cwd = params.cwd;
-    session.thread.linkedDirectories = [params.linkedDirectory, ...others];
-    session.thread.updatedAt = Date.now();
-    await this.store.save(session);
   }
 
   async setExecutionMode(threadId: string, mode: ThreadExecutionMode): Promise<void> {
@@ -1083,9 +1087,11 @@ export class ClaudeBackend {
       await live.query.setPermissionMode(permissionMode);
       live.config.permissionMode = permissionMode;
     }
-    const session = await this.store.read(threadId);
-    session.thread.executionMode = mode;
-    await this.store.save(session);
+    await this.store.withMetadataMutation(threadId, async () => {
+      const session = await this.store.read(threadId);
+      session.thread.executionMode = mode;
+      await this.store.save(session);
+    });
   }
 
   async startTurn(params: ClaudeTurnParams & {
@@ -1468,13 +1474,20 @@ export class ClaudeBackend {
     const firstPrompt = input.find((item) => item.type === "text" && item.text.trim());
     turn.titlePrompt = firstPrompt?.type === "text" ? firstPrompt.text : undefined;
     if (session.thread.titleSource === "fallback" && firstPrompt?.type === "text") {
-      session.thread.title = firstPrompt.text.replace(/\s+/g, " ").trim().slice(0, 80);
-      session.thread.titleSource = "derived";
-      await this.store.save(session);
-      if (live.session !== session) Object.assign(live.session.thread, { title: session.thread.title, titleSource: "derived" });
-      await this.emit({ method: "thread/name/updated", params: {
-        threadId, threadName: session.thread.title, titleSource: "derived",
-      } });
+      const title = firstPrompt.text.replace(/\s+/g, " ").trim().slice(0, 80);
+      const changed = await this.store.withMetadataMutation(threadId, async () => {
+        const current = await this.store.read(threadId);
+        if (current.thread.titleSource !== "fallback") return false;
+        current.thread.title = title;
+        current.thread.titleSource = "derived";
+        await this.store.save(current);
+        return true;
+      });
+      if (changed) {
+        Object.assign(session.thread, { title, titleSource: "derived" });
+        if (live.session !== session) Object.assign(live.session.thread, { title, titleSource: "derived" });
+        await this.emit({ method: "thread/name/updated", params: { threadId, threadName: title, titleSource: "derived" } });
+      }
     }
     turn.entries.set(user.id, user);
     await this.appendTurnEntries(threadId, turn, [user]);
@@ -1624,15 +1637,18 @@ export class ClaudeBackend {
             session.resumeSessionAt = undefined;
             session.forkFromSdkSessionId = undefined;
             if (newSession) session.sdkSessionDir = undefined;
-            const current = await this.store.read(threadId);
-            current.sdkSessionId = message.session_id;
-            delete current.resumeSessionAt;
-            delete current.forkFromSdkSessionId;
-            // The new session now holds the primer; later turns resume it.
-            delete current.primerPending;
-            session.primerPending = undefined;
-            if (newSession) delete current.sdkSessionDir;
-            await this.store.save(current);
+            const current = await this.store.withMetadataMutation(threadId, async () => {
+              const metadata = await this.store.read(threadId);
+              metadata.sdkSessionId = message.session_id;
+              delete metadata.resumeSessionAt;
+              delete metadata.forkFromSdkSessionId;
+              // The new session now holds the primer; later turns resume it.
+              delete metadata.primerPending;
+              session.primerPending = undefined;
+              if (newSession) delete metadata.sdkSessionDir;
+              await this.store.save(metadata);
+              return metadata;
+            });
             // A new turn ends every rewind's undo; drop the files kept for one.
             if (current.rewinds?.some((rewind) => rewind.fileBackup)) {
               void rm(this.store.rewindBackupDirectory(threadId), { recursive: true, force: true }).catch(() => {});
@@ -2039,12 +2055,14 @@ export class ClaudeBackend {
     // A monitor that calls complete_monitoring ends its own thread before
     // that turn ends. Nothing is left to save, as for the turn's entries.
     if (this.store.isForgotten(session.thread.id)) return;
-    const current = await this.store.read(session.thread.id);
-    current.sdkSessionId = session.sdkSessionId;
-    current.modelUsage = session.modelUsage;
-    current.contextWindow = session.contextWindow;
-    current.thread.updatedAt = Date.now();
-    await this.store.save(current);
+    await this.store.withMetadataMutation(session.thread.id, async () => {
+      const current = await this.store.read(session.thread.id);
+      current.sdkSessionId = session.sdkSessionId;
+      current.modelUsage = session.modelUsage;
+      current.contextWindow = session.contextWindow;
+      current.thread.updatedAt = Date.now();
+      await this.store.save(current);
+    });
   }
 
   /** Record the result that ends the desktop turn; returns why it failed. */
@@ -2292,7 +2310,7 @@ export class ClaudeBackend {
     const { session } = live;
     const threadId = session.thread.id;
     try {
-      let current = await this.store.read(threadId);
+      const current = await this.store.read(threadId);
       if (current.thread.titleSource === "explicit" || !session.sdkSessionId || live.controller.signal.aborted) return false;
       // Do not inspect a different account's session store. A session
       // reader would start a process at every turn's end for a title the
@@ -2313,28 +2331,35 @@ export class ClaudeBackend {
           // title control, which always uses the correct session and account.
         }
       }
-      current = await this.store.read(threadId);
-      if (current.thread.titleSource === "explicit") return false;
       const query = live.query as ClaudeTitleQuery;
       const disabled = ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"]
         .some((key) => ["1", "true", "yes", "on"].includes(live.titleEnv?.[key]?.trim().toLowerCase() ?? ""));
-      const canRequest = allowRequest && !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
-        && Boolean(turn.titlePrompt?.trim()) && !live.controller.signal.aborted;
-      if (!title && !canRequest) return false;
-      // Persist the attempt before spending quota so failure/restart cannot
-      // create a title request on every turn.
-      if (!current.titleGenerationAttempted) {
-        current.titleGenerationAttempted = true;
-        await this.store.save(current);
-      }
+      const canRequest = await this.store.withMetadataMutation(threadId, async () => {
+        const latest = await this.store.read(threadId);
+        if (latest.thread.titleSource === "explicit") return false;
+        const request = allowRequest && !title && !latest.titleGenerationAttempted && !disabled
+          && typeof query.generateSessionTitle === "function" && Boolean(turn.titlePrompt?.trim()) && !live.controller.signal.aborted;
+        // Persist the attempt before spending quota so failure/restart cannot
+        // create a title request on every turn.
+        if ((title || request) && !latest.titleGenerationAttempted) {
+          latest.titleGenerationAttempted = true;
+          await this.store.save(latest);
+        }
+        return request;
+      });
       if (canRequest) title = await requestClaudeTitle(query, turn.titlePrompt!, live.controller.signal);
       if (title && !live.controller.signal.aborted) {
-        current = await this.store.read(threadId);
-        if (current.thread.titleSource !== "explicit" && current.thread.title !== title) {
-          current.thread.title = title;
-          current.thread.titleSource = "derived";
-          await this.store.save(current);
-          await this.emit({ method: "thread/name/updated", params: { threadId, threadName: title, titleSource: "derived" } });
+        const nextTitle = title;
+        const changed = await this.store.withMetadataMutation(threadId, async () => {
+          const latest = await this.store.read(threadId);
+          if (latest.thread.titleSource === "explicit" || latest.thread.title === nextTitle) return false;
+          latest.thread.title = nextTitle;
+          latest.thread.titleSource = "derived";
+          await this.store.save(latest);
+          return true;
+        });
+        if (changed) {
+          await this.emit({ method: "thread/name/updated", params: { threadId, threadName: nextTitle, titleSource: "derived" } });
         }
       }
       return canRequest;
@@ -3092,49 +3117,51 @@ export class ClaudeBackend {
           if (!fileBackup) await rm(backup, { recursive: true, force: true });
         }
       }
-      const current = await this.store.read(threadId);
-      const fromSdkSessionId = current.sdkSessionId!;
-      const before = {
-        ...(current.resumeSessionAt ? { resumeSessionAt: current.resumeSessionAt } : {}),
-        ...(current.modelUsage ? { modelUsage: current.modelUsage } : {}),
-        ...(current.contextWindow ? { contextWindow: current.contextWindow } : {}),
-      };
-      const undoable = Boolean(rewindId) && (params.mode === "conversation" || fileBackup);
-      if (point.keptUuid) {
-        current.resumeSessionAt = point.keptUuid;
-      } else {
-        // Nothing before the first prompt to resume at: the next turn starts
-        // a new session, and the old one keeps the removed turns.
-        delete current.sdkSessionId;
-        delete current.resumeSessionAt;
-      }
-      // Billing starts over on the kept branch. Keep the last measured
-      // occupancy until Claude can measure the resumed context.
-      delete current.modelUsage;
-      current.thread.updatedAt = Date.now();
-      const truncationId = await this.store.truncate(threadId, target.messageId);
-      current.rewinds = [...current.rewinds ?? [], {
-        ...(rewindId ? { id: rewindId } : {}),
-        at: current.thread.updatedAt, beforeTurnId: target.turnId ?? point.promptUuid, sdkSessionId: fromSdkSessionId,
-        ...(point.leafUuid ? { removedLeafUuid: point.leafUuid } : {}),
-        ...(restoredFiles ? { restoredFiles } : {}),
-        ...(undoable ? {
-          truncationId,
-          after: {
-            ...(current.sdkSessionId ? { sdkSessionId: current.sdkSessionId } : {}),
-            ...(current.resumeSessionAt ? { resumeSessionAt: current.resumeSessionAt } : {}),
-          },
-          before,
-          ...(fileBackup ? { fileBackup: true } : {}),
-        } : {}),
-      }];
-      await this.store.save(current);
-      return {
-        ...(promptEntry?.type === "message" ? { promptText: promptEntry.text } : {}),
-        ...(restoredFiles ? { restoredFileCount: restoredFiles.length } : {}),
-        undoable,
-        updatedAt: current.thread.updatedAt,
-      };
+      return await this.store.withMetadataMutation(threadId, async () => {
+        const current = await this.store.read(threadId);
+        const fromSdkSessionId = current.sdkSessionId!;
+        const before = {
+          ...(current.resumeSessionAt ? { resumeSessionAt: current.resumeSessionAt } : {}),
+          ...(current.modelUsage ? { modelUsage: current.modelUsage } : {}),
+          ...(current.contextWindow ? { contextWindow: current.contextWindow } : {}),
+        };
+        const undoable = Boolean(rewindId) && (params.mode === "conversation" || fileBackup);
+        if (point.keptUuid) {
+          current.resumeSessionAt = point.keptUuid;
+        } else {
+          // Nothing before the first prompt to resume at: the next turn starts
+          // a new session, and the old one keeps the removed turns.
+          delete current.sdkSessionId;
+          delete current.resumeSessionAt;
+        }
+        // Billing starts over on the kept branch. Keep the last measured
+        // occupancy until Claude can measure the resumed context.
+        delete current.modelUsage;
+        current.thread.updatedAt = Date.now();
+        const truncationId = await this.store.truncate(threadId, target.messageId);
+        current.rewinds = [...current.rewinds ?? [], {
+          ...(rewindId ? { id: rewindId } : {}),
+          at: current.thread.updatedAt, beforeTurnId: target.turnId ?? point.promptUuid, sdkSessionId: fromSdkSessionId,
+          ...(point.leafUuid ? { removedLeafUuid: point.leafUuid } : {}),
+          ...(restoredFiles ? { restoredFiles } : {}),
+          ...(undoable ? {
+            truncationId,
+            after: {
+              ...(current.sdkSessionId ? { sdkSessionId: current.sdkSessionId } : {}),
+              ...(current.resumeSessionAt ? { resumeSessionAt: current.resumeSessionAt } : {}),
+            },
+            before,
+            ...(fileBackup ? { fileBackup: true } : {}),
+          } : {}),
+        }];
+        await this.store.save(current);
+        return {
+          ...(promptEntry?.type === "message" ? { promptText: promptEntry.text } : {}),
+          ...(restoredFiles ? { restoredFileCount: restoredFiles.length } : {}),
+          undoable,
+          updatedAt: current.thread.updatedAt,
+        };
+      });
     } finally {
       this.rewinding.delete(threadId);
     }
@@ -3157,10 +3184,11 @@ export class ClaudeBackend {
       if (!record || record.id !== rewindId || !record.after || !record.truncationId) {
         throw new Error(unavailable);
       }
+      const { truncationId } = record;
       if (
         session.sdkSessionId !== record.after.sdkSessionId
         || session.resumeSessionAt !== record.after.resumeSessionAt
-        || !await this.store.canUndoTruncation(threadId, record.truncationId)
+        || !await this.store.canUndoTruncation(threadId, truncationId)
       ) {
         throw new Error(`${unavailable} Claude has continued the conversation since.`);
       }
@@ -3168,20 +3196,23 @@ export class ClaudeBackend {
       if (live) await this.closeSession(live);
       const backup = this.store.rewindBackupDirectory(threadId, rewindId);
       if (record.fileBackup) await restoreRewindFiles(backup);
-      await this.store.undoTruncation(threadId, record.truncationId);
-      const current = await this.store.read(threadId);
-      current.sdkSessionId = record.sdkSessionId;
-      // Resume at the removed branch's end, the conversation as it was.
-      if (record.removedLeafUuid) current.resumeSessionAt = record.removedLeafUuid;
-      else delete current.resumeSessionAt;
-      if (record.before?.modelUsage) current.modelUsage = record.before.modelUsage;
-      if (record.before?.contextWindow) current.contextWindow = record.before.contextWindow;
-      current.thread.updatedAt = Date.now();
-      current.rewinds = current.rewinds?.map((rewind) =>
-        rewind.id === rewindId ? { ...rewind, undoneAt: current.thread.updatedAt } : rewind);
-      await this.store.save(current);
+      const result = await this.store.withMetadataMutation(threadId, async () => {
+        await this.store.undoTruncation(threadId, truncationId);
+        const current = await this.store.read(threadId);
+        current.sdkSessionId = record.sdkSessionId;
+        // Resume at the removed branch's end, the conversation as it was.
+        if (record.removedLeafUuid) current.resumeSessionAt = record.removedLeafUuid;
+        else delete current.resumeSessionAt;
+        if (record.before?.modelUsage) current.modelUsage = record.before.modelUsage;
+        if (record.before?.contextWindow) current.contextWindow = record.before.contextWindow;
+        current.thread.updatedAt = Date.now();
+        current.rewinds = current.rewinds?.map((rewind) =>
+          rewind.id === rewindId ? { ...rewind, undoneAt: current.thread.updatedAt } : rewind);
+        await this.store.save(current);
+        return { updatedAt: current.thread.updatedAt };
+      });
       await rm(backup, { recursive: true, force: true });
-      return { updatedAt: current.thread.updatedAt };
+      return result;
     } finally {
       this.rewinding.delete(threadId);
     }
@@ -3252,18 +3283,20 @@ export class ClaudeBackend {
     if (!await this.withSessionReader(async (reader) => await claudeSessionGone(previous, reader))) {
       throw new Error(CLAUDE_SESSION_STILL_PRESENT_MESSAGE);
     }
-    if (busy()) throw new ClaudeTurnActiveError("Wait for Claude to finish with this thread first.");
-    const current = await this.store.read(threadId);
-    if ((current.sdkSessionId ?? current.forkFromSdkSessionId) !== previous) {
-      throw new Error("This thread's Claude session changed. Send your message again.");
-    }
-    current.sessionRestarts = [...current.sessionRestarts ?? [], { at: Date.now(), previousSdkSessionId: previous }];
-    current.primerPending = true;
-    delete current.sdkSessionId;
-    delete current.forkFromSdkSessionId;
-    delete current.resumeSessionAt;
-    delete current.sdkSessionDir;
-    await this.store.save(current);
+    await this.store.withMetadataMutation(threadId, async () => {
+      if (busy()) throw new ClaudeTurnActiveError("Wait for Claude to finish with this thread first.");
+      const current = await this.store.read(threadId);
+      if ((current.sdkSessionId ?? current.forkFromSdkSessionId) !== previous) {
+        throw new Error("This thread's Claude session changed. Send your message again.");
+      }
+      current.sessionRestarts = [...current.sessionRestarts ?? [], { at: Date.now(), previousSdkSessionId: previous }];
+      current.primerPending = true;
+      delete current.sdkSessionId;
+      delete current.forkFromSdkSessionId;
+      delete current.resumeSessionAt;
+      delete current.sdkSessionDir;
+      await this.store.save(current);
+    });
     claudeBackendLog.info("Claude thread continues in a new session", { threadId, previousSdkSessionId: previous });
     return { threadId };
   }

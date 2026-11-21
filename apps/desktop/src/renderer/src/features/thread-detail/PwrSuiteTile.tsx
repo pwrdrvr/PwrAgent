@@ -48,6 +48,8 @@ export function PwrSuiteTile(props: (
 ) & {
   name: string;
   icon: string;
+  /** A transparent or non-square mark: fit it whole onto a light plate. */
+  iconPlate?: boolean;
   ariaLabel: string;
   line: ReactNode;
   lineTone?: PwrSuiteTileLineTone;
@@ -84,7 +86,7 @@ export function PwrSuiteTile(props: (
       <img
         alt=""
         aria-hidden="true"
-        className="mcp-connection__icon"
+        className={"mcp-connection__icon" + (props.iconPlate ? " mcp-connection__icon--plate" : "")}
         src={props.icon}
       />
       <div className="mcp-connection__copy">

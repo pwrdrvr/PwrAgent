@@ -1,4 +1,10 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type {
+  ReadWorktreeReflinkCapabilitiesRequest,
+  ReadWorktreeReflinkCapabilitiesResponse,
+  RunWorktreeReflinkRequest,
+  RunWorktreeReflinkResponse,
+} from "@pwragent/shared/contracts/worktree-reflink";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared/contracts/federation-services";
 import type {
   ResearchHarnessCheck,
@@ -319,6 +325,12 @@ import type {
   ConnectPwrGitResponse,
   OpenPwrGitResponse,
   OpenSandboxerLinkResponse,
+  BoatLinkTarget,
+  BoatSignInMethod,
+  ConnectBoatRequest,
+  OpenBoatLinkResponse,
+  SetBoatCleanupOnPrCloseRequest,
+  SetBoatSandboxPolicyRequest,
   SandboxerLinkTarget,
   PwrGitConnectionStatus,
   OpenPwrSnapResponse,
@@ -855,6 +867,20 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setSandboxerCleanupOnPrClose?: (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  /** Checks a pasted Boat API key and stores it encrypted on this machine. */
+  connectBoat?: (request: ConnectBoatRequest) => Promise<MutateMcpConnectionResponse>;
+  /** Starts a Boat sign-in; the status carries the code Boat's page asks for. */
+  startBoatSignIn?: (method: BoatSignInMethod) => Promise<MutateMcpConnectionResponse>;
+  cancelBoatSignIn?: () => Promise<MutateMcpConnectionResponse>;
+  /** Opens Boat's page for the sign-in in flight, once the code is copied. */
+  openBoatSignInPage?: () => Promise<MutateMcpConnectionResponse>;
+  setBoatSandboxPolicy?: (
+    request: SetBoatSandboxPolicyRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setBoatCleanupOnPrClose?: (
+    request: SetBoatCleanupOnPrCloseRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  openBoatLink?: (target: BoatLinkTarget) => Promise<OpenBoatLinkResponse>;
   setLinearPasteImages?: (request: SetLinearPasteImagesRequest) => Promise<void>;
   /** Images in text pasted from Linear, read through a Linear connection. */
   fetchLinearPastedImages?: (
@@ -1937,6 +1963,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readWorktreeImage?: (
     request: ReadWorktreeImageRequest
   ) => Promise<ReadWorktreeImageResponse>;
+  /** What the selected Git's `git worktree reflink` offers, for one worktree. */
+  readWorktreeReflinkCapabilities?: (
+    request: ReadWorktreeReflinkCapabilitiesRequest
+  ) => Promise<ReadWorktreeReflinkCapabilitiesResponse>;
+  /** Estimates, or shares, a worktree's storage with its source checkout. */
+  runWorktreeReflink?: (
+    request: RunWorktreeReflinkRequest
+  ) => Promise<RunWorktreeReflinkResponse>;
   getGlabStatus?: (request?: GetGlabStatusRequest) => Promise<GlabStatus>;
   pickGlabCommand?: () => Promise<PickGhCommandResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;

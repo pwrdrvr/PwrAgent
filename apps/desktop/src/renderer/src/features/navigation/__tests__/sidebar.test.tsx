@@ -34,7 +34,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
-import { findPeerCounterpartDirectory } from "../../../lib/federation-project-match";
+import { findPeerCounterpartDirectory, type ProjectIdentity } from "../../../lib/federation-project-match";
 import type {
   CheckFederationTargetProject,
   FederationProjectDirectory,
@@ -2792,7 +2792,7 @@ describe("Sidebar", () => {
     );
   });
 
-  it("asks this machine for the project when the parent runs on a peer", async () => {
+  it("matches this machine's differently named checkout using the peer's selected detail", async () => {
     const remoteParent: NavigationThreadSummary = {
       ...localThread,
       id: "thread-remote-parent",
@@ -2808,13 +2808,20 @@ describe("Sidebar", () => {
         capabilities: ["environment_actions", "launchpad_metadata", "thread_navigation", "turn_control"],
       },
     };
+    const repositoryKey = "github.com/fixture/project";
+    const readThreadWorktreeAvailability = vi.fn(async () => ({
+      available: true,
+      thread: { ...remoteParent, primaryGitRepository: repositoryKey },
+    }));
     const onCreateSubthread = vi.fn(async () => undefined);
-    const readSubthreadWorktreeBase = vi.fn(async () => ({ available: true as const, baseBranch: "release" }));
+    const renamedCheckout = { kind: "directory" as const, label: "Renamed clone", path: "/src/renamed-clone", repositoryKey };
+    const readSubthreadWorktreeBase = vi.fn(async (_instanceId: string | undefined, project: ProjectIdentity) =>
+      findPeerCounterpartDirectory(project, [renamedCheckout]) ? { available: true as const, baseBranch: "release" } : undefined);
     render(
       <Sidebar
         backends={backends}
         browseMode="inbox"
-        directories={directories}
+        directories={[]}
         inboxThreads={[remoteParent]}
         loading={false}
         threads={[remoteParent]}
@@ -2822,6 +2829,7 @@ describe("Sidebar", () => {
         newThreadFederationTargets={[
           { availability: "available", instanceId: "mini", label: "Mac Mini" },
         ]}
+        readThreadWorktreeAvailability={readThreadWorktreeAvailability}
         readSubthreadWorktreeBase={readSubthreadWorktreeBase}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -2832,9 +2840,7 @@ describe("Sidebar", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Remote parent" }));
-    fireEvent.mouseEnter(
-      screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }).parentElement!,
-    );
+    fireEvent.mouseEnter((await screen.findByRole("menuitem", { name: "Sub-thread in New Worktree" })).parentElement!);
     const flyout = screen.getByRole("menu", { name: "New worktree on" });
     await act(async () => {});
     const machines = within(flyout).getAllByRole("menuitem");
@@ -2845,9 +2851,10 @@ describe("Sidebar", () => {
     // Undefined is this machine; the parent's peer is not asked about itself.
     expect(readSubthreadWorktreeBase.mock.calls).toEqual([[
       undefined,
-      { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+      { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent", repositoryKey },
       "codex/thread-centric-ui",
     ]]);
+    expect(readThreadWorktreeAvailability).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       fireEvent.click(machines[1]!);
@@ -2873,7 +2880,7 @@ describe("Sidebar", () => {
         newThreadFederationTargets={[
           { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
         ]}
-        readThreadWorktreeAvailability={() => new Promise<boolean>(() => undefined)}
+        readThreadWorktreeAvailability={() => new Promise<never>(() => undefined)}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onCreateSubthread={onCreateSubthread}
@@ -2913,7 +2920,7 @@ describe("Sidebar", () => {
         newThreadFederationTargets={[
           { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
         ]}
-        readThreadWorktreeAvailability={() => new Promise<boolean>(() => undefined)}
+        readThreadWorktreeAvailability={() => new Promise<never>(() => undefined)}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onCreateSubthread={async () => undefined}
@@ -3035,7 +3042,9 @@ describe("Sidebar", () => {
 
   it.each([false, true])("waits for owner Git capability before enabling creation (%s)", async (available) => {
     let resolveAvailability!: (available: boolean) => void;
-    const readThreadWorktreeAvailability = vi.fn(() => new Promise<boolean>((resolve) => { resolveAvailability = resolve; }));
+    const readThreadWorktreeAvailability = vi.fn(async (thread: NavigationThreadSummary) => ({
+      thread, available: await new Promise<boolean>((resolve) => { resolveAvailability = resolve; }),
+    }));
     render(
       <Sidebar
         backends={backends}

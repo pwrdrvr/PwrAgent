@@ -283,6 +283,7 @@ Rules:
 - metadata should wrap or truncate gracefully
 - active/selected state should be visible through background + border + accent cue
 - unread / blocked / running / ready-for-review states should be distinguishable at a glance
+- the open thread stays on screen: when its row scrolls out of the list, a compact card docks at the top or bottom edge, names the row's project, and scrolls back to the row on click. See [UI-THEME.md](../UI-THEME.md#thread-rows)
 
 ### Badges and Pills
 

@@ -90,8 +90,12 @@ describe("Settings → Git → Updates", () => {
   });
 
   it("names a release that needs a newer PwrAgent and offers no download for it", () => {
-    const result = copy({ check: { checkedAt: NOW, needsAppUpdate: { version: "2.56.0-dev-pwrgit.6" } } });
-    expect(result.note).toBe("2.56.0-dev-pwrgit.6 needs a newer PwrAgent. Update PwrAgent to use it.");
+    const result = copy({
+      tracks: { prereleaseBlocked: { version: "2.56.0-dev-pwrgit.6", reason: "Git runtime manifest schema 2 requires a newer PwrAgent." } },
+      check: { checkedAt: NOW },
+    });
+    expect(result.note).toBe("2.56.0-dev-pwrgit.6 is unavailable. Git runtime manifest schema 2 requires a newer PwrAgent.");
+    expect(result.message).toBe("is bundled with PwrAgent.");
     expect(kinds(result)).toEqual(["check"]);
   });
 });
@@ -140,12 +144,16 @@ describe("Settings → Git → Build track", () => {
   it("never offers an older promoted build over a newer prerelease build in use", () => {
     const result = copy({
       track: "latest",
-      tracks: { latestTag: "2.56.0-dev-pwrgit.5", prereleaseTag: "2.56.0-dev-pwrgit.6" },
-      releases: [releaseOf(6)],
-      selected: releaseOf(6).generation,
-      check: { checkedAt: NOW, available: availableOf(5), needsAppUpdate: { version: "2.56.0-dev-pwrgit.5" } },
+      tracks: {
+        latestTag: "2.56.0-dev-pwrgit.5",
+        prereleaseTag: "2.56.0-dev-pwrgit.7",
+        latestBlocked: { version: "2.56.0-dev-pwrgit.6", reason: "GitHub could not serve SHA256SUMS (HTTP 404)." },
+      },
+      releases: [releaseOf(7)],
+      selected: releaseOf(7).generation,
+      check: { checkedAt: NOW, available: availableOf(5) },
     });
-    expect(result.tag).toBe("2.56.0-dev-pwrgit.6");
+    expect(result.tag).toBe("2.56.0-dev-pwrgit.7");
     expect(result.message).toMatch(/^is in use\./u);
     expect(kinds(result)).toEqual(["check"]);
     expect(result.note).toBe("Commands already running finish on the Git they started with.");
@@ -158,8 +166,20 @@ describe("Settings → Git → Build track", () => {
       check: { checkedAt: NOW - 60 * 60_000 },
     });
     expect(result.message).toBe("is the newest promoted PwrDrvr Git. Checked 1 hour ago.");
-    expect(result.note).toBe("Prerelease offers 2.56.0-dev-pwrgit.5, not yet promoted.");
+    expect(result.note).toBe("2.56.0-dev-pwrgit.5 is available on the Prerelease track.");
     expect(kinds(result)).toEqual(["check"]);
+  });
+
+  it.each([undefined, availableOf(5)])("shows the actual prerelease rejection on Latest with or without a promoted fallback", (available) => {
+    const blocked = { version: releaseOf(6).version, reason: "PwrDrvr Git has no archive for darwin-universal." };
+    const result = copy({
+      track: "latest",
+      tracks: { prereleaseBlocked: blocked },
+      check: { checkedAt: NOW, ...(available ? { available } : {}) },
+    });
+    expect(result.note).toContain(`Prerelease ${blocked.version} is unavailable. ${blocked.reason}`);
+    expect(result.actions.filter((action) => action.kind === "download").map((action) => action.tag))
+      .toEqual(available ? [available.tag] : []);
   });
 
   it("labels each track with the version it offers, or the bundle once checked", () => {

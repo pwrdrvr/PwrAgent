@@ -145,4 +145,80 @@ describe("LinkedProjectsPanel", () => {
       REMOTE_NATIVE_PICKER_TOOLTIP,
     );
   });
+
+  describe("Share storage", () => {
+    const worktree = sharedCheckout;
+    const mainCheckout = { id: "/fixture/Project", kind: "local" as const, label: "Project main", path: "/fixture/Project" };
+    const thread: NavigationThreadSummary = { ...childThread, linkedDirectories: [worktree, mainCheckout] };
+    const storageApi = (capabilities: { reflink: boolean; verifyFilters: boolean }) => ({
+      readWorktreeReflinkCapabilities: vi.fn(async () => ({
+        status: "ready" as const, capabilities, runtimeKey: "git",
+      })),
+      runWorktreeReflink: vi.fn(async () => ({ status: "failed" as const, reason: "not run in this test" })),
+    });
+    const view = (desktopApi: ReturnType<typeof storageApi>, shown = thread) => <LinkedProjectsPanel
+      desktopApi={desktopApi} thread={shown} hideTooltip={() => undefined} showTooltip={() => undefined}
+    />;
+
+    it("is offered for a worktree only after the selected Git's help lists the command", async () => {
+      const api = storageApi({ reflink: true, verifyFilters: false });
+      render(view(api));
+      // Nothing is offered while the probe is out.
+      expect(screen.queryByRole("button", { name: /Share storage/ })).not.toBeInTheDocument();
+      const action = await screen.findByRole("button", { name: "Share storage for Project" });
+      // The main checkout has no source to share with.
+      expect(screen.getAllByRole("button", { name: /Share storage/ })).toEqual([action]);
+      expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalledWith({
+        backend: "codex", threadId: thread.id, worktreePath: worktree.worktreePath,
+      });
+
+      fireEvent.click(action);
+      expect(await screen.findByRole("dialog", { name: "Share worktree storage" })).toBeVisible();
+    });
+
+    it("does not reopen for a thread when the panel comes back from another one", async () => {
+      const api = storageApi({ reflink: true, verifyFilters: false });
+      const panel = render(view(api));
+      fireEvent.click(await screen.findByRole("button", { name: "Share storage for Project" }));
+      expect(await screen.findByRole("dialog", { name: "Share worktree storage" })).toBeVisible();
+
+      const other: NavigationThreadSummary = { ...thread, id: "other" };
+      panel.rerender(view(api, other));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      // The other thread links the same directory, and did not ask for the dialog.
+      expect(await screen.findByRole("button", { name: "Share storage for Project" })).toBeVisible();
+      panel.rerender(view(api));
+      await screen.findByRole("button", { name: "Share storage for Project" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("does not restart its probe when the api object is rebuilt on a render", async () => {
+      const api = storageApi({ reflink: true, verifyFilters: false });
+      const panel = render(view(api));
+      await screen.findByRole("button", { name: "Share storage for Project" });
+      panel.rerender(view({ ...api }));
+      panel.rerender(view({ ...api }));
+      expect(screen.getByRole("button", { name: "Share storage for Project" })).toBeVisible();
+      expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalledTimes(1);
+    });
+
+    it("is not offered when the selected Git has no such command", async () => {
+      const api = storageApi({ reflink: false, verifyFilters: false });
+      render(view(api));
+      await waitFor(() => expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(screen.queryByRole("button", { name: /Share storage/ })).not.toBeInTheDocument();
+    });
+
+    it("is not offered, or probed, for a thread another machine owns", async () => {
+      const api = storageApi({ reflink: true, verifyFilters: true });
+      render(view(api, {
+        ...thread,
+        federation: { ref: { target: { instanceId: "peer" } } } as NavigationThreadSummary["federation"],
+      }));
+      await Promise.resolve();
+      expect(api.readWorktreeReflinkCapabilities).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: /Share storage/ })).not.toBeInTheDocument();
+    });
+  });
 });
