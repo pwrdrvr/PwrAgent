@@ -4411,6 +4411,7 @@ export class DesktopBackendRegistry {
         params.backend,
         params,
         diagnostics,
+        displayMetadataObservationSequence,
       );
       const threads = this.inheritIncompleteThreadList(
         await this.withThreadEnvironmentOptions(listed.threads),
@@ -4497,6 +4498,7 @@ export class DesktopBackendRegistry {
       skipArchivedMetadataRefresh?: boolean;
     },
     diagnostics: { callerReason: ThreadListCallerReason; ownerId: string },
+    observationSequence: number,
   ): Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }> {
     if (backend === "claude") {
       const threads = await this.claudeBackend.listThreads(params);
@@ -4527,12 +4529,15 @@ export class DesktopBackendRegistry {
       );
       // Listings that began before a restore cannot authorize destructive
       // cleanup, including archived reads made outside the cleanup pool.
-      if (!params.skipArchivedMetadataRefresh
+      if ((!params.archived || !params.skipArchivedMetadataRefresh)
         && this.threadArchiveCoordinator.archiveCleanupReadGeneration("codex") === archiveGeneration) {
         this.threadArchiveCoordinator.scheduleThreadListArchiveStateCleanup({
           backend: "codex",
-          filter: params.filter,
+          observationSequence,
           archived: params.archived,
+          completeInventory: !params.skipArchivedMetadataRefresh && !params.filter?.trim()
+            && params.limit === undefined && params.maxPages === undefined
+            && !this.isIncompleteThreadList(threads),
           threads,
         });
       }
@@ -16333,7 +16338,9 @@ export class DesktopBackendRegistry {
     const [providerFilteredThreads, observedFilterCandidates] =
       await Promise.all([
         this.codexClient
-          .listThreads(params, diagnostics)
+          // A requested page cap already has its own registry cache key and
+          // cannot authorize absence. Retry an unexpectedly short walk sooner.
+          .listThreads(params, diagnostics, params.maxPages === undefined ? () => { incomplete = true; } : undefined)
           .catch(async (error) => {
             if (
               diagnostics?.callerReason === "archive-cleanup"

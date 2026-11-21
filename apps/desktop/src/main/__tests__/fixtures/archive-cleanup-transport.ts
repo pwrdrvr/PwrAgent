@@ -7,6 +7,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   activeIds = ["active", "transition"];
   archivedIds = ["archive-one", "archive-two", "archive-three"];
   rows?: { active: Array<{ id: string; cwd: string }>; archived: Array<{ id: string; cwd: string }> };
+  repeatActiveCursor = false;
   readonly listings: Array<{ archived: boolean; cursor?: string; sortKey?: string }> = [];
   private readonly heldKinds = new Set<boolean>();
   private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
@@ -78,8 +79,9 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
       if (this.rows) {
         const rows = archived ? this.rows.archived : this.rows.active;
         const end = page + Math.min(request.params?.limit ?? 25, 100);
+        const nextCursor = end < rows.length ? String(end) : null;
         result = { data: rows.slice(page, end).map((row) => ({ ...row, name: row.id, updatedAt: 1 })),
-          nextCursor: end < rows.length ? String(end) : null };
+          nextCursor: !archived && this.repeatActiveCursor && cursor ? cursor : nextCursor };
       }
     }
     const reply = () => this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
