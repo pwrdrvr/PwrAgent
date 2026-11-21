@@ -1471,41 +1471,80 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await outpost?.close(); await desktop.close(); }
   });
 
-  it("the enrolled Outpost retries an unclaimed workspace refusal without replacing its native owner", async () => {
-    const host = await startConformanceDaemon({ capabilities: [...VIEWER_CAPABILITIES, "turn_queue_pause"] });
-    const displaced = `${host.workspace}-unavailable`;
-    try {
-      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-      const identity = { backend: "codex" as const, threadId: created.threadId };
-      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-      const request = (id: string, text: string) => ({ ...identity, queueEntryId: id, input: [{ type: "text" as const, text }],
-        messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender", instanceId: "forged" } } });
-      await host.client.startTurn(request("ack-gate", "hold-steer-ack"));
-      await vi.waitFor(() => expect(existsSync(path.join(host.env.PWRAGENT_TEST_DATA!, "steer.ready"))).toBe(true));
-      const guidance = request("held-guidance", "Invented recoverable workspace guidance");
-      const accepted = await host.client.startTurn(guidance);
-      await host.client.setQueuedTurnPaused({ queueEntryId: accepted.queueEntryId!, paused: true });
-      await rename(host.workspace, displaced);
-      await writeFile(path.join(host.env.PWRAGENT_TEST_DATA!, "steer.release"), "release");
-      await host.client.setQueuedTurnPaused({ queueEntryId: accepted.queueEntryId!, paused: false });
-      const projection = { protocol: 2 as const, ref: identity };
-      await vi.waitFor(async () => expect((await host.client.getNavigationQueueProjection(projection)).entries[0]?.manualReleaseRequired).toBe(true));
-      const held = await host.client.getNavigationQueueProjection(projection);
-      expect(await host.client.releaseQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ disposition: "blocked" });
-      expect(await host.client.getNavigationQueueProjection(projection)).toEqual(held);
-      await rename(displaced, host.workspace);
-      expect(await host.client.releaseQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ disposition: "started", turnId: active.turnId });
-      expect((await host.client.startTurn(guidance)).queueEntryId).toBe(accepted.queueEntryId);
-      expect((await host.client.resolveThreadAdmissionState(identity)).activeTurn?.turnId).toBe(active.turnId);
-      expect((await host.client.getNavigationQueueProjection(projection)).entries).toEqual([]);
-      const calls = readFileSync(path.join(host.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-      expect(calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === guidance.input[0]!.text)).toHaveLength(1);
-      expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === guidance.input[0]!.text)).toHaveLength(0);
-      await host.client.interruptTurn(active);
-    } finally {
-      if (existsSync(displaced)) await rename(displaced, host.workspace);
-      await host.close();
+  it("the enrolled Outpost retries an unclaimed workspace refusal without replacing its native owner", async ({ signal, onTestFinished }) => {
+    const starting = startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES });
+    let displaced: string | undefined;
+    onTestFinished(async () => {
+      const host = await starting.catch(() => undefined);
+      if (!host) return;
+      try {
+        if (displaced && existsSync(displaced)) await rename(displaced, host.workspace);
+      } finally {
+        await host.close();
+      }
+    });
+    const host = await starting;
+    signal.throwIfAborted();
+    displaced = `${host.workspace}-unavailable`;
+    host.subscribe(EVENT_CLASSES);
+    const data = host.env.PWRAGENT_TEST_DATA!;
+    const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+    const identity = { backend: "codex" as const, threadId: created.threadId };
+    const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+    expect(active.turnId).toEqual(expect.any(String));
+    const request = (id: string, text: string) => ({ ...identity, queueEntryId: id, input: [{ type: "text" as const, text }],
+      messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender", instanceId: "forged" } } });
+    const gate = request("ack-gate", "hold-steer-ack");
+    await host.client.startTurn(gate);
+    const ready = path.join(data, "steer.ready");
+    while (!existsSync(ready)) await delay(10, undefined, { signal });
+
+    // The provider has claimed the gate steer and has yet to acknowledge it.
+    // The queue keeps the next steer waiting while this admission is in flight.
+    const guidanceText = "Invented recoverable workspace guidance";
+    const guidance = request("held-guidance", guidanceText);
+    expect(await host.client.startTurn(guidance)).toMatchObject({ queueStatus: "queued", queueEntryId: guidance.queueEntryId });
+    await rename(host.workspace, displaced);
+    await writeFile(path.join(data, "steer.release"), "release");
+    const blocked = await host.waitForEvent("thread/turnQueue/updated", event =>
+      event.backend === identity.backend && event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.threadId === identity.threadId
+      && event.notification.params.queueEntryId === guidance.queueEntryId
+      && event.notification.params.status === "blocked", signal);
+    expect(blocked.notification.params).toMatchObject({ errorMessage: `Thread workspace is unavailable: ${host.workspace}` });
+
+    const projection = () => host.client.getNavigationQueueProjection({ protocol: 2, ref: identity });
+    const activeTurnId = async () => (await host.client.resolveThreadAdmissionState(identity)).activeTurn?.turnId;
+    // Include native attempts on this thread and any delivery of the guidance.
+    const nativeCalls = () => readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n")
+      .map(line => JSON.parse(line))
+      .filter(call => (call.method === "turn/start" || call.method === "turn/steer")
+        && (call.params?.threadId === identity.threadId
+          || call.params?.input?.some((item: { text?: string }) => item.text === guidanceText)));
+    const originalCalls = [
+      { method: "turn/start", params: { threadId: identity.threadId, input: [{ type: "text", text: "slow" }] } },
+      { method: "turn/steer", params: { threadId: identity.threadId, expectedTurnId: active.turnId, input: gate.input } },
+    ];
+    const held = await projection();
+    expect(held.entries).toMatchObject([{ queueEntryId: guidance.queueEntryId, manualReleaseRequired: true }]);
+    expect(nativeCalls()).toMatchObject(originalCalls);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: guidance.queueEntryId })).toMatchObject({ disposition: "blocked" });
+      expect(await projection()).toEqual(held);
+      expect(await activeTurnId()).toBe(active.turnId);
+      expect(nativeCalls()).toMatchObject(originalCalls);
     }
+
+    await rename(displaced, host.workspace);
+    expect(await host.client.releaseQueuedTurn({ queueEntryId: guidance.queueEntryId }))
+      .toMatchObject({ disposition: "started", turnId: active.turnId });
+    expect((await host.client.startTurn(guidance)).queueEntryId).toBe(guidance.queueEntryId);
+    expect((await projection()).entries).toEqual([]);
+    expect(await activeTurnId()).toBe(active.turnId);
+    expect(nativeCalls()).toMatchObject([...originalCalls,
+      { method: "turn/steer", params: { threadId: identity.threadId, expectedTurnId: active.turnId, input: guidance.input } },
+    ]);
+    await host.client.interruptTurn(active);
   });
 
   it("the existing durable steering caller delivers once to the active turn on both registered owners and leaves waiting input intact", async () => {
