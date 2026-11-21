@@ -314,10 +314,6 @@ import {
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
 } from "@pwragent/shared/contracts/tool-output-incidents";
-import {
-  type FocusedDiffAnalysisRequest,
-  type FocusedDiffAnalysisResponse,
-} from "@pwragent/shared/contracts/diff-focus";
 import { type BackendSummary } from "@pwragent/shared/contracts/backend";
 import { type AutomationThreadSummary } from "@pwragent/shared/contracts/automations";
 import {
@@ -427,7 +423,6 @@ import { getDesktopNavigationDetailService } from "../app-server/navigation-deta
 import {
   isFederationPeerUnavailableError,
 } from "../federation/federation-peer-unavailable-error";
-import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
@@ -1194,7 +1189,6 @@ class DesktopAppServerService {
         error: error instanceof Error ? error.message : String(error),
       }),
     }));
-  private focusedDiffService: FocusedDiffService | null = null;
   private prFetcher: ForgePrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
     string,
@@ -8226,61 +8220,6 @@ class DesktopAppServerService {
     });
   }
 
-  async analyzeFocusedDiff(
-    request: FocusedDiffAnalysisRequest
-  ): Promise<FocusedDiffAnalysisResponse> {
-    // Diff condensation is gated by an experimental setting. When the
-    // user has it disabled, never call the focused-diff service — return
-    // the synthetic "full" response that the renderer treats as
-    // "render every hunk, hide nothing". This is the diff-eliding gate
-    // that keeps us from sending unsolicited structured-generation requests.
-    //
-    // PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE bypasses the gate so E2Es that
-    // exercise the focused-diff path keep working with the default-off
-    // setting; without that bypass the override (consumed inside
-    // FocusedDiffService.analyze) never gets a chance to run.
-    const condensation = getDesktopSettingsService()
-      .readExperimentalConfig()
-      .diffCondensation;
-    const testOverridePresent = Boolean(
-      process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE,
-    );
-    if (condensation?.enabled !== true && !testOverridePresent) {
-      logDebug("analyzeFocusedDiff", {
-        filePath: request.filePath ?? null,
-        hunkCount: request.hunks.length,
-        mode: "full",
-        source: "condensation-disabled",
-        hiddenHunkCount: 0,
-      });
-      return {
-        mode: "full",
-        source: "condensation-disabled",
-        hiddenHunkIndices: [],
-        hiddenHunkCount: 0,
-        decisions: request.hunks.map((hunk) => ({
-          index: hunk.index,
-          disposition: "show" as const,
-          reasonCode: "keep" as const,
-          reason: "diff condensation disabled in settings",
-          confidence: 1,
-        })),
-      };
-    }
-
-    const response = await this.getFocusedDiffService().analyze(request);
-
-    logDebug("analyzeFocusedDiff", {
-      filePath: request.filePath ?? null,
-      hunkCount: request.hunks.length,
-      mode: response.mode,
-      source: response.source,
-      hiddenHunkCount: response.hiddenHunkCount,
-    });
-
-    return response;
-  }
-
   async close(): Promise<void> {
     this.unsubscribeRestartGate?.();
     this.unsubscribeRestartGate = undefined;
@@ -8288,7 +8227,6 @@ class DesktopAppServerService {
     this.ownerNavigationActive = false;
     this.ownerNavigationMetadataVersion += 1;
     this.ownerNavigationMetadataAbort?.abort();
-    this.focusedDiffService = null;
     this.prFetcher = undefined;
     this.forgeCiClient = undefined;
     this.localFilePoller?.dispose();
@@ -8916,25 +8854,6 @@ class DesktopAppServerService {
       task = this.getThreadDependencyCoordinator().reconcile();
     }
     void task?.catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
-  }
-
-  private getFocusedDiffService(): FocusedDiffService {
-    if (this.focusedDiffService) {
-      return this.focusedDiffService;
-    }
-
-    this.focusedDiffService = new FocusedDiffService({
-      client: {
-        generateObject: async (request) => {
-          const result = await getDesktopBackendRegistry().generateStructuredObject(request);
-          if (result.status !== "ok") {
-            throw new Error(result.reason);
-          }
-          return { object: result.object };
-        },
-      },
-    });
-    return this.focusedDiffService;
   }
 }
 

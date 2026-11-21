@@ -522,10 +522,6 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import type {
-  FocusedDiffAnalysisRequest,
-  FocusedDiffAnalysisResponse,
-} from "@pwragent/shared/contracts/diff-focus";
-import type {
   InspectTokenMiserOutputRequest,
   InspectTokenMiserOutputResponse,
   AnalyzeThreadToolHistoryRequest,
@@ -1273,9 +1269,6 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getThreadMaintenanceRun?: () => Promise<ThreadMaintenanceRun | null>;
   /** Stops after the item in progress. Nothing already done is undone. */
   stopThreadMaintenance?: () => Promise<void>;
-  analyzeFocusedDiff?: (
-    request: FocusedDiffAnalysisRequest
-  ) => Promise<FocusedDiffAnalysisResponse>;
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;

@@ -13676,7 +13676,7 @@ describe("CodexAppServerClient", () => {
               onToolCall: async () => ({ success: true, contentItems: [] }),
             })
           : client.generateStructuredObject({
-              ...common, helper: "diff_condensation", disableExecution: kind === "data-only",
+              ...common, helper: "automation_prompts", disableExecution: kind === "data-only",
               isMatch: (record) => typeof record.title === "string",
             });
       if (kind === "tool") {
@@ -13773,7 +13773,7 @@ describe("CodexAppServerClient", () => {
         output: [
           {
             type: "text",
-            text: JSON.stringify({ decisions: [] }),
+            text: JSON.stringify({ prompt: "Run daily checks." }),
           },
         ],
       },
@@ -13784,21 +13784,21 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     await expect(client.generateStructuredObject({
-      helper: "diff_condensation",
+      helper: "automation_prompts",
       disableExecution,
-      system: "Keep behavioral and uncertain changes visible.",
-      prompt: "Classify these serialized diff hunks.",
+      system: "Return a prompt for this automation.",
+      prompt: "Draft an automation prompt from this request.",
       model: "gpt-5.6-luna",
       schema: {
         type: "object",
-        required: ["decisions"],
-        properties: { decisions: { type: "array" } },
+        required: ["prompt"],
+        properties: { prompt: { type: "string" } },
       },
-      isMatch: (record) => Array.isArray(record.decisions),
+      isMatch: (record) => typeof record.prompt === "string",
       timeoutMs: 5_000,
     })).resolves.toMatchObject({
       status: "ok",
-      object: { decisions: [] },
+      object: { prompt: "Run daily checks." },
       model: "gpt-5.6-luna",
     });
 
@@ -13813,7 +13813,7 @@ describe("CodexAppServerClient", () => {
       expect.objectContaining({
         method: "thread/start",
         params: expect.objectContaining({
-          baseInstructions: "Keep behavioral and uncertain changes visible.",
+          baseInstructions: "Return a prompt for this automation.",
           environments: [],
           model: "gpt-5.6-luna",
           runtimeWorkspaceRoots: [
@@ -13858,7 +13858,7 @@ describe("CodexAppServerClient", () => {
           input: [
             {
               type: "text",
-              text: "Classify these serialized diff hunks.",
+              text: "Draft an automation prompt from this request.",
               text_elements: [],
             },
           ],
@@ -14315,15 +14315,15 @@ describe("CodexAppServerClient", () => {
       status: "ok",
       model: "gpt-5.6-luna",
     });
-    await expect(run("diff_condensation")).resolves.toMatchObject({
+    await expect(run("automation_prompts")).resolves.toMatchObject({
       status: "ok",
       model: "gpt-5.5",
     });
     settings = {
       defaultModel: "gpt-6.1-luna",
-      helpers: { diff_condensation: { model: "gpt-5.6-luna-preview" } },
+      helpers: { automation_prompts: { model: "gpt-5.6-luna-preview" } },
     };
-    await expect(run("diff_condensation")).resolves.toMatchObject({
+    await expect(run("automation_prompts")).resolves.toMatchObject({
       status: "ok",
       model: "gpt-6-luna",
     });
@@ -14404,7 +14404,7 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({ command: "codex" });
     MockTransport.modelListResult = createModelListResponse([]);
     const run = async () => await client.generateStructuredObject({
-      helper: "diff_condensation",
+      helper: "automation_prompts",
       prompt: "Summarize",
       schema: { type: "object", properties: { summary: { type: "string" } } },
       isMatch: (record) => typeof record.summary === "string",

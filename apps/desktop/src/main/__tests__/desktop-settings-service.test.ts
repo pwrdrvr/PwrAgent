@@ -5040,9 +5040,7 @@ describe("DesktopSettingsService", () => {
     await expect(
       service.writeConfigPatchTargeted({
         experimental: {
-          diffCondensation: {
-            enabled: true,
-          },
+          fullAccessRiskWarningDismissed: true,
         },
       }),
     ).rejects.toThrow("could not be parsed");
@@ -5276,9 +5274,15 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults diff condensation to disabled and persists the toggle", async () => {
-    const root = createTempRoot();
-    const configPath = path.join(root, "config.toml");
+  it.each([true, false])("ignores the retired diff condensation toggle and preserves enabled=%s for downgrade", async (enabled) => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const legacy = [
+      "[experimental.diff_condensation]",
+      "# Operator comment",
+      `enabled = ${enabled}`,
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, legacy);
     const service = new DesktopSettingsService({
       configPath,
       env: {},
@@ -5286,29 +5290,18 @@ describe("DesktopSettingsService", () => {
     });
 
     const initial = await service.readSettingsProjection();
-    expect(initial.experimental.diffCondensation).toEqual({
-      enabled: { value: false, source: "default" },
-    });
+    expect(initial.experimental).not.toHaveProperty("diffCondensation");
 
     await service.writeConfigPatchTargeted({
-      experimental: {
-        diffCondensation: { enabled: true },
-      },
+      experimental: { fullAccessRiskWarningDismissed: true },
     });
 
     const updated = await service.readSettingsProjection();
-    expect(updated.experimental.diffCondensation).toEqual({
-      enabled: { value: true, source: "config" },
+    expect(updated.experimental.fullAccessRiskWarningDismissed).toEqual({
+      value: true,
+      source: "config",
     });
-
-    await service.writeConfigPatchTargeted({
-      experimental: {
-        diffCondensation: { enabled: false },
-      },
-    });
-
-    const reverted = await service.readSettingsProjection();
-    expect(reverted.experimental.diffCondensation.enabled.value).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toContain(legacy);
   });
 
   it("defaults Full Access risk warning dismissal to false and persists it", async () => {

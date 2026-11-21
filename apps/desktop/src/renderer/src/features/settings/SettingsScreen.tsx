@@ -1229,11 +1229,6 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
-        onDiffCondensationEnabledChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { diffCondensation: { enabled } },
-          });
-        }}
         onTokenMiserEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserEnabled: enabled },

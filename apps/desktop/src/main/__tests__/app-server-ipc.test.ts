@@ -1164,9 +1164,6 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
     subscribe: prAutomationSettings.subscribe,
   }),
   getDesktopSettingsService: () => ({
-    readExperimentalConfig: () => ({
-      diffCondensation: { enabled: false },
-    }),
     readSettings: prAutomationSettings.readSettings,
     isForgeEnabled: () => true,
   }),

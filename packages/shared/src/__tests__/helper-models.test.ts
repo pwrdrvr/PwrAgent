@@ -49,16 +49,16 @@ describe("resolveHelperModel", () => {
   it("orders request, row, Helper default, then Automatic", () => {
     const settings = {
       defaultModel: "gpt-5.5",
-      helpers: { diff_condensation: { model: "gpt-5.6-luna" } },
+      helpers: { automation_prompts: { model: "gpt-5.6-luna" } },
     };
     const models = catalog("gpt-6-luna", "gpt-5.6-luna", "gpt-5.5", "gpt-6");
     expect(resolveHelperModel({
-      helper: "diff_condensation",
+      helper: "automation_prompts",
       settings,
       models,
       requestedModel: "gpt-6",
     })).toMatchObject({ model: "gpt-6", source: "requested" });
-    expect(resolveHelperModel({ helper: "diff_condensation", settings, models }))
+    expect(resolveHelperModel({ helper: "automation_prompts", settings, models }))
       .toMatchObject({ model: "gpt-5.6-luna", source: "helper" });
     expect(resolveHelperModel({ helper: "thread_titles", settings, models }))
       .toMatchObject({ model: "gpt-5.5", source: "helper_default" });

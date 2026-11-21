@@ -1,10 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { AppServerThreadFileDiffRef } from "@pwragent/shared/contracts/normalized-app-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptDiff } from "../TranscriptDiff";
 
-const ELIGIBLE_DIFF = [
+const MULTI_HUNK_DIFF = [
   "--- a/src/example.ts",
   "+++ b/src/example.ts",
   "@@ -1,7 +1,7 @@",
@@ -51,7 +51,7 @@ const DETAIL = {
     kind: "update" as const,
     additions: 4,
     removals: 4,
-    diff: ELIGIBLE_DIFF
+    diff: MULTI_HUNK_DIFF
   }
 };
 
@@ -61,59 +61,17 @@ describe("TranscriptDiff", () => {
     delete (window as Window & { pwragent?: unknown }).pwragent;
   });
 
-  it("defaults to a focused view when analysis hides low-signal hunks", async () => {
-    const analyzeFocusedDiff = vi.fn(async () => ({
-      mode: "focused" as const,
-      source: "acp:grok" as const,
-      hiddenHunkIndices: [1],
-      hiddenHunkCount: 1,
-      decisions: []
-    }));
-    (window as Window & { pwragent?: unknown }).pwragent = {
-      analyzeFocusedDiff
-    };
-
+  it("renders every hunk and context line in patch order", () => {
     render(<TranscriptDiff detail={DETAIL} />);
 
-    expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
-    await screen.findByText("1 hunk hidden, 5 lines skipped");
-    expect(screen.queryByText("// refreshed comment")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-
-    expect(screen.getByRole("button", { name: "Zoom out" })).toBeInTheDocument();
-    expect(screen.getByText("// refreshed comment")).toBeInTheDocument();
-    expect(analyzeFocusedDiff).toHaveBeenCalledTimes(1);
+    const table = screen.getByRole("table", { name: "Update example.ts diff" });
+    const patchRows = MULTI_HUNK_DIFF.split("\n").slice(2);
+    expect(within(table).getAllByRole("row").map((row) =>
+      row.querySelector("code")?.textContent ?? row.textContent
+    )).toEqual(patchRows.map((line) => line.startsWith("@@") ? line : line.slice(1) || " "));
   });
 
-  it("falls back to deterministic condensation when focused analysis fails", async () => {
-    const analyzeFocusedDiff = vi.fn(async () => {
-      throw new Error("network down");
-    });
-    (window as Window & { pwragent?: unknown }).pwragent = {
-      analyzeFocusedDiff
-    };
-
-    render(<TranscriptDiff detail={DETAIL} />);
-
-    await waitFor(() => {
-      expect(analyzeFocusedDiff).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
-    expect(screen.getByText("6 lines skipped")).toBeInTheDocument();
-    expect(screen.queryByText("const keep3 = 3;")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-
-    expect(screen.getByText("const keep3 = 3;")).toBeInTheDocument();
-  });
-
-  it("renders omitted large diffs without focused analysis", () => {
-    const analyzeFocusedDiff = vi.fn();
-    (window as Window & { pwragent?: unknown }).pwragent = {
-      analyzeFocusedDiff
-    };
-
+  it("renders omitted large diffs", () => {
     render(
       <TranscriptDiff
         detail={{
@@ -133,12 +91,11 @@ describe("TranscriptDiff", () => {
     expect(
       screen.getByText("Large file diff omitted from transcript view (518 KB).")
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
-    expect(analyzeFocusedDiff).not.toHaveBeenCalled();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
   it("fetches referenced live diff text only when the diff component renders", async () => {
-    const getThreadFileDiff = vi.fn(async () => ({ diff: ELIGIBLE_DIFF }));
+    const getThreadFileDiff = vi.fn(async () => ({ diff: MULTI_HUNK_DIFF }));
     (window as Window & { pwragent?: unknown }).pwragent = {
       getThreadFileDiff
     };
@@ -165,6 +122,7 @@ describe("TranscriptDiff", () => {
 
     expect(screen.getByText("Loading diff...")).toBeInTheDocument();
     await screen.findByText(/beta\/index/);
+    expect(screen.getByText("const keep3 = 3;")).toBeInTheDocument();
     expect(getThreadFileDiff).toHaveBeenCalledWith({ ref: diffRef });
   });
 
