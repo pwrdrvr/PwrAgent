@@ -3,7 +3,7 @@ import { permissionForCommandVerb } from "@pwragent/shared/contracts/rbac";
 import type { MessagingBindingRecord, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { buildHelpActions, formatMessagingCommandHelpBody, matchMessagingCommandVerb, MESSAGING_COMMAND_CATALOG, MESSAGING_HELP_ACTION_COMMANDS, MESSAGING_REVIEW_HELP_SPEC, paginateHelpCatalog } from "./messaging-command-catalog.js";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
-import { parseReviewCommand } from "../../../shared/review-command.js";
+import { isBareClaudeCodeReviewCommand, parseReviewCommand } from "../../../shared/review-command.js";
 import { parseMessagingSchedule, resolveScheduledAction, scheduledActionDisplayId } from "./messaging-scheduled-actions.js";
 import { messageOriginForInboundEvent, scheduledActionFailureMessage, parseDefaultAgentScopeKind, normalizeMonitorCommandAction, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
 import type { MessagingCommandContext } from "./messaging-command-context";
@@ -127,7 +127,45 @@ export class MessagingCommandHandlers {
       await this.handleReviewCommand(event);
       return;
     }
+    if (!verb && await this.handleBareCodeReviewCommand(event)) {
+      return;
+    }
     await this.routeUnknownCommandToBoundThread(event);
+  }
+
+  /**
+   * A bare `/code-review` on a thread that reviews as Claude Code starts the
+   * same tracked review of the current changes that `/review` and the desktop
+   * panel start: a review card, Auto-fix, and the requesting contact's
+   * permissions. Anywhere else, and with arguments, it is the agent's own
+   * command and goes to the thread as typed. Returns false to pass it on.
+   */
+  private async handleBareCodeReviewCommand(
+    event: MessagingInboundCommandEvent,
+  ): Promise<boolean> {
+    if (!isBareClaudeCodeReviewCommand(`/${event.command.replace(/^\/+/, "")} ${event.args.join(" ")}`)) {
+      return false;
+    }
+    const binding = await this.context.store.findActiveBindingForChannel(event.channel);
+    if (!binding || !await this.context.host().claudeCodeReviewSupportedForBinding(binding)) {
+      return false;
+    }
+    const permission = permissionForCommandVerb("review");
+    if (permission && !await this.context.host().requirePermission(event, permission, "command:code-review")) {
+      return true;
+    }
+    if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
+      event, binding, "review:remote-instance",
+    )) {
+      return true;
+    }
+    await this.context.host().submitMessagingReview({
+      binding,
+      event,
+      runMode: "claude-code-review",
+      target: { type: "uncommittedChanges" },
+    });
+    return true;
   }
 
   private async handleScheduleCommand(

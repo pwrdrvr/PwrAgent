@@ -113,6 +113,48 @@ describe("combined review arguments", () => {
     }
   });
 
+  /**
+   * Rule: a bare /code-review from messaging on a Claude thread starts the
+   * same tracked Claude Code review of the current changes the desktop panel
+   * starts, although a Claude owner has no review/start. With arguments it is
+   * Claude Code's own command and reaches the thread as typed.
+   */
+  it("starts a bare /code-review as a tracked Claude Code review of the current changes", async () => {
+    const fixture = await messagingReviewHarness("telegram", 1, undefined, "claude");
+    const { tempDir, dbPath } = createTempStateDb("pwragent-claude-code-review-command-");
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const db = StateDb.open(dbPath);
+    fixture.controllerOptions.requestStore = new SqliteMessagingRequestStore(db.raw);
+    fixture.controllerOptions.adapter.retainedSourceConnectionId = () => "fixture-connection";
+    fixture.controllerOptions.adapter.authorizeRetainedSource = () => true;
+    fixture.controls.startReview = false;
+    fixture.controls.runner = false;
+    const codeReview = (args: string[]) => fixture.controller.handleInboundEvent({
+      ...fixture.event(), kind: "command", command: "code-review", args,
+      rawText: `/code-review ${args.join(" ")}`.trim(),
+    });
+    try {
+      const { writes } = await measureSqliteWrites(() => codeReview([]));
+      expect(fixture.requests).toEqual([{
+        backend: "claude", threadId: fixture.thread.id, delivery: "inline",
+        runMode: "claude-code-review", afterReview: "auto-fix", reasoningEffort: "high",
+        messagingSource: expect.objectContaining({ requestId: expect.any(String), ownerId: expect.any(String) }),
+        target: { type: "uncommittedChanges" },
+      }]);
+      expectSqliteWriteBudget({ scenario: "messaging-claude-review-source", writes,
+        note: "One messaging Claude review retains the requesting contact at admission in one commit. ~2.06 MB/day at 100 reviews/day. No idle writes." });
+      await codeReview(["high", "12"]);
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+      db.close();
+      await removeTempStateDbDir(tempDir);
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
   it("routes a Claude thread's combined review as /code-review even without a managed reviewer", async () => {
     const fixture = await messagingReviewHarness("telegram", 1, undefined, "claude");
     const { tempDir, dbPath } = createTempStateDb("pwragent-claude-review-contact-");

@@ -194,3 +194,52 @@ describe("messaging command owner protocol", () => {
     }), { numRuns: 10 });
   });
 });
+
+describe("messaging /code-review", () => {
+  /**
+   * Rule: a bare /code-review on a thread that reviews as Claude Code is a
+   * PwrAgent review like /review: reply permission, then peer scope for a
+   * peer's thread, then one Claude Code review of the current changes.
+   * Anywhere else, or with arguments, it goes to the thread as typed.
+   */
+  it("starts a tracked Claude Code review only for a bare command on a supporting thread", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom<string[]>([], ["high"], ["12"], ["--fix"]),
+      fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+      async (args, supported, remote, canReply, canControlPeer) => {
+        const binding = remote ? { ...commandBinding, federatedThread: {
+          backend: commandBinding.backend, threadId: commandBinding.threadId,
+          target: { scope: "remote" as const, instanceId: "peer" },
+        } } : commandBinding;
+        const submissions: unknown[] = [];
+        const f = commandHarness({
+          claudeCodeReviewSupportedForBinding: async () => { f.trace.push("supported"); return supported; },
+          requirePermission: async (_event, permission) => { f.trace.push(permission); return canReply; },
+          requireRemoteScopeForBinding: async () => { f.trace.push("peer scope"); return canControlPeer; },
+          submitMessagingReview: async (params) => { f.trace.push("review"); submissions.push(params); },
+        });
+        const owner = new MessagingCommandHandlers({ ...f.context, store: {
+          findActiveBindingForChannel: async () => { f.trace.push("binding"); return binding; },
+        } });
+        await owner.handleCommand(commandEvent("code-review", args));
+        const typed = `input:/code-review${args.length ? ` ${args.join(" ")}` : ""}`;
+        const expected: string[] = [];
+        if (args.length > 0) {
+          expected.push("binding", typed);
+        } else if (!supported) {
+          expected.push("binding", "supported", "binding", typed);
+        } else {
+          expected.push("binding", "supported", "message.reply");
+          if (canReply) {
+            if (remote) expected.push("peer scope");
+            if (!remote || canControlPeer) expected.push("review");
+          }
+        }
+        expect(f.trace).toEqual(expected);
+        expect(submissions).toEqual(f.trace.includes("review")
+          ? [expect.objectContaining({ runMode: "claude-code-review", target: { type: "uncommittedChanges" } })]
+          : []);
+      },
+    ));
+  });
+});

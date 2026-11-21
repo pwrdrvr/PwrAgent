@@ -1039,13 +1039,22 @@ export class MessagingReviewWorkflow {
       this.context.backend,
     );
     const pullRequestCommand = "pullRequestArgs" in params;
-    if (!submitReview || (!pullRequestCommand && !await this.reviewSupportedForBinding(params.binding))) {
+    // Claude Code's own /code-review runs on an owner that advertises it, not
+    // through review/start, so it is checked against that capability instead.
+    const requestedClaudeCodeReview = params.runMode === "claude-code-review";
+    if (!submitReview || (
+      requestedClaudeCodeReview
+        ? !await this.claudeCodeReviewSupportedForBinding(params.binding)
+        : !pullRequestCommand && !await this.reviewSupportedForBinding(params.binding)
+    )) {
       await this.deliverReviewUnsupported(params.binding, params.event);
       return;
     }
 
     try {
-      const federationTarget = pullRequestCommand ? federationTargetForBinding(params.binding) : undefined;
+      const federationTarget = pullRequestCommand || requestedClaudeCodeReview
+        ? federationTargetForBinding(params.binding)
+        : undefined;
       const owner = await this.context.host().getBackendSummary(params.binding.backend, federationTarget);
       const navigation = await this.context.host().readBoundThreadConfiguration(params.binding);
       const target = pullRequestCommand
@@ -1246,6 +1255,31 @@ export class MessagingReviewWorkflow {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];
+    }
+  }
+
+  /** Whether the bound thread reviews as Claude Code's own `/code-review`. */
+  async claudeCodeReviewSupportedForBinding(
+    binding: MessagingBindingRecord,
+  ): Promise<boolean> {
+    if (!this.context.backend.submitReview) {
+      return false;
+    }
+    try {
+      const owner = await this.context.host().getBackendSummary(
+        binding.backend,
+        federationTargetForBinding(binding),
+      );
+      return Boolean(owner?.available) && prefersClaudeCodeReview({
+        ownerSummary: owner,
+        thread: { source: binding.backend },
+      });
+    } catch (error) {
+      this.context.logger.debug?.("messaging Claude Code review capability lookup failed", {
+        backend: binding.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   }
 

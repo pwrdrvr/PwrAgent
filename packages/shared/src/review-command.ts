@@ -389,6 +389,16 @@ export function prefersClaudeCodeReview(params: {
       || (params.requestedRunMode === undefined && !params.reviewerChosen));
 }
 
+/**
+ * Whether text is Claude Code's `/code-review` with no arguments. Where a
+ * thread reviews as Claude Code, PwrAgent opens its review panel (desktop)
+ * or picker (messaging) for it, as it does for a bare `/review`. A command
+ * with arguments is Claude Code's own and runs as typed.
+ */
+export function isBareClaudeCodeReviewCommand(input: string): boolean {
+  return /^\/code-review$/i.test(input.trim());
+}
+
 export function isClaudeCodeReviewLevel(value: unknown): value is ClaudeCodeReviewLevel {
   return typeof value === "string"
     && (CLAUDE_CODE_REVIEW_LEVELS as readonly string[]).includes(value);

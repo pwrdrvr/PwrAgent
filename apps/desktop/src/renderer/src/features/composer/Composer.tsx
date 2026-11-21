@@ -292,6 +292,7 @@ import {
   type ClaudeCodeReviewLevel,
   DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
   formatReviewCommand,
+  isBareClaudeCodeReviewCommand,
   parseReviewCommand,
 } from "../../../../shared/review-command";
 import {
@@ -6391,6 +6392,20 @@ function useComposerController(props: ComposerProps) {
     reviewerChosen: Boolean(reviewConfig?.reviewer),
     thread: props.thread,
   });
+  // A bare /code-review opens the same panel as /review on a thread that
+  // reviews as Claude Code, so the panel's targets, effort and Auto-fix apply.
+  // With arguments it is Claude Code's own command and runs as typed.
+  const codeReviewOpensReviewPanel = supportsReview
+    && !props.launchpad
+    && prefersClaudeCodeReview({
+      ownerSummary: reviewThreadOwnerSummary,
+      thread: props.thread,
+    });
+  const opensReviewPanel = (command: SlashCommandSuggestion): boolean =>
+    command.id === "review-current"
+    || (codeReviewOpensReviewPanel
+      && command.source === "provider"
+      && isBareClaudeCodeReviewCommand(command.label));
   // Together needs an owner that takes a combined target.
   const reviewPullRequestSetSupported =
     reviewThreadOwnerSummary?.capabilities.reviewPullRequestSet === true;
@@ -9934,6 +9949,10 @@ function useComposerController(props: ComposerProps) {
       await submitForkCommand(forkCommand);
       return;
     }
+    if (codeReviewOpensReviewPanel && isBareClaudeCodeReviewCommand(draft)) {
+      enterReviewComposer();
+      return;
+    }
     const reviewCommand = parsedReviewCommand;
     if (turnPayloadPreparationInFlightRef.current || sendPreparationRef.current) {
       return;
@@ -10397,7 +10416,7 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
-    if (command.id === "review-current") {
+    if (opensReviewPanel(command)) {
       enterReviewComposer();
       return;
     }
@@ -12925,7 +12944,7 @@ function useComposerController(props: ComposerProps) {
     };
 
     const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
-      if (command.id === "review-current") {
+      if (opensReviewPanel(command)) {
         enterReviewComposer();
         return true;
       }

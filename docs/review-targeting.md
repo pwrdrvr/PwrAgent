@@ -148,6 +148,14 @@ and the panel shows the exact command. Several PRs Together are one
 comma-separated argument, which Claude Code reviews as one report; Separately
 queues one command per PR.
 
+A bare `/code-review` typed in such a thread, or picked from the command menu,
+opens this panel the same way `/review` does. A bare `/code-review` from a
+bound messaging conversation starts a Claude Code review of the current
+changes at the default effort, with the same reply permission, peer scope and
+contact retention as `/review --pr`. With arguments (`/code-review ultra`,
+`/code-review high 12`), and on a thread that does not review as Claude Code,
+it is Claude Code's own command and is sent as typed.
+
 `claudeCodeReviewCommand` builds the command on the owner. A PR is its bare
 number when the checkout has exactly one GitHub remote and the PR is that
 repository's, otherwise its URL, so the review card's parser

@@ -8916,6 +8916,77 @@ describe("Composer", () => {
   });
 
   /**
+   * Rule: a bare /code-review on a Claude thread that reviews as Claude Code
+   * opens the same review panel as /review, whether it is typed and sent or
+   * picked from the command menu. With arguments, or on a thread that does
+   * not review as Claude Code, it is Claude Code's own command and is sent.
+   */
+  describe("bare /code-review", () => {
+    const codeReviewComposer = (codeReviewCapable: boolean) => {
+      const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: "thread-1", turnId: "turn-1" }));
+      const claude = backendSummary("claude");
+      claude.capabilities = { ...claude.capabilities, reviewRunMode: true, reviewAutoFix: true,
+        reviewPullRequestSet: true, reviewClaudeCodeReview: codeReviewCapable };
+      render(<Composer
+        backends={[claude]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false} skills={[]}
+        providerCommands={[{
+          name: "code-review", description: "Review the current diff.", argumentHint: "[low|medium|high] [--fix]",
+          backend: "claude", scope: "backend", source: "provider",
+        }]}
+        thread={{
+          id: "thread-1", title: "Code review", titleSource: "explicit", source: "claude",
+          executionMode: "default", inbox: { inInbox: false }, projectKey: "/repo/project",
+          linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
+        }}
+      />);
+      return { startTurn };
+    };
+    const send = async (text: string): Promise<void> => {
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText("Reply"), { target: { value: text } });
+        fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+      });
+    };
+
+    it.each(["/code-review", "/code-review ", "  /CODE-REVIEW"])("opens the review panel for %j", async (text) => {
+      const { startTurn } = codeReviewComposer(true);
+      await send(text);
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(screen.getByText(/^\/code-review high$/)).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("opens the review panel when /code-review is picked from the command menu", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/code-r" } });
+      const commands = screen.getByRole("listbox", { name: "Commands" });
+      await act(async () => {
+        fireEvent.click(within(commands).getByRole("option", { name: /\/code-review/ }));
+      });
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("sends /code-review with arguments as Claude Code's own command", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      await send("/code-review ultra 12");
+      await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    });
+
+    it("sends a bare /code-review on an owner that does not review as Claude Code", async () => {
+      const { startTurn } = codeReviewComposer(false);
+      // The first Enter completes the command from the menu; the next sends it.
+      await send("/code-review");
+      await act(async () => { fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" }); });
+      await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    });
+  });
+
+  /**
    * Rule: a checked PR that leaves the list while the panel is open (it was
    * detached) is dropped from the submission instead of failing it, since
    * the list no longer offers a way to uncheck it.
