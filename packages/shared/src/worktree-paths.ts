@@ -64,12 +64,15 @@ function configuredRootOwner(value: string): "codex" | "pwragent" | undefined {
 }
 
 /** Whose worktree root a path is in. The first root in the path decides, so a
- * Codex worktree with a folder named `.pwragent` inside it is still Codex's. */
+ * Codex worktree with a folder named `.pwragent` inside it is still Codex's,
+ * and a worktree in the configured folder is that folder's even when its
+ * checkout holds a `.codex/worktrees` of its own. */
 export function toolWorktreeRootOwner(value: string | undefined): "codex" | "pwragent" | undefined {
   if (!value?.trim()) return undefined;
+  const configured = configuredRootOwner(value);
+  if (configured !== undefined) return configured;
   const owner = TOOL_WORKTREE_ROOT.exec(value)?.[1];
-  if (owner !== undefined) return owner === "codex" ? "codex" : "pwragent";
-  return configuredRootOwner(value);
+  return owner === undefined ? undefined : owner === "codex" ? "codex" : "pwragent";
 }
 
 export function isToolManagedWorktreePath(value: string | undefined): boolean {

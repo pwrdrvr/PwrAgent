@@ -203,6 +203,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let createScheduledThreadActionFn: RegistryDependencies["createScheduledThreadActionFn"];
   let threadTitleGenerationService: RegistryDependencies["threadTitleGenerationService"];
   ownerAdmission = options?.ownerAdmission;
+  // A marked folder stays marked; check the marker once per folder, not on
+  // every ownership question maintenance asks.
+  const markedWorktreeFolders = new Set<string>();
   const managedMaintenanceRoots = options?.managedWorktreeRoots
     ?? (async () => {
       // A worktree folder adds its root once PwrAgent has marked it; the home
@@ -211,9 +214,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       let folder: ReturnType<ReturnType<typeof getDesktopSettingsService>["resolveWorktreeFolder"]>;
       try { folder = getDesktopSettingsService().resolveWorktreeFolder(); }
       catch { folder = undefined; }
-      const marked = folder
-        ? await access(path.join(folder.directory, WORKTREE_FOLDER_MARKER)).then(() => true, () => false)
-        : false;
+      let marked = folder ? markedWorktreeFolders.has(folder.directory) : false;
+      if (folder && !marked) {
+        marked = await access(path.join(folder.directory, WORKTREE_FOLDER_MARKER)).then(() => true, () => false);
+        if (marked) markedWorktreeFolders.add(folder.directory);
+      }
       return [
         userHomeWorktreesRoot(),
         ...(folder ? [userHomeWorktreesRoot(folder.directory)] : []),

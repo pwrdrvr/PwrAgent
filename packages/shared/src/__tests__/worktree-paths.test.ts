@@ -48,6 +48,8 @@ describe("worktree path recognition", () => {
           [join(folder, `.${hash}`, project), undefined],
           [join(`${folder}-other`, hash, project), undefined],
           [join(folder, ".pwragent", "worktrees", hash, project), "pwragent"],
+          // The folder is the first root in this path, so it decides.
+          [join(folder, hash, project, ".codex", "worktrees", hash, project), configured ? "pwragent" : "codex"],
           [join(windows ? "C:\\Users\\me" : "/Users/me", ".codex", "worktrees", hash, project), "codex"],
         ];
         for (const [value, owner] of cases) {
