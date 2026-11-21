@@ -326,7 +326,7 @@ describe("Token Miser pricing projection", () => {
       const prepare = db.raw.prepare.bind(db.raw);
       vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
-        const kind = /FROM thread_usage_lines/.test(sql) ? "lines" : /FROM thread_usage_turns/.test(sql) ? "turns" : undefined;
+        const kind = /FROM thread_usage_lines/.test(sql) ? "lines" : /(?:FROM|JOIN) thread_usage_turns/.test(sql) ? "turns" : undefined;
         if (kind) {
           const all = statement.all.bind(statement);
           vi.spyOn(statement, "all").mockImplementation((...args) => {
