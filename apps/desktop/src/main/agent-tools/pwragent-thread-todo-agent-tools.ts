@@ -19,6 +19,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
   parseThreadTodoMessageTarget,
+  THREAD_TODO_PLACEMENTS,
   threadTodoPrerequisites,
   threadTodoSteps,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -51,6 +52,14 @@ const MODEL_SETTING_MAX_LENGTH = 200;
 const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
   readonly ThreadExecutionMode[];
 const WORK_MODES = ["local", "worktree"] as const;
+const PLACEMENT_DESCRIPTION = [
+  "sub_thread files the new thread under this one.",
+  "Use it for part of this thread's work, such as a follow-up to its PR.",
+  "top_level starts its own thread in the project.",
+  "Use it for standalone work, such as an unrelated bug or a new feature.",
+  "Omitted is sub_thread. Work for another project is always top_level, so sub_thread is refused there.",
+  "The operator can change it before starting.",
+].join(" ");
 const TODO_WRITING_GUIDANCE = [
   "Write titles, details, and handoff prompts in clear, natural language for the operator.",
   "Use normal spacing and complete sentences, without compressed agent shorthand.",
@@ -346,6 +355,10 @@ function normalizeAction(
       if (workMode !== undefined && !isOneOf(workMode, WORK_MODES)) {
         return { ok: false, message: "start_thread workMode must be local or worktree." };
       }
+      const placement = action.placement;
+      if (placement !== undefined && !isOneOf(placement, THREAD_TODO_PLACEMENTS)) {
+        return { ok: false, message: "start_thread placement must be sub_thread or top_level." };
+      }
       const executionMode = action.executionMode;
       if (executionMode !== undefined && !isOneOf(executionMode, EXECUTION_MODES)) {
         return {
@@ -371,6 +384,7 @@ function normalizeAction(
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(executionMode ? { executionMode } : {}),
           ...(workMode ? { workMode } : {}),
+          ...(placement ? { placement } : {}),
         },
       };
     }
@@ -487,6 +501,9 @@ export function normalizeUpdateTodoArgs(
   const workMode = readClearableChoice(args.workMode, "workMode", WORK_MODES);
   if (workMode && !workMode.ok) return workMode;
   if (workMode) action.workMode = workMode.value;
+  const placement = readClearableChoice(args.placement, "placement", THREAD_TODO_PLACEMENTS);
+  if (placement && !placement.ok) return placement;
+  if (placement) action.placement = placement.value;
   if (args.pullRequest !== undefined) {
     const pullRequest = normalizePullRequestReference(args.pullRequest);
     if (!pullRequest) {
@@ -626,6 +643,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread for follow-up work. For Git work, set action.workMode=worktree unless the instructions require sharing a checkout. Give the child its task in the assigned checkout.",
+        "Set action.placement=top_level for standalone work. It starts as its own thread in the project, not a sub-thread.",
         "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
@@ -793,6 +811,11 @@ function inputSchemaForOperation(
                 description:
                   "start_thread only: use worktree for Git work unless the instructions require a shared checkout. PwrAgent creates it from the default branch. local shares the source directory and is used when omitted.",
               },
+              placement: {
+                type: "string",
+                enum: [...THREAD_TODO_PLACEMENTS],
+                description: `start_thread only: ${PLACEMENT_DESCRIPTION}`,
+              },
             },
           },
         },
@@ -862,6 +885,11 @@ function inputSchemaForOperation(
             type: "string",
             enum: [...WORK_MODES, ""],
             description: "Handoff cards: use worktree for Git work unless the instructions require a shared checkout. local shares the source directory. Empty clears the proposal.",
+          },
+          placement: {
+            type: "string",
+            enum: [...THREAD_TODO_PLACEMENTS, ""],
+            description: `Handoff cards: ${PLACEMENT_DESCRIPTION} Empty clears the proposal.`,
           },
           pullRequest: {
             type: "string",

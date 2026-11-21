@@ -2086,6 +2086,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_todo_message: "",
   // Plan cards for handoffs ride on turn_control, which the operator grants.
   thread_todo_plan: "",
+  // Placement of a handoff's thread is negotiation, not a remote action.
+  thread_todo_placement: "",
   operator_requests: "operator request queue",
   operator_questions: "dismiss async questions",
   thread_mcp_connections: "Thread MCP connections",

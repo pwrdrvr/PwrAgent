@@ -670,7 +670,7 @@ export function createThreadTodoRunners(params: {
       return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: assertNotHeld });
     },
     startThread: async ({
-      sourceBackend, sourceThreadId, cwd: requestedCwd, project, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
+      sourceBackend, sourceThreadId, cwd: requestedCwd, project, crossProject, placement, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
@@ -743,14 +743,15 @@ export function createThreadTodoRunners(params: {
         ...(workMode === "worktree"
           ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
           : {}),
-        // Work for another project is not grouped under this thread, as
-        // handoff_task does not group it.
-        ...(crossProject
-          ? {}
-          : {
+        // A sub-thread is filed under the raising thread. The service has
+        // already made work for another project top-level, as handoff_task
+        // does not group it either.
+        ...(placement !== "top_level" && !crossProject
+          ? {
               parentThreadId: sourceThreadId,
               parentThreadBackend: sourceBackend,
-            }),
+            }
+          : {}),
       });
       if (action.title) {
         try {

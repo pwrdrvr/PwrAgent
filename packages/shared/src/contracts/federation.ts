@@ -85,6 +85,12 @@ export const FEDERATION_CAPABILITIES = [
    * thread there sends the prompt alone without it.
    */
   "thread_todo_plan",
+  /**
+   * The owner honors a handoff card's `placement` and the operator's pick
+   * from `threadTodos.runAction`. A viewer shows an older owner's card as a
+   * sub-thread, which is what that owner makes, and sends no placement.
+   */
+  "thread_todo_placement",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",

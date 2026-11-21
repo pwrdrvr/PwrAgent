@@ -11,6 +11,7 @@ import type {
   ThreadTodoMergeMethod,
   ThreadTodoModelSettings,
   ThreadTodoMessageTarget,
+  ThreadTodoPlacement,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
   ThreadTodoResolution,
@@ -25,8 +26,10 @@ import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
   THREAD_TODO_MERGE_METHODS,
+  THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
   THREAD_TODO_RESOLUTION_RESULTS,
   mergeThreadTodoItems,
+  resolveThreadTodoPlacement,
   settleMergeMethod,
   threadTodoActionProject,
   threadTodoKindForAction,
@@ -68,8 +71,8 @@ export type ThreadTodoActionRunners = {
   }) => Promise<{ summary: string }>;
   /**
    * `crossProject` is true when the card is for a project other than the
-   * raising thread's. Such a thread is not grouped under the source thread,
-   * matching handoff_task.
+   * raising thread's. `placement` is settled by then: a sub-thread is filed
+   * under the source thread, and a cross-project start is always top-level.
    */
   startThread: (params: {
     sourceBackend: AppServerBackendKind;
@@ -77,6 +80,8 @@ export type ThreadTodoActionRunners = {
     cwd?: string;
     project?: ThreadTodoProject;
     crossProject: boolean;
+    /** Absent is a sub-thread, unless the start is for another project. */
+    placement?: ThreadTodoPlacement;
     action: StartThreadAction;
     todo: ThreadTodoDispatchCard;
     modelSettings?: ThreadTodoModelSettings;
@@ -153,6 +158,7 @@ export type ThreadTodoActionPatch = {
   reasoningEffort?: string | null;
   executionMode?: ThreadExecutionMode | null;
   workMode?: ThreadTodoWorkMode | null;
+  placement?: ThreadTodoPlacement | null;
   pullRequest?: string;
 };
 
@@ -179,6 +185,7 @@ const START_THREAD_PATCH_FIELDS = [
   "reasoningEffort",
   "executionMode",
   "workMode",
+  "placement",
 ] as const;
 
 export class ThreadTodoError extends Error {
@@ -281,6 +288,7 @@ export class ThreadTodoService {
       && params.targetProject.key !== sourceProject?.key
       ? params.targetProject
       : undefined;
+    assertPlacementFitsProject(input.action?.type === "start_thread" ? input.action.placement : undefined, targetProject);
     const now = this.now();
     // Read and write in one transaction: a re-raise merges into the steps
     // the operator may be ticking from another window at the same moment.
@@ -661,6 +669,9 @@ export class ThreadTodoService {
         && params.targetProject.key !== current.sourceProject?.key
         ? params.targetProject
         : undefined;
+    // Only a placement named in this change is checked: a proposal made
+    // before the card moved to another project just no longer applies.
+    assertPlacementFitsProject(params.action?.placement ?? undefined, targetProject);
     return this.store.replaceContent({
       id: current.id,
       kind: current.kind,
@@ -690,6 +701,8 @@ export class ThreadTodoService {
       allowOpenItems?: boolean;
       /** The access the operator saw on a start card. */
       seenExecutionMode?: ThreadTodoSeenExecutionMode;
+      /** The operator's placement, replacing the card's proposal. */
+      placement?: ThreadTodoPlacement;
     } & ThreadTodoStartChoices = {},
   ): Promise<ThreadTodo> {
     const todo = this.require(id);
@@ -737,6 +750,22 @@ export class ThreadTodoService {
     // raising thread's workspace.
     const cwd = todo.targetProject ? todo.targetProject.path : todo.cwd;
     const crossProject = todo.targetProject !== undefined;
+    const placement = action.type === "start_thread" && !options.messageTarget
+      ? resolveThreadTodoPlacement({
+          ...(options.placement ? { requested: options.placement } : {}),
+          ...(action.placement ? { proposed: action.placement } : {}),
+          crossProject,
+          otherMachine: startOnInstance !== undefined,
+        })
+      : undefined;
+    // A sub-thread needs its parent here, in the same project. Starting a
+    // top-level thread instead would file it where the operator did not ask.
+    if (placement?.refused) {
+      throw new ThreadTodoError(
+        "invalid_arguments",
+        `${THREAD_TODO_PLACEMENT_LOCK_MESSAGES[placement.lock ?? "project"]} It cannot be a sub-thread of this thread.`,
+      );
+    }
     // The card's own title: the action's names the new thread, which shows it.
     const dispatchCard: ThreadTodoDispatchCard = { id: todo.id, title: todo.title };
     this.running.add(id);
@@ -813,6 +842,7 @@ export class ThreadTodoService {
             cwd,
             project,
             crossProject,
+            placement: placement?.placement ?? "sub_thread",
             action,
             todo: dispatchCard,
             modelSettings: options.modelSettings
@@ -976,4 +1006,17 @@ function patchAction(
       ? "A review card has no action fields to change."
       : "A reminder has no action to change. Raise a new card with add_todo to add one.",
   );
+}
+
+/** add_todo and update_todo refuse a sub-thread proposed for another project. */
+function assertPlacementFitsProject(
+  placement: ThreadTodoPlacement | undefined,
+  targetProject: ThreadTodoProject | undefined,
+): void {
+  if (placement === "sub_thread" && targetProject) {
+    throw new ThreadTodoError(
+      "invalid_arguments",
+      `Work for ${targetProject.label} always starts as a top-level thread there, so placement cannot be sub_thread.`,
+    );
+  }
 }

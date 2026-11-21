@@ -29,6 +29,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
+  isThreadTodoPlacement,
   isThreadTodoSeenExecutionMode,
   isThreadTodoStatus,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -188,6 +189,7 @@ export const localThreadTodoOperations = {
         ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
         ...(request.modelSettings ? { modelSettings: parseDispatchSettings(request.modelSettings) } : {}),
         ...(request.workMode === "local" || request.workMode === "worktree" ? { workMode: request.workMode } : {}),
+        ...(isThreadTodoPlacement(request.placement) ? { placement: request.placement } : {}),
         ...(typeof request.environment === "string" && request.environment.trim()
           ? { environment: request.environment.trim() }
           : {}),

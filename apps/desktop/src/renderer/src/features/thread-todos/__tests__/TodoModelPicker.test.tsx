@@ -116,7 +116,7 @@ describe("to-do dispatch model picker", () => {
     expect(within(screen.getByRole("group", { name: "Start settings" })).getAllByRole("button")[0]!.getAttribute("aria-label"))
       .toMatch(/^Model for the new thread:/);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show start settings" })); });
-    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Where", "Env"]);
+    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Thread", "Where", "Env"]);
     expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" }).getAttribute("aria-expanded")).toBe("false");
     const menu = await openPicker();
     expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).hasAttribute("data-tooltip")).toBe(false);

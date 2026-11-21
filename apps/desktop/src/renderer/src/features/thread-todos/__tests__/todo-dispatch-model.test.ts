@@ -101,7 +101,7 @@ describe("handoff machines", () => {
       peers: [winLab, { instanceId: "ci", label: "ci-runner", availability: "offline" }, { instanceId: "mac", label: "studio" }],
       local: studio,
     });
-    expect(owner).toEqual({ key: "local", label: "studio", available: true, dispatchTarget: true });
+    expect(owner).toEqual({ key: "local", label: "studio", available: true, dispatchTarget: true, placement: true });
     expect(machines.map((machine) => [machine.key, machine.label, machine.available, machine.unavailableReason]))
       .toEqual([
         ["local", "studio", true, undefined],
