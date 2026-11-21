@@ -1,5 +1,5 @@
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
-import { appendFileSync, readFileSync, writeFileSync, watch } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 type FixtureTurn = { id: string; status: string; items: unknown[]; error: { message: string } | null };
@@ -256,12 +256,18 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
         const prompt = (params.input as Array<{ text?: string }> | undefined)?.[0]?.text;
         if (prompt === "hold-steer-ack" && recordsFile) {
           const directory = path.dirname(recordsFile);
-          const watcher = watch(directory, (_event, file) => {
-            if (String(file) !== "steer.release") return;
-            watcher.close();
+          const release = path.join(directory, "steer.release");
+          const acknowledgeWhenReleased = () => {
+            // The marker survives a missed filesystem notification. The
+            // transport owns this timer and clears it on close.
+            if (!existsSync(release)) {
+              this.schedule(acknowledgeWhenReleased, 10);
+              return;
+            }
             this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
-          });
+          };
           writeFileSync(path.join(directory, "steer.ready"), turn.id);
+          acknowledgeWhenReleased();
           return;
         }
       }
