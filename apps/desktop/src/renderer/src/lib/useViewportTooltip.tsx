@@ -119,7 +119,7 @@ export function portalViewportTop(): number {
  * their lifecycle, and a card's pointer bridge must not be cut short by an
  * unrelated tooltip.
  */
-let activePlainTooltip: { hide: () => void } | null = null;
+let activePlainTooltip: { current: () => void } | null = null;
 
 export type TooltipPoint = { x: number; y: number };
 
@@ -324,9 +324,9 @@ export type ViewportTooltip = ReturnType<typeof useViewportTooltip>;
 /**
  * A surface's single tooltip, offered to everything inside it.
  *
- * Separate instances do not know about each other: one control left showing a
- * tooltip on focus is still showing it when a hover raises a second, so two
- * land on screen at once. A surface whose controls are partly its own and
+ * Separate instances share only the window's plain-tooltip slot, so a second
+ * instance closes the first rather than updating it in place. A surface whose
+ * controls are partly its own and
  * partly passed in by a caller (the lightbox pill, which takes extra copy
  * controls as a prop) cannot thread a prop to all of them, so it publishes
  * one here instead.
@@ -486,14 +486,13 @@ export function useViewportTooltip(options: {
     hoverDelayTimerRef.current = null;
   }, []);
 
-  // This instance's identity in `activePlainTooltip`. Stable for the hook's
-  // life; `hide` is read through the ref so the entry never goes stale.
+  // This instance's identity in `activePlainTooltip`: the ref object is stable
+  // for the hook's life, and its `current` is always the latest `hide`.
   const hideRef = useRef<() => void>(() => {});
-  const registryEntryRef = useRef({ hide: () => hideRef.current() });
 
   const hide = useCallback((): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
-    if (activePlainTooltip === registryEntryRef.current) {
+    if (activePlainTooltip === hideRef) {
       activePlainTooltip = null;
     }
     clearHoverDelay();
@@ -517,9 +516,9 @@ export function useViewportTooltip(options: {
       return;
     }
     const previous = activePlainTooltip;
-    activePlainTooltip = registryEntryRef.current;
-    if (previous && previous !== registryEntryRef.current) {
-      previous.hide();
+    activePlainTooltip = hideRef;
+    if (previous && previous !== hideRef) {
+      previous.current();
     }
   }, []);
 
@@ -742,7 +741,7 @@ export function useViewportTooltip(options: {
   }, []);
 
   useEffect(() => () => {
-    if (activePlainTooltip === registryEntryRef.current) {
+    if (activePlainTooltip === hideRef) {
       activePlainTooltip = null;
     }
     anchorGenerationRef.current += 1;
