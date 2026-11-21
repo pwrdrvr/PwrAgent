@@ -1,11 +1,15 @@
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { NavigationQueryRequest } from "@pwragent/shared/contracts/navigation";
+import { formatFederationPeerDisplayLabel, formatFederationPeerShortDisplayLabel } from "@pwragent/shared/contracts/federation";
+import type { FederationCapability } from "@pwragent/shared/contracts/federation";
+import type { NavigationQueryRequest, NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type { MessagingChannelRef, MessagingInboundCommandEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { MessagingBrowseWorkflow } from "../messaging/core/messaging-browse-workflow";
+import { DesktopMessagingBackendBridge, type DesktopMessagingFederationBridge } from "../messaging/desktop-backend-bridge";
 
 type Context = ConstructorParameters<typeof MessagingBrowseWorkflow>[0];
 
@@ -18,7 +22,7 @@ function command(name: "resume" | "agent"): MessagingInboundCommandEvent {
   };
 }
 
-function fixture() {
+function fixture(index: Pick<NavigationSnapshot, "threads" | "directories"> = { threads: [], directories: [] }) {
   const local = new NavigationQueryStore({ now: () => 1_000 });
   const peer = new NavigationQueryStore({ now: () => 1_000 });
   const requests: NavigationQueryRequest[] = [];
@@ -39,8 +43,8 @@ function fixture() {
     async getNavigationQueryPage(request) {
       expect(this).toBe(backend);
       requests.push(request);
-      const store = request.federationTarget ? peer : local;
-      return store.readPage({ scopeKey: "browse", request, loadIndex: async () => ({ threads: [], directories: [] }) });
+      const ownerId = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
+      return (ownerId ? peer : local).readPage({ scopeKey: ownerId ?? "local", request, loadIndex: async () => index });
     },
   };
   const context = {
@@ -76,6 +80,66 @@ function fixture() {
   } satisfies Context;
   return { owner: new MessagingBrowseWorkflow(context), context, backend, requests, intents, effects };
 }
+
+async function expectPickerOwnerLabels(shortName: string, projects: boolean) {
+  const f = fixture({
+    threads: [{ id: "thread", source: "codex", title: "Investigate CPU profile", titleSource: "explicit",
+      updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false } }],
+    directories: [{ key: "repo", kind: "directory", label: "Tools", threadKeys: ["codex:thread"], needsAttentionCount: 0 }],
+  });
+  const visible = [
+    { id: "main-instance", label: "Studio-MBP-M5-Max", profileName: "default", shortLabel: shortName },
+    { id: "dev-instance", label: "Studio-MBP-M5-Max", profileName: "dev", shortLabel: shortName },
+    { id: "older-instance", label: "Mac Mini", profileName: "default" },
+  ];
+  const peers = visible.map((peer) => ({
+    target: { scope: "remote" as const, instanceId: peer.id },
+    label: formatFederationPeerDisplayLabel(peer, visible),
+    shortLabel: peer.shortLabel ? formatFederationPeerShortDisplayLabel(peer, visible) : undefined,
+    capabilities: ["messaging_route"] satisfies FederationCapability[],
+  }));
+  const federation = { connectedPeerTargets: () => peers } satisfies Pick<DesktopMessagingFederationBridge, "connectedPeerTargets">;
+  const bridge = new DesktopMessagingBackendBridge({} as DesktopBackendRegistry, federation as DesktopMessagingFederationBridge);
+  f.backend.listNavigationOwners = () => bridge.listNavigationOwners();
+  f.context.actorHasPermission = (_event, permission) => permission === "federation.remote_control";
+
+  await f.owner.presentResumeBrowser({ ...command("resume"), args: projects ? ["--projects"] : [] });
+
+  const intent = f.intents.at(-1);
+  const expectedKind = projects ? "project_picker" : "thread_picker";
+  if (intent?.kind !== expectedKind) throw new Error(`Expected ${expectedKind}, received ${intent?.kind}`);
+  const actions = intent.page.actions.filter(({ id }) => id === (projects ? "browse:select-project" : "browse:select-thread"));
+  const expectedItem = projects ? "Tools (1)" : "Investigate CPU profile";
+  const expectedValue = projects ? { directoryKey: "repo", label: "Tools" } : { backend: "codex", threadId: "thread" };
+  // Only the display name varies by alias availability. Each callback still identifies the owner of the row.
+  const labelsByOwner = new Map([
+    ["main-instance", `[${shortName} / default] ${expectedItem}`],
+    ["dev-instance", `[${shortName} / dev] ${expectedItem}`],
+    ["older-instance", `[Mac Mini] ${expectedItem}`],
+    [undefined, expectedItem],
+  ]);
+  expect(actions).toHaveLength(labelsByOwner.size);
+  for (const [instanceId, label] of labelsByOwner) {
+    const value = { ...expectedValue, ...(instanceId ? { federationInstanceId: instanceId } : {}) };
+    const action = actions.find((candidate) => {
+      const data = candidate.value as { federationInstanceId?: string } | undefined;
+      return data?.federationInstanceId === instanceId;
+    });
+    expect(action?.value).toEqual(value);
+    expect(action?.label.replace(/^\d+\. /, "")).toBe(label);
+    expect(intent.fallbackText).toContain(action!.label);
+  }
+}
+
+it.each([false, true])("uses compact owner names in /resume actions and text (projects=%s)", async (projects) => {
+  await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z]{1,8}$/), async (shortName) => {
+    await expectPickerOwnerLabels(shortName, projects);
+  }), { numRuns: 30 });
+});
+
+it("shows [A / default] for a remote default profile when the machine also has a dev profile", async () => {
+  await expectPickerOwnerLabels("A", false);
+});
 
 it("publishes only while the initiating conversation still owns the browse", async () => {
   await fc.assert(fc.asyncProperty(
