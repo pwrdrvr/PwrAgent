@@ -108,7 +108,10 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
       })));
     const renderer = sessions.find(({ manifest }) => manifest.target === "renderer")!;
     const traceName = "renderer-hot-0001.trace.json";
-    expect(renderer.manifest.artifacts).toEqual(expect.arrayContaining(["renderer-hot-0001.cpuprofile", traceName]));
+    const events = (await readFile(path.join(diagnostics, renderer.name, "events.ndjson"), "utf8"))
+      .split("\n").filter((line) => line.includes('"chromium-trace-'));
+    expect(renderer.manifest.artifacts, events.join("\n"))
+      .toEqual(expect.arrayContaining(["renderer-hot-0001.cpuprofile", traceName]));
     const trace = JSON.parse(await readFile(path.join(diagnostics, renderer.name, traceName), "utf8"));
     expect(trace.traceEvents).toEqual(expect.any(Array));
 

@@ -86,6 +86,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         async function run(untilFull: boolean) {
           await target.loadURL(args.origin);
           const raw: Buffer[] = [];
+          let publishError = "";
           const trace = new Trace(() => {
             const session = createSession();
             return {
@@ -98,7 +99,15 @@ test("native rolling trace evicts old events and publishes only filtered timing 
                 }
               },
             };
-          }, publish, (message) => warnings.push(message), { bufferSizeKb: 1024 });
+          }, async (...params) => {
+            try {
+              await publish(...params);
+            } catch (error) {
+              // This probe records only a contrived page and fixture paths.
+              publishError = String(error);
+              throw error;
+            }
+          }, (message) => warnings.push(message), { bufferSizeKb: 1024 });
           const owner = {};
           try {
             await trace.arm(owner);
@@ -136,7 +145,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
             const capture = await trace.capture(owner, args.artifact, trigger);
             const mode = untilFull ? "recordUntilFull" : "recordContinuously";
             if (capture.status !== "written") {
-              throw new Error(`${mode} capture did not publish: ${JSON.stringify(capture)}`);
+              throw new Error(`${mode} capture did not publish: ${JSON.stringify(capture)} (${raw.length} chunks, ${publishError || warnings.join(", ")})`);
             }
             const exported = Buffer.concat(raw).toString("utf8");
             const events: { name?: string }[] = JSON.parse(exported).traceEvents;

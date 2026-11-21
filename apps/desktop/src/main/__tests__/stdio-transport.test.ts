@@ -12,6 +12,7 @@ import { PassThrough, Writable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { compareCodexCliVersions } from "@pwrdrvr/codex-discovery";
 import { StdioJsonRpcTransport } from "../codex-app-server/stdio-transport";
+import * as processTree from "../process-tree";
 
 const { resolveCodexCommandMock, spawnMock, transportLog } = vi.hoisted(() => ({
   resolveCodexCommandMock: vi.fn(async ({ command }: { command: string }) => ({
@@ -238,12 +239,22 @@ describe("StdioJsonRpcTransport", () => {
       command: "codex",
       env: { ...process.env, CODEX_HOME: "/fixture/identity-codex" },
       readExecutableIdentity,
+      readProcessTable: async () => [],
     });
-    await transport.connect();
-    expect(order).toEqual(["read", "spawn"]);
-    expect(transport.getProcessInfo()).toEqual(expect.objectContaining({ executable }));
-    await transport.close();
-    expect(transport.getProcessInfo()).toBeUndefined();
+    // The fake PID can belong to an unrelated process group on the host.
+    const terminate = vi.spyOn(processTree, "terminateOwnedProcessTree")
+      .mockImplementation(async (owned) => { owned.kill(); });
+    try {
+      await transport.connect();
+      expect(order).toEqual(["read", "spawn"]);
+      expect(transport.getProcessInfo()).toEqual(expect.objectContaining({ executable }));
+      await transport.close();
+      expect(child.killCalled).toBe(true);
+      expect(transport.getProcessInfo()).toBeUndefined();
+    } finally {
+      await transport.close();
+      terminate.mockRestore();
+    }
   });
 
   it("stops further requests after a rejected refresh token", async () => {
