@@ -1025,14 +1025,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       const rateLimit = target
         ? this.emitRateLimitFromError(error, target, { retryable: false })
         : undefined;
-      const deliveryError = telegramDeliveryErrorMessage(error);
+      const failure = telegramDeliveryFailure(error);
       this.options.logger?.warn?.(
-        `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${deliveryError}`,
+        `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${failure.errorMessage}`,
       );
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        errorMessage: deliveryError,
+        ...failure,
         outcome: "failed",
         ...(rateLimit ? { rateLimit } : {}),
         surface: intent.targetSurface,
@@ -1419,7 +1419,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        errorMessage: telegramDeliveryErrorMessage(error),
+        ...telegramDeliveryFailure(error),
         outcome: "failed",
         ...(rateLimitInfo ? { rateLimit: rateLimitInfo } : {}),
       };
@@ -1882,7 +1882,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       );
       return;
     }
-    if (this.hasMissingTopicId(updateId, message)) {
+    if (this.hasMissingTopicId(updateId, message, message.from.id)) {
       return;
     }
 
@@ -2050,7 +2050,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
-    const missingTopicId = this.hasMissingTopicId(updateId, message);
+    const missingTopicId = this.hasMissingTopicId(updateId, message, callbackQuery.from.id);
     await this.bot.api.answerCallbackQuery({
       callback_query_id: callbackQuery.id,
       ...(missingTopicId ? { text: "Telegram did not identify this topic. Reopen it and try again." } : {}),
@@ -3023,15 +3023,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         : undefined);
   }
 
-  private hasMissingTopicId(updateId: number, message: TelegramMessage): boolean {
+  private hasMissingTopicId(updateId: number, message: TelegramMessage, actorId: number): boolean {
     // Telegram marks named topics with is_topic_message. General can omit both fields.
     if (message.is_topic_message !== true || message.message_thread_id !== undefined) {
       return false;
     }
-    this.options.logger?.warn?.("telegram inbound ignored: topic ID is missing", {
-      updateId,
-      messageId: message.message_id,
-    });
+    if (this.isAuthorizedActor(String(actorId)) && this.isAuthorizedTelegramConversation(message.chat)) {
+      this.options.logger?.warn?.("telegram inbound ignored: topic ID is missing", {
+        updateId,
+        messageId: message.message_id,
+      });
+    }
     return true;
   }
 
@@ -3540,14 +3542,17 @@ function errorMessage(error: unknown): string {
   return scrubBotToken(error instanceof Error ? error.message : String(error));
 }
 
-function telegramDeliveryErrorMessage(error: unknown): string {
+function telegramDeliveryFailure(error: unknown): Pick<MessagingDeliveryResult, "errorMessage" | "failureReason"> {
   if (telegramErrorIncludes(error, "topic_closed")) {
-    return "The target Telegram topic is closed.";
+    return { errorMessage: "The target Telegram topic is closed." };
   }
   if (telegramErrorIncludes(error, "message thread not found") || telegramErrorIncludes(error, "topic_deleted")) {
-    return "Telegram could not find the target topic.";
+    return {
+      errorMessage: "Telegram could not find the target topic.",
+      failureReason: "target_not_found",
+    };
   }
-  return errorMessage(error);
+  return { errorMessage: errorMessage(error) };
 }
 
 function isTelegramMessageNotModifiedError(error: unknown): boolean {

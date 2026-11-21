@@ -1556,6 +1556,42 @@ describe("TelegramAdapter callback persistence", () => {
       },
     ));
   });
+
+  it("silently drops chatter with a missing topic ID if the actor or group is unauthorized", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 2, max: 2_000_000 }),
+      fc.constantFrom("actor", "group", "both"),
+      async (id, unauthorized) => {
+        const warn = vi.fn();
+        const listener = vi.fn(async () => {});
+        const adapter = new TelegramAdapter({
+          api: fakeTelegramApi(),
+          config: {
+            channel: "telegram",
+            botToken: "token",
+            authorizedActorIds: [{ id: "42", displayName: "" }],
+            authorizedSupergroupIds: [{ id: "-100123", displayName: "Ops" }],
+          },
+          logger: { debug: vi.fn(), warn },
+          pollOnStart: false,
+        });
+        await adapter.start(listener);
+        await adapter.handleUpdate({
+          update_id: id,
+          message: {
+            chat: { id: unauthorized === "actor" ? -100123 : -100124, type: "supergroup", is_forum: true },
+            from: { id: unauthorized === "group" ? 42 : 43 },
+            is_topic_message: true,
+            message_id: id + 1,
+            text: "ordinary conversation",
+          },
+        });
+
+        expect(listener).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+      },
+    ));
+  });
 });
 
 describe("TelegramAdapter source-relative delivery", () => {
