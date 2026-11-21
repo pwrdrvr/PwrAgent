@@ -1242,10 +1242,6 @@ export class DesktopSettingsService {
           config.experimental?.fullAccessRiskWarningDismissed,
           false,
         ),
-        liveTranscriptEventFiltering: this.resolveConfigBoolean(
-          config.experimental?.liveTranscriptEventFiltering,
-          false,
-        ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
           true,

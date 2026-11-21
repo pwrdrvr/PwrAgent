@@ -193,7 +193,6 @@ export type DesktopSettingsConfig = {
   experimental?: {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
-    liveTranscriptEventFiltering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -1009,12 +1008,6 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "full_access_risk_warning_dismissed"],
       patch.experimental.fullAccessRiskWarningDismissed,
-    );
-  }
-  if (patch.experimental?.liveTranscriptEventFiltering !== undefined) {
-    set(
-      ["experimental", "live_transcript_event_filtering"],
-      patch.experimental.liveTranscriptEventFiltering,
     );
   }
   if (patch.experimental?.threadPricingSummary !== undefined) {
@@ -2616,9 +2609,6 @@ function normalizeDesktopConfig(
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
       fullAccessRiskWarningDismissed: readBoolean(
         experimental?.full_access_risk_warning_dismissed,
-      ),
-      liveTranscriptEventFiltering: readBoolean(
-        experimental?.live_transcript_event_filtering,
       ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(

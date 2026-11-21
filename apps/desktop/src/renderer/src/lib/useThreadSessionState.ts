@@ -37,7 +37,6 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerToolRequestUserInputNotification,
-  AppServerThreadCommandDetail,
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
@@ -160,6 +159,8 @@ type TurnUsageAccumulator = {
 
 type RecentlyCompletedTurnUsage = {
   accumulator?: TurnUsageAccumulator;
+  // Keep one accounting baseline when there is no cached transcript row.
+  entry?: AppServerThreadActivityEntry;
   turn: AppServerThreadTurnMetadata;
 };
 
@@ -3484,13 +3485,14 @@ function findKnownTurnUsageMetadata(
     ...(session.response?.replay.entries ?? []),
     ...session.optimisticEntries,
   ];
+  const recentUsageEntry = session.recentlyCompletedTurnUsage?.entry;
   const turnUsageEntry = entries.find(
     (candidate) =>
       candidate.turn?.id === turnId &&
       candidate.type === "activity" &&
       isTokenUsageActivityEntry(candidate) &&
       tokenUsageActivityScope(candidate) === "turn"
-  );
+  ) ?? (recentUsageEntry?.turn?.id === turnId ? recentUsageEntry : undefined);
   const entry = turnUsageEntry ?? entries.find((candidate) => candidate.turn?.id === turnId);
   const entryIsTurnUsage =
     entry?.type === "activity" &&
@@ -3681,18 +3683,9 @@ function flushPendingAssistantToOptimistic(
 function updateActivityEntry(
   entry: AppServerThreadActivityEntry,
   details: AppServerThreadActivityDetail[],
-  turn: AppServerThreadTurnMetadata | undefined,
-  options: { suppressNoop?: boolean } = {}
+  turn: AppServerThreadTurnMetadata | undefined
 ): AppServerThreadActivityEntry {
   const mergedDetails = mergeActivityDetails(entry.details, details);
-  if (
-    options.suppressNoop &&
-    activityDetailsEqual(entry.details, mergedDetails) &&
-    turnMetadataEqual(entry.turn, entry.turn ?? turn)
-  ) {
-    return entry;
-  }
-
   return {
     ...entry,
     summary: summarizeLiveActivity(mergedDetails),
@@ -3700,76 +3693,6 @@ function updateActivityEntry(
     details: mergedDetails,
     ...(entry.turn ?? turn ? { turn: entry.turn ?? turn } : {}),
   };
-}
-
-function activityCommandDetailsEqual(
-  left: AppServerThreadCommandDetail | undefined,
-  right: AppServerThreadCommandDetail | undefined
-): boolean {
-  return (
-    left?.displayCommand === right?.displayCommand &&
-    left?.rawCommand === right?.rawCommand &&
-    left?.cwd === right?.cwd &&
-    left?.output === right?.output &&
-    left?.exitCode === right?.exitCode &&
-    left?.durationMs === right?.durationMs &&
-    JSON.stringify(left?.subAgent) === JSON.stringify(right?.subAgent)
-  );
-}
-
-function activityImagesEqual(
-  left: AppServerThreadActivityDetail["images"],
-  right: AppServerThreadActivityDetail["images"],
-): boolean {
-  if (left?.length !== right?.length) {
-    return false;
-  }
-  return (left ?? []).every((leftImage, index) => {
-    const rightImage = right?.[index];
-    return (
-      leftImage.type === rightImage?.type &&
-      leftImage.url === rightImage.url &&
-      leftImage.alt === rightImage.alt
-    );
-  });
-}
-
-function activityDetailsEqual(
-  left: AppServerThreadActivityDetail[],
-  right: AppServerThreadActivityDetail[]
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((leftDetail, index) => {
-    const rightDetail = right[index];
-    return (
-      leftDetail.id === rightDetail?.id &&
-      leftDetail.kind === rightDetail.kind &&
-      leftDetail.label === rightDetail.label &&
-      leftDetail.markdown === rightDetail.markdown &&
-      leftDetail.path === rightDetail.path &&
-      leftDetail.status === rightDetail.status &&
-      leftDetail.url === rightDetail.url &&
-      leftDetail.fileDiff === rightDetail.fileDiff &&
-      activityImagesEqual(leftDetail.images, rightDetail.images) &&
-      activityCommandDetailsEqual(leftDetail.command, rightDetail.command)
-    );
-  });
-}
-
-function turnMetadataEqual(
-  left: AppServerThreadTurnMetadata | undefined,
-  right: AppServerThreadTurnMetadata | undefined
-): boolean {
-  return (
-    left?.id === right?.id &&
-    left?.status === right?.status &&
-    left?.startedAt === right?.startedAt &&
-    left?.completedAt === right?.completedAt &&
-    left?.durationMs === right?.durationMs
-  );
 }
 
 function isThreadLocalTranscriptNotification(
@@ -3786,53 +3709,6 @@ function isThreadLocalTranscriptNotification(
     notification.method === "thread/tokenUsage/updated" ||
     notification.method === "thread/contextWindow/updated"
   );
-}
-
-function liveActivityNotificationSignature(params: {
-  backend: string;
-  notification: AppServerNotification;
-  threadId: string;
-}): string | undefined {
-  if (
-    params.notification.method !== "item/started" &&
-    params.notification.method !== "item/completed"
-  ) {
-    return undefined;
-  }
-
-  const item = getNotificationItem(params.notification.params);
-  const details = item ? buildLiveToolDetails(item, undefined, params.notification.method) : [];
-  if (details.length === 0) {
-    return undefined;
-  }
-
-  const turnId =
-    typeof params.notification.params.turnId === "string"
-      ? params.notification.params.turnId
-      : "";
-  const signatureParts = [
-    params.backend,
-    params.threadId,
-    params.notification.method,
-    turnId,
-    ...details.flatMap((detail) => [
-      detail.id,
-      detail.kind,
-      detail.label,
-      detail.markdown ?? "",
-      detail.path ?? "",
-      detail.status ?? "",
-      detail.url ?? "",
-      detail.command?.displayCommand ?? "",
-      detail.command?.rawCommand ?? "",
-      detail.command?.cwd ?? "",
-      detail.command?.output ?? "",
-      typeof detail.command?.exitCode === "number" ? String(detail.command.exitCode) : "",
-      typeof detail.command?.durationMs === "number" ? String(detail.command.durationMs) : "",
-    ]),
-  ];
-
-  return signatureParts.join("\u0000");
 }
 
 const NO_RESPONSE_ENTRIES: AppServerThreadEntry[] = [];
@@ -3868,7 +3744,6 @@ function upsertLiveActivityEntry(
   params: {
     details: AppServerThreadActivityDetail[];
     now: number;
-    suppressDuplicateLiveActivityUpdates?: boolean;
     threadId: string;
     turn?: AppServerThreadTurnMetadata;
   }
@@ -3888,16 +3763,7 @@ function upsertLiveActivityEntry(
   if (matchingIndex !== -1) {
     const optimisticEntries = [...flushed.optimisticEntries];
     const existing = optimisticEntries[matchingIndex] as AppServerThreadActivityEntry;
-    const updated = updateActivityEntry(
-      existing,
-      params.details,
-      params.turn,
-      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
-    );
-    if (updated === existing) {
-      return flushed;
-    }
-    optimisticEntries[matchingIndex] = updated;
+    optimisticEntries[matchingIndex] = updateActivityEntry(existing, params.details, params.turn);
     return {
       ...flushed,
       expectOwnUpdate: true,
@@ -3925,13 +3791,8 @@ function upsertLiveActivityEntry(
     const updated = updateActivityEntry(
       lastOptimisticEntry as AppServerThreadActivityEntry,
       params.details,
-      params.turn,
-      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
+      params.turn
     );
-    if (updated === lastOptimisticEntry) {
-      lastLiveActivityVerifiedAgainst.set(flushed.optimisticEntries, responseEntries);
-      return flushed;
-    }
 
     const optimisticEntries = [
       ...flushed.optimisticEntries.slice(0, -1),
@@ -5283,7 +5144,9 @@ function retainSessionCache(
 
   for (const entry of Object.entries(sessions)) {
     const [threadKey, session] = entry;
-    if (threadKey === selectedThreadKey || session.interacted) {
+    // Background lifecycle state is protected while it drives an indicator.
+    // When it settles, it competes for the same bounded slots as view-only sessions.
+    if (threadKey === selectedThreadKey || session.interacted || session.thinkingSinceAt !== undefined) {
       interactedEntries.push(entry);
     } else {
       viewOnlyEntries.push(entry);
@@ -5485,7 +5348,6 @@ export function useThreadSessionState(params: {
   initialHistoryLimit?: number;
   readReason?: "thread-view" | "star-map-card";
   retainedRemoteThreads?: NavigationThreadSummary[];
-  liveTranscriptEventFiltering?: boolean;
   suspended?: boolean;
   thread?: NavigationThreadSummary;
 }): {
@@ -5554,7 +5416,6 @@ export function useThreadSessionState(params: {
 } {
   const {
     desktopApi,
-    liveTranscriptEventFiltering = false,
     suspended = false,
     thread,
   } = params;
@@ -5576,6 +5437,7 @@ export function useThreadSessionState(params: {
     threadKey,
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
+  const openedTranscriptsRef = useRef(new Set<string>());
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
   const liveContextWindowVersionsRef = useRef(new Map<string, number>());
   const liveTranscriptVersionsRef = useRef(new Map<string, number>());
@@ -5588,7 +5450,6 @@ export function useThreadSessionState(params: {
     threadKey: string;
   } | undefined>(undefined);
   const reconciledLaunchpadMessageIdsRef = useRef<Record<string, string>>({});
-  const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const loadedHistoryIndexesRef = useRef<Record<string, TranscriptHistoryIndex>>({});
   // Avoid copying and rescanning every previously retained live aggregate on
   // each ThreadView callback. Map insertion order preserves same-id upserts.
@@ -5640,6 +5501,11 @@ export function useThreadSessionState(params: {
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const key of openedTranscriptsRef.current) {
+      if (key !== selectedThreadKeyRef.current && !retainedThreadKeys.has(key)) {
+        openedTranscriptsRef.current.delete(key);
+      }
+    }
     for (const key of liveLifecycleVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveLifecycleVersionsRef.current.delete(key);
     }
@@ -6234,6 +6100,7 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    openedTranscriptsRef.current.add(threadKey);
     updateSession(threadKey, (current) => ({
       ...current,
       // A failed hydration is suppressed while the operator remains on the
@@ -6689,8 +6556,6 @@ export function useThreadSessionState(params: {
           if (detail) {
             const currentItems = liveToolItemsRef.current[targetThreadKey] ?? {};
             if (method === "item/started" && (
-              !liveTranscriptEventFiltering || !isUnfocusedThread || isRetainedRemoteThread
-            ) && (
               item?.status === "inProgress" || item?.status === "in_progress"
             )) {
               const turnId = readNotificationTurnId(event.notification);
@@ -6767,45 +6632,21 @@ export function useThreadSessionState(params: {
       // must not recreate this window's discarded transcript cache.
       if (managesRemoteRetentionRef.current && event.federationTarget?.scope === "remote"
         && isUnfocusedThread && !isRetainedRemoteThread) return;
-      if (
-        liveTranscriptEventFiltering &&
-        isUnfocusedThread &&
-        !isRetainedRemoteThread &&
-        isThreadLocalTranscriptNotification(event.notification)
-      ) {
-        // The transcript text waits for focus, but streamed text still ends
-        // a safety hold, or the thread would show the hold once focused.
-        if (event.notification.method === "item/agentMessage/delta") {
-          const notification = event.notification;
-          updateSession(targetThreadKey, (session) =>
-            transitionSafetyBuffering(session, notification));
-        }
-        return;
-      }
-
+      // A local thread can run without any window opening it. Keep its
+      // lifecycle live, and let the first owner read supply its history.
+      const retainTranscript = !isUnfocusedThread || isRetainedRemoteThread
+        || (event.federationTarget ?? readRendererFederationTarget())?.scope === "remote"
+        || openedTranscriptsRef.current.has(targetThreadKey);
+      const isTranscriptUpdate = isThreadLocalTranscriptNotification(event.notification);
       const liveContextWindow = event.notification.method === "thread/contextWindow/updated"
         ? readContextWindowFill(event.notification.params)
         : undefined;
-      if (liveContextWindow) {
+      if (retainTranscript && liveContextWindow) {
         const previous = liveContextWindowVersionsRef.current.get(targetThreadKey) ?? 0;
         liveContextWindowVersionsRef.current.set(targetThreadKey, previous + 1);
       }
 
-      if (liveTranscriptEventFiltering) {
-        const liveActivitySignature = liveActivityNotificationSignature({
-          backend: event.backend,
-          notification: event.notification,
-          threadId: notificationThreadId,
-        });
-        if (liveActivitySignature) {
-          if (lastLiveActivitySignatureRef.current[targetThreadKey] === liveActivitySignature) {
-            return;
-          }
-          lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
-        }
-      }
-
-      if (isThreadLocalTranscriptNotification(event.notification)) {
+      if (retainTranscript && isTranscriptUpdate) {
         const liveTranscriptVersion = (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
         liveTranscriptVersionsRef.current.set(targetThreadKey, liveTranscriptVersion);
         const itemId = liveNotificationItemId(event.notification);
@@ -6836,10 +6677,10 @@ export function useThreadSessionState(params: {
         });
       }
 
-      if (
+      if (retainTranscript && (
         event.notification.method === "thread/compacted"
         || event.notification.method === "thread/rewound"
-      ) {
+      )) {
         // Reads and pagination cursors from before the reset cannot rebuild
         // the new history. Invalidate them before scheduling a fresh read.
         hydrationsRef.current.set(targetThreadKey, transitionThreadHydration(
@@ -6863,7 +6704,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeTurnId: notificationTurnId ?? current.activeTurnId,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingRequest: event.notification,
             pendingStatusText: "Waiting for approval",
@@ -6880,7 +6721,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeTurnId: notificationTurnId ?? current.activeTurnId,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingStatusText: "Waiting for input",
             pendingUserInput,
@@ -6897,7 +6738,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeTurnId: notificationTurnId ?? current.activeTurnId,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingMcpInteraction,
             pendingStatusText: "Waiting for MCP approval",
@@ -6911,19 +6752,27 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             expectOwnUpdate: true,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingStatusText: "Compacting context",
           };
         }
 
+        // Usage still needs accounting, including task monitor usage on item completion.
+        if (!retainTranscript && isTranscriptUpdate
+          && event.notification.method !== "item/completed"
+          && event.notification.method !== "thread/contextWindow/updated"
+          && event.notification.method !== "thread/tokenUsage/updated") {
+          return current;
+        }
+
         // Queue admission can publish the authoritative user item before the
         // Composer's startTurn promise adds its optimistic row. Materialize
         // the started item; a later completion reconciles by the same id.
-        if (
+        if (retainTranscript && (
           event.notification.method === "item/started"
           || event.notification.method === "item/completed"
-        ) {
+        )) {
           const userMessageEntry = userMessageEntryFromItem(
             event.notification.params,
             current.response?.replay.entries ?? [],
@@ -7016,7 +6865,6 @@ export function useThreadSessionState(params: {
           return upsertLiveActivityEntry(current, {
             details,
             now: nextLastTouchedAt,
-            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
             threadId: notificationThreadId,
             turn,
           });
@@ -7162,7 +7010,6 @@ export function useThreadSessionState(params: {
           return upsertLiveActivityEntry(current, {
             details: [detail],
             now: nextLastTouchedAt,
-            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
             threadId: notificationThreadId,
             turn,
           });
@@ -7262,7 +7109,7 @@ export function useThreadSessionState(params: {
             activeTurnStartedAt: startedAt,
             backendReportedActive: true,
             expectOwnUpdate: true,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingTurnUsage: undefined,
           };
@@ -7311,7 +7158,7 @@ export function useThreadSessionState(params: {
           });
           const item = getNotificationItem(event.notification.params);
           const transientTaskMonitorItem = isTransientTaskMonitorItem(item);
-          const assistantMessageEntry = transientTaskMonitorItem
+          const assistantMessageEntry = !retainTranscript || transientTaskMonitorItem
             ? undefined
             : assistantMessageEntryFromCompletedItem({
                 itemParams: event.notification.params,
@@ -7385,6 +7232,11 @@ export function useThreadSessionState(params: {
               entry: taskMonitorUsageEntry,
               threadId: notificationThreadId,
             });
+          }
+          if (!retainTranscript) {
+            return current;
+          }
+          if (taskMonitorUsageEntry) {
             const nextResponse = appendThreadEntries(
               current.response,
               {
@@ -7466,7 +7318,6 @@ export function useThreadSessionState(params: {
             return upsertLiveActivityEntry(current, {
               details,
               now: nextLastTouchedAt,
-              suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
               threadId: notificationThreadId,
               turn,
             });
@@ -7480,9 +7331,6 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
-          const liveToolItemIds = new Set(
-            Object.keys(liveToolItemsRef.current[targetThreadKey] ?? {}),
-          );
           const completedTurnMatchesActive = terminalTurnMatchesActiveTurn(
             current,
             completedTurn?.id,
@@ -7492,51 +7340,49 @@ export function useThreadSessionState(params: {
               `${targetThreadKey}:${completedTurn.id}`
             );
           }
-          if (liveTranscriptEventFiltering && isUnfocusedThread) {
+          const completedUsageActivity = current.pendingUsageActivityEntry
+            && completedTurn && completedTurnMatchesActive
+            ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
+            : undefined;
+          const settledLifecycle = completedTurnMatchesActive ? {
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
+            backendReportedActive: false,
+            staleThinkingRecheckAt: undefined,
+            completionHydrationRetries: 0,
+            pendingAssistantMessage: undefined,
+            pendingMcpInteraction: undefined,
+            pendingRequest: undefined,
+            pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
+            ...(completedTurn ? {
+              recentlyCompletedTurnUsage: {
+                accumulator: current.pendingTurnUsage,
+                ...(!retainTranscript && completedUsageActivity ? { entry: completedUsageActivity } : {}),
+                turn: completedTurn,
+              },
+            } : {}),
+            pendingUserInput: undefined,
+            pendingStatusText: undefined,
+            transientMessage: undefined,
+          } : {};
+          persistFinalizedUsageEntry({
+            backend: event.backend,
+            desktopApi,
+            entry: completedUsageActivity,
+            threadId: notificationThreadId,
+          });
+          if (!retainTranscript) {
             return {
               ...current,
-              activeTurnId: completedTurnMatchesActive
-                ? undefined
-                : current.activeTurnId,
-              activeTurnStartedAt: completedTurnMatchesActive
-                ? undefined
-                : current.activeTurnStartedAt,
-              backendReportedActive: completedTurnMatchesActive
-                ? false
-                : current.backendReportedActive,
+              ...settledLifecycle,
               error: undefined,
               lastTouchedAt: nextLastTouchedAt,
-              pendingAssistantMessage: completedTurnMatchesActive
-                ? undefined
-                : current.pendingAssistantMessage,
-              pendingMcpInteraction: completedTurnMatchesActive
-                ? undefined
-                : current.pendingMcpInteraction,
-              pendingRequest: completedTurnMatchesActive
-                ? undefined
-                : current.pendingRequest,
-              pendingTurnUsage: completedTurnMatchesActive
-                ? undefined
-                : current.pendingTurnUsage,
-              recentlyCompletedTurnUsage:
-                completedTurnMatchesActive && completedTurn
-                  ? {
-                      accumulator: current.pendingTurnUsage,
-                      turn: completedTurn,
-                    }
-                  : current.recentlyCompletedTurnUsage,
-              pendingUserInput: completedTurnMatchesActive
-                ? undefined
-                : current.pendingUserInput,
-              pendingStatusText: completedTurnMatchesActive
-                ? undefined
-                : current.pendingStatusText,
-              transientMessage: completedTurnMatchesActive
-                ? undefined
-                : current.transientMessage,
             };
           }
-
+          const liveToolItemIds = new Set(
+            Object.keys(liveToolItemsRef.current[targetThreadKey] ?? {}),
+          );
           const completedTurnHasReview = hasReviewEntryForTurn(
             current.response,
             completedTurn?.id
@@ -7703,34 +7549,9 @@ export function useThreadSessionState(params: {
               didCompleteRetainedLiveEntry = true;
             }
           }
-          const completedUsageActivity =
-            current.pendingUsageActivityEntry &&
-            completedTurn &&
-            completedTurnMatchesActive
-              ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
-              : undefined;
-          persistFinalizedUsageEntry({
-            backend: event.backend,
-            desktopApi,
-            entry: completedUsageActivity,
-            threadId: notificationThreadId,
-          });
-
           return {
             ...current,
-            activeTurnId: completedTurnMatchesActive
-              ? undefined
-              : current.activeTurnId,
-            activeTurnStartedAt: completedTurnMatchesActive
-              ? undefined
-              : current.activeTurnStartedAt,
-            backendReportedActive: completedTurnMatchesActive
-              ? false
-              : current.backendReportedActive,
-            staleThinkingRecheckAt: completedTurnMatchesActive ? undefined : current.staleThinkingRecheckAt,
-            completionHydrationRetries: completedTurnMatchesActive
-              ? 0
-              : current.completionHydrationRetries,
+            ...settledLifecycle,
             error: undefined,
             expectOwnUpdate: true,
             hydratedUpdatedAt:
@@ -7761,38 +7582,7 @@ export function useThreadSessionState(params: {
                     completedUsageActivity
                   )
                 : remainingOptimisticEntries,
-            pendingAssistantMessage: completedTurnMatchesActive
-              ? undefined
-              : current.pendingAssistantMessage,
-            pendingMcpInteraction: completedTurnMatchesActive
-              ? undefined
-              : current.pendingMcpInteraction,
-            pendingRequest: completedTurnMatchesActive
-              ? undefined
-              : current.pendingRequest,
-            pendingUsageActivityEntry: completedTurnMatchesActive
-              ? undefined
-              : current.pendingUsageActivityEntry,
-            pendingTurnUsage: completedTurnMatchesActive
-              ? undefined
-              : current.pendingTurnUsage,
-            recentlyCompletedTurnUsage:
-              completedTurnMatchesActive && completedTurn
-                ? {
-                    accumulator: current.pendingTurnUsage,
-                    turn: completedTurn,
-                  }
-                : current.recentlyCompletedTurnUsage,
-            pendingUserInput: completedTurnMatchesActive
-              ? undefined
-              : current.pendingUserInput,
-            pendingStatusText: completedTurnMatchesActive
-              ? undefined
-              : current.pendingStatusText,
             response: nextResponse,
-            transientMessage: completedTurnMatchesActive
-              ? undefined
-              : current.transientMessage,
           };
         }
 
@@ -8111,10 +7901,10 @@ export function useThreadSessionState(params: {
             });
             usageEntry = completedUsage.entry ?? usageEntry;
             nextRecentlyCompletedTurnUsage = {
+              ...recentlyCompletedTurnUsage,
               accumulator:
                 completedUsage.accumulator
                 ?? recentlyCompletedTurnUsage.accumulator,
-              turn: recentlyCompletedTurnUsage.turn,
             };
           }
           if (!contextWindow && !usageEntry) {
@@ -8146,11 +7936,11 @@ export function useThreadSessionState(params: {
                 ? true
                 : current.expectOwnUpdate,
             interacted:
-              usageEntry && !holdUsageUntilTurnCompletes
+              retainTranscript && usageEntry && !holdUsageUntilTurnCompletes
                 ? true
                 : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
-            optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
+            optimisticEntries: retainTranscript && usageEntry && !holdUsageUntilTurnCompletes
               ? suppressUsageEntry
                 ? current.optimisticEntries
                 : mergeFinalizedUsageEntry(
@@ -8174,7 +7964,6 @@ export function useThreadSessionState(params: {
     });
   }, [
     desktopApi,
-    liveTranscriptEventFiltering,
     thread,
     threadKey,
     updateSession,

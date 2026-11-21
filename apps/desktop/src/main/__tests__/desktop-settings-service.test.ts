@@ -5342,9 +5342,11 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults live transcript event filtering to false and persists it", async () => {
+  it.each([true, false])("ignores the retired transcript setting (stored value: %s)", async (enabled) => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
+    const retiredLine = `live_transcript_event_filtering = ${enabled}`;
+    fs.writeFileSync(configPath, `[experimental]\n${retiredLine}\n`);
     const service = new DesktopSettingsService({
       configPath,
       env: {},
@@ -5352,25 +5354,16 @@ describe("DesktopSettingsService", () => {
     });
 
     const initial = await service.readSettingsProjection();
-    expect(initial.experimental.liveTranscriptEventFiltering).toEqual({
-      value: false,
-      source: "default",
-    });
-
-    await service.writeConfigPatchTargeted({
-      experimental: {
-        liveTranscriptEventFiltering: true,
-      },
-    });
-
+    expect(initial.experimental).not.toHaveProperty("liveTranscriptEventFiltering");
+    await service.writeConfigPatchTargeted({ experimental: { fullAccessRiskWarningDismissed: true } });
     const updated = await service.readSettingsProjection();
-    expect(updated.experimental.liveTranscriptEventFiltering).toEqual({
+    expect(updated.experimental).not.toHaveProperty("liveTranscriptEventFiltering");
+    expect(updated.experimental.fullAccessRiskWarningDismissed).toEqual({
       value: true,
       source: "config",
     });
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "live_transcript_event_filtering = true",
-    );
+    // An unrelated save preserves the old value for older builds.
+    expect(fs.readFileSync(configPath, "utf8")).toContain(retiredLine);
   });
 
   it("defaults Markdown rendering on and writes only [general.markdown] to a new config", async () => {

@@ -1234,11 +1234,6 @@ function SettingsSectionBody(props: {
             experimental: { diffCondensation: { enabled } },
           });
         }}
-        onLiveTranscriptEventFilteringChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { liveTranscriptEventFiltering: enabled },
-          });
-        }}
         onTokenMiserEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserEnabled: enabled },

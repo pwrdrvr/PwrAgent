@@ -215,6 +215,8 @@ export type BackendClient = {
       deadlineAt?: number;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
+    /** Called when rows are returned with an unexhausted cursor, including on a coalesced read. */
+    onIncompletePageWalk?: () => void,
   ): Promise<AppServerThreadSummary[]>;
   listArchiveCleanupThreadsPage?: CodexAppServerClient["listArchiveCleanupThreadsPage"];
   /** The listing above honors `sortKey: "updated_at"`. */
