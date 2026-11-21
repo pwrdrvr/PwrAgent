@@ -133,6 +133,20 @@ describe("desktop config helper models", () => {
     expect(save("", { helpers: { diff_condensation: { model: "gpt-5.6-luna" } } })).toBe("");
   });
 
+  it("clears active inline overrides and keeps the retired override in a single array", () => {
+    const existing = [
+      "[models]",
+      'helper_models = [{ helper = "thread_titles", model = "gpt-6-luna" }, { helper = "diff_condensation", model = "gpt-5.6-luna" }]',
+      "",
+    ].join("\n");
+
+    const written = save(existing, { helpers: {} });
+    expect(written).not.toMatch(/^helper_models\s*=/m);
+    expect(parseTomlTables(written, "test.toml").models?.helper_models).toEqual([
+      { helper: "diff_condensation", model: "gpt-5.6-luna" },
+    ]);
+  });
+
   it("clears every key when the row returns to Automatic and overrides are cleared", () => {
     const existing = [
       "# Operator comment",

@@ -2082,55 +2082,10 @@ export function desktopSettingsPatchToEdits(
       : { op: "deleteTableArray", path: ["models", "usage_account_names"] });
   }
   if (patch.models?.helperModels !== undefined) {
-    const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
-    if (helperModels.defaultModel) {
-      set(["models", "helper_default_model"], helperModels.defaultModel);
-    } else {
-      edits.push({ op: "delete", path: ["models", "helper_default_model"] });
-    }
-    if (helperModels.defaultReasoningEffort) {
-      set(
-        ["models", "helper_default_reasoning_effort"],
-        helperModels.defaultReasoningEffort,
-      );
-    } else {
-      edits.push({
-        op: "delete",
-        path: ["models", "helper_default_reasoning_effort"],
-      });
-    }
-    const entries = Object.entries(helperModels.helpers)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([helper, choice]) => ({
-        helper,
-        ...(choice.backend ? { backend: choice.backend } : {}),
-        ...(choice.model ? { model: choice.model } : {}),
-        ...(choice.reasoningEffort
-          ? { reasoning_effort: choice.reasoningEffort }
-          : {}),
-      }));
-    // Keep existing overrides for this retired helper when rewriting the
-    // array, so a downgrade can still recover the operator's choice.
-    const existingRows = currentTables.models?.helper_models;
-    const retiredRows = Array.isArray(existingRows)
-      ? existingRows.flatMap((row) => (
-        typeof row === "object" && readString(row.helper) === RETIRED_DIFF_CONDENSATION_HELPER_ID
-          ? [row]
-          : []
-      ))
-      : [];
-    if (entries.length > 0 || retiredRows.length > 0) {
-      edits.push({
-        op: "setTableArray",
-        path: ["models", "helper_models"],
-        value: [...entries, ...retiredRows],
-      });
-    } else {
-      edits.push({
-        op: "deleteTableArray",
-        path: ["models", "helper_models"],
-      });
-    }
+    edits.push(...helperModelSettingsToEdits(
+      patch.models.helperModels,
+      currentTables.models?.helper_models,
+    ));
   }
   if (patch.models?.taskMonitorModels !== undefined) {
     const entries = Object.entries(
@@ -4039,6 +3994,47 @@ function readUsageAccountNames(value: unknown): Record<string, string> | undefin
     names[account] = name.trim();
   }
   return Object.keys(names).length ? names : undefined;
+}
+
+function helperModelSettingsToEdits(
+  patch: DesktopHelperModelSettings,
+  existingRows: TomlScalar | undefined,
+): TomlEdit[] {
+  const { defaultModel, defaultReasoningEffort, helpers } = normalizeHelperModelSettings(patch);
+  const entries = Object.entries(helpers)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([helper, choice]) => ({
+      helper,
+      ...(choice.backend ? { backend: choice.backend } : {}),
+      ...(choice.model ? { model: choice.model } : {}),
+      ...(choice.reasoningEffort ? { reasoning_effort: choice.reasoningEffort } : {}),
+    }));
+  // Keep existing overrides for this retired helper when rewriting the
+  // array, so a downgrade can still recover the operator's choice.
+  const retiredRows = Array.isArray(existingRows)
+    ? existingRows.flatMap((row) => (
+      typeof row === "object" && readString(row.helper) === RETIRED_DIFF_CONDENSATION_HELPER_ID
+        ? [row]
+        : []
+    ))
+    : [];
+  const rows = [...entries, ...retiredRows];
+  const defaultModelPath = ["models", "helper_default_model"];
+  const defaultEffortPath = ["models", "helper_default_reasoning_effort"];
+  const rowsPath = ["models", "helper_models"];
+  return [
+    defaultModel
+      ? { op: "set", path: defaultModelPath, value: defaultModel }
+      : { op: "delete", path: defaultModelPath },
+    defaultReasoningEffort
+      ? { op: "set", path: defaultEffortPath, value: defaultReasoningEffort }
+      : { op: "delete", path: defaultEffortPath },
+    // An inline array and an array of tables cannot define the same key.
+    { op: "delete", path: rowsPath },
+    rows.length > 0
+      ? { op: "setTableArray", path: rowsPath, value: rows }
+      : { op: "deleteTableArray", path: rowsPath },
+  ];
 }
 
 function normalizeHelperModelSettings(
