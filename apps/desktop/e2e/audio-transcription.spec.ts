@@ -136,7 +136,7 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
     const settings = page.getByRole("region", { name: "Audio transcription settings" });
     const enabled = settings.getByRole("switch", { name: "Enabled — Audio transcription" });
     const clear = settings.getByRole("button", { name: "Remove saved OpenAI project API key", exact: true });
-    const savedKey = settings.getByText("Saved in keychain", { exact: true });
+    const savedKey = settings.getByText(/aved in keychain$/);
     await expect(settings).toContainText("$0.017 per minute ($1.02 per hour)");
     const secret = settings.getByLabel("OpenAI project API key", { exact: true });
     await secret.fill(API_KEY);

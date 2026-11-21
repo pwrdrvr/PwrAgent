@@ -44,7 +44,18 @@ export function SecretField(props: {
   // input; state would not show the first write until the next render.
   const writingRef = useRef(false);
   const dirty = value.length > 0;
-  const view = describeSecretField(props.state, { dirty, saved });
+  // A write this row made stops vouching for the value once the store says
+  // it is gone, removed from another window or dropped by the keychain.
+  const [wasConfigured, setWasConfigured] = useState(props.state.configured);
+  if (wasConfigured !== props.state.configured) {
+    setWasConfigured(props.state.configured);
+    if (!props.state.configured) setSaved(false);
+  }
+  const view = describeSecretField(props.state, {
+    dirty: value.trim().length > 0,
+    saved,
+  });
+  const announce = saved && !dirty;
 
   const save = async (): Promise<void> => {
     const nextValue = value.trim();
@@ -135,7 +146,7 @@ export function SecretField(props: {
           >
             {view.commitLabel}
           </button>
-          {view.canDiscard ? (
+          {dirty ? (
             <button
               className="button button--ghost"
               disabled={props.disabled}
@@ -170,9 +181,10 @@ export function SecretField(props: {
             </span>
           ) : (
             <span
+              // Keyed so the answer to a write mounts as a new live region.
+              key={announce ? "announce" : "state"}
               className={`settings-secret__status is-${view.tone}`}
-              // Announced only as the answer to a write this row just made.
-              role={saved && !dirty ? "status" : undefined}
+              role={announce ? "status" : undefined}
             >
               <SecretStatusMark tone={view.tone} />
               {view.status}

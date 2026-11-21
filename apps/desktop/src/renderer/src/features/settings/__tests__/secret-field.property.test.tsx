@@ -55,6 +55,17 @@ describe("describeSecretField", () => {
     );
   });
 
+  it("answers a write with words the row did not show before it", () => {
+    fc.assert(
+      fc.property(arbState, (state) => {
+        const before = describeSecretField(state, { dirty: false, saved: false });
+        const after = describeSecretField(state, { dirty: false, saved: true });
+        expect(after.status).not.toBe(before.status);
+        expect(after.status).toContain("aved in keychain");
+      }),
+    );
+  });
+
   it("offers Remove only for a stored value this row can remove", () => {
     fc.assert(
       fc.property(arbState, arbRow, (state, row) => {
@@ -83,6 +94,68 @@ describe("describeSecretField", () => {
 
 describe("SecretField", () => {
   afterEach(cleanup);
+
+  const stored: DesktopSettingsSecretState = {
+    configured: true,
+    source: "keychain",
+    writable: true,
+  };
+
+  function field(state: DesktopSettingsSecretState) {
+    return (
+      <SecretField
+        label="Fixture key"
+        secret="telegramBotToken"
+        state={state}
+        onClearSecret={async () => true}
+        onReplaceSecret={async () => true}
+      />
+    );
+  }
+
+  it("reads differently after replacing a stored value, in a new live region", async () => {
+    const { input, row } = renderField(stored);
+    const before = within(row).getByText("Saved in keychain");
+
+    fireEvent.change(input, { target: { value: "fixture-value" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const after = await within(row).findByText("New value saved in keychain");
+    expect(after).toHaveAttribute("role", "status");
+    expect(after).not.toBe(before);
+  });
+
+  it("stops vouching for its own write once the store reports the value gone", async () => {
+    const view = render(field(stored));
+    const input = screen.getByLabelText("Fixture key");
+    const row = input.closest(".settings-secret") as HTMLElement;
+    fireEvent.change(input, { target: { value: "fixture-value" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await within(row).findByText("New value saved in keychain");
+
+    view.rerender(field({ configured: false, source: "unset", writable: true }));
+
+    expect(within(row).getByText("Not set")).toBeInTheDocument();
+    expect(
+      within(row).queryByRole("button", { name: "Remove saved Fixture key" }),
+    ).toBeNull();
+  });
+
+  it("does not ask for a save that whitespace alone cannot make", () => {
+    const { input, row } = renderField({
+      configured: false,
+      source: "unset",
+      writable: true,
+    });
+
+    fireEvent.change(input, { target: { value: "   " } });
+
+    expect(within(row).getByText("Not set")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Save" })).not.toHaveClass(
+      "button--primary",
+    );
+    expect(within(row).getByRole("button", { name: "Discard" })).toBeInTheDocument();
+  });
 
   it("states the stored state inside the control, for every state", () => {
     fc.assert(

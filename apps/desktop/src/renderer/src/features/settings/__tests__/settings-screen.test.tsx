@@ -7816,7 +7816,7 @@ describe("SettingsScreen", () => {
     );
     // Saved, but the snapshot does not show the secret yet: two of three.
     await within(signing.closest(".settings-secret") as HTMLElement).findByText(
-      "Saved in keychain",
+      "New value saved in keychain",
     );
     expect(testSettingsCredentials).not.toHaveBeenCalled();
 
@@ -7907,7 +7907,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(signing, { target: { value: "fixture-signing-secret" } });
     fireEvent.keyDown(signing, { key: "Enter" });
     await within(signing.closest(".settings-secret") as HTMLElement).findByText(
-      "Saved in keychain",
+      "New value saved in keychain",
     );
     await waitFor(() => {
       expect(testSettingsCredentials).toHaveBeenCalled();
@@ -8092,7 +8092,9 @@ describe("SettingsScreen", () => {
     });
     await waitFor(() => expect(botToken).toHaveValue(""));
     const botControls = botToken.closest(".settings-secret") as HTMLElement;
-    expect(within(botControls).getByRole("status")).toHaveTextContent("Saved");
+    expect(within(botControls).getByRole("status")).toHaveTextContent(
+      "New value saved in keychain",
+    );
 
     const appToken = screen.getByLabelText("App Token");
     fireEvent.change(appToken, { target: { value: "xapp-1-fake" } });

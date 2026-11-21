@@ -16,12 +16,12 @@ export type SecretFieldPresentation = {
   commitLabel: "Save" | "Replace";
   /** The commit button is the row's primary action only while a draft waits. */
   commitIsPrimary: boolean;
-  canDiscard: boolean;
   canRemove: boolean;
 };
 
 export function describeSecretField(
   state: Pick<DesktopSettingsSecretState, "configured" | "source" | "overriddenByEnv">,
+  /** `dirty`: a draft that could be saved, so not whitespace alone. */
   row: { dirty: boolean; saved: boolean },
 ): SecretFieldPresentation {
   const fromEnv = state.source === "env";
@@ -33,7 +33,6 @@ export function describeSecretField(
     placeholder: replaces ? "Paste a new value to replace it" : "Paste the value here",
     commitLabel,
     commitIsPrimary: row.dirty,
-    canDiscard: row.dirty,
     canRemove: replaces,
   } as const;
 
@@ -46,19 +45,25 @@ export function describeSecretField(
         : "Not saved yet. Press Enter or Save.",
     };
   }
-  if (fromEnv) {
+  if (fromEnv && !row.saved) {
     return {
       ...base,
       tone: "set",
       status: "Set by an environment variable. Unset it to manage the value here.",
     };
   }
-  if (stored && state.overriddenByEnv) {
+  if (fromEnv || (stored && state.overriddenByEnv)) {
     return {
       ...base,
       tone: "override",
-      status: "Saved in keychain. An environment variable overrides it.",
+      status: row.saved
+        ? "New value saved in keychain. An environment variable overrides it."
+        : "Saved in keychain. An environment variable overrides it.",
     };
+  }
+  if (row.saved) {
+    // Replacing a stored value must not read the same before and after.
+    return { ...base, tone: "set", status: "New value saved in keychain" };
   }
   if (stored) {
     return { ...base, tone: "set", status: "Saved in keychain" };
