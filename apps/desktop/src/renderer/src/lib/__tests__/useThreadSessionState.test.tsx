@@ -6415,7 +6415,7 @@ describe("useThreadSessionState", () => {
     await flushReactUpdates();
   });
 
-  it("isolates transient messages by thread and turn", async () => {
+  it("isolates transient messages by cached thread and turn", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex" | "acp:grok";
@@ -6463,11 +6463,13 @@ describe("useThreadSessionState", () => {
         }),
       {
         initialProps: {
-          currentThread: thread1,
+          currentThread: thread2,
         },
       }
     );
 
+    await waitForThreadHydration(result, "thread-2");
+    rerender({ currentThread: thread1 });
     await waitForThreadHydration(result, "thread-1");
 
     act(() => {
@@ -12543,7 +12545,7 @@ describe("useThreadSessionState", () => {
     await flushReactUpdates();
   });
 
-  it("tracks background activity without adding it to the focused transcript", async () => {
+  it("tracks an unopened thread's command separately from the focused transcript", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
@@ -12602,7 +12604,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.entries).toEqual([]);
-    expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBe(true);
+    expect(result.current.agentCommandThreadKeys["codex:thread-2"]).toBe(true);
   });
 
   it.each([false, true])("keeps live turn output for a cached thread (focused: %s)", async (focused) => {

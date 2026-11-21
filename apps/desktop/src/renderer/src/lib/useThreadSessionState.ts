@@ -159,6 +159,8 @@ type TurnUsageAccumulator = {
 
 type RecentlyCompletedTurnUsage = {
   accumulator?: TurnUsageAccumulator;
+  // Keep one accounting baseline when there is no cached transcript row.
+  entry?: AppServerThreadActivityEntry;
   turn: AppServerThreadTurnMetadata;
 };
 
@@ -3483,13 +3485,14 @@ function findKnownTurnUsageMetadata(
     ...(session.response?.replay.entries ?? []),
     ...session.optimisticEntries,
   ];
+  const recentUsageEntry = session.recentlyCompletedTurnUsage?.entry;
   const turnUsageEntry = entries.find(
     (candidate) =>
       candidate.turn?.id === turnId &&
       candidate.type === "activity" &&
       isTokenUsageActivityEntry(candidate) &&
       tokenUsageActivityScope(candidate) === "turn"
-  );
+  ) ?? (recentUsageEntry?.turn?.id === turnId ? recentUsageEntry : undefined);
   const entry = turnUsageEntry ?? entries.find((candidate) => candidate.turn?.id === turnId);
   const entryIsTurnUsage =
     entry?.type === "activity" &&
@@ -5141,7 +5144,9 @@ function retainSessionCache(
 
   for (const entry of Object.entries(sessions)) {
     const [threadKey, session] = entry;
-    if (threadKey === selectedThreadKey || session.interacted) {
+    // Background lifecycle state is protected while it drives an indicator.
+    // When it settles, it competes for the same bounded slots as view-only sessions.
+    if (threadKey === selectedThreadKey || session.interacted || session.thinkingSinceAt !== undefined) {
       interactedEntries.push(entry);
     } else {
       viewOnlyEntries.push(entry);
@@ -5432,6 +5437,7 @@ export function useThreadSessionState(params: {
     threadKey,
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
+  const openedTranscriptsRef = useRef(new Set<string>());
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
   const liveContextWindowVersionsRef = useRef(new Map<string, number>());
   const liveTranscriptVersionsRef = useRef(new Map<string, number>());
@@ -5495,6 +5501,11 @@ export function useThreadSessionState(params: {
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const key of openedTranscriptsRef.current) {
+      if (key !== selectedThreadKeyRef.current && !retainedThreadKeys.has(key)) {
+        openedTranscriptsRef.current.delete(key);
+      }
+    }
     for (const key of liveLifecycleVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveLifecycleVersionsRef.current.delete(key);
     }
@@ -6089,6 +6100,7 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    openedTranscriptsRef.current.add(threadKey);
     updateSession(threadKey, (current) => ({
       ...current,
       // A failed hydration is suppressed while the operator remains on the
@@ -6620,15 +6632,21 @@ export function useThreadSessionState(params: {
       // must not recreate this window's discarded transcript cache.
       if (managesRemoteRetentionRef.current && event.federationTarget?.scope === "remote"
         && isUnfocusedThread && !isRetainedRemoteThread) return;
+      // A local thread can run without any window opening it. Keep its
+      // lifecycle live, and let the first owner read supply its history.
+      const retainTranscript = !isUnfocusedThread || isRetainedRemoteThread
+        || (event.federationTarget ?? readRendererFederationTarget())?.scope === "remote"
+        || openedTranscriptsRef.current.has(targetThreadKey);
+      const isTranscriptUpdate = isThreadLocalTranscriptNotification(event.notification);
       const liveContextWindow = event.notification.method === "thread/contextWindow/updated"
         ? readContextWindowFill(event.notification.params)
         : undefined;
-      if (liveContextWindow) {
+      if (retainTranscript && liveContextWindow) {
         const previous = liveContextWindowVersionsRef.current.get(targetThreadKey) ?? 0;
         liveContextWindowVersionsRef.current.set(targetThreadKey, previous + 1);
       }
 
-      if (isThreadLocalTranscriptNotification(event.notification)) {
+      if (retainTranscript && isTranscriptUpdate) {
         const liveTranscriptVersion = (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
         liveTranscriptVersionsRef.current.set(targetThreadKey, liveTranscriptVersion);
         const itemId = liveNotificationItemId(event.notification);
@@ -6659,10 +6677,10 @@ export function useThreadSessionState(params: {
         });
       }
 
-      if (
+      if (retainTranscript && (
         event.notification.method === "thread/compacted"
         || event.notification.method === "thread/rewound"
-      ) {
+      )) {
         // Reads and pagination cursors from before the reset cannot rebuild
         // the new history. Invalidate them before scheduling a fresh read.
         hydrationsRef.current.set(targetThreadKey, transitionThreadHydration(
@@ -6686,7 +6704,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeTurnId: notificationTurnId ?? current.activeTurnId,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingRequest: event.notification,
             pendingStatusText: "Waiting for approval",
@@ -6703,7 +6721,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeTurnId: notificationTurnId ?? current.activeTurnId,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingStatusText: "Waiting for input",
             pendingUserInput,
@@ -6720,7 +6738,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeTurnId: notificationTurnId ?? current.activeTurnId,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingMcpInteraction,
             pendingStatusText: "Waiting for MCP approval",
@@ -6734,19 +6752,27 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             expectOwnUpdate: true,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingStatusText: "Compacting context",
           };
         }
 
+        // Usage still needs accounting, including task monitor usage on item completion.
+        if (!retainTranscript && isTranscriptUpdate
+          && event.notification.method !== "item/completed"
+          && event.notification.method !== "thread/contextWindow/updated"
+          && event.notification.method !== "thread/tokenUsage/updated") {
+          return current;
+        }
+
         // Queue admission can publish the authoritative user item before the
         // Composer's startTurn promise adds its optimistic row. Materialize
         // the started item; a later completion reconciles by the same id.
-        if (
+        if (retainTranscript && (
           event.notification.method === "item/started"
           || event.notification.method === "item/completed"
-        ) {
+        )) {
           const userMessageEntry = userMessageEntryFromItem(
             event.notification.params,
             current.response?.replay.entries ?? [],
@@ -7083,7 +7109,7 @@ export function useThreadSessionState(params: {
             activeTurnStartedAt: startedAt,
             backendReportedActive: true,
             expectOwnUpdate: true,
-            interacted: true,
+            interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             pendingTurnUsage: undefined,
           };
@@ -7132,7 +7158,7 @@ export function useThreadSessionState(params: {
           });
           const item = getNotificationItem(event.notification.params);
           const transientTaskMonitorItem = isTransientTaskMonitorItem(item);
-          const assistantMessageEntry = transientTaskMonitorItem
+          const assistantMessageEntry = !retainTranscript || transientTaskMonitorItem
             ? undefined
             : assistantMessageEntryFromCompletedItem({
                 itemParams: event.notification.params,
@@ -7206,6 +7232,11 @@ export function useThreadSessionState(params: {
               entry: taskMonitorUsageEntry,
               threadId: notificationThreadId,
             });
+          }
+          if (!retainTranscript) {
+            return current;
+          }
+          if (taskMonitorUsageEntry) {
             const nextResponse = appendThreadEntries(
               current.response,
               {
@@ -7300,9 +7331,6 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
-          const liveToolItemIds = new Set(
-            Object.keys(liveToolItemsRef.current[targetThreadKey] ?? {}),
-          );
           const completedTurnMatchesActive = terminalTurnMatchesActiveTurn(
             current,
             completedTurn?.id,
@@ -7312,6 +7340,49 @@ export function useThreadSessionState(params: {
               `${targetThreadKey}:${completedTurn.id}`
             );
           }
+          const completedUsageActivity = current.pendingUsageActivityEntry
+            && completedTurn && completedTurnMatchesActive
+            ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
+            : undefined;
+          const settledLifecycle = completedTurnMatchesActive ? {
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
+            backendReportedActive: false,
+            staleThinkingRecheckAt: undefined,
+            completionHydrationRetries: 0,
+            pendingAssistantMessage: undefined,
+            pendingMcpInteraction: undefined,
+            pendingRequest: undefined,
+            pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
+            ...(completedTurn ? {
+              recentlyCompletedTurnUsage: {
+                accumulator: current.pendingTurnUsage,
+                ...(!retainTranscript && completedUsageActivity ? { entry: completedUsageActivity } : {}),
+                turn: completedTurn,
+              },
+            } : {}),
+            pendingUserInput: undefined,
+            pendingStatusText: undefined,
+            transientMessage: undefined,
+          } : {};
+          persistFinalizedUsageEntry({
+            backend: event.backend,
+            desktopApi,
+            entry: completedUsageActivity,
+            threadId: notificationThreadId,
+          });
+          if (!retainTranscript) {
+            return {
+              ...current,
+              ...settledLifecycle,
+              error: undefined,
+              lastTouchedAt: nextLastTouchedAt,
+            };
+          }
+          const liveToolItemIds = new Set(
+            Object.keys(liveToolItemsRef.current[targetThreadKey] ?? {}),
+          );
           const completedTurnHasReview = hasReviewEntryForTurn(
             current.response,
             completedTurn?.id
@@ -7478,34 +7549,9 @@ export function useThreadSessionState(params: {
               didCompleteRetainedLiveEntry = true;
             }
           }
-          const completedUsageActivity =
-            current.pendingUsageActivityEntry &&
-            completedTurn &&
-            completedTurnMatchesActive
-              ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
-              : undefined;
-          persistFinalizedUsageEntry({
-            backend: event.backend,
-            desktopApi,
-            entry: completedUsageActivity,
-            threadId: notificationThreadId,
-          });
-
           return {
             ...current,
-            activeTurnId: completedTurnMatchesActive
-              ? undefined
-              : current.activeTurnId,
-            activeTurnStartedAt: completedTurnMatchesActive
-              ? undefined
-              : current.activeTurnStartedAt,
-            backendReportedActive: completedTurnMatchesActive
-              ? false
-              : current.backendReportedActive,
-            staleThinkingRecheckAt: completedTurnMatchesActive ? undefined : current.staleThinkingRecheckAt,
-            completionHydrationRetries: completedTurnMatchesActive
-              ? 0
-              : current.completionHydrationRetries,
+            ...settledLifecycle,
             error: undefined,
             expectOwnUpdate: true,
             hydratedUpdatedAt:
@@ -7536,38 +7582,7 @@ export function useThreadSessionState(params: {
                     completedUsageActivity
                   )
                 : remainingOptimisticEntries,
-            pendingAssistantMessage: completedTurnMatchesActive
-              ? undefined
-              : current.pendingAssistantMessage,
-            pendingMcpInteraction: completedTurnMatchesActive
-              ? undefined
-              : current.pendingMcpInteraction,
-            pendingRequest: completedTurnMatchesActive
-              ? undefined
-              : current.pendingRequest,
-            pendingUsageActivityEntry: completedTurnMatchesActive
-              ? undefined
-              : current.pendingUsageActivityEntry,
-            pendingTurnUsage: completedTurnMatchesActive
-              ? undefined
-              : current.pendingTurnUsage,
-            recentlyCompletedTurnUsage:
-              completedTurnMatchesActive && completedTurn
-                ? {
-                    accumulator: current.pendingTurnUsage,
-                    turn: completedTurn,
-                  }
-                : current.recentlyCompletedTurnUsage,
-            pendingUserInput: completedTurnMatchesActive
-              ? undefined
-              : current.pendingUserInput,
-            pendingStatusText: completedTurnMatchesActive
-              ? undefined
-              : current.pendingStatusText,
             response: nextResponse,
-            transientMessage: completedTurnMatchesActive
-              ? undefined
-              : current.transientMessage,
           };
         }
 
@@ -7886,10 +7901,10 @@ export function useThreadSessionState(params: {
             });
             usageEntry = completedUsage.entry ?? usageEntry;
             nextRecentlyCompletedTurnUsage = {
+              ...recentlyCompletedTurnUsage,
               accumulator:
                 completedUsage.accumulator
                 ?? recentlyCompletedTurnUsage.accumulator,
-              turn: recentlyCompletedTurnUsage.turn,
             };
           }
           if (!contextWindow && !usageEntry) {
@@ -7921,11 +7936,11 @@ export function useThreadSessionState(params: {
                 ? true
                 : current.expectOwnUpdate,
             interacted:
-              usageEntry && !holdUsageUntilTurnCompletes
+              retainTranscript && usageEntry && !holdUsageUntilTurnCompletes
                 ? true
                 : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
-            optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
+            optimisticEntries: retainTranscript && usageEntry && !holdUsageUntilTurnCompletes
               ? suppressUsageEntry
                 ? current.optimisticEntries
                 : mergeFinalizedUsageEntry(
