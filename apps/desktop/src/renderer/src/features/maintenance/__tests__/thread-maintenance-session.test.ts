@@ -75,7 +75,7 @@ describe("thread maintenance session, as a model", () => {
       { type: "status", status: { phase: "plan" } },
       { type: "minimize" },
     ]);
-    // Settings → Review… names a project; the session already open wins.
+    // Settings → Thread Maintenance… names a project; the session already open wins.
     const reopened = threadMaintenanceSessionReducer(minimized, { type: "launch", projectKey: "/src/harbor-web" });
     expect(reopened.session).toEqual({ id: minimized.session!.id, minimized: false, noticeHidden: false });
     expect(reopened.status).toEqual({ phase: "plan" });

@@ -397,6 +397,12 @@ export class ThreadArchiveSweeper {
       hibernation.skipped = "Hibernation is off";
       return;
     }
+    // Inspecting a checkout reads Git and measures its files, so a long pass
+    // reports as it goes; the row would otherwise read only "Running".
+    const progress = () => this.publish({
+      ...this.status, ...tally, hibernation: { ...hibernation, kept: { ...hibernation.kept } },
+    });
+    progress();
     const keep = (reason: string) => { hibernation.kept[reason] = (hibernation.kept[reason] ?? 0) + 1; };
     let candidates: ThreadArchiveCandidate[];
     try { candidates = await this.deps.listCandidates(this.abort.signal); }
@@ -416,6 +422,7 @@ export class ThreadArchiveSweeper {
       if (this.abort.signal.aborted) return;
       // Native children may own an independent checkout. Shared-path rules
       // protect inherited checkouts, regardless of where the parent lives.
+      let inspected = false;
       try {
         const listed = deps.keepReason(candidate, candidates, policy, Date.now(), owners);
         if (!listed.target) continue;
@@ -424,6 +431,7 @@ export class ThreadArchiveSweeper {
           keep(listed.keep);
           continue;
         }
+        inspected = true;
         const workspace = await deps.inspectWorkspace(listed.target, policy, this.abort.signal);
         if (this.abort.signal.aborted) return;
         if (workspace) {
@@ -439,6 +447,8 @@ export class ThreadArchiveSweeper {
           this.count(tally, "hibernation", error, { threadId: candidate.thread.id });
           this.deps.onError(error, candidate.thread.id);
         }
+      } finally {
+        if (inspected && !this.abort.signal.aborted) progress();
       }
     }
   }

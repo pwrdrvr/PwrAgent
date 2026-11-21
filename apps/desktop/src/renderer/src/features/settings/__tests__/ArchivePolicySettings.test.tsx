@@ -132,7 +132,7 @@ describe("ArchiveSweepField", () => {
     render(<ArchiveSweepField desktopApi={api} />);
     expect(await screen.findByText("Not run yet")).toBeInTheDocument();
     expect(screen.getByText(`First sweep about ${clock.format(NEXT_AT)}`)).toBeInTheDocument();
-    const runNow = screen.getByRole("button", { name: "Run now" });
+    const runNow = screen.getByRole("button", { name: "Sweep now" });
     fireEvent.click(runNow);
     await screen.findByText("Running");
     expect(runNow).toHaveAttribute("aria-disabled", "true");
@@ -193,6 +193,16 @@ describe("ArchiveSweepField", () => {
     expect(screen.getByText("Cleaned 498 of 498 archived worktrees. Protected 3.")).toBeInTheDocument();
   });
 
+  it("shows hibernation progress while the pass runs", async () => {
+    const { api, publish } = sweepApi({ running: false, deleted: 0, failed: 0 });
+    render(<ArchiveSweepField desktopApi={api} />);
+    await screen.findByText("Not run yet");
+    publish({ running: true, deleted: 0, failed: 0, hibernation: { checked: 12, hibernated: 3, kept: { "Recently active": 9 } } });
+    expect(screen.getByText("Checkouts: 12 checked, 3 hibernated.")).toBeInTheDocument();
+    publish({ running: true, deleted: 0, failed: 0, hibernation: { checked: 0, hibernated: 0, kept: {}, skipped: "Hibernation is off" } });
+    expect(screen.queryByText(/^Checkouts:/)).toBeNull();
+  });
+
   it("shows empty-folder progress", async () => {
     const { api, publish } = sweepApi({ running: false, deleted: 0, failed: 0 });
     render(<ArchiveSweepField desktopApi={api} />);
@@ -206,7 +216,7 @@ describe("ArchiveSweepField", () => {
     expect(screen.getByText(/Cleaned 259 of 259 empty worktree folders/)).toBeInTheDocument();
   });
 
-  it("opens Thread maintenance from Review… when App provides it", async () => {
+  it("opens Thread maintenance from Thread Maintenance… when App provides it", async () => {
     const { api } = sweepApi({ running: false, deleted: 0, failed: 0, finishedAt: FINISHED_AT, nextAt: NEXT_AT });
     const open = vi.fn();
     render(
@@ -214,14 +224,14 @@ describe("ArchiveSweepField", () => {
         <ArchiveSweepField desktopApi={api} />
       </ThreadMaintenanceLauncherContext.Provider>,
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Thread Maintenance…" }));
     expect(open).toHaveBeenCalledOnce();
   });
 
-  it("has no Review… button without a launcher", async () => {
+  it("has no Thread Maintenance… button without a launcher", async () => {
     const { api } = sweepApi({ running: false, deleted: 0, failed: 0, finishedAt: FINISHED_AT, nextAt: NEXT_AT });
     render(<ArchiveSweepField desktopApi={api} />);
-    await screen.findByRole("button", { name: "Run now" });
-    expect(screen.queryByRole("button", { name: "Review…" })).toBeNull();
+    await screen.findByRole("button", { name: "Sweep now" });
+    expect(screen.queryByRole("button", { name: "Thread Maintenance…" })).toBeNull();
   });
 });
