@@ -285,6 +285,14 @@ export type BoatSignInProgress =
   | { state: "waiting"; method: BoatSignInMethod; userCode: string; expiresAt: number }
   | { state: "failed"; error: string };
 
+/** A tunnel open on this computer into a port of a thread's sandbox. */
+export type BoatThreadPortForward = {
+  /** The port inside the sandbox. */
+  port: number;
+  /** Where it answers here: `http://127.0.0.1:<local port>`. */
+  url: string;
+};
+
 /** One of a thread's Boat sandboxes, as its panel shows it. */
 export type BoatThreadSandbox = {
   id: string;
@@ -293,10 +301,18 @@ export type BoatThreadSandbox = {
   type?: string;
   /** What Boat has billed for it so far. */
   dollars?: number;
+  /** The auto-stop length as last set, not the time left. */
   ttlSeconds?: number;
+  /**
+   * When Boat will stop it by itself (its `archiveAfter`), in epoch
+   * milliseconds. Absent when auto-stop is off or Boat did not say.
+   */
+  stopsAt?: number;
+  /** The tunnels open into it from this computer. */
+  forwards?: BoatThreadPortForward[];
 };
 
-export const BOAT_THREAD_SANDBOX_ACTIONS = ["stop", "delete"] as const;
+export const BOAT_THREAD_SANDBOX_ACTIONS = ["stop", "delete", "close_forward"] as const;
 export type BoatThreadSandboxAction = (typeof BOAT_THREAD_SANDBOX_ACTIONS)[number];
 
 export function isBoatThreadSandboxAction(value: unknown): value is BoatThreadSandboxAction {
@@ -308,7 +324,14 @@ export type ListThreadBoatSandboxesResponse = { sandboxes: BoatThreadSandbox[] }
 export type ChangeThreadBoatSandboxRequest = ListThreadBoatSandboxesRequest & {
   sandboxId: string;
   action: BoatThreadSandboxAction;
+  /** The sandbox port whose tunnel `close_forward` closes. */
+  port?: number;
 };
+
+/** A sandbox port, as `close_forward` names it. */
+export function isBoatSandboxPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65_535;
+}
 
 export type ConnectBoatRequest = { apiKey: string };
 export type StartBoatSignInRequest = { method: BoatSignInMethod };

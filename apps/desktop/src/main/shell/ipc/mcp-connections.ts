@@ -3,6 +3,7 @@ import {
   isMcpConnectionToolApproval,
   isBoatLinkTarget,
   isBoatSignInMethod,
+  isBoatSandboxPort,
   isBoatThreadSandboxAction,
   type ChangeThreadBoatSandboxRequest,
   type ListThreadBoatSandboxesRequest,
@@ -411,14 +412,16 @@ export function registerMcpConnectionIpcHandlers(
         || typeof request.backend !== "string"
         || typeof request.sandboxId !== "string"
         || !isBoatThreadSandboxAction(request.action)
+        || (request.action === "close_forward" && !isBoatSandboxPort(request.port))
       ) {
-        throw new Error("Name the Boat sandbox and whether to stop or delete it.");
+        throw new Error("Name the Boat sandbox and whether to stop or delete it, or which tunnel to close.");
       }
       return await service.changeThreadBoatSandbox({
         backend: request.backend,
         threadId: request.threadId,
         sandboxId: request.sandboxId,
         action: request.action,
+        ...(request.action === "close_forward" ? { port: request.port } : {}),
       });
     },
   );

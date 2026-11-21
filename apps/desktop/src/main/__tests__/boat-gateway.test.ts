@@ -76,7 +76,11 @@ function fakeBoat(acceptedKey = KEY) {
         url: `https://${segments[1]}-3000.on.boat.dev/?_token=t`,
       });
     }
-    return answer(200, { ok: true, sandbox: { id: segments[1], state: "ready", type: "small" } });
+    // `ttlSeconds` is the length as set; `archiveAfter` is when it stops.
+    return answer(200, {
+      ok: true,
+      sandbox: { id: segments[1], state: "ready", type: "small", ttlSeconds: 3600, archiveAfter: "2026-11-21T13:00:00Z" },
+    });
   };
   return { fetchFn, sent };
 }
@@ -318,7 +322,7 @@ describe("Boat through the MCP gateway", () => {
   });
 
   it("lets a window list, stop and delete only the sandboxes its thread created", async () => {
-    const { boat, call, registry, service } = harness();
+    const { boat, call, registry, service, tunnels } = harness();
     registry.setEnabled(BOAT, true);
     await service.connectBoat(KEY);
     const thread = (threadId: string) => ({ backend: "codex", threadId });
@@ -335,21 +339,50 @@ describe("Boat through the MCP gateway", () => {
     expect(mine.map((sandbox) => sandbox.id)).toEqual(["bx_0"]);
     expect(theirs.map((sandbox) => sandbox.id)).toEqual(["bx_1"]);
     expect(JSON.stringify(mine)).not.toContain(KEY);
+    // The panel's time left comes from Boat's deadline, not the configured length.
+    expect(mine[0]).toMatchObject({ ttlSeconds: 3600, stopsAt: Date.parse("2026-11-21T13:00:00Z") });
+
+    // Each thread sees the tunnels into its own sandboxes, under the sandbox.
+    await call("thread-a", "forward_port", { sandboxId: "bx_0", port: 3000 });
+    await call("thread-b", "forward_port", { sandboxId: "bx_1", port: 5432 });
+    const [aTunnel, bTunnel] = tunnels.tunnels;
+    const forwardsOf = async (threadId: string) =>
+      (await service.listThreadBoatSandboxes(thread(threadId))).sandboxes
+        .map((sandbox) => ({ id: sandbox.id, forwards: sandbox.forwards }));
+    await expect(forwardsOf("thread-a"))
+      .resolves.toEqual([{ id: "bx_0", forwards: [{ port: 3000, url: "http://127.0.0.1:40000" }] }]);
+    await expect(forwardsOf("thread-b"))
+      .resolves.toEqual([{ id: "bx_1", forwards: [{ port: 5432, url: "http://127.0.0.1:40001" }] }]);
 
     // The window's thread decides what it reaches, exactly as for an agent.
-    for (const action of ["stop", "delete"] as const) {
+    const windowFrom = boat.sent.length;
+    for (const action of ["stop", "delete", "close_forward"] as const) {
       const sent = boat.sent.length;
-      await expect(service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_1", action }))
-        .rejects.toThrow();
+      await expect(service.changeThreadBoatSandbox({
+        ...thread("thread-a"), sandboxId: "bx_1", action, ...(action === "close_forward" ? { port: 5432 } : {}),
+      })).rejects.toThrow();
       expect(boat.sent.slice(sent).filter((request) => request.method !== "GET")).toEqual([]);
     }
+    expect(bTunnel?.alive).toBe(true);
+
+    // Close ends only that tunnel; the sandbox keeps running.
+    const closed = await service.changeThreadBoatSandbox({
+      ...thread("thread-a"), sandboxId: "bx_0", action: "close_forward", port: 3000,
+    });
+    expect(aTunnel?.alive).toBe(false);
+    expect(closed.sandboxes.map((sandbox) => [sandbox.id, sandbox.forwards])).toEqual([["bx_0", undefined]]);
+    expect(boat.sent.some((request) => request.url.includes("bx_0/stop"))).toBe(false);
+    await expect(forwardsOf("thread-b"))
+      .resolves.toEqual([{ id: "bx_1", forwards: [{ port: 5432, url: "http://127.0.0.1:40001" }] }]);
 
     await service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_0", action: "stop" });
     expect(boat.sent.at(-2)).toMatchObject({ method: "POST", url: expect.stringContaining("/sandboxes/bx_0/stop") });
     await service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_0", action: "delete" });
     expect(boat.sent.some((request) => request.method === "DELETE" && request.url.endsWith("/sandboxes/bx_0")))
       .toBe(true);
-    expect(boat.sent.some((request) => request.url.includes("bx_1") && request.method !== "GET")).toBe(false);
+    expect(boat.sent.slice(windowFrom).some((request) => request.url.includes("bx_1") && request.method !== "GET"))
+      .toBe(false);
+    expect(bTunnel?.alive).toBe(true);
   });
 
   it("answers a window's delete of a sandbox Boat no longer has with the list, not an error", async () => {
