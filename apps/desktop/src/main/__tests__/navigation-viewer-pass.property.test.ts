@@ -28,6 +28,9 @@ const current = vi.hoisted(() => ({
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => current.store }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => current.registry }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
+// The synthetic /fixture projects are primary checkouts. Resolve their ownership
+// without disk I/O so the fixture can drain the pass through microtasks.
+vi.mock("../git-info/worktree-store", () => ({ resolveWorktreeRepositoryDirectory: async () => undefined }));
 vi.mock("../messaging/messaging-bindings-snapshot", () => ({ buildNavigationIndexMessagingBindings: async () => new Map() }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
   remoteThreadSummaries: () => current.cache, health: async () => ({ instanceId: "viewer" }),

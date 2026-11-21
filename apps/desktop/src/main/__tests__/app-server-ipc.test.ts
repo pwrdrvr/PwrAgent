@@ -1247,7 +1247,8 @@ vi.mock("../storage/desktop-overlay-store", () => ({
   }),
 }));
 
-vi.mock("../app-server/directory-registration-service", () => ({
+vi.mock(import("../app-server/directory-registration-service"), async (importOriginal) => ({
+  ...await importOriginal(),
   registerDirectoryFromDisk: registerDirectoryFromDiskService,
 }));
 

@@ -178,7 +178,6 @@ import {
   type MoveThreadToMainCheckoutResponse,
   type RecreateThreadWorktreeRequest,
   type RecreateThreadWorktreeResponse,
-  type LinkedDirectorySummary,
   type RenameThreadRequest,
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
@@ -365,7 +364,7 @@ import { isThreadPendingWakeInvalidation } from "@pwragent/shared/contracts/thre
 import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import { rankInboxThreadKeys } from "@pwragent/shared/inbox";
 import { resolveNewThreadBackend } from "@pwragent/shared/backend-selection";
-import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { linkedDirectoryForRegistration, registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { readWorktreeImage } from "../app-server/worktree-image-reader";
 import {
   disposeDesktopBackendRegistry,
@@ -1027,10 +1026,6 @@ function getRemoteNavigationSnapshotCacheKey(
     federationTarget: request.federationTarget,
     filter: request.filter ?? "",
   });
-}
-
-function toLinkedDirectoryPathId(value: string): string {
-  return path.resolve(value).replace(/\\/g, "/");
 }
 
 function reconcileRemoteLaunchpadBranch(
@@ -8169,14 +8164,8 @@ class DesktopAppServerService {
         };
       }
 
-      const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
-      const directory: LinkedDirectorySummary = {
-        id: directoryPathId,
-        kind: "local",
-        label: registered.directoryLabel,
-        path: directoryPathId,
-      };
-      await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await this.getOverlayStore().addLinkedDirectory({
+      const directory = linkedDirectoryForRegistration(registered);
+      await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.worktreePath ?? directory.path], async () => await this.getOverlayStore().addLinkedDirectory({
         backend,
         threadId: request.threadId,
         directory,

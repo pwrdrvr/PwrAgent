@@ -1530,10 +1530,12 @@ export type RegisterDirectoryFromDiskResponse =
   | {
       ok: true;
       /**
-       * Canonical Git root when detected, otherwise the selected folder
+       * Primary Git checkout when detected, otherwise the selected folder
        * path. The directoryKey uses this path with the `directory:` prefix.
        */
       directoryPath: string;
+      /** Selected linked checkout root, when it differs from the project path. */
+      checkoutPath?: string;
       directoryKey: string;
       directoryLabel: string;
       currentBranch?: string;

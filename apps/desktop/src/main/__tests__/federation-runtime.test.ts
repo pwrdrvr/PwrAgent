@@ -501,7 +501,7 @@ describe("DesktopFederationRuntime", () => {
     const registration = vi.spyOn(directoryRegistration, "registerDirectoryFromDisk").mockImplementation(async () => {
       fencedAtRegistration = fenced;
       await held;
-      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra",
+      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra", checkoutPath: "/owner/topic",
         launchpad: { directoryKey: "directory:/owner/extra", directoryKind: "directory", directoryLabel: "extra", directoryPath: "/owner/extra",
           backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
         defaults: { backend: "codex", executionMode: "default" } };
@@ -510,11 +510,15 @@ describe("DesktopFederationRuntime", () => {
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
       .mockReturnValue({ withThreadWorkspaceMutation, publishLocalEvent, withArchiveWorkspaceWrite: async (_paths: string[], work: () => Promise<unknown>) => await work() } as never);
     try {
-      const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/extra" });
+      const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/topic" });
       expect(fencedAtRegistration).toBe(true);
       release();
-      await expect(attaching).resolves.toMatchObject({ ok: true });
-      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function), ["/owner/extra"]);
+      const attached = await attaching;
+      expect(attached).toMatchObject({ ok: true, directory: { kind: "worktree", path: expect.stringMatching(/\/owner\/extra$/),
+        id: expect.stringMatching(/\/owner\/topic$/), worktreePath: expect.stringMatching(/\/owner\/topic$/) } });
+      expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "owner" }))
+        .toMatchObject({ extraLinkedDirectories: [attached.ok ? attached.directory : null] });
+      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function), ["/owner/topic"]);
       expect(fenced).toBe(false);
     } finally {
       release();

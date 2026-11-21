@@ -37,7 +37,7 @@ import {
   pullRequestRollupPriority,
   resolveLifecycleState,
 } from "@pwragent/shared/pull-request-rollup";
-import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import { canonicalizeNavigationPath, classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import {
   countNavigationStarMapFacets,
   passesNavigationStarMapFilters,
@@ -76,6 +76,8 @@ export type NavigationQueryIndex = {
   localInstanceId?: string;
   coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
+  /** Worktree directory keys folded into each primary project. */
+  worktreeProjectAliases?: Record<string, string[]>;
   threads: NavigationThreadSummary[];
   inputRequestThreadKeys?: ReadonlySet<string>;
   /** The observation clock value taken when this index's listing began. */
@@ -1253,13 +1255,27 @@ function buildChildCounts(
 
 function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationProjectionWork, includeChildCounts = true): ProjectionIndex {
   onWork?.("index", index.threads.length);
+  const checkoutProjects = new Map<string, NavigationDirectorySummary>();
+  const foldedProjects = new Map<string, NavigationDirectorySummary>();
+  for (const directory of index.directories) {
+    if (directory.checkoutPaths) {
+      for (const key of directory.threadKeys) checkoutProjects.set(key, directory);
+    }
+    for (const key of index.worktreeProjectAliases?.[directory.key] ?? []) foldedProjects.set(key, directory);
+  }
+  if (foldedProjects.size) {
+    for (const thread of index.threads) {
+      const primary = thread.linkedDirectories[0];
+      const project = primary && foldedProjects.get(`directory:${canonicalizeNavigationPath(primary.path)}`);
+      if (project) checkoutProjects.set(buildThreadIdentityKey(thread.source, thread.id), project);
+    }
+  }
   const maps = {
     threadsByIdentity: new Map(index.threads.map((thread) => [threadKey(thread), thread])),
     threadsByLegacyKey: buildThreadsByLegacyKey(index),
     parentCandidates: buildParentCandidates(index),
     repositories: repositoryIdentitiesByPath(index),
-    checkoutProjects: new Map(index.directories.flatMap((directory) =>
-      directory.checkoutPaths ? directory.threadKeys.map((key) => [key, directory] as const) : [])),
+    checkoutProjects,
   };
   return { ...maps, ...(includeChildCounts ? buildChildCounts(index.threads, maps, onWork)
     : { childCountByParent: new Map<string, number>(), viewerChildCountByParent: new Map<string, number>() }) };
