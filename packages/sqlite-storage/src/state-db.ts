@@ -950,6 +950,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
   WHERE status IN ('watching', 'dispatching');
 CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
   ON pr_status_watches(pr_key, status, lease_expires_at);
+-- Share the live-watch index between startup and thread-scoped retry reads.
+CREATE INDEX IF NOT EXISTS idx_pr_status_watches_retry
+  ON pr_status_watches(status, backend, thread_id, head_sha, pr_key)
+  WHERE status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal');
+-- Include the history tie-breaker so the thread seek stops at the limit.
+CREATE INDEX IF NOT EXISTS idx_pr_status_watches_history
+  ON pr_status_watches(backend, thread_id, updated_at DESC, watch_id DESC)
+  WHERE status IN ('dispatched', 'superseded', 'cancelled', 'failed');
 `;
 
 /**

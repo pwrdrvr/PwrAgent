@@ -19,6 +19,72 @@ const pr: PrSummary = {
   state: "passing", checkState: "passing", lifecycleState: "merged", headSha: "a".repeat(40),
 };
 
+it("selects saved observations, unobserved PRs, and ordered history from the same watch inventory", async () => {
+  const fixtures = [
+    { id: "saved", backend: "codex", threadId: identity.threadId, prNumber: 17, status: "pending_terminal" },
+    { id: "leased", backend: "codex", threadId: identity.threadId, prNumber: 31, status: "notifying_terminal" },
+    { id: "duplicate-event", backend: "claude", threadId: identity.threadId, prNumber: 17, status: "notifying_terminal" },
+    { id: "new-subscription", backend: "codex", threadId: identity.threadId, prNumber: 17, status: "watching" },
+    { id: "legacy-claim", backend: "codex", threadId: identity.threadId, prNumber: 2, status: "dispatching" },
+    { id: "other-thread", backend: "codex", threadId: "other", prNumber: 10, status: "watching" },
+    { id: "checks", backend: "codex", threadId: identity.threadId, prNumber: 8, status: "watching", checks: true },
+    { id: "history-a", backend: "codex", threadId: identity.threadId, prNumber: 11, status: "dispatched", endedAt: 7 },
+    { id: "history-b", backend: "codex", threadId: identity.threadId, prNumber: 12, status: "failed", endedAt: 7 },
+    { id: "history-c", backend: "codex", threadId: identity.threadId, prNumber: 13, status: "cancelled", endedAt: 4 },
+    { id: "history-d", backend: "codex", threadId: identity.threadId, prNumber: 14, status: "superseded", endedAt: 8, checks: true },
+    { id: "history-other-backend", backend: "claude", threadId: identity.threadId, prNumber: 15, status: "dispatched", endedAt: 9 },
+  ] as const;
+  await fc.assert(fc.asyncProperty(
+    fc.shuffledSubarray([...fixtures], { minLength: fixtures.length, maxLength: fixtures.length }),
+    fc.integer({ min: 1, max: 5 }),
+    async (inventory, limit) => {
+      const db = openInMemoryStateDb();
+      const store = new SqliteOverlayStore(db);
+      try {
+        const insert = db.raw.prepare(`INSERT INTO pr_status_watches (
+          watch_id, backend, thread_id, pr_key, head_sha, notify_on_success, notify_on_failure,
+          notify_on_merged, status, lease_owner, lease_expires_at, created_at, updated_at, payload
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?)`);
+        const rows = inventory.map((entry) => {
+          const { id, backend, threadId, prNumber, status } = entry;
+          const checks = "checks" in entry;
+          const snapshot = { ...pr, number: prNumber, url: `https://github.com/fixture/project/pull/${prNumber}` };
+          const saved = status === "pending_terminal" || status === "notifying_terminal";
+          const unobserved = status === "watching" || status === "dispatching";
+          const leased = status === "notifying_terminal" || status === "dispatching";
+          const updatedAt = "endedAt" in entry ? entry.endedAt : 3;
+          const watch = { watchId: id, backend, threadId, prNumber, prKey: buildPullRequestStatusKey(snapshot),
+            prUrl: snapshot.url, kind: checks ? "checks" : "terminal", headSha: checks ? pr.headSha! : "",
+            notifyOn: checks ? ["success"] : ["merged"], createdAt: 1, failureHandledByAutoFix: false };
+          const observation = saved ? { pr: snapshot, observedAt: 2 } : undefined;
+          insert.run(id, backend, threadId, watch.prKey, watch.headSha, Number(checks), Number(!checks),
+            status, leased ? "prior-owner" : null, leased ? 10 : null, updatedAt,
+            JSON.stringify({ ...watch, terminalObservation: observation }));
+          return { watch, status, updatedAt, unobserved, observation, checks };
+        });
+        for (const thread of [undefined, identity, { ...identity, backend: "claude" as const }]) {
+          const scoped = thread ? rows.filter(({ watch }) => watch.backend === thread.backend && watch.threadId === thread.threadId) : rows;
+          const observations = new Map(scoped.flatMap(({ observation }) =>
+            observation ? [[JSON.stringify(observation), observation] as const] : []));
+          expect(await store.listPendingPrTerminalWatchObservations(thread)).toEqual([...observations.values()]);
+          for (const unobservedOnly of [false, true]) {
+            const keys = scoped.filter((row) => !row.checks && (row.unobserved || (!unobservedOnly && row.observation)))
+              .map(({ watch }) => watch.prKey);
+            expect(await store.listPendingPrTerminalWatchPrKeys({ ...thread, unobservedOnly })).toEqual([...new Set(keys)].sort());
+          }
+          if (thread) {
+            const history = scoped.filter((row) => !row.unobserved && !row.observation)
+              .map(({ watch, status, updatedAt }) => ({ ...watch, status, updatedAt }))
+              .sort((a, b) => b.updatedAt - a.updatedAt || b.watchId.localeCompare(a.watchId))
+              .slice(0, limit);
+            expect(await store.listThreadPrStatusWatchHistory({ ...thread, limit })).toEqual(history);
+          }
+        }
+      } finally { db.close(); }
+    },
+  ), { numRuns: 25 });
+});
+
 async function assertRenamedPendingEvent(renames: number, expiredLease: boolean, outcome: "merged" | "closed"): Promise<void> {
   const db = openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);
