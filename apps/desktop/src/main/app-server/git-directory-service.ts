@@ -23,8 +23,9 @@ import type {
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared/contracts/settings";
 import { normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
 import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
+import { WORKTREE_FOLDER_CODEX_SUBFOLDER } from "@pwragent/shared/worktree-paths";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
-import { checkWorktreeFolder } from "../settings/worktree-folder-check";
+import { checkWorktreeFolder, markWorktreeFolder } from "../settings/worktree-folder-check";
 import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
@@ -284,26 +285,32 @@ function worktreesRootFor(
   if (storage === "user-home" && options?.backend === "codex") {
     // Codex Desktop lists only worktrees under $CODEX_HOME/worktrees, so
     // Codex threads leave it only when the operator opts them in.
-    if (folder?.includeCodex) return path.join(folder.directory, ".codex", "worktrees");
+    if (folder?.includeCodex) return path.join(folder.directory, WORKTREE_FOLDER_CODEX_SUBFOLDER);
     return codexHomeWorktreesRoot({
       codexHome: options.codexHome,
       homeDir: options.homeDir,
     });
   }
 
-  return storage === "user-home"
-    ? userHomeWorktreesRoot(folder?.directory ?? options?.homeDir)
-    : path.join(repoRoot, ".worktrees");
+  if (storage !== "user-home") return path.join(repoRoot, ".worktrees");
+  // The operator's folder is the root itself: worktrees go straight into it.
+  return folder ? folder.directory : userHomeWorktreesRoot(options?.homeDir);
 }
 
 /**
  * The operator's worktree folder is used as given, never created: with an
  * external drive unmounted, `mkdir -p /Volumes/<drive>/...` would silently
- * put worktrees on the startup disk. Only `.pwragent/worktrees` beneath an
- * existing folder is created.
+ * put worktrees on the startup disk. Only the Codex subfolder is created
+ * inside it. A folder that already holds other files is refused, and an
+ * accepted one is marked as PwrAgent's before its first worktree.
  */
 async function assertWorktreeBaseDirectoryAvailable(baseDirectory: string): Promise<void> {
   const status = await checkWorktreeFolder(baseDirectory);
+  if (status === "in-use") {
+    throw new Error(
+      `Worktree folder ${baseDirectory} already holds other files. Choose an empty folder in Settings → Worktrees.`,
+    );
+  }
   if (status === "not-responding") {
     throw new Error(
       `Worktree folder ${baseDirectory} is not responding. Check the drive or network share, or choose another folder in Settings → Worktrees.`,
@@ -386,8 +393,9 @@ export async function computeWorktreePath(params: {
   });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
   const baseTimestamp = params.timestamp ?? Date.now();
-  if (worktreeFolder && path.dirname(path.dirname(root)) === worktreeFolder.directory) {
+  if (worktreeFolder && (root === worktreeFolder.directory || path.dirname(root) === worktreeFolder.directory)) {
     await assertWorktreeBaseDirectoryAvailable(worktreeFolder.directory);
+    await markWorktreeFolder(worktreeFolder.directory);
   }
   await mkdir(root, { recursive: true });
 

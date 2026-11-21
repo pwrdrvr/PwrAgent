@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { setConfiguredWorktreeFolder } from "@pwragent/shared/worktree-paths";
 import type {
   ClearDesktopSettingsSecretRequest,
   DesktopChatReplyComposer,
@@ -43,6 +44,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   const pendingRuntimeRefreshVersionRef = useRef<number | null | undefined>(
     undefined,
   );
+  // Path recognition in this window must know the operator's worktree
+  // folder. Set while rendering, so children in this same pass see it.
+  setConfiguredWorktreeFolder(snapshot?.worktrees?.baseDirectory);
 
   const read = useCallback(async (): Promise<void> => {
     if (!desktopApi?.readSettings) {

@@ -14,18 +14,20 @@ describe("managed checkout ownership, with the filesystem as oracle", () => {
     temporary.push(base);
     const root = path.join(base, "worktrees");
     const inside = path.join(root, "id", "repo");
+    // A worktree folder's `codex` subfolder holds Codex threads' worktrees.
+    const codex = path.join(root, "codex", "id", "repo");
     const outside = path.join(base, "outside");
     const sibling = path.join(base, "worktrees-other", "repo");
-    for (const directory of [inside, outside, sibling]) await mkdir(directory, { recursive: true });
+    for (const directory of [inside, codex, outside, sibling]) await mkdir(directory, { recursive: true });
     const escape = path.join(root, "escape");
     const alias = path.join(base, "alias");
     await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
     await symlink(inside, alias, process.platform === "win32" ? "junction" : "dir");
     const cases = [
       [inside, true], [outside, false], [sibling, false], [escape, false], [alias, true],
-      [root, false], [path.join(root, "missing"), false],
+      [root, false], [path.join(root, "missing"), false], [codex, false],
     ] as const;
-    await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: cases.length - 1 }), { minLength: 7, maxLength: 20 }),
+    await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: cases.length - 1 }), { minLength: 8, maxLength: 20 }),
       async (order) => {
         for (const index of order) {
           const [checkout, managed] = cases[index]!;

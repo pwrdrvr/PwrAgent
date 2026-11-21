@@ -18,33 +18,47 @@ says when to read this document. Relative links were updated for this location.
 | --- | --- | --- |
 | `in-repo` | any | `<repo>/.worktrees` |
 | `user-home` (default) | Codex | `$CODEX_HOME/worktrees` (default `~/.codex/worktrees`) |
-| `user-home` + `base_directory_includes_codex` | Codex | `<folder>/.codex/worktrees` |
-| `user-home` | others | `<folder>/.pwragent/worktrees` |
+| `user-home` + folder + `base_directory_includes_codex` | Codex | `<folder>/codex` |
+| `user-home` + folder | others | `<folder>` |
+| `user-home`, no folder | others | `~/.pwragent/worktrees` |
 
-`<folder>` is `[worktrees] base_directory` when set, otherwise the home folder. Operators set it with
-**Worktree folder → Choose…** in Settings → Worktrees, for example to keep worktrees on an external drive
-instead of a small startup disk. **Use home folder** removes the key. It must be an absolute path. A
-build without this setting ignores the key and uses the home folder.
+`<folder>` is `[worktrees] base_directory`. Operators set it with **Worktree folder → Choose…** in
+Settings → Worktrees, for example to keep worktrees on an external drive instead of a small startup
+disk. **Use home folder** removes the key. It must be an absolute path. A build without this setting
+ignores the key and uses the home folder.
 
-- The folder names a parent, not the root: PwrAgent always appends `.pwragent/worktrees`. Path-based
-  recognition (`isToolManagedWorktreePath` in `@pwragent/shared`) matches that suffix anywhere, so thread
-  rows, project matching and maintenance need no new rules. Do not let the setting name the root directly.
-- `computeWorktreePath` never creates the folder itself, only `.pwragent/worktrees` beneath it. With an
-  external drive unmounted, `mkdir -p /Volumes/<drive>/…` would silently put worktrees on the startup disk,
-  so allocation throws "Worktree folder … is not available" instead.
+- The folder is the root: worktrees go straight into it as `<folder>/<hash>/<project>`, with no
+  `.pwragent/worktrees` in the path. Path-based recognition (`isToolManagedWorktreePath` and
+  `toolWorktreeRootOwner` in `@pwragent/shared/worktree-paths`) still matches that suffix anywhere, and
+  matches the folder through `setConfiguredWorktreeFolder`. The main process calls it at startup and on
+  every `[worktrees]` change (`desktop-settings-singleton.ts`); each window calls it from its settings
+  snapshot (`useDesktopSettings`). `<folder>/codex` decides before `<folder>`, so a Codex hash folder is
+  never taken for a PwrAgent worktree. A folder chosen earlier is no longer recognized by path; threads
+  keep their recorded worktree paths.
+- A folder that already holds other files would make its subfolders look like worktrees, so it is
+  refused: `checkWorktreeFolder` reports `in-use` unless the folder holds only hidden entries or carries
+  `WORKTREE_FOLDER_MARKER` (`.pwragent-worktrees`). Worktree creation writes that marker before the
+  first worktree, and maintenance counts the folder as a managed root only once it is marked. The
+  `codex` subfolder is never a managed root (`isInManagedWorktreeRoot`), as `$CODEX_HOME/worktrees`
+  never was.
+- `computeWorktreePath` never creates the folder itself, only the `codex` subfolder and hash folders in
+  it. With an external drive unmounted, `mkdir -p /Volumes/<drive>/…` would silently put worktrees on
+  the startup disk, so allocation throws "Worktree folder … is not available" instead.
 - The settings snapshot never stats the folder: on a stale network mount a stat can block the main
   process for the network timeout. Settings → Worktrees asks `settings:worktree-folder-check`
   (`checkWorktreeFolder` in `src/main/settings/worktree-folder-check.ts`) when it shows the folder and
-  whenever the window regains focus, and shows **Checking…**, **Available**, **Not available**, or
-  **Not responding** (no answer within 3 seconds). The check reads the configured folder itself; the
-  renderer cannot name a path. Worktree creation uses the same check, and a check joins a stat still
-  running for that folder, so a hung mount never ties up more than one libuv threadpool thread.
+  whenever the window regains focus, and shows **Checking…**, **Available**, **Not empty**,
+  **Not available**, or **Not responding** (no answer within 3 seconds). The check reads the configured
+  folder itself; the renderer cannot name a path. Worktree creation uses the same check, and a check
+  joins a stat still running for that folder, so a hung mount never ties up more than one libuv
+  threadpool thread.
 - Codex threads keep `$CODEX_HOME/worktrees` unless **Use for Codex threads too**
   (`base_directory_includes_codex = true`) is on. Codex Desktop lists an owner-marked worktree
   (`codex-thread.json` in its Git directory) only under `$CODEX_HOME/worktrees` (#164), so it does not
   show worktrees in the folder. The Codex CLI and App Server treat the folder as an ordinary `cwd`.
-- Changing the folder does not move existing worktrees. Archive and hibernation manage the home root and
-  the folder's root (`managedMaintenanceRoots` in `backend-registry-wiring.ts`), so older worktrees age out.
+- Changing the folder does not move existing worktrees. Archive and hibernation manage the home root,
+  the folder, and the folder's `.pwragent/worktrees` that earlier builds used (`managedMaintenanceRoots`
+  in `backend-registry-wiring.ts`), so older worktrees age out.
 - A worktree on a different volume from its repository is fine: git records absolute paths, and handoff
   moves changes with git commands, not filesystem renames.
 

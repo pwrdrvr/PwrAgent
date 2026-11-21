@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
-import { checkWorktreeFolder } from "../settings/worktree-folder-check";
+import { checkWorktreeFolder, WORKTREE_FOLDER_MARKER } from "../settings/worktree-folder-check";
 
 // Records every synchronous filesystem probe the settings service makes.
 vi.mock("node:fs", async (importOriginal) => {
@@ -56,18 +56,29 @@ describe("worktree folder availability", () => {
     expect(touched).toEqual([]);
   });
 
-  it("answers available, missing, or not responding", async () => {
+  it("answers available, in use, missing, or not responding", async () => {
     const root = tempRoot();
-    const file = path.join(root, "file");
-    writeFileSync(file, "");
-    expect(await checkWorktreeFolder(root)).toBe("available");
+    const folder = path.join(root, "Dev");
+    mkdirSync(path.join(folder, ".pwragent"), { recursive: true });
+    // Hidden entries only: an earlier build's `.pwragent/worktrees`, Finder's files.
+    writeFileSync(path.join(folder, ".DS_Store"), "");
+    expect(await checkWorktreeFolder(folder)).toBe("available");
+    writeFileSync(path.join(folder, "notes.txt"), "");
+    expect(await checkWorktreeFolder(folder)).toBe("in-use");
+    writeFileSync(path.join(folder, WORKTREE_FOLDER_MARKER), "");
+    expect(await checkWorktreeFolder(folder)).toBe("available");
     expect(await checkWorktreeFolder(path.join(root, "unplugged"))).toBe("missing");
-    expect(await checkWorktreeFolder(file)).toBe("missing");
-    const hung = await checkWorktreeFolder(root, {
+    expect(await checkWorktreeFolder(path.join(folder, "notes.txt"))).toBe("missing");
+    const hungStat = await checkWorktreeFolder(root, {
       timeoutMs: 20,
       statDirectory: () => new Promise(() => {}),
     });
-    expect(hung).toBe("not-responding");
+    expect(hungStat).toBe("not-responding");
+    const hungList = await checkWorktreeFolder(root, {
+      timeoutMs: 20,
+      readDirectory: () => new Promise(() => {}),
+    });
+    expect(hungList).toBe("not-responding");
   });
 
   it("joins a stat that is still running instead of starting another", async () => {
