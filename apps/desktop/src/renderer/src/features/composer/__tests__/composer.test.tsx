@@ -7488,10 +7488,13 @@ describe("Composer", () => {
     function fixture() {
       const signal = { current: undefined as AbortSignal | undefined };
       const finishCapture = vi.fn(async () => {});
+      const playReadyTone = vi.fn();
       let receive: ((event: DictationEvent) => void) | undefined;
-      vi.mocked(startDictationCapture).mockReset().mockImplementation(async (abort) => {
+      vi.mocked(startDictationCapture).mockReset().mockImplementation(async (abort, onAudio) => {
         signal.current = abort;
-        return { finish: finishCapture };
+        // Listening needs audio from the microphone, not only an open device.
+        onAudio(new Uint8Array(2));
+        return { finish: finishCapture, playReadyTone };
       });
       const dictation = {
         start: vi.fn(async (_id: string) => {}),
@@ -7504,7 +7507,7 @@ describe("Composer", () => {
         },
       };
       return {
-        signal, finishCapture, dictation,
+        signal, finishCapture, playReadyTone, dictation,
         delta: (text: string) => receive?.({ id: dictation.start.mock.calls.at(-1)![0], kind: "delta", text }),
         props: {
           backends: [backendSummary("codex")],
@@ -7613,7 +7616,9 @@ describe("Composer", () => {
 
       const reply = screen.getByRole("textbox", { name: "Reply" });
       fireEvent.change(reply, { target: { value: "/fork " } });
-      fireEvent.keyDown(reply, { key: "Enter" });
+      // Enter finishes live dictation instead of submitting; Send still forks.
+      if (phase === "listening") await clickButton("Fork");
+      else fireEvent.keyDown(reply, { key: "Enter" });
       expect(onForkThread).toHaveBeenCalledOnce();
       if (phase === "listening") {
         expect(screen.getByRole("button", { name: "Stop dictation" })).toBeEnabled();
@@ -7627,13 +7632,94 @@ describe("Composer", () => {
       expect(screen.getByRole("button", { name: "Dictate with OpenAI" })).toBeEnabled();
     });
 
+    // Enter belongs to dictation while a transcript is pending: it never
+    // starts a turn with whatever the draft happens to hold.
+    it.each([
+      ["connecting", "an empty draft"],
+      ["connecting", "a typed draft"],
+      ["listening", "an empty draft"],
+      ["listening", "a typed draft"],
+      ["finishing", "an empty draft"],
+      ["finishing", "a typed draft"],
+    ] as const)("never submits on Enter while %s with %s", async (phase, content) => {
+      const { dictation, props, playReadyTone } = fixture();
+      const start = createDeferred<void>();
+      const finish = createDeferred<string>();
+      if (phase === "connecting") dictation.start.mockReturnValue(start.promise);
+      dictation.finish.mockReturnValue(finish.promise);
+      render(<Composer {...props} />);
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      if (content === "a typed draft") fireEvent.change(reply, { target: { value: "Existing draft" } });
+      await clickButton("Dictate with OpenAI");
+      if (phase !== "connecting") {
+        await screen.findByRole("button", { name: "Stop dictation" });
+        expect(playReadyTone).toHaveBeenCalledOnce();
+      }
+      if (phase === "finishing") {
+        await clickButton("Stop dictation");
+        await waitFor(() => expect(dictation.finish).toHaveBeenCalledOnce());
+      }
+
+      fireEvent.keyDown(reply, { key: "Enter" });
+      expect(props.desktopApi.startTurn).not.toHaveBeenCalled();
+      if (phase === "connecting") {
+        expect(dictation.finish).not.toHaveBeenCalled();
+        return;
+      }
+      // One Enter stops a listening session; a second cannot finish it twice.
+      await waitFor(() => expect(dictation.finish).toHaveBeenCalledOnce());
+      fireEvent.keyDown(reply, { key: "Enter" });
+      await act(async () => { finish.resolve("Final transcript"); });
+      expect(dictation.finish).toHaveBeenCalledOnce();
+      expect(props.desktopApi.startTurn).not.toHaveBeenCalled();
+      expect(reply).toHaveTextContent("Final transcript");
+    });
+
+    it("returns the keyboard to the end of the draft after the Stop button inserts a transcript", async () => {
+      const { props } = fixture();
+      render(<Composer {...props} />);
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.change(reply, { target: { value: "Existing draft" } });
+      await clickButton("Dictate with OpenAI");
+      await screen.findByRole("button", { name: "Stop dictation" });
+      const stop = screen.getByRole("button", { name: "Stop dictation" });
+      act(() => stop.focus());
+      await clickButton("Stop dictation");
+      await waitFor(() => expect(reply).toHaveTextContent("Final transcript"));
+      // Tiptap applies queued focus on the next animation frame.
+      await act(async () => { await new Promise(requestAnimationFrame); });
+      expect(reply).toHaveFocus();
+      const selection = window.getSelection();
+      expect(selection?.isCollapsed).toBe(true);
+      expect(selection?.anchorNode?.textContent).toBe("Final transcript");
+      expect(selection?.anchorOffset).toBe("Final transcript".length);
+    });
+
+    it("dictates into a thread that a remote instance owns", async () => {
+      const { dictation, props } = fixture();
+      const target = { scope: "remote" as const, instanceId: "owner" };
+      render(
+        <Composer
+          {...props}
+          thread={{ ...props.thread, federation: {
+            instanceLabel: "Owner",
+            ref: { backend: "codex", threadId: props.thread.id, target },
+          } }}
+        />,
+      );
+      await clickButton("Dictate with OpenAI");
+      await clickButton("Stop dictation");
+      await waitFor(() => expect(dictation.finish).toHaveBeenCalledOnce());
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent("Final transcript"));
+    });
+
     it("places live dictation feedback inside the shrinkable band", async () => {
       const { props, delta } = fixture();
       render(<Composer {...props} />);
       await clickButton("Dictate with OpenAI");
       await screen.findByRole("button", { name: "Stop dictation" });
       act(() => delta("Live words"));
-      expect(screen.getByText("Listening…").closest(".composer__band")).toContainElement(
+      expect(screen.getByText(/^Listening…/).closest(".composer__band")).toContainElement(
         screen.getByLabelText("Live transcript"),
       );
     });

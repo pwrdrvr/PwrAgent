@@ -405,6 +405,13 @@ import { useComposerDictation } from "./useComposerDictation";
 import { ComposerDictationFeedback } from "./ComposerDictationFeedback";
 import { DICTATION_PRICE } from "../../../../shared/audio-transcription";
 
+function isEditingOutsideComposer(): boolean {
+  const focused = document.activeElement;
+  return focused instanceof HTMLElement
+    && focused.matches("input, textarea, select, [contenteditable='true']")
+    && !focused.closest("form.composer");
+}
+
 export type ComposerProps = {
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
@@ -6464,14 +6471,32 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
-  const dictationApi = props.dictationAvailable && !props.composerCovered
-    && filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
+  // Dictation is the viewer's: this machine's microphone and key fill a local
+  // draft, so a thread owned by a remote instance dictates the same way.
+  const dictationApi = props.dictationAvailable && !props.composerCovered && !isReviewComposerOpen
     ? props.desktopApi?.dictation
     : undefined;
   const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) =>
     activeComposerScopeKeyRef.current === composerScopeKey
-    && inputRef.current?.appendPlainText(text) === true,
+    // The caret lands after the transcript unless the operator has since
+    // started typing in another field.
+    && inputRef.current?.appendPlainText(text, { focusEnd: !isEditingOutsideComposer() }) === true,
   );
+  const toggleDictation = (): void => {
+    // Starting moves the keyboard into the draft, where Enter stops dictation.
+    if (dictation.phase === "idle") inputRef.current?.focus({ synchronous: true });
+    void dictation.toggle();
+  };
+  /**
+   * Enter never submits a draft whose transcript is still pending: it finishes
+   * dictation, and the next Enter sends. Send stays a deliberate way to send
+   * the existing draft while dictation continues.
+   */
+  const finishDictationInsteadOfSubmitting = (): boolean => {
+    if (dictation.phase === "idle") return false;
+    if (dictation.phase === "listening") void dictation.toggle();
+    return true;
+  };
   const dictationLabel = dictation.phase === "idle" ? "Dictate with OpenAI"
     : dictation.phase === "connecting" ? "Cancel dictation"
       : dictation.phase === "listening" ? "Stop dictation"
@@ -13157,6 +13182,11 @@ function useComposerController(props: ComposerProps) {
         return;
       }
 
+      if (event.key === "Enter" && !event.shiftKey && !event.altKey && finishDictationInsteadOfSubmitting()) {
+        event.preventDefault();
+        return;
+      }
+
       if (!hasAutocompleteOptions) {
         const liveHasComposerContent = Boolean(
           (inputRef.current?.value ?? draft).trim() ||
@@ -13978,7 +14008,12 @@ function useComposerController(props: ComposerProps) {
         );
       })}
 
-      <ComposerDictationFeedback phase={dictation.phase} text={dictation.text} error={dictation.error} />
+      <ComposerDictationFeedback
+        phase={dictation.phase}
+        text={dictation.text}
+        error={dictation.error}
+        onLevel={dictation.onLevel}
+      />
 
       {/* Last in the band, nearest the input it describes. Hidden once the
           launchpad is submitted: the starting thread is no longer a draft
@@ -15971,7 +16006,7 @@ function useComposerController(props: ComposerProps) {
         data-tooltip={dictation.phase === "idle" ? `Dictate with OpenAI · ${DICTATION_PRICE}` : dictationLabel}
         disabled={dictation.phase === "finishing"
           || (dictation.phase === "idle" && (launchpadSubmitting || forking))}
-        onClick={() => void dictation.toggle()}
+        onClick={toggleDictation}
       >
         <MicIcon size={15} aria-hidden="true" />
       </button>
