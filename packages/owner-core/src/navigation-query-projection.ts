@@ -11,6 +11,9 @@ import type {
   NavigationStarMapFacetCounts,
   NavigationDirectorySummary,
   NavigationDirectoryRow,
+  NavigationDirectoryGitStatus,
+  NavigationDirectoryGitProof,
+  NavigationDirectoryGitRevisions,
   NavigationIdentity,
   NavigationQuery,
   NavigationQueryCoverage,
@@ -46,7 +49,7 @@ import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-
 import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import { textMatchesJumpQuery } from "@pwragent/shared/jump-search-text";
 import { navigationWorkingStatePath } from "@pwragent/shared/navigation-query-events";
-import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
+import { DIRECTORY_GIT_PROOF_MAX_KEYS, DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH, readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import {
   navigationAttentionIdentity,
   type NavigationAttentionOrder,
@@ -78,6 +81,8 @@ export type NavigationQueryIndex = {
   directories: NavigationDirectorySummary[];
   /** Worktree directory keys folded into each primary project. */
   worktreeProjectAliases?: Record<string, string[]>;
+  /** The checkout supplying fallback repository identity for a synthesized parent project. */
+  worktreeRepositorySources?: Record<string, { key: string; repositoryRevision?: string }>;
   threads: NavigationThreadSummary[];
   inputRequestThreadKeys?: ReadonlySet<string>;
   /** The observation clock value taken when this index's listing began. */
@@ -632,10 +637,7 @@ function projectNavigationRow(params: {
   };
 }
 
-function projectDirectoryGitStatus(
-  directory: NavigationDirectorySummary,
-): NavigationDirectoryRow["gitStatus"] {
-  const status = directory.gitStatus;
+function projectDirectoryGitStatus(status: NavigationDirectoryGitStatus | undefined): NavigationDirectoryRow["gitStatus"] {
   if (!status) {
     return undefined;
   }
@@ -659,6 +661,22 @@ function projectDirectoryGitStatus(
         }
       : {}),
   };
+}
+
+export function navigationDirectoryRepositoryRevision(status: NavigationDirectoryGitStatus | undefined): string | undefined {
+  const remotes = status?.remoteRepositories;
+  if ((status?.originRepository?.length ?? 0) > 1024
+    || (remotes && (remotes.length > 32 || remotes.some((remote) => remote.length > 1024)))) return undefined;
+  return hashValue(["repository", status?.originRepository, remotes]);
+}
+
+/** Compare the current write with the serving snapshot, independently of prior notifications or writers. */
+export function navigationDirectoryGitRevisions(status: NavigationDirectoryGitStatus | undefined): NavigationDirectoryGitRevisions | undefined {
+  const repository = navigationDirectoryRepositoryRevision(status);
+  if (!repository) return undefined;
+  const descriptor = projectDirectoryGitStatus(status);
+  if (Object.values(descriptor ?? {}).some((value) => typeof value === "string" && value.length > 1024)) return undefined;
+  return { version: 1, repository, descriptor: hashValue(["descriptor", repository, descriptor]) };
 }
 
 function buildDirectoryRows(params: {
@@ -696,7 +714,7 @@ function buildDirectoryRows(params: {
       if (isOrdinaryThread(thread)) unpinnedThreadCount += 1;
       for (const child of children.get(key) ?? []) pending.push(child);
     }
-    const gitStatus = projectDirectoryGitStatus(directory);
+    const gitStatus = projectDirectoryGitStatus(directory.gitStatus);
     // A checkout reads its own remotes; a placeholder carries the peer's.
     const repositoryKey = directory.gitStatus?.originRepository ?? directory.repositoryKey;
     const repositoryKeys = directory.gitStatus?.remoteRepositories?.length
@@ -1346,7 +1364,7 @@ function projectionMetadataDependencies(params: {
   const { kind } = request.query;
   if (index.coverage?.state !== "complete") return undefined;
   const viewer = request.inventory === "viewer";
-  const ownerSidebar = request.inventory === "owner" && request.consumer === "main-sidebar";
+  const ownerSidebar = !viewer && request.consumer === "main-sidebar";
   if (kind !== "directory" && kind !== "exact"
     && !(viewer && kind === "directory-index") && !(ownerSidebar && kind === "children")) return undefined;
   if (!viewer && !ownerSidebar) return undefined;
@@ -1372,14 +1390,70 @@ function projectionMetadataDependencies(params: {
     ...(ownerSidebar ? { workingStatePaths: [...workingStatePaths].sort() } : {}) });
 }
 
+function collectionDirectoryGitProof(params: {
+  selected: readonly NavigationThreadSummary[];
+  descriptors: readonly NavigationDirectorySummary[];
+  index: NavigationQueryIndex;
+  projection: ProjectionIndex;
+}): NavigationDirectoryGitProof | undefined {
+  // Bound optional work as well as the wire representation. Large collections
+  // keep ordinary invalidation. A truncated list can never exclude a write.
+  const { selected, descriptors, index, projection } = params;
+  if (selected.length > 512 || descriptors.length > DIRECTORY_GIT_PROOF_MAX_KEYS) return undefined;
+  const dirs = new Map<NavigationDirectorySummary, "descriptor" | "repository">();
+  const paths = new Set<string>();
+  let remainingLinks = 512;
+  for (const dir of descriptors) dirs.set(dir, "descriptor");
+  for (const thread of selected) {
+    if (thread.federation) continue;
+    const checkout = checkoutProjectForThread(thread, projection.checkoutProjects);
+    if (checkout && !dirs.has(checkout)) dirs.set(checkout, "repository");
+    remainingLinks -= thread.linkedDirectories.length;
+    if (dirs.size > DIRECTORY_GIT_PROOF_MAX_KEYS || remainingLinks < 0) return undefined;
+    for (const link of thread.linkedDirectories) {
+      const descriptor = classifyDirectory(link);
+      if (descriptor.kind !== "directory") continue;
+      paths.add(link.path);
+      if (descriptor.path) paths.add(descriptor.path);
+      if (paths.size > 64) return undefined;
+    }
+  }
+  // Mirror both path lookups in withRepositoryIdentities, even for a
+  // checkout whose first origin may be added after this page is served.
+  if (paths.size) {
+    if (index.directories.length > 512) return undefined;
+    for (const dir of index.directories) {
+      if (dir.path && paths.has(dir.path) && !dirs.has(dir)) dirs.set(dir, "repository");
+      if (dirs.size > DIRECTORY_GIT_PROOF_MAX_KEYS) return undefined;
+    }
+  }
+  const directories: Array<readonly [string, string]> = [];
+  for (const [dir, part] of dirs) {
+    if (!dir.key || dir.key.length > DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH) return undefined;
+    const revisions = navigationDirectoryGitRevisions(dir.gitStatus);
+    if (!revisions) return undefined;
+    directories.push(Object.freeze([dir.key, revisions[part]] as const));
+    const source = index.worktreeRepositorySources?.[dir.key];
+    if (source) {
+      if (!source.repositoryRevision || source.key.length > DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH) return undefined;
+      directories.push(Object.freeze([source.key, source.repositoryRevision] as const));
+    }
+    if (directories.length > DIRECTORY_GIT_PROOF_MAX_KEYS) return undefined;
+  }
+  directories.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  return Object.freeze({ version: 1, directories: Object.freeze(directories) });
+}
+
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
   attentionOrder?: NavigationAttentionOrder;
   onIndexWork?: NavigationProjectionWork;
   deferPullRequests?: boolean;
-}): NavigationQueryMaterialization {
+  includeDirectoryGitProof?: boolean;
+}): NavigationQueryMaterialization & { directoryGitProof?: NavigationDirectoryGitProof } {
   const query = params.request.query;
+  const inventory = params.request.inventory ?? "owner";
   if (query.kind === "model-inventory") {
     const owned = params.index.threads.filter((thread) => isStarMapOwnerThread(thread)
       && (!params.request.backend || params.request.backend === "all" || params.request.backend === thread.source));
@@ -1457,7 +1531,7 @@ export function projectNavigationQuery(params: {
   // native parent's complete order as a scalar, without exporting its full
   // subthreadOrder collection or depending on viewer pin summaries.
   const siblingOrders = new Map<string, number>();
-  if (params.request.inventory === "owner" && query.kind === "exact") {
+  if (inventory === "owner" && query.kind === "exact") {
     const parents = new Map<string, NavigationThreadSummary>();
     for (const thread of selectedThreads) {
       const parent = parentIdentity(thread, parentCandidates);
@@ -1533,11 +1607,24 @@ export function projectNavigationQuery(params: {
   const exactDescriptor = query.kind === "exact" && selectedThreads.length
     ? params.index.directories.find((directory) => directory.threadKeys.some((key) => selectedThreads[0] === threadsByLegacyKey.get(key))) : undefined;
   const descriptor = query.kind === "exact" ? exactDescriptor : scopedDirectory;
+  const indexedDirectories = query.kind === "directory-index" ? selectIndexedDirectories(params.index.directories, query) : undefined;
+  // A mixed viewer can place remote pins using local project metadata. Its
+  // authored row set alone cannot exclude a change to that placement.
+  const directoryGitProof = params.includeDirectoryGitProof && snapshot && params.index.coverage?.state === "complete"
+    && params.request.consumer === "main-sidebar"
+    && (inventory === "owner" || (snapshot.rowOwners?.length === 0
+      && !(query.kind === "exact" && query.resolveFromOwners)))
+    && (query.kind === "directory" || query.kind === "children" || query.kind === "exact" || query.kind === "lens"
+      || (inventory === "owner" && query.kind === "group-members") || indexedDirectories)
+    ? collectionDirectoryGitProof({ selected: indexedDirectories ? [] : selectedThreads,
+        descriptors: indexedDirectories ?? (descriptor ? [descriptor] : []), index: params.index, projection: prepared })
+    : undefined;
   const metadataDependencies = projectionMetadataDependencies({ index: params.index, request: params.request,
     selectedThreads, countsThreads, descriptor, threadsByLegacyKey });
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     ...(metadataDependencies ? { metadataDependencies } : {}),
+    ...(directoryGitProof ? { directoryGitProof } : {}),
     // Both pages count every owner thread, so both can say which providers
     // the owner uses. Provider chips hide while that is a single provider.
     counts: countsForThreads(countsThreads, {
@@ -1564,8 +1651,8 @@ export function projectNavigationQuery(params: {
     ...(includeDirectories ? { collectionKind: "directories" as const } : {}),
     ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
     directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index, checkoutProjects)
-      : query.kind === "directory-index" ? buildDirectoryRows({
-        snapshot: { ...params.index, directories: selectIndexedDirectories(params.index.directories, query) },
+      : indexedDirectories ? buildDirectoryRows({
+        snapshot: { ...params.index, directories: indexedDirectories },
         threadsByLegacyKey,
         parentCandidates,
       }) : [],

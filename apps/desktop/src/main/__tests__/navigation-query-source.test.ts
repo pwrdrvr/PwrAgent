@@ -46,7 +46,8 @@ import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
-import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
+import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
+import { navigationDirectoryGitRevisions, projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 
 function createSource(coverage: "complete" | "checking" | "degraded" = "complete") {
   let finish!: () => void;
@@ -118,7 +119,7 @@ it("publishes the repository once when a same-named worktree has a saved project
       }));
       mocks.store.readDirectoryGitStatusCache.mockResolvedValue({
         [repoKey]: { gitStatus: { currentBranch: "main" } },
-        [worktreeKey]: { gitStatus: { currentBranch: "topic" } },
+        [worktreeKey]: { gitStatus: { currentBranch: "topic", originRepository: repositoryKey } },
       });
 
       const index = await source.read();
@@ -129,6 +130,35 @@ it("publishes the repository once when a same-named worktree has a saved project
       expect(projects.map((row) => row.path)).toEqual([repo]);
       expect(findPeerCounterpartDirectory({ kind: "directory", label: "Project", repositoryKey }, projects))
         .toMatchObject({ key: repoKey, counts: { total: 1 }, gitStatus: { currentBranch: "main" }, pinnedRank: "1024", directoryThreadsCollapsed: true });
+      const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "owner", query: { kind: "directory-index" } };
+      const pins: NavigationQueryRequest = { ...request, query: { kind: "group-members", roots: [{ backend: "codex", threadId: thread.id }] } };
+      const store = new NavigationQueryStore();
+      const read = vi.fn((sent: NavigationQueryRequest) => store.readPage({ request: sent, scopeKey: "worktree", loadIndex: () => source.read() }));
+      const window = new NavigationWindowQueries({ getNavigationQueryPage: read });
+      try {
+        window.setDemand(new Map([["projects", request], ["pins", pins]]));
+        await window.refresh();
+        const moved = "github.com/example/moved";
+        for (const [originRepository, changesOrigin] of [[repositoryKey, false], [moved, true], [moved, false]] as const) {
+          const gitStatus = { currentBranch: "feature", originRepository };
+          mocks.store.readDirectoryGitStatusCache.mockResolvedValue({
+            [repoKey]: { gitStatus: { currentBranch: "main" } }, [worktreeKey]: { gitStatus },
+          });
+          const event: AgentEvent = { backend: "codex", notification: { method: "navigation/directoryGitStatus/updated",
+            params: { directoryKey: worktreeKey, fetchedAt: 1, gitStatus, directoryGitRevisions: navigationDirectoryGitRevisions(gitStatus) } } };
+          for (const listener of source.listeners) listener(event);
+          read.mockClear();
+          window.invalidate(undefined, undefined, event);
+          await window.refresh(undefined, undefined, true);
+          const fresh = projectNavigationQuery({ index: await source.read(), request }).directories[0]!;
+          expect(fresh.repositoryKey).toBe(parentRegistered ? repositoryKey : originRepository);
+          expect(window.getSnapshot().resources.get("projects")!.state.page?.directories?.[0]?.repositoryKey).toBe(fresh.repositoryKey);
+          expect(window.getSnapshot().resources.get("pins")!.state.page?.entries[0]?.row.checkoutProject?.repositoryKey).toBe(fresh.repositoryKey);
+          expect(read.mock.calls.map(([sent]) => sent.query.kind).sort()).toEqual(
+            changesOrigin && !parentRegistered ? ["directory-index", "group-members"] : [],
+          );
+        }
+      } finally { window.dispose(); }
       if (parentRegistered) expect(projects[0]?.launchpadBackend).toBe("claude");
       const projectPage = (query: NavigationQueryRequest["query"]) => projectNavigationQuery({ index, request: {
         protocol: 2, inventory: "owner", consumer: "star-map", query,

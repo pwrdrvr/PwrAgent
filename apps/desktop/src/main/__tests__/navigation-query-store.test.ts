@@ -1013,6 +1013,66 @@ it("streams the same UTF-8 revision and backing count as canonical materializati
   });
 });
 
+it("uses one directory baseline for omitted and explicit owner inventory", async () => {
+  const index = createNavigationQuerySnapshot({ ...snapshot([thread("1")]), coverage: { state: "complete" } });
+  const store = new NavigationQueryStore();
+  const read = (patch: Partial<NavigationQueryRequest>) => store.readPage({ request: request({ query: { kind: "directory-index" }, ...patch }),
+    scopeKey: "owner", loadIndex: async () => index });
+  const explicit = await read({ inventory: "owner" });
+  expect(explicit.directoryGitProof).toBeDefined();
+  const implicit = await read({});
+  expect([implicit.queryKey, implicit.countsRevision, implicit.directoryGitProof])
+    .toEqual([explicit.queryKey, explicit.countsRevision, explicit.directoryGitProof]);
+  expect((await read({ completeBaselineRevision: explicit.countsRevision })).unchanged).toBe(true);
+});
+
+it("keeps both owner cursors when only Git proofs exceed the shared generation budget", async () => {
+  const query = request({ inventory: "owner", pageSize: 1 });
+  const threads = Array.from({ length: 80 }, (_, i) => thread(String(i + 1), ""));
+  const raw = { threads, directories: [], coverage: { state: "complete" as const } };
+  const size = () => Buffer.byteLength(JSON.stringify(projectNavigationQuery({ request: query, index: raw })));
+  const room = 16 * 1024 * 1024 - size();
+  for (const [i, row] of threads.entries()) row.title = "x".repeat(Math.floor(room / threads.length) + Number(i < room % threads.length));
+  expect(size()).toBe(16 * 1024 * 1024);
+  const index = createNavigationQuerySnapshot(raw);
+  const store = new NavigationQueryStore();
+  const read = (scopeKey: string, cursor?: string) => store.readPage({ request: { ...query, cursor }, scopeKey, loadIndex: async () => index });
+  const first = await read("first");
+  const second = await read("second");
+  for (const [scope, page] of [["first", first], ["second", second]] as const) {
+    expect(page.nextCursor).toBeTruthy();
+    const next = await read(scope, page.nextCursor);
+    expect(next.entries[0]?.row.id).toBe("79");
+    expect(next.countsRevision).toBe(page.countsRevision);
+    expect(next.directoryGitProof).toBeUndefined();
+  }
+});
+
+it("keeps directory Git dependencies immutable across an owner cursor", async () => {
+  const key = "directory:/fixture";
+  const data = snapshot([thread("1"), thread("2")]);
+  data.directories = [{ key, label: "Fixture", kind: "directory", needsAttentionCount: 0, threadKeys: ["codex:1", "codex:2"] }];
+  const index = createNavigationQuerySnapshot({ ...data, coverage: { state: "complete" } });
+  const store = new NavigationQueryStore();
+  const read = (patch: Partial<NavigationQueryRequest> = {}) => store.readPage({ scopeKey: "owner", loadIndex: async () => index,
+    request: request({ inventory: "owner", query: { kind: "directory", directoryKey: key }, pageSize: 1, ...patch }) });
+  const first = await read();
+  const proof = first.directoryGitProof!;
+  expect(first.nextCursor).toBeTruthy();
+  expect(proof.directories).toHaveLength(1);
+  expect(Object.isFrozen(proof)).toBe(true);
+  expect(Object.isFrozen(proof.directories)).toBe(true);
+  expect(Object.isFrozen(proof.directories[0])).toBe(true);
+  expect((await read({ cursor: first.nextCursor })).directoryGitProof).toEqual(proof);
+  const range = await read({ retainedRange: { revision: first.countsRevision, ownerEpoch: first.ownerEpoch, start: 0, count: 1 } });
+  expect(range.rangeUnchanged).toEqual({ start: 0, count: 1 });
+  expect(range.directoryGitProof).toBeUndefined();
+  const complete = await read({ pageSize: 2 });
+  const ack = await read({ pageSize: 2, completeBaselineRevision: complete.countsRevision });
+  expect(ack.unchanged).toBe(true);
+  expect(ack.directoryGitProof).toBeUndefined();
+});
+
 it.each([
   { overflow: 0, deferredPr: false }, { overflow: 1, deferredPr: false }, { overflow: 0, deferredPr: true },
 ])("admits viewer owner proofs only when their canonical bytes fit (overflow $overflow, deferred PR $deferredPr)", async ({ overflow, deferredPr }) => {
@@ -1040,6 +1100,7 @@ it.each([
   expect(first.entries).toHaveLength(1);
   expect(first.nextCursor).toBeTruthy();
   expect(first.viewerRowOwners).toEqual(overflow ? undefined : []);
+  expect(first.directoryGitProof).toBeUndefined();
   if (deferredPr) {
     const second = await read(first.nextCursor);
     expect(second.entries[0]?.row.id).toBe(threads.at(-2)!.id);

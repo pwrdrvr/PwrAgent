@@ -2248,6 +2248,8 @@ describe("app server ipc", () => {
         method: "navigation/directoryGitStatus/updated",
         params: {
           directoryKey: "directory:/owner/repo",
+          directoryGitRevisions: { version: 1, repository: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+            descriptor: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) },
           fetchedAt: 2_000,
           gitStatus: {
             currentBranch: "main",
