@@ -1025,13 +1025,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       const rateLimit = target
         ? this.emitRateLimitFromError(error, target, { retryable: false })
         : undefined;
+      const deliveryError = telegramDeliveryErrorMessage(error);
       this.options.logger?.warn?.(
-        `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${errorMessage(error)}`,
+        `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${deliveryError}`,
       );
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        errorMessage: errorMessage(error),
+        errorMessage: deliveryError,
         outcome: "failed",
         ...(rateLimit ? { rateLimit } : {}),
         surface: intent.targetSurface,
@@ -1418,7 +1419,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        errorMessage: errorMessage(error),
+        errorMessage: telegramDeliveryErrorMessage(error),
         outcome: "failed",
         ...(rateLimitInfo ? { rateLimit: rateLimitInfo } : {}),
       };
@@ -1881,6 +1882,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       );
       return;
     }
+    if (this.hasMissingTopicId(updateId, message)) {
+      return;
+    }
 
     // `@<botusername> <verb>` text mention → command. Run BEFORE the
     // attachment branch so captions like `@PwrAgentBot resume` on a
@@ -2046,9 +2050,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
+    const missingTopicId = this.hasMissingTopicId(updateId, message);
     await this.bot.api.answerCallbackQuery({
       callback_query_id: callbackQuery.id,
+      ...(missingTopicId ? { text: "Telegram did not identify this topic. Reopen it and try again." } : {}),
     });
+    if (missingTopicId) {
+      return;
+    }
 
     const channel = this.channelFromMessage(message);
     const persistedBinding =
@@ -3009,10 +3018,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private messageThreadIdFromMessage(message: TelegramMessage): number | undefined {
     return message.message_thread_id ??
-      (message.is_topic_message === true ||
-      (message.chat.type === "supergroup" && message.chat.is_forum === true)
+      (message.chat.type === "supergroup" && message.chat.is_forum === true
         ? TELEGRAM_GENERAL_TOPIC_THREAD_ID
         : undefined);
+  }
+
+  private hasMissingTopicId(updateId: number, message: TelegramMessage): boolean {
+    // Telegram marks named topics with is_topic_message. General can omit both fields.
+    if (message.is_topic_message !== true || message.message_thread_id !== undefined) {
+      return false;
+    }
+    this.options.logger?.warn?.("telegram inbound ignored: topic ID is missing", {
+      updateId,
+      messageId: message.message_id,
+    });
+    return true;
   }
 
   /**
@@ -3518,6 +3538,16 @@ function telegramGroupStreamMinIntervalMs(deliveriesInWindow: number): number {
 
 function errorMessage(error: unknown): string {
   return scrubBotToken(error instanceof Error ? error.message : String(error));
+}
+
+function telegramDeliveryErrorMessage(error: unknown): string {
+  if (telegramErrorIncludes(error, "topic_closed")) {
+    return "The target Telegram topic is closed.";
+  }
+  if (telegramErrorIncludes(error, "message thread not found") || telegramErrorIncludes(error, "topic_deleted")) {
+    return "Telegram could not find the target topic.";
+  }
+  return errorMessage(error);
 }
 
 function isTelegramMessageNotModifiedError(error: unknown): boolean {
