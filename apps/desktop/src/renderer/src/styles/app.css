@@ -5647,7 +5647,7 @@ textarea,
 .selected-thread-dock {
   appearance: none;
   position: absolute;
-  /* Above the stuck project header (6) it sits under. */
+  /* Above the stuck project headers (6) and the rows. */
   z-index: 7;
   /* 6px inside the lane inset on both sides. The ring and its plate reach
      6px out, so they end at the inset: clear of the wall on the left and of
@@ -5677,6 +5677,42 @@ textarea,
 
 .selected-thread-dock--top {
   top: calc(var(--selected-thread-dock-top, 0px) + 6px);
+}
+
+/* The top dock sits above the stuck project header, not under it. While it
+   is up, the region carries `.has-selected-thread-dock-top`, and every
+   sticky header in the list sticks lower by
+   `--selected-thread-dock-reserve` (the card plus its 6px plate above and
+   below). This band fills the strip they left so rows do not show around
+   the card. It spans the lane inset to inset, as the rows do, and leaves
+   the scrollbar's column alone.
+
+   The shift hangs on the class, not on the property's value. The dock
+   takes the class off to measure the list with its headers in their own
+   places, on every scroll frame. Changing an inherited custom property
+   there restyles every row under the region (38ms a frame at 360 rows);
+   a class with these four descendant selectors restyles the headers. */
+.selected-thread-dock-band {
+  position: absolute;
+  z-index: 7;
+  top: var(--selected-thread-dock-top, 0px);
+  right: var(--sidebar-lane-inset);
+  left: var(--sidebar-lane-inset);
+  height: var(--selected-thread-dock-reserve, 0px);
+  background: var(--bg-sidebar);
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-row__header,
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-group__header {
+  top: var(--selected-thread-dock-reserve, 0px);
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directories-pin-slot {
+  top: calc(2px + var(--selected-thread-dock-reserve, 0px));
+}
+
+.sidebar__scroll-region.has-selected-thread-dock-top .directory-row__thread-divider {
+  top: calc(var(--directory-row-header-height, 24px) + var(--selected-thread-dock-reserve, 0px));
 }
 
 .selected-thread-dock--bottom {

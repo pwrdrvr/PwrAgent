@@ -140,11 +140,62 @@ describe("SelectedThreadDock", () => {
     expect(dock()).toBeNull();
   });
 
-  it("docks at the top, under the stuck project header, when the row left upward", () => {
-    renderDock(mountList(-300));
+  it("docks at the list's top edge, above the stuck project header, when the row left upward", () => {
+    const region = mountList(-300);
+    renderDock(region);
     expect(dock()?.dataset.edge).toBe("top");
-    // The stuck header is 30px tall; the region starts at the lane's top.
-    expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("30px");
+    // At the list's own edge, whatever is stuck there: a header or divider
+    // arriving or leaving under it cannot move it.
+    expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("0px");
+    // The stuck headers move down by the card plus its plate.
+    expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("58px");
+    expect(region.classList.contains("has-selected-thread-dock-top")).toBe(true);
+    expect(region.querySelector(".selected-thread-dock-band")).not.toBeNull();
+  });
+
+  it("gives the headers their place back when it leaves the top", () => {
+    const region = mountList(-300);
+    const view = renderDock(region);
+    place(region.querySelector("[data-row='open']")!, 900, 60);
+    view.rerender(dockElement(region, "open", {}));
+    expect(dock()?.dataset.edge).toBe("bottom");
+    expect(region.classList.contains("has-selected-thread-dock-top")).toBe(false);
+    expect(region.querySelector(".selected-thread-dock-band")).toBeNull();
+    view.unmount();
+    expect(region.classList.contains("has-selected-thread-dock-top")).toBe(false);
+    expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("");
+  });
+
+  // Showing the top dock moves the stuck header down, which covers more of
+  // the row. The rule reads the list as it lies without the dock, so the
+  // dock shows exactly when the row is lost under the header's own place:
+  // it neither alternates with the header nor outstays the row's return.
+  it("shows exactly when the row is lost under the header's own place, from either state", () => {
+    const shown = (rowTop: number): number => Math.max(0, rowTop + 60 - Math.max(rowTop, 130));
+    for (const start of [60, 250]) {
+      for (let rowTop = 60; rowTop <= 260; rowTop += 1) {
+        const region = mountList(start);
+        const header = region.querySelector<HTMLElement>("[data-header='pwrgit']")!;
+        // The header sticks to the list's top, as far down as the reserve says.
+        vi.spyOn(header, "getBoundingClientRect").mockImplementation(() => {
+          const top = 100 + (region.classList.contains("has-selected-thread-dock-top") ? 58 : 0);
+          return { x: 0, y: top, top, bottom: top + 30, left: 0, right: 300, width: 300, height: 30, toJSON: () => ({}) } as DOMRect;
+        });
+        // Docked at the top (60) or not docked (250), then the row moves.
+        const view = renderDock(region);
+        place(region.querySelector("[data-row='open']")!, rowTop, 60);
+        const seen: (string | undefined)[] = [];
+        for (let pass = 0; pass < 4; pass += 1) {
+          view.rerender(dockElement(region, "open", {}));
+          seen.push(dock()?.dataset.edge);
+        }
+        const expected = shown(rowTop) >= 39 ? undefined : "top";
+        expect(seen, `from ${start}, row at ${rowTop}`).toEqual([expected, expected, expected, expected]);
+        expect(region.classList.contains("has-selected-thread-dock-top")).toBe(expected === "top");
+        view.unmount();
+        region.remove();
+      }
+    }
   });
 
   it("docks at the bottom when the row is further down", () => {
@@ -282,14 +333,14 @@ describe("SelectedThreadDock", () => {
       expect(dock()?.querySelector(".selected-thread-dock__direction")).toBeNull();
     });
 
-    it("sits under the stuck header of the project being read when its own has scrolled past", () => {
+    it("sits above the stuck header of the project being read when its own has scrolled past", () => {
       const region = mountList(900, { hidden: true });
       place(region.querySelector("[data-header='pwragent']")!, -300, 30);
       place(region.querySelector("[data-directory-key='pwragent']")!, -300, 30);
       renderDock(region, "open", { directoryKeys: ["pwragent"] });
       expect(dock()?.dataset.edge).toBe("top");
-      // PwrGit's header is stuck at the top, 30px tall.
-      expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("30px");
+      // Above PwrGit's header, which is stuck at the top.
+      expect(dock()?.style.getPropertyValue("--selected-thread-dock-top")).toBe("0px");
     });
 
     it("stands in for its project when no parent has a row", () => {

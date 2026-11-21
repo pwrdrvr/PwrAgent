@@ -418,6 +418,16 @@ test("the selected thread docks at the list's edge when its row scrolls away", a
     // At the top edge, inside the list, ring included (4px reach).
     expect(dockBox!.y - 4).toBeGreaterThanOrEqual(scrollBox!.y);
     expect(dockBox!.y).toBeLessThan(scrollBox!.y + scrollBox!.height / 2);
+    // Above every stuck project header, which moves down to make room: a
+    // header or divider arriving under the dock cannot move it.
+    const stuckHeaderTops = await threadBrowser.locator(".directory-row__header").evaluateAll(
+      (headers, top) => headers.map((header) => header.getBoundingClientRect())
+        .filter((box) => box.bottom > top && box.top < top + 120).map((box) => box.top),
+      scrollBox!.y,
+    );
+    for (const headerTop of stuckHeaderTops) {
+      expect(headerTop).toBeGreaterThanOrEqual(dockBox!.y + dockBox!.height);
+    }
     expect(dockBox!.x - 4).toBeGreaterThanOrEqual(scrollBox!.x);
     expect(dockBox!.x + dockBox!.width + 4).toBeLessThanOrEqual(
       scrollBox!.x + scrollBox!.width + GEOMETRY_TOLERANCE_PX,

@@ -25,10 +25,19 @@ const STICKY_HEADER = ".directory-row__header";
 const STICKY_DIVIDER = ".directory-row__thread-divider";
 // Nothing sticks lower than this, so a row further down needs no header scan.
 const STICKY_REACH_PX = 160;
+// The top dock's band: the card, 6px of plate above it and 6px below.
+const DOCK_PLATE_PX = 6;
+// The card's height before it has been drawn once: two lines at the default
+// density. The first layout pass after it mounts replaces this.
+const DOCK_HEIGHT_GUESS_PX = 46;
+// On the region while the dock is at the top. Everything that sticks to the
+// top of the list then sticks lower by the reserve, under the dock.
+const TOP_DOCK_CLASS = "has-selected-thread-dock-top";
+const RESERVE_PROPERTY = "--selected-thread-dock-reserve";
 
 type DockState = {
   edge: DockEdge;
-  /** From the region's top to the dock's edge of the list, for the top dock. */
+  /** From the region's top to the list's top edge, for the top dock. */
   top: number;
   /** From the list's bottom edge to the region's, for the bottom dock. */
   bottom: number;
@@ -119,6 +128,14 @@ function speaksForThread(holder: Element): boolean {
     || holder.querySelector(".directory-row__summary[aria-expanded='false']") !== null;
 }
 
+/**
+ * Reads the list as it lies with no top dock: the caller lifts the dock's
+ * reserve first, so the sticky headers are where they would be without it.
+ * One rule in one layout cannot alternate with the headers it moves, and it
+ * lets the dock go as soon as the row would show. Measured under the shifted
+ * headers, a row at the very start of the list stayed covered by them with
+ * nowhere left to scroll, and the dock never left.
+ */
 function measure(
   region: HTMLElement,
   threadKey: string,
@@ -143,18 +160,18 @@ function measure(
   const held = rows.length === 0 ? holdersOf(region, holders) : [];
   const targets = held.length > 0 ? held : rows;
   const extents = targets.map(extentOf);
-  const nearTop = extents.some((extent) => extent.top < view.top + STICKY_REACH_PX);
-  // Where a top dock sits: under whatever is stuck to the top of the list.
+  const listTop = view.top;
+  const nearTop = extents.some((extent) => extent.top < listTop + STICKY_REACH_PX);
   const stuckTop = nearTop
     ? stuckBandTop(
-      view.top,
+      listTop,
       [...lane.querySelectorAll(STICKY_HEADER)].map(extentOf),
       [...lane.querySelectorAll(STICKY_DIVIDER)].map(extentOf),
     )
-    : view.top;
+    : listTop;
   // What counts as in view. A row under the stuck header is not. A project's
   // section is: the header stuck there is its own, or it has scrolled past.
-  const bandTop = held[0] && isProjectSection(held[0]) ? view.top : stuckTop;
+  const bandTop = held[0] && isProjectSection(held[0]) ? listTop : stuckTop;
   const band = { top: bandTop, bottom: view.bottom };
   const placement = selectedThreadDockPlacement(extents, band);
   const holder = placement ? held[placement.index] : held[0];
@@ -172,8 +189,10 @@ function measure(
     row,
     state: {
       edge,
-      // The headers above a row that is out of view below are not in its way.
-      top: (edge === "top" ? stuckTop : view.top) - regionBox.top,
+      // The top dock sits at the list's own top edge, above every stuck
+      // header. Under them it moved whenever one of them did: down as a
+      // Directory threads divider stuck, then up a pixel at a time as it left.
+      top: view.top - regionBox.top,
       bottom: regionBox.bottom - view.bottom,
       gutter: lane.offsetWidth - lane.clientWidth,
       directoryKey: (row ?? holder)?.closest<HTMLElement>("[data-thread-directory-key]")
@@ -200,6 +219,10 @@ function sameDock(a: DockState | undefined, b: DockState | undefined): boolean {
  * The open thread, docked at the edge of the list its row scrolled out
  * through. Click it to bring the row back to the middle of the list.
  *
+ * At the top it sits above the stuck project header, which moves down to
+ * make room: the dock's place is then the list's own edge, and no header
+ * arriving or leaving under it can move it.
+ *
  * A thread with no row in the list docks too: one inside a collapsed parent
  * or a closed project, or one the lens does not list. It then stands in for
  * whatever would hold the row once that has scrolled out, and a click opens
@@ -218,12 +241,25 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const [dock, setDock] = useState<DockState>();
   const dockRef = useRef<DockState | undefined>(undefined);
   const rowRef = useRef<HTMLElement | undefined>(undefined);
+  const cardRef = useRef<HTMLButtonElement>(null);
+  // The region that carries the reserve, to take it back from on unmount.
+  // The property stays on it between top docks; only the class comes and goes.
+  const reservedRegionRef = useRef<HTMLElement | undefined>(undefined);
   // The thread whose hidden row the dock was asked to reveal. Focus follows
   // to that row when it arrives, as it does for a row the dock scrolls to.
   const focusOnArrivalRef = useRef<string | undefined>(undefined);
 
   const sync = useCallback((): void => {
     const region = regionRef.current;
+    // Lifted for the measure, which reads the list with its headers in
+    // their own places, and put back below before anything paints. The
+    // class goes, not the property: see `.selected-thread-dock-band`.
+    const reserved = reservedRegionRef.current;
+    reserved?.classList.remove(TOP_DOCK_CLASS);
+    if (reserved && reserved !== region) {
+      reserved.style.removeProperty(RESERVE_PROPERTY);
+      reservedRegionRef.current = undefined;
+    }
     const measured = region && threadKey
       ? measure(region, threadKey, {
         ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
@@ -231,6 +267,17 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       })
       : undefined;
     rowRef.current = measured?.row;
+    const reserve = measured?.state.edge === "top"
+      ? (cardRef.current?.offsetHeight || DOCK_HEIGHT_GUESS_PX) + 2 * DOCK_PLATE_PX
+      : 0;
+    if (region && reserve > 0) {
+      const value = `${reserve}px`;
+      if (region.style.getPropertyValue(RESERVE_PROPERTY) !== value) {
+        region.style.setProperty(RESERVE_PROPERTY, value);
+      }
+      region.classList.add(TOP_DOCK_CLASS);
+      reservedRegionRef.current = region;
+    }
     if (focusOnArrivalRef.current !== undefined) {
       const arrived = region && focusOnArrivalRef.current === threadKey && !measured
         ? threadRows(region, threadKey)[0]
@@ -255,6 +302,14 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // Every render: the selection, the lens and the rows all reach here as a
   // render, and the first paint after one must not show a stale dock.
   useLayoutEffect(sync);
+
+  // Only on unmount. A cleanup tied to the thread or the region would take
+  // the reserve back after the layout pass above had just set it.
+  useLayoutEffect(() => () => {
+    reservedRegionRef.current?.classList.remove(TOP_DOCK_CLASS);
+    reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
+    reservedRegionRef.current = undefined;
+  }, []);
 
   // And what moves rows without a render: a scroll, a resize, and rows that
   // mount inside a list which keeps its own state.
@@ -297,7 +352,18 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // No `aria-label`: the card's own text names it (title, time, project), and
   // a label that leaves any of it out fails WCAG 2.5.3 Label in Name.
   return (
+    <>
+    {dock.edge === "top" ? (
+      // The list's rows pass under the dock; this keeps them out of sight
+      // in the strip the stuck headers have moved down from.
+      <span
+        aria-hidden="true"
+        className="selected-thread-dock-band"
+        style={{ "--selected-thread-dock-top": `${dock.top}px` } as CSSProperties}
+      />
+    ) : null}
     <button
+      ref={cardRef}
       className={`selected-thread-dock selected-thread-dock--${dock.edge}`}
       data-edge={dock.edge}
       data-testid="selected-thread-dock"
@@ -339,5 +405,6 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
         ) : null}
       </span>
     </button>
+    </>
   );
 }
