@@ -19,7 +19,7 @@ it("merges a recorded account across machines, separates ten accounts, and names
 it("keeps unkeyed history separate even when the owner's current login is known", () => {
   const row = usageFixture();
   const sameLabel = { ...row, target: { scope: "remote" as const, instanceId: "another-instance" } };
-  const limits = buildLimitAccounts([{ owner: row.owner, current: { observedAt: 300, accountKey: "new-login", limits: [] } }]);
+  const limits = buildLimitAccounts([{ owner: row.owner, target: row.target, current: { observedAt: 300, accountKey: "new-login", limits: [] } }]);
   const accounts = buildUsageAccounts([row, sameLabel], limits);
   expect(accounts).toHaveLength(3);
   expect(accounts.filter((account) => account.unknown)).toHaveLength(2);
@@ -30,7 +30,7 @@ it("keeps unkeyed history separate even when the owner's current login is known"
 it("keeps historical accounts on the same instance selectable alongside the current account", () => {
   const row = usageFixture();
   const accounts = buildUsageAccounts([{ ...row, accountKey: "previous" }, { ...row, accountKey: "current" }],
-    buildLimitAccounts([{ owner: row.owner, current: { observedAt: 300, accountKey: "current", limits: [] } }]));
+    buildLimitAccounts([{ owner: row.owner, target: row.target, current: { observedAt: 300, accountKey: "current", limits: [] } }]));
   expect(accounts).toHaveLength(2);
   expect(accounts.find((account) => account.key === usageAccountKey({ ...row, accountKey: "previous" }))?.limitKey).toBeUndefined();
   expect(accounts.find((account) => account.key === usageAccountKey({ ...row, accountKey: "current" }))?.limitKey).toBe("account:current");
@@ -42,10 +42,10 @@ it("names an account by provider and plan, adding machines, then key, only where
     target: { scope: "remote" as const, instanceId: owner },
   });
   const limits = buildLimitAccounts([
-    { owner: "Studio Mac", current: { observedAt: 300, accountKey: "work", planType: "pro", limits: [] } },
-    { owner: "Build server", current: { observedAt: 300, accountKey: "work", planType: "pro", limits: [] } },
-    { owner: "Travel laptop", current: { observedAt: 300, accountKey: "personal", planType: "pro", limits: [] } },
-    { owner: "Lab", current: { observedAt: 300, accountKey: "team", planType: "business", limits: [] } },
+    { owner: "Studio Mac", target: { scope: "remote", instanceId: "studio" }, current: { observedAt: 300, accountKey: "work", planType: "pro", limits: [] } },
+    { owner: "Build server", target: { scope: "remote", instanceId: "build" }, current: { observedAt: 300, accountKey: "work", planType: "pro", limits: [] } },
+    { owner: "Travel laptop", target: { scope: "remote", instanceId: "travel" }, current: { observedAt: 300, accountKey: "personal", planType: "pro", limits: [] } },
+    { owner: "Lab", target: { scope: "remote", instanceId: "lab" }, current: { observedAt: 300, accountKey: "team", planType: "business", limits: [] } },
   ]);
   const labels = (names?: Record<string, string>) => Object.fromEntries(buildUsageAccounts([
     keyed("work", "Studio Mac"), keyed("personal", "Travel laptop"), keyed("same-a", "Spare"), keyed("same-b", "Spare"),

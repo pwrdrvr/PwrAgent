@@ -391,6 +391,27 @@ it("uses the selected account's reset window rather than another instance's curr
   expect(screen.getByText(/Limits are the newest reading, from Remote/)).toBeInTheDocument();
 });
 
+it("shows separate keyless limits for the local dev profile and the default peer on the same host", async () => {
+  const now = Date.now();
+  const readFederationActivity = vi.fn(async () => ({ health: {
+    localLabel: "Host", localShortLabel: "Mini", localProfileName: "dev",
+    peers: [{ id: "peer", label: "Host", shortLabel: "Mini", profileName: "default", status: "connected" }],
+  } }) as ReadFederationActivityResponse);
+  const readUsageActivity = vi.fn(async (request) => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
+    limitObservation: { observedAt: now, limits: [{ name: "Weekly limit", windowKey: "secondary" as const,
+      usedPercent: request.federationTarget?.scope === "local" ? 19 : 68 }] },
+  }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity }} />);
+
+  const band = within(await screen.findByRole("region", { name: "Limits and cost" }));
+  expect(band.getByRole("img", { name: /19% used/ })).toBeInTheDocument();
+  expect(band.getByRole("img", { name: /68% used/ })).toBeInTheDocument();
+  const instances = within(screen.getByRole("group", { name: "Instances" }));
+  expect(instances.getByRole("button", { name: "Host (dev)" })).toHaveTextContent(/^Mini \(dev\)$/);
+  expect(instances.getByRole("button", { name: "Host" })).toHaveTextContent(/^Mini$/);
+  expect(band.getByRole("button", { name: /account.*Host \(dev\)/i })).toHaveAttribute("aria-pressed", "true");
+});
+
 it("shows Claude's limits beside Codex's and follows the provider the window was opened for", async () => {
   const now = new Date(2026, 9, 25, 12).getTime();
   vi.spyOn(Date, "now").mockReturnValue(now);

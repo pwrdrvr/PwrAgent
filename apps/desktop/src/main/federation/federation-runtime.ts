@@ -241,7 +241,7 @@ import {
   isFederationInstanceId,
   isFederationEventClass,
   formatFederationPeerDisplayLabel,
-  formatFederationPeerShortDisplayLabel,
+  formatFederationPeerTargetLabels,
   isRemoteFederationTarget,
   type FederationRemoteTarget,
   type FederationTarget,
@@ -1851,22 +1851,16 @@ export class DesktopFederationRuntime {
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
-    return this.visiblePeers()
-      .filter((peer) => peer.status === "connected")
-      .map((peer) => {
-        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
-        return {
-          target: { scope: "remote", instanceId: peer.id },
-          label: formatFederationPeerDisplayLabel(peer),
-          ...(shortLabel
-            ? {
-                shortLabel: formatFederationPeerShortDisplayLabel({ ...peer, shortLabel }),
-              }
-            : {}),
-          capabilities: [...peer.capabilities],
-          navigationQueryProtocol: peer.navigationQueryProtocol,
-        };
-      });
+    const peers = this.visiblePeers().filter((peer) => peer.status === "connected");
+    return peers.map((peer) => {
+      const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+      return {
+        target: { scope: "remote", instanceId: peer.id },
+        ...formatFederationPeerTargetLabels({ ...peer, shortLabel }, peers),
+        capabilities: [...peer.capabilities],
+        navigationQueryProtocol: peer.navigationQueryProtocol,
+      };
+    });
   }
 
   assertRemoteNavigationQueryProtocol(

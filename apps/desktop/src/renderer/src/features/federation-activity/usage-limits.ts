@@ -1,4 +1,5 @@
 import type { UsageLimitObservation, UsageLimitReading } from "@pwragent/shared/contracts/usage-activity";
+import { federationTargetKey, type FederationTarget } from "@pwragent/shared/contracts/federation";
 
 /**
  * One owner's limit readings, as returned by its usage read. An owner can
@@ -6,6 +7,7 @@ import type { UsageLimitObservation, UsageLimitReading } from "@pwragent/shared/
  */
 export type LimitSource = {
   owner: string;
+  target: FederationTarget;
   current?: UsageLimitObservation | UsageLimitObservation[];
   history?: UsageLimitObservation[];
 };
@@ -49,6 +51,7 @@ export type LimitAccount = {
   accountKey?: string;
   planType?: string;
   owners: string[];
+  ownerKeys: string[];
   observedAt: number;
   observedBy: string;
   series: LimitSeries[];
@@ -75,18 +78,19 @@ export function limitSeriesFor(account: LimitAccount | undefined, limit: UsageLi
  * accounts. Readings without an account key stay with their own owner.
  */
 export function buildLimitAccounts(sources: LimitSource[]): LimitAccount[] {
-  const accounts = new Map<string, { provider: string; accountKey?: string; planType?: string; owners: Set<string>;
+  const accounts = new Map<string, { provider: string; accountKey?: string; planType?: string; owners: Map<string, string>;
     observations: Array<UsageLimitObservation & { owner: string }> }>();
   for (const source of sources) {
+    const ownerKey = federationTargetKey(source.target);
     const current = source.current === undefined ? [] : Array.isArray(source.current) ? source.current : [source.current];
     for (const observation of [...source.history ?? [], ...current]) {
       const provider = limitProvider(observation);
       // OpenAI keeps the keys it had before other providers reported limits.
       const scope = provider === "openai" ? "" : `${provider}:`;
-      const key = observation.accountKey ? `account:${scope}${observation.accountKey}` : `owner:${scope}${source.owner}`;
+      const key = observation.accountKey ? `account:${scope}${observation.accountKey}` : `owner:${scope}${ownerKey}`;
       let account = accounts.get(key);
-      if (!account) accounts.set(key, account = { provider, accountKey: observation.accountKey, owners: new Set(), observations: [] });
-      account.owners.add(source.owner);
+      if (!account) accounts.set(key, account = { provider, accountKey: observation.accountKey, owners: new Map(), observations: [] });
+      account.owners.set(ownerKey, source.owner);
       account.planType ??= observation.planType;
       account.observations.push({ ...observation, owner: source.owner });
     }
@@ -118,7 +122,7 @@ export function buildLimitAccounts(sources: LimitSource[]): LimitAccount[] {
     const series = [...byLimit.entries()].map(([id, { reading, points }]) => describeSeries(id, reading, points))
       .sort((a, b) => windowOrder(a) - windowOrder(b));
     return { key, provider: account.provider, accountKey: account.accountKey, planType: account.planType,
-      owners: [...account.owners], observedAt: newest.observedAt,
+      owners: [...new Set(account.owners.values())], ownerKeys: [...account.owners.keys()], observedAt: newest.observedAt,
       observedBy: newest.owner, series, credits };
   }).sort((a, b) => b.observedAt - a.observedAt);
 }

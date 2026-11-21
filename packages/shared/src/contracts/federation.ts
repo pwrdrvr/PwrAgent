@@ -1168,6 +1168,21 @@ export function formatFederationPeerShortDisplayLabel(
   return parts.profileName ? `${machine} / ${parts.profileName}` : machine;
 }
 
+/** A legacy destination can share a host label with the known default profile. */
+export function formatFederationPeerTargetLabels(
+  peer: { label: string; profileName?: string; shortLabel?: string },
+  visiblePeers: readonly { label: string; profileName?: string }[],
+): { label: string; shortLabel?: string } {
+  const unknownProfile = !peer.profileName && visiblePeers.some(
+    (candidate) => candidate.label === peer.label && candidate.profileName === "default",
+  );
+  const qualifier = unknownProfile ? " (profile unknown)" : "";
+  return {
+    label: `${formatFederationPeerDisplayLabel(peer)}${qualifier}`,
+    ...(peer.shortLabel ? { shortLabel: `${formatFederationPeerShortDisplayLabel(peer)}${qualifier}` } : {}),
+  };
+}
+
 export function federationTargetKey(target: FederationTarget): string {
   return isRemoteFederationTarget(target) ? `remote:${target.instanceId}` : "local";
 }

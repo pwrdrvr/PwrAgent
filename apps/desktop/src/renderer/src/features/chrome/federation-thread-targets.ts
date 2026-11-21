@@ -1,6 +1,5 @@
 import {
-  formatFederationPeerDisplayLabel,
-  formatFederationPeerShortDisplayLabel,
+  formatFederationPeerTargetLabels,
   type FederationCapability,
   type FederationHealthStatus,
 } from "@pwragent/shared/contracts/federation";
@@ -84,16 +83,15 @@ export function buildFederationPeerTargets<Availability extends string>(
   if (!health) {
     return [];
   }
-  return health.peers
-    .filter(
-      (peer) =>
-        !peer.revokedAt
-        && peer.id !== excludedInstanceId,
-    )
+  const peers = health.peers.filter((peer) => !peer.revokedAt && peer.status !== "revoked");
+  const visible = health.localLabel
+    ? [...peers, { label: health.localLabel, profileName: health.localProfileName }]
+    : peers;
+  return peers
+    .filter((peer) => peer.id !== excludedInstanceId)
     .map((peer) => ({
       instanceId: peer.id,
-      label: formatFederationPeerDisplayLabel(peer),
-      ...(peer.shortLabel ? { shortLabel: formatFederationPeerShortDisplayLabel(peer) } : {}),
+      ...formatFederationPeerTargetLabels(peer, visible),
       availability: resolve(peer),
       ...(peer.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
     }))

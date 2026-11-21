@@ -5059,6 +5059,21 @@ describe("Cloudflare listener reachability", () => {
 });
 
 describe("federation short names", () => {
+  it("keeps the default target bare beside a same-label peer with an unknown profile", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      shortNames: { shortLabelFor: () => string | undefined };
+    };
+    const base = { label: "Host", status: "connected", capabilities: ["remote_window" as const] };
+    const peers = [{ ...base, id: "pwr_default", profileName: "default" }, { ...base, id: "pwr_legacy" }];
+    vi.spyOn(runtime, "visiblePeers").mockReturnValue(peers);
+    vi.spyOn(runtime.shortNames, "shortLabelFor").mockReturnValue("Mini");
+
+    expect(runtime.connectedPeerTargets()).toMatchObject([
+      { target: { instanceId: "pwr_default" }, label: "Host", shortLabel: "Mini" },
+      { target: { instanceId: "pwr_legacy" }, label: "Host (profile unknown)", shortLabel: "Mini (profile unknown)" },
+    ]);
+  });
+
   it("merges the gateway's short-name map, re-sends it onward only, and tells renderers", async () => {
     const meta = new Map<string, string>([["federation_gateway_instance_id", "gateway_one"]]);
     const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);

@@ -412,8 +412,11 @@ function matchesInstanceQuery(
     return true;
   }
   const needle = query.toLowerCase();
+  const qualifiedDefault = instance.profileName === "default" ? `${instance.label} / default` : undefined;
   const haystack = [
     instance.label,
+    qualifiedDefault,
+    qualifiedDefault?.replace(/\s*\/\s*/g, "/"),
     instance.notes,
     instance.profileName,
     instance.instanceId,
