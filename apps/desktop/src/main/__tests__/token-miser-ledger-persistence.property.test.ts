@@ -305,8 +305,8 @@ describe("Token Miser pricing projection", () => {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: count }, (_, index) => line(index, { model: "unknown-fixture" })) });
       db.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5'").run();
       const attach = vi.spyOn(store as unknown as {
-        attachTokenMiserUsageTurnMetadataSync(backend: string, threadId: string, lines: ThreadUsageLineRecord[]): void;
-      }, "attachTokenMiserUsageTurnMetadataSync");
+        attachUsageTurnMetadataSync(backend: string, threadId: string, lines: ThreadUsageLineRecord[]): void;
+      }, "attachUsageTurnMetadataSync");
       await store.readTokenMiserGatePricingLines({ backend: "codex", threadId: THREAD, sourceItemIds: [], turnIds: ["turn-1"] });
       const sizes = attach.mock.calls.map((call) => call[2].length);
       expect(Math.max(...sizes)).toBeLessThanOrEqual(10);
