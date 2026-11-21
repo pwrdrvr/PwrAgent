@@ -674,8 +674,148 @@ describe("DesktopAutomationService", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(setRunUsage).toHaveBeenCalledTimes(1);
 
+    store.markRunTerminal({ runId: runNow.run.id, status: "completed" });
+    await Promise.all(
+      registryListeners.map((listener) => listener(pricingEvent(130_000))),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(setRunUsage).toHaveBeenCalledTimes(2);
+    expect(store.getRun(runNow.run.id)).toMatchObject({
+      status: "completed",
+      usage: { totalCostMicros: 130_000 },
+    });
+
     service.dispose();
     vi.useRealTimers();
+  });
+
+  it.each([false, true])("bounds turn lookups as unrelated automation history grows (ANALYZE: %s)", async (analyzed) => {
+    vi.useFakeTimers();
+    const service = new DesktopAutomationService({ registry, store });
+    const raw = stateDb.raw;
+    const prepare = raw.prepare.bind(raw);
+    const plans: string[] = [];
+    const turnKeySeek = /SEARCH automation_runs USING .*\((?:backend=\? AND backend_turn_id=\?|backend_turn_id=\? AND backend=\?)\)/;
+    const runningStatusSeek = /SEARCH automation_runs USING .*\(status=\?\)/;
+    // Measure the SELECTs issued by the real registry subscriber, with their
+    // actual parameters, on the native database used by the store.
+    const prepareSpy = vi.spyOn(raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (/^\s*SELECT\b/i.test(sql) && /\bFROM automation_runs\b/i.test(sql)) {
+        const explain = prepare(`EXPLAIN QUERY PLAN ${sql}`);
+        const trace = <T>(execute: (...args: unknown[]) => T) => (...args: unknown[]): T => {
+          const rows = explain.all(...args) as Array<{ detail: string }>;
+          plans.push(rows.map((row) => row.detail).join("\n"));
+          return execute(...args);
+        };
+        statement.get = trace(statement.get.bind(statement));
+        statement.all = trace(statement.all.bind(statement));
+      }
+      return statement;
+    });
+    const emit = async (event: AgentEvent) => {
+      expect(registryListeners).toHaveLength(1);
+      await registryListeners[0]!(event);
+    };
+
+    try {
+      const automation = store.createAutomation({
+        id: "lookup-automation",
+        backend: "codex",
+        threadId: "owner-thread",
+        name: "Turn lookup",
+        taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+        status: "paused",
+        now: 0,
+      });
+      const insertAutomation = prepare(`INSERT INTO automations
+        (automation_id, backend, thread_id, name, status, backlog_policy, created_at, updated_at, payload)
+        VALUES (?, 'codex', ?, 'History', 'paused', 'coalesce', 0, 0, '{}')`);
+      const insertRun = prepare(`INSERT INTO automation_runs
+        (run_id, automation_id, backend, thread_id, status, trigger, backend_turn_id, created_at, updated_at, payload)
+        VALUES (?, ?, 'codex', ?, 'completed', 'manual', ?, ?, ?, '{}')`);
+      const seedHistory = raw.transaction((from: number, to: number) => {
+        for (let agent = from; agent < to; agent += 1) {
+          const id = `history-agent-${agent}`;
+          const thread = `history-thread-${agent}`;
+          insertAutomation.run(id, thread);
+          for (let index = 0; index < 50; index += 1) {
+            const run = `history-run-${agent}-${index}`;
+            insertRun.run(run, id, thread, `history-turn-${agent}-${index}`, index, index);
+          }
+        }
+      });
+      service.start();
+      store.createRun({ id: "lookup-run", automationId: automation.id, trigger: "manual", now: 0 });
+      store.markRunStarted({ runId: "lookup-run", backendTurnId: "lookup-turn", now: 1 });
+
+      let previousAgents = 0;
+      let cost = 0;
+      for (const agents of [20, 40, 1_000]) {
+        seedHistory(previousAgents, agents);
+        previousAgents = agents;
+        if (analyzed) raw.exec("ANALYZE automation_runs");
+        const fixture = `${agents * 50} completed runs, analyzed=${analyzed}`;
+        plans.length = 0;
+        cost += 1;
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "thread/pricing/updated",
+            params: {
+              threadId: "execution-thread",
+              pricing: {
+                summaries: [],
+                lines: [
+                  { scope: "turn", turnId: "lookup-turn", totalCostMicros: cost },
+                  { scope: "turn", turnId: "manual-turn", totalCostMicros: 99 },
+                ],
+              },
+            },
+          },
+        } as unknown as AgentEvent);
+        expect.soft(plans, fixture).toHaveLength(1);
+        expect.soft(plans[0], fixture).toMatch(turnKeySeek);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(store.getRun("lookup-run")?.usage).toEqual({ totalCostMicros: cost });
+
+        plans.length = 0;
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "manual-thread",
+              turnId: "manual-turn",
+              turn: { id: "manual-turn", status: "completed" },
+            },
+          },
+        } as AgentEvent);
+        expect.soft(plans.length, fixture).toBeLessThanOrEqual(3);
+        expect.soft(plans.at(-1), fixture).toMatch(turnKeySeek);
+        for (const plan of plans.slice(0, -1)) {
+          expect.soft(turnKeySeek.test(plan) || runningStatusSeek.test(plan), fixture).toBe(true);
+        }
+        expect(store.getRun("lookup-run")?.status).toBe("running");
+
+        plans.length = 0;
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: { threadId: "manual-thread", turnId: "manual-turn", itemId: "manual-item", delta: "Manual" },
+          },
+        } as AgentEvent);
+        expect.soft(plans, fixture).toHaveLength(1);
+        const [streamPlan = ""] = plans;
+        expect.soft(turnKeySeek.test(streamPlan) || runningStatusSeek.test(streamPlan), fixture).toBe(true);
+      }
+    } finally {
+      prepareSpy.mockRestore();
+      service.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("lists an active run as the latest automation status", async () => {

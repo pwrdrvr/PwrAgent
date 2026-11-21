@@ -17,8 +17,9 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
   // recovery guard, research, request-pricing, sub-agent dismissal,
-  // operator-request scope, pricing summary, gate pricing, and usage completion
-  // indexes, plus the pricing summary deltas and scheduled action projections.
+  // operator-request scope, pricing summary, gate pricing, usage completion,
+  // and automation turn indexes, plus pricing summary deltas and scheduled
+  // action projections.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
@@ -44,6 +45,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_gate_child_source"
     && row.name !== "idx_thread_usage_lines_gate_usage_turn"
     && row.name !== "idx_thread_usage_lines_completion_turn"
+    && row.name !== "idx_automation_runs_backend_turn"
     && row.name !== "thread_pricing_summary_delta_insert"
     && row.name !== "thread_pricing_summary_delta_update"
     && row.name !== "thread_pricing_summary_delta_delete"
