@@ -4,7 +4,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { normalizeBoatSandboxPolicy } from "@pwragent/shared/contracts/mcp-connections";
 import { BoatApiError, type BoatApiRequest } from "../mcp-connections/boat-api";
-import { BoatPortForwards, boatTunnelArgs } from "../mcp-connections/boat-port-forward";
+import { BoatPortForwards, boatTunnelArgs, openSshCommand } from "../mcp-connections/boat-port-forward";
 import { BoatTools } from "../mcp-connections/boat-tools";
 import { FAKE_HOST_KEY, FAKE_PUBLIC_KEY, fakeTunnelRuntime } from "./helpers/boat-tunnel-fake";
 
@@ -133,7 +133,8 @@ describe("Boat port forwards", () => {
           // The pinned key is the one Boat returned, alone, in both databases.
           const knownHosts = optionValue(tunnel.args, "UserKnownHostsFile")!.replaceAll("\"", "");
           expect(optionValue(tunnel.args, "GlobalKnownHostsFile")).toBe(optionValue(tunnel.args, "UserKnownHostsFile"));
-          expect(machine.files.get(knownHosts)).toBe(`${sandboxId} ${FAKE_HOST_KEY}\n`);
+          // On Windows the option carries forward slashes; the file is the same.
+          expect(machine.files.get(path.normalize(knownHosts))).toBe(`${sandboxId} ${FAKE_HOST_KEY}\n`);
           // The destination is one argument that cannot be read as an option.
           const destination = tunnel.args.at(-1)!;
           expect(destination).toMatch(/^[a-z_][a-z0-9_-]*@[A-Za-z0-9:][A-Za-z0-9.:-]*$/);
@@ -271,6 +272,18 @@ describe("Boat port forwards", () => {
     });
     expect(machine.directories.size).toBe(0);
     expect(machine.files.size).toBe(0);
+  });
+
+  it("runs the system's Win32-OpenSSH on Windows when it is there, whatever PATH holds", () => {
+    const system = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "OpenSSH", "ssh.exe");
+    expect(openSshCommand("ssh", "win32", (file) => file === system)).toBe(system);
+    expect(openSshCommand("ssh-keygen", "win32", (file) => file === system.replace("ssh.exe", "ssh-keygen.exe")))
+      .toBe(system.replace("ssh.exe", "ssh-keygen.exe"));
+    // Not installed: whatever PATH finds, rather than no tunnel at all.
+    expect(openSshCommand("ssh", "win32", () => false)).toBe("ssh");
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(openSshCommand("ssh", platform, () => true)).toBe("ssh");
+    }
   });
 
   it("hands Windows ssh each path in an option value as the same file", () => {

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { boatTunnelArgs, systemTunnelRuntime } from "../mcp-connections/boat-port-forward";
+import { boatTunnelArgs, openSshCommand, systemTunnelRuntime } from "../mcp-connections/boat-port-forward";
 
 /**
  * The tunnel's real `ssh-keygen` and `ssh` on this machine, with the exact
@@ -30,7 +30,7 @@ const NOT_A_CONNECTION_ERROR = /bad configuration option|command-line line|unpro
 /** `ssh -V`, quoted in each failure so it names the client that ran. */
 async function sshVersion(): Promise<string | undefined> {
   try {
-    return (await run("ssh", ["-V"], { windowsHide: true })).stderr.trim();
+    return (await run(openSshCommand("ssh"), ["-V"], { windowsHide: true })).stderr.trim();
   } catch {
     // Windows ships the OpenSSH client and must have it; elsewhere it may be absent.
     return process.platform === "win32" ? "no ssh on PATH" : undefined;
@@ -41,7 +41,8 @@ const version = await sshVersion();
 
 describe.runIf(version !== undefined)("the system tunnel runtime", () => {
   it("makes a key ssh will load and starts ssh with options it accepts, failing only to connect", async () => {
-    // On Windows, the client that applies Windows ACLs, not Git's MSYS ssh.
+    // On Windows, the system's client that applies Windows ACLs, which the
+    // runtime prefers to Git's MSYS ssh (first on PATH on windows-latest).
     if (process.platform === "win32") expect(version).toMatch(/^OpenSSH_for_Windows/);
     const directory = await runtime.makeDirectory();
     made.push(directory);
@@ -49,7 +50,7 @@ describe.runIf(version !== undefined)("the system tunnel runtime", () => {
     expect(publicKey).toMatch(/^ssh-ed25519 [A-Za-z0-9+/=]+ pwragent-forward$/);
 
     // Refused with "UNPROTECTED PRIVATE KEY FILE" when others can read it.
-    const derived = await run("ssh-keygen", ["-y", "-f", privateKeyPath], { windowsHide: true })
+    const derived = await run(openSshCommand("ssh-keygen"), ["-y", "-f", privateKeyPath], { windowsHide: true })
       .catch((error: { stderr?: string }) => ({ stdout: "", stderr: error.stderr ?? String(error) }));
     expect(derived.stderr, version).not.toMatch(NOT_A_CONNECTION_ERROR);
     expect(derived.stdout.trim().split(" ").slice(0, 2), version).toEqual(publicKey.split(" ").slice(0, 2));
@@ -67,7 +68,7 @@ describe.runIf(version !== undefined)("the system tunnel runtime", () => {
     });
 
     // Every option parsed as meant, the quoted path included.
-    const resolved = await run("ssh", ["-G", ...args], { windowsHide: true });
+    const resolved = await run(openSshCommand("ssh"), ["-G", ...args], { windowsHide: true });
     const setting = (name: string): string | undefined => resolved.stdout
       .split(/\r?\n/)
       .find((line) => line.toLowerCase().startsWith(`${name} `))
@@ -80,7 +81,7 @@ describe.runIf(version !== undefined)("the system tunnel runtime", () => {
     expect(setting("port")).toBe(String(closedPort));
 
     // The known-hosts file reads as one entry for the sandbox's alias.
-    const found = await run("ssh-keygen", ["-F", "bx_system", "-f", knownHostsPath], { windowsHide: true });
+    const found = await run(openSshCommand("ssh-keygen"), ["-F", "bx_system", "-f", knownHostsPath], { windowsHide: true });
     expect(found.stdout).toContain("bx_system ssh-ed25519");
 
     const child = runtime.spawn(args);

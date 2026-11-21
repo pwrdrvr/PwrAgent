@@ -199,9 +199,12 @@ Rules, each held by `boat-port-forward.property.test.ts`:
   session that asked for it ends, when the key is removed, and when the app
   quits. Its key directory is removed with it.
 
-On Windows the `ssh` on PATH is normally the system's Win32-OpenSSH. It was
-checked on Windows Server 2022 (`OpenSSH_for_Windows_9.5p2`) on 2026-11-21,
-and `boat-port-forward.system.test.ts` checks it in the Windows CI lane. That
+On Windows the tunnel runs the system's Win32-OpenSSH
+(`%SystemRoot%\System32\OpenSSH`) when it is installed, and only otherwise
+the `ssh` on PATH: Git for Windows can put its MSYS build first, as it does on
+GitHub's windows-latest (`OpenSSH_10.6p1`). The system client was checked on
+Windows Server 2022 (`OpenSSH_for_Windows_9.5p2`) on 2026-11-21, and
+`boat-port-forward.system.test.ts` checks it in the Windows CI lane. That
 client refuses a private key
 other users can read; the key `ssh-keygen` writes into the temporary directory
 carries only the owner's, SYSTEM's and Administrators' access, which it
