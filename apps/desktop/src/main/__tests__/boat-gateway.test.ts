@@ -7,6 +7,7 @@ import { BOAT_TOOLS } from "../mcp-connections/boat-tools";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import type { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
+import { FAKE_HOST_KEY, fakeTunnelRuntime } from "./helpers/boat-tunnel-fake";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 
 /**
@@ -66,6 +67,9 @@ function fakeBoat(acceptedKey = KEY) {
         content: `box_shadow_blur_radius: 4px; /* ${KEY} */`,
       });
     }
+    if (segments[2] === "sshkey") {
+      return answer(200, { ok: true, machineIp: "203.0.113.10", sshUser: "user", hostKey: FAKE_HOST_KEY });
+    }
     if (segments[2] === "host") {
       return answer(200, {
         ok: true, port: 3000, access: "private", isProtected: true,
@@ -83,14 +87,19 @@ function fakeBoat(acceptedKey = KEY) {
  */
 function requiredAction(method: string, segments: readonly string[]): string {
   if (segments[0] === "limits") return "account.read";
+  // Boat documents `snapshot.read` for reading; a save is taken to be a write.
+  if (segments[0] === "saved-snapshots") return method === "GET" ? "snapshot.read" : "snapshot.write";
   if (segments.length === 1) return method === "POST" ? "sandbox.create" : "sandbox.read";
   if (segments.length === 2) {
     return method === "DELETE" ? "sandbox.delete" : method === "PATCH" ? "sandbox.update" : "sandbox.read";
   }
   switch (segments[2]) {
     case "commands": return "exec";
-    case "files": return method === "PUT" ? "file.write" : "file.read";
+    case "files":
+      if (segments[3] === "upload-url") return "file.write";
+      return method === "PUT" ? "file.write" : "file.read";
     case "host": return "host";
+    case "sshkey": return "ssh";
     case "stop": return "sandbox.stop";
     case "resume": return "sandbox.resume";
     case "fork": return "sandbox.fork";
@@ -128,14 +137,19 @@ function toolArguments(name: string, sandboxId: string): Record<string, unknown>
   switch (name) {
     case "create_sandbox":
     case "list_sandboxes":
+    case "list_snapshots":
     case "account_status": return {};
+    case "save_snapshot": return { sandboxId, name: "deps" };
+    case "get_snapshot": return { name: "deps" };
     case "exec": return { sandboxId, command: "true" };
     case "command_status":
     case "kill_command": return { sandboxId, processId: 1 };
     case "read_file": return { sandboxId, path: "/app/theme.css" };
     case "write_file": return { sandboxId, path: "/app/theme.css", content: "a" };
     case "list_files": return { sandboxId, path: "/app" };
-    case "host_port": return { sandboxId, port: 3000 };
+    case "host_port":
+    case "forward_port":
+    case "close_port_forward": return { sandboxId, port: 3000 };
     case "extend_sandbox": return { sandboxId, ttlMinutes: 30 };
     default: return { sandboxId };
   }
@@ -169,6 +183,7 @@ function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: 
       }
     },
   };
+  const tunnels = fakeTunnelRuntime();
   const service = new McpConnectionGatewayService({
     sandboxer: sandboxerStub(),
     registry,
@@ -184,6 +199,7 @@ function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: 
     },
     leaseManager: null,
     fetchFn: boat.fetchFn,
+    boatTunnelRuntime: tunnels.runtime,
     stdioSecrets,
     threadSandboxes: threadSandboxes as never,
   });
@@ -203,7 +219,7 @@ function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: 
     internals.grants.set(token, grant);
     return await internals.dispatchBridgeOperation(token, grant, "tools/call", { name, arguments: args });
   };
-  return { boat, call, registry, rows, service, stored };
+  return { boat, call, registry, rows, service, stored, tunnels };
 }
 
 describe("Boat through the MCP gateway", () => {
@@ -293,7 +309,76 @@ describe("Boat through the MCP gateway", () => {
     }
 
     expect(boat.refused).toEqual([]);
-    expect(failed).toEqual([]);
+    // This harness's thread has no directory, so a push or pull stops before
+    // Boat; boat-workspace.property.test.ts takes them the whole way. Closing
+    // a tunnel is local: Boat is not asked. A save needs the operator's
+    // approval, and this harness has nobody to ask: it read the snapshot
+    // list from Boat, then stopped.
+    expect(failed).toEqual(["push_workspace", "pull_changes", "close_port_forward", "save_snapshot"]);
+  });
+
+  it("lets a window list, stop and delete only the sandboxes its thread created", async () => {
+    const { boat, call, registry, service } = harness();
+    registry.setEnabled(BOAT, true);
+    await service.connectBoat(KEY);
+    const thread = (threadId: string) => ({ backend: "codex", threadId });
+
+    // A thread with nothing recorded is answered without asking Boat.
+    const before = boat.sent.length;
+    await expect(service.listThreadBoatSandboxes(thread("thread-a"))).resolves.toEqual({ sandboxes: [] });
+    expect(boat.sent.length).toBe(before);
+
+    await call("thread-a", "create_sandbox", {});
+    await call("thread-b", "create_sandbox", {});
+    const mine = (await service.listThreadBoatSandboxes(thread("thread-a"))).sandboxes;
+    const theirs = (await service.listThreadBoatSandboxes(thread("thread-b"))).sandboxes;
+    expect(mine.map((sandbox) => sandbox.id)).toEqual(["bx_0"]);
+    expect(theirs.map((sandbox) => sandbox.id)).toEqual(["bx_1"]);
+    expect(JSON.stringify(mine)).not.toContain(KEY);
+
+    // The window's thread decides what it reaches, exactly as for an agent.
+    for (const action of ["stop", "delete"] as const) {
+      const sent = boat.sent.length;
+      await expect(service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_1", action }))
+        .rejects.toThrow();
+      expect(boat.sent.slice(sent).filter((request) => request.method !== "GET")).toEqual([]);
+    }
+
+    await service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_0", action: "stop" });
+    expect(boat.sent.at(-2)).toMatchObject({ method: "POST", url: expect.stringContaining("/sandboxes/bx_0/stop") });
+    await service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_0", action: "delete" });
+    expect(boat.sent.some((request) => request.method === "DELETE" && request.url.endsWith("/sandboxes/bx_0")))
+      .toBe(true);
+    expect(boat.sent.some((request) => request.url.includes("bx_1") && request.method !== "GET")).toBe(false);
+  });
+
+  it("answers a window's delete of a sandbox Boat no longer has with the list, not an error", async () => {
+    const real = fakeBoat();
+    const boat = {
+      sent: real.sent,
+      fetchFn: async (input: string | URL, init?: RequestInit): Promise<Response> => {
+        // Deleted in Boat's dashboard: it is not there to read or delete.
+        if (String(input).endsWith("/sandboxes/bx_0") && init?.method !== "POST") {
+          real.sent.push({ method: init?.method ?? "GET", url: String(input), authorization: null });
+          return new Response(
+            JSON.stringify({ ok: false, code: "not_found", error: "no such sandbox" }),
+            { status: 404, headers: { "content-type": "application/json" } },
+          );
+        }
+        return await real.fetchFn(input, init);
+      },
+    };
+    const { call, registry, rows, service } = harness(boat);
+    registry.setEnabled(BOAT, true);
+    await service.connectBoat(KEY);
+    await call("thread-a", "create_sandbox", {});
+    const thread = { backend: "codex", threadId: "thread-a" };
+
+    await expect(service.changeThreadBoatSandbox({ ...thread, sandboxId: "bx_0", action: "delete" }))
+      .resolves.toEqual({ sandboxes: [] });
+    expect(rows.find((row) => row.sandboxId === "bx_0")?.status).toBe("deleted");
+    // Stopping what is not there is still an error.
+    await expect(service.changeThreadBoatSandbox({ ...thread, sandboxId: "bx_0", action: "stop" })).rejects.toThrow();
   });
 
   it("asks for a new sign-in once Boat refuses the stored key a sandbox", async () => {

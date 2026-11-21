@@ -85,9 +85,20 @@ stated as properties in `boat-tools.property.test.ts`.
 - **Credentials stay out.** While `boat_keep_credentials_out` is on (the
   default), create, resume, and fork send `noEnv: true`, so the account's
   GitHub token, secrets, and model keys never enter a sandbox.
-- **Caps are refusals.** A size above `boat_max_type` or an auto-stop above
-  `boat_max_ttl_minutes` is refused with the limit named. It is not clamped
-  and does not prompt.
+- **Above a cap, the operator is asked.** A size above `boat_max_type` or an
+  auto-stop above `boat_max_ttl_minutes` puts one question to the operator,
+  naming each value and its limit. Approval covers that one request and
+  changes no setting. Declined, or with nobody to ask (a caller that cannot
+  show a prompt), the request is refused with the limit named. It is never
+  clamped. No auto-stop is set further out than a week, approved or not.
+- **Named snapshots are the operator's.** `save_snapshot` saves a thread's
+  own sandbox under a name so later sandboxes start warm
+  (`create_sandbox` with `fromSnapshot`). It always asks first, saying that
+  the snapshot outlives the thread, whether it replaces one, and what Boat
+  charges beyond the plan's included count. PwrAgent keeps no record of
+  named snapshots and never deletes one: they are a project's start-up
+  images, kept on purpose. `fromSnapshot` takes a snapshot name only, never
+  a share code, which would start someone else's machine image.
 - **Named fields only.** Each request is built from the fields a tool
   declares; unknown arguments never reach Boat.
 - **A fork copies a finished snapshot.** While a stopped sandbox is `stopping`
@@ -98,9 +109,14 @@ stated as properties in `boat-tools.property.test.ts`.
   it was copied. Seen with a real account on 2026-11-20.
 
 A fresh sandbox reports `idle`, not `ready`, and accepts commands in both
-states; the tool instructions say so. Named snapshots are not offered: Boat
-refuses them on a trial plan (`trial_saved_snapshots_not_allowed`), and a
-stopped sandbox already keeps its disk for resume and fork.
+states; the tool instructions say so. Boat refuses to save a named snapshot
+on a trial plan (`trial_saved_snapshots_not_allowed`); the tool passes that
+on. `account_status` and `list_snapshots` report how many the plan includes.
+
+The question reaches the operator as an MCP form elicitation from PwrAgent's
+in-process Boat server, routed by the gateway to the one tool call that
+caused it (`mcp-upstream-elicitation.ts`). It is an upstream form, not a
+host tool approval, so no access mode or approval policy answers it.
 - **Cleanup is narrow.** PwrAgent's own cleanup session can stop and delete a
   thread's sandboxes and nothing else.
 
@@ -130,7 +146,87 @@ Creating, forking, and deleting write one `thread_sandboxes` row each, through
 the store calls the `thread-sandbox-record-created` and
 `thread-sandbox-cleanup-two` write budgets already measure.
 
-## Not built yet
+## The thread's sandboxes in the MCP access panel
 
-`forward_port` (a localhost tunnel), workspace push and pull, and per-sandbox
-cost in the thread panel. Each has a to-do card.
+`ThreadBoatSandboxes` lists what a thread on this machine created, with state,
+size and what Boat has billed so far, and offers Stop and a two-step Delete.
+The window calls `listThreadBoatSandboxes` and `changeThreadBoatSandbox` on the
+gateway service, which run `list_sandboxes`, `stop_sandbox` and
+`delete_sandbox` through `BoatTools` with the thread's own scope. The window
+therefore reaches exactly what the thread's agent reaches, and a sandbox id
+from another thread is refused before Boat is asked. A thread with no recorded
+sandboxes is answered without a request to Boat. A remote thread shows no
+section: the key and the bill belong to its owner.
+
+## Port forwards
+
+`forward_port` makes a port in a running sandbox answer at `127.0.0.1` on the
+operator's computer. `boat-port-forward.ts` opens it with the system `ssh`,
+not `boat forward`: the CLI would need the API key in a child process's
+environment, where any process of the same user can read it. PwrAgent makes
+an ed25519 key pair for the one tunnel with `ssh-keygen`, sends the public
+half to `POST /sandboxes/{id}/sshkey` (the `ssh` key action), and starts
+`ssh -N -L 127.0.0.1:<free port>:127.0.0.1:<port>`. The child holds only that
+private key, which opens nothing but the sandbox it was registered on. A key
+minted before this action was added is refused by Boat, and the tool says to
+sign in again.
+
+Rules, each held by `boat-port-forward.property.test.ts`:
+
+- The listener binds `127.0.0.1`. No argument changes the bind address, adds
+  a reverse or dynamic forward, or picks the local port.
+- The server must present the host key Boat returned (`StrictHostKeyChecking`
+  with a known-hosts file holding that one key). An answer without a host key
+  opens no tunnel. The user's ssh config, agent and known hosts are not read.
+- What Boat returns for host and user is checked against a pattern before it
+  reaches the command line.
+- A tunnel closes when the sandbox is stopped, resumed or deleted (by an
+  agent, the panel, or PR cleanup), when `ssh` exits, when the last MCP
+  session that asked for it ends, when the key is removed, and when the app
+  quits. Its key directory is removed with it.
+
+Nothing is written to SQLite for a tunnel: it does not survive a restart.
+
+## Moving a thread's directory
+
+`push_workspace` copies a thread directory into a sandbox and `pull_changes`
+brings the sandbox's edits back. `boat-workspace.ts` holds the rules and
+`boat-workspace.property.test.ts` checks them with real Git and tar against a
+sandbox that runs the scripts it is sent.
+
+Push:
+
+- The directory is the thread's working directory, or one of its other
+  directories named by absolute path. The gateway reads them through the same
+  resolver that reports MCP roots. Any other path is refused before a file is
+  read.
+- The file list is `git ls-files --cached --others --exclude-standard`: what
+  Git tracks, plus untracked files no ignore rule covers. A file named `.env`,
+  `.env.*` or `.envrc` at any depth is left out even when it is tracked, and the answer
+  counts how many were.
+- The files go as one gzip tar (at most 200 MiB) to a signed upload URL from
+  `POST /sandboxes/{id}/files/upload-url`. The Boat key is not sent to that
+  URL.
+- A script unpacks it at `remotePath` (under `/home/user` or `/tmp`, plain
+  characters only), runs `git init`, commits, and tags the commit
+  `pwragent-base`. A `remotePath` that already holds files is refused unless
+  `replace` is true.
+
+Pull:
+
+- A script stages everything in the sandbox copy and writes
+  `git diff --binary --cached pwragent-base` to a file, which comes back
+  through a signed download URL (at most 100 MiB).
+- `git apply --check` runs against the local files as they are. If any change
+  does not fit, nothing is written and the answer quotes Git. Otherwise
+  `git apply` writes the changes to the working tree, uncommitted and
+  unstaged.
+- Uncommitted local changes are never discarded. A local change to a file the
+  sandbox also changed refuses the pull; a local change elsewhere stays, and
+  the answer says local changes were kept.
+- A patch that names a path inside `.git` is refused by PwrAgent, and one that
+  leaves the directory is refused by Git.
+- After a pull lands, the sandbox copy commits and moves `pwragent-base`, so
+  the next pull carries only newer changes.
+
+Neither tool writes to SQLite.

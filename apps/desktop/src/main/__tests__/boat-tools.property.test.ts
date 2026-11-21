@@ -8,7 +8,7 @@ import {
   type BoatSandboxType,
 } from "@pwragent/shared/contracts/mcp-connections";
 import { BoatApiError, type BoatApiRequest } from "../mcp-connections/boat-api";
-import { BOAT_TOOLS, BoatTools, type BoatToolRole } from "../mcp-connections/boat-tools";
+import { BOAT_TOOLS, BoatTools, type BoatConfirm, type BoatToolRole } from "../mcp-connections/boat-tools";
 
 /**
  * The rules PwrAgent's Boat tools hold for any arguments an agent sends,
@@ -40,6 +40,17 @@ function fakeBoat() {
       sent.push(request);
       const [root, id, action] = request.path;
       if (root === "limits") return { ok: true, canStart: true, activeSandboxes: sandboxes.size, maxActiveSandboxes: 100, email: ACCOUNT_EMAIL };
+      if (root === "saved-snapshots") {
+        if (request.method === "POST") {
+          return { ok: true, status: "saving", snapshot: { name: request.body?.name, status: "saving", sourceSandboxId: "bx_secret", org: ACCOUNT_EMAIL } };
+        }
+        if (id) return { ok: true, snapshot: { name: id, status: "ready", sizeBytes: 1, sourceSandboxId: "bx_secret" } };
+        return {
+          ok: true,
+          snapshots: [{ name: "taken", status: "ready", sourceSandboxId: "bx_secret" }],
+          allowance: { included: 10, used: 10, pricePerExtraDailyDollars: 0.056, orgName: ACCOUNT_EMAIL },
+        };
+      }
       if (root !== "sandboxes") throw new BoatApiError(`unexpected path with ${KEY}`, "failed", 500);
       if (!id) {
         const created = `bx_${next++}`;
@@ -119,7 +130,8 @@ const hostileArgs = fc.record({
   detached: fc.boolean(),
   localhost: fc.boolean(),
   env: fc.oneof(fc.dictionary(fc.string(), fc.string(), { maxKeys: 4 }), fc.constant({ A: "1" })),
-  name: fc.string({ maxLength: 20 }),
+  name: fc.oneof(fc.string({ maxLength: 20 }), fc.constantFrom("deps", "taken")),
+  fromSnapshot: fc.constantFrom("deps", "bsh_sharecode", "Latest", "latest", 7),
 }, { requiredKeys: [] });
 
 const step = fc.record({ thread: fc.integer({ min: 0, max: 1 }), tool: toolName, args: hostileArgs });
@@ -227,6 +239,126 @@ describe("PwrAgent's Boat tools", () => {
     const allowed = await tools.call("create_sandbox", { type: "default", ttlMinutes: 30 });
     expect(allowed.isError).toBeUndefined();
     expect(boat.sent[0]?.body).toMatchObject({ type: "default", ttlSeconds: 1800, noEnv: true });
+  });
+
+  it("goes above a cap only for the one request the operator approved, and asks once", async () => {
+    // Model: a start is sent iff nothing is above a cap, or the operator
+    // approved. The operator is asked iff something is above a cap, once,
+    // and is told every value that is. What is sent is what was asked for.
+    await fc.assert(fc.asyncProperty(
+      policyArbitrary,
+      fc.constantFrom("create_sandbox", "resume_sandbox", "fork_sandbox", "extend_sandbox"),
+      fc.option(fc.constantFrom(...BOAT_SANDBOX_TYPES), { nil: undefined }),
+      fc.option(fc.integer({ min: 1, max: 10_080 }), { nil: undefined }),
+      fc.constantFrom<Awaited<ReturnType<BoatConfirm>>>("approved", "declined", "unavailable"),
+      async (policy, name, type, ttlMinutes, answer) => {
+        fc.pre(name !== "extend_sandbox" || ttlMinutes !== undefined);
+        const boat = fakeBoat();
+        const { tools } = session(boat, policy);
+        await tools.call("create_sandbox", {});
+        boat.sent.length = 0;
+        const questions: string[] = [];
+        const confirm: BoatConfirm = async (message) => {
+          questions.push(message);
+          return answer;
+        };
+        const sizeOver = name !== "extend_sandbox" && type !== undefined
+          && BOAT_SANDBOX_TYPES.indexOf(type) > BOAT_SANDBOX_TYPES.indexOf(policy.maxType);
+        const timeOver = ttlMinutes !== undefined && ttlMinutes > policy.maxTtlMinutes;
+
+        const result = await tools.call(
+          name,
+          { sandboxId: "bx_0", ...(type ? { type } : {}), ...(ttlMinutes ? { ttlMinutes } : {}) },
+          undefined,
+          confirm,
+        );
+
+        const changed = boat.sent.filter((request) => request.method !== "GET");
+        if (!sizeOver && !timeOver) {
+          expect(questions).toEqual([]);
+          expect(changed).toHaveLength(1);
+        } else {
+          expect(questions).toHaveLength(1);
+          if (sizeOver) expect(questions[0]).toContain(`size ${type} (your limit is ${policy.maxType})`);
+          if (timeOver) expect(questions[0]).toContain(`${ttlMinutes} minutes (your limit is ${policy.maxTtlMinutes})`);
+          expect(changed).toHaveLength(answer === "approved" ? 1 : 0);
+          expect(result.isError === true).toBe(answer !== "approved");
+        }
+        for (const request of changed) {
+          if (type && name !== "extend_sandbox") expect(request.body?.type).toBe(type);
+          if (ttlMinutes) expect(request.body?.ttlSeconds).toBe(ttlMinutes * 60);
+        }
+      },
+    ));
+  });
+
+  it("saves a named snapshot only once the operator, told what it costs, approves", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("deps", "taken"),
+      fc.constantFrom<Awaited<ReturnType<BoatConfirm>>>("approved", "declined", "unavailable"),
+      async (name, answer) => {
+        const boat = fakeBoat();
+        const { tools } = session(boat, normalizeBoatSandboxPolicy(undefined));
+        await tools.call("create_sandbox", {});
+        const questions: string[] = [];
+        const result = await tools.call("save_snapshot", { sandboxId: "bx_0", name }, undefined, async (message) => {
+          questions.push(message);
+          return answer;
+        });
+
+        const saves = boat.sent.filter((request) => request.method === "POST" && request.path[0] === "saved-snapshots");
+        expect(saves).toHaveLength(answer === "approved" ? 1 : 0);
+        expect(result.isError === true).toBe(answer !== "approved");
+        // Asked every time, about this snapshot, with its lifetime and price.
+        expect(questions).toHaveLength(1);
+        expect(questions[0]).toContain(`"${name}" from sandbox bx_0`);
+        expect(questions[0]).toContain("after this thread ends");
+        expect(questions[0]).toContain("PwrAgent never deletes it");
+        expect(questions[0]).toContain(name === "taken"
+          ? "It replaces the snapshot already named"
+          : "Boat charges $0.056 a day for it");
+        if (answer === "approved") {
+          expect(saves[0]?.body).toEqual({ sandboxId: "bx_0", name });
+          // Nothing about the account or the source rides back.
+          expect(JSON.stringify(result)).not.toContain("bx_secret");
+          expect(JSON.stringify(result)).not.toContain(ACCOUNT_EMAIL);
+        }
+      },
+    ));
+  });
+
+  it("saves a snapshot only of the thread's own sandbox, and starts only from a snapshot name", async () => {
+    const boat = fakeBoat();
+    const { tools } = session(boat, normalizeBoatSandboxPolicy(undefined));
+    const approve: BoatConfirm = async () => "approved";
+    // Another thread's sandbox: refused before the operator is bothered.
+    const other = session(boat, normalizeBoatSandboxPolicy(undefined));
+    await other.tools.call("create_sandbox", {});
+    boat.sent.length = 0;
+    let asked = 0;
+    await expect(tools.call("save_snapshot", { sandboxId: "bx_0", name: "deps" }, undefined, async () => {
+      asked += 1;
+      return "approved";
+    })).resolves.toMatchObject({ isError: true });
+    expect(asked).toBe(0);
+    expect(boat.sent).toEqual([]);
+
+    // A share code is someone else's machine image; a reserved word is not a name.
+    for (const fromSnapshot of ["bsh_sharecode", "Deps", "latest", "a/b", ""]) {
+      await expect(tools.call("create_sandbox", { fromSnapshot }, undefined, approve)).resolves.toMatchObject({ isError: true });
+    }
+    expect(boat.sent).toEqual([]);
+
+    const started = await tools.call("create_sandbox", { fromSnapshot: "deps" });
+    expect(started.isError).toBeUndefined();
+    // The snapshot's own size is kept; auto-stop and credentials still apply.
+    expect(boat.sent[0]?.body).toMatchObject({ from: "deps", ttlSeconds: 3600, noEnv: true });
+    expect(boat.sent[0]?.body).not.toHaveProperty("type");
+
+    // PwrAgent's cleanup can save nothing.
+    const cleanup = session(boat, normalizeBoatSandboxPolicy(undefined), "cleanup");
+    await expect(cleanup.tools.call("save_snapshot", { sandboxId: "bx_1", name: "deps" }, undefined, approve))
+      .resolves.toMatchObject({ isError: true });
   });
 
   it("sends public: false for every hosted port, whatever else the call carries", async () => {

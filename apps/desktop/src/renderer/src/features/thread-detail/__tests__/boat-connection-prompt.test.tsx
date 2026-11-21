@@ -246,6 +246,8 @@ describe("BoatSetupDetail sign-in", () => {
     expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Get the Boat CLI" })).toBeInTheDocument();
+    // A pasted key is told what it must be allowed to do.
+    expect(screen.getByText(/sandbox\.create, .*snapshot\.write, account\.read/)).toBeInTheDocument();
   });
 });
 

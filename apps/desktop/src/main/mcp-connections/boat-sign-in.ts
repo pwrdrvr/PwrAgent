@@ -4,6 +4,7 @@ import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import {
+  BOAT_KEY_ACTIONS,
   BOAT_ORIGIN,
   normalizeBoatApiKey,
   redactBoatApiKeys,
@@ -34,31 +35,6 @@ import {
  */
 
 export const BOAT_CLI_INSTALL_PATH = join(".ascii", "bin", process.platform === "win32" ? "boat.exe" : "boat");
-/**
- * What the minted key may do: one action per kind of request the Boat tools
- * make, and nothing else. Boat's `full-sandbox` preset is not enough: it
- * leaves out create, resume, fork and delete. No SSH, desktop stream, agent
- * prompt, environment or account write is granted.
- *
- * `sandbox.delete` rather than `sandbox.delete-own`: a key from a later
- * sign-in must still delete what an earlier key created, or cleanup after a
- * pull request closes would leave those sandboxes billing. PwrAgent, the
- * key's only holder, limits each thread to the sandboxes it created.
- */
-export const BOAT_KEY_ACTIONS = [
-  "sandbox.create",
-  "sandbox.read",
-  "sandbox.update",
-  "sandbox.stop",
-  "sandbox.resume",
-  "sandbox.fork",
-  "sandbox.delete",
-  "exec",
-  "file.read",
-  "file.write",
-  "host",
-  "account.read",
-] as const;
 /** The key PwrAgent mints: those actions only, and it expires. */
 export const BOAT_KEY_ARGS = [
   "api-key", "create", "PwrAgent", "--actions", BOAT_KEY_ACTIONS.join(","), "--ttl", "90d", "--json",
@@ -91,7 +67,14 @@ export type BoatSignInOptions = {
   now?: () => number;
 };
 
-type Attempt = { home: string; cli: string; controller: AbortController; url?: string };
+type Attempt = {
+  home: string;
+  cli: string;
+  controller: AbortController;
+  url?: string;
+  /** Set once the wait has started: it ends the session and removes the home. */
+  finishing?: Promise<void>;
+};
 
 export class BoatSignIn {
   private attempt?: Attempt;
@@ -159,7 +142,7 @@ export class BoatSignIn {
     attempt.url = link.url;
     this.current = { state: "waiting", method, userCode: link.userCode, expiresAt: link.expiresAt };
     this.options.onChanged();
-    void this.finish(attempt, link.expiresAt);
+    attempt.finishing = this.finish(attempt, link.expiresAt);
     return this.current;
   }
 
@@ -174,14 +157,27 @@ export class BoatSignIn {
     }
   }
 
-  /** Stops waiting. The link already open in the browser stops mattering. */
-  async cancel(): Promise<void> {
+  /**
+   * Stops waiting. The link already open in the browser stops mattering.
+   *
+   * The throwaway home is not removed here once the wait has started: the
+   * operator may already have approved, and the session that opened can only
+   * be revoked with the token in that home. The wait revokes it, then
+   * removes the home. `wait` holds until that is done; a caller inside the
+   * sign-in itself must not ask for it.
+   */
+  async cancel(options: { wait?: boolean } = {}): Promise<void> {
     const attempt = this.attempt;
     const had = this.current !== undefined;
     this.current = undefined;
     if (attempt) {
       attempt.controller.abort();
-      await this.release(attempt);
+      if (attempt.finishing) {
+        this.attempt = undefined;
+        if (options.wait) await attempt.finishing;
+      } else {
+        await this.release(attempt);
+      }
     }
     if (attempt || had) this.options.onChanged();
   }
@@ -220,8 +216,10 @@ export class BoatSignIn {
         await this.run(cli, ["api-key", "revoke", unstoredKeyId, "--json"], { home, timeoutMs: STEP_TIMEOUT_MS })
           .catch(() => undefined);
       }
-      if (signedIn) {
-        // Revokes the session this sign-in opened. The key outlives it.
+      if (signedIn || signal.aborted) {
+        // Revokes the session this sign-in opened. The key outlives it. A
+        // cancelled wait may have been approved a moment before, so it is
+        // asked too; with no session the CLI has nothing to do.
         await this.run(cli, ["logout"], { home, timeoutMs: STEP_TIMEOUT_MS }).catch(() => undefined);
       }
       const wasCurrent = this.attempt === attempt;
