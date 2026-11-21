@@ -1119,6 +1119,17 @@ describe("tooltip observation budgets", () => {
     const geometry = vi.fn(() => rectangle({ left: 20, top: 80, width: 200, height: 26 }));
     anchor.getBoundingClientRect = geometry;
     const { request, drain } = runFramesAfterDelivery();
+    // The native observer's initial notification, for the box on entry. It
+    // costs no geometry read; the size change below does.
+    act(() => {
+      for (const callback of resizeCallbacks) {
+        callback([{
+          target: anchor,
+          borderBoxSize: [{ inlineSize: 160, blockSize: 26 }],
+        } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+      }
+    });
+    expect(request).toHaveBeenCalledTimes(0);
     rerender(<AnchorLifecycleFixture anchorLabel="A much longer streamed label" />);
     await deliverMutations();
     expect(request).toHaveBeenCalledTimes(0);
