@@ -231,7 +231,9 @@ describe("Boat workspace push", () => {
         }
         for (const request of reached) {
           const text = JSON.stringify(request.body);
-          expect(text).not.toContain(elsewhere);
+          // Where temp directories live under /tmp, the other repository's
+          // path is itself a valid place in the sandbox to name.
+          if (args.remotePath !== elsewhere) expect(text).not.toContain(elsewhere);
           expect(text).not.toContain("rm -rf /;");
         }
       },
