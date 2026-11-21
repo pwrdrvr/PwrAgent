@@ -538,17 +538,19 @@ assertWorkflowJobRunner(
   "preview",
   macosRunner,
 );
-for (const expected of [
+assertWorkflowJobContainsText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "test",
   "Select an Xcode with actool 26",
-  "DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}",
-  "PWRAGENT_REQUIRE_ACTOOL: \"1\"",
-]) {
-  assertWorkflowJobContainsText(
-    releaseWorkflow,
-    ".github/workflows/release.yml",
-    "test",
-    expected,
-  );
+);
+for (const stepName of ["Test (unit)", "Retry failed unit tests"]) {
+  for (const expected of [
+    "DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}",
+    'PWRAGENT_REQUIRE_ACTOOL: "1"',
+  ]) {
+    assertWorkflowStepContainsText(releaseWorkflow, ".github/workflows/release.yml", "test", stepName, expected);
+  }
 }
 for (const expected of [
   "host_version=\"$(sw_vers -productVersion)\"",
