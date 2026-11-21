@@ -16,8 +16,8 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
-  // recovery guard, research, request-pricing, sub-agent dismissal, and
-  // operator-request scope changes that followed it.
+  // recovery guard, research, request-pricing, sub-agent dismissal,
+  // operator-request scope, and PR watch index changes that followed it.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
@@ -36,6 +36,8 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.name !== "idx_thread_todos_thread_backend"
     && row.name !== "idx_thread_reviews_backend"
     && row.name !== "idx_thread_reviews_thread_backend"
+    && row.name !== "idx_pr_status_watches_retry"
+    && row.name !== "idx_pr_status_watches_history"
   ).map(row => row.name === "thread_usage_lines"
     ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
     : row) : rows;
@@ -93,6 +95,7 @@ const upgrades = [
   { version: 77, sql: "DROP INDEX idx_thread_todos_dependency; ALTER TABLE thread_todos DROP COLUMN dependency_id" },
   { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
   { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing" },
+  { version: 82, sql: "DROP INDEX idx_pr_status_watches_retry; DROP INDEX idx_pr_status_watches_history" },
 ] as const;
 
 describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {
