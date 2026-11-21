@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
 import type { Transport, FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { BoatPortForwards, type BoatPortForward, type BoatTunnelRuntime } from "./boat-port-forward";
+import { BoatWorkspaceError, type BoatWorkspace, type BoatWorkspaceGit } from "./boat-workspace";
+import { runGitCommand } from "../app-server/git-executable";
 import {
   BOAT_LINKS,
   BOAT_MCP_CONNECTION_ID,
@@ -45,6 +48,8 @@ export type BoatSessionScope = {
   ownedSandboxIds: () => ReadonlySet<string>;
   recordOwned: (sandbox: BoatOwnedSandbox) => void;
   forgetOwned: (sandboxId: string) => void;
+  /** The thread's directories on this machine, its working directory first. */
+  workspaceRoots?: () => Promise<readonly string[]>;
 };
 
 export type BoatConnectionOptions = {
@@ -55,6 +60,8 @@ export type BoatConnectionOptions = {
   now?: () => number;
   /** Stands in for `ssh` and the file system under a port forward, in tests. */
   tunnelRuntime?: BoatTunnelRuntime;
+  /** Runs Git in a thread directory for a push or pull. */
+  git?: BoatWorkspaceGit;
 };
 
 export class BoatConnection {
@@ -191,11 +198,13 @@ export class BoatConnection {
       mcpTypes.load(),
     ]);
     const session = `session-${this.nextSession++}`;
+    const { workspaceRoots, ...owned } = scope;
     const tools = new BoatTools({
       api: this.api,
       policy: this.options.policy,
-      ...scope,
+      ...owned,
       forwards: { manager: this.forwards, session },
+      ...(workspaceRoots ? { workspace: this.workspace(workspaceRoots) } : {}),
     });
     const server = new Server({ name: "pwragent-boat", version: "1" }, {
       capabilities: { tools: {} },
@@ -231,12 +240,44 @@ export class BoatConnection {
   async callTool(scope: BoatSessionScope, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
     // Holds the tunnels so a stop or delete from a window closes them too.
     // The session is never recorded: a window opens no tunnel of its own.
+    const { workspaceRoots: _noDirectories, ...owned } = scope;
     return await new BoatTools({
       api: this.api,
       policy: this.options.policy,
-      ...scope,
+      ...owned,
       forwards: { manager: this.forwards, session: "window" },
     }).call(name, args);
+  }
+
+  private workspace(roots: () => Promise<readonly string[]>): BoatWorkspace {
+    const fetchFn = this.options.fetchFn;
+    return {
+      roots,
+      git: this.options.git ?? (async (cwd, args) => await runGitCommand(cwd, args, { maxBuffer: 64 * 1024 * 1024 })),
+      transfer: {
+        // A signed URL is its own authority: the Boat key is not sent to it.
+        upload: async (url, file, signal) => {
+          const response = await fetchFn(url, {
+            method: "PUT",
+            body: await fs.readFile(file),
+            redirect: "error",
+            ...(signal ? { signal } : {}),
+          });
+          if (!response.ok) throw new BoatWorkspaceError(`Boat did not accept the upload (HTTP ${response.status}).`);
+        },
+        download: async (url, file, limitBytes, signal) => {
+          const response = await fetchFn(url, { method: "GET", redirect: "error", ...(signal ? { signal } : {}) });
+          if (!response.ok) throw new BoatWorkspaceError(`Boat did not return the changes (HTTP ${response.status}).`);
+          const bytes = Buffer.from(await response.arrayBuffer());
+          if (bytes.length > limitBytes) {
+            throw new BoatWorkspaceError(
+              `The sandbox's changes are ${Math.ceil(bytes.length / (1024 * 1024))} MiB, more than a pull brings back. Nothing was changed.`,
+            );
+          }
+          await fs.writeFile(file, bytes, { mode: 0o600 });
+        },
+      },
+    };
   }
 
   /** The tunnels open into these sandboxes. */

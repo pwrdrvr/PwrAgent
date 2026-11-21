@@ -187,6 +187,46 @@ Rules, each held by `boat-port-forward.property.test.ts`:
 
 Nothing is written to SQLite for a tunnel: it does not survive a restart.
 
-## Not built yet
+## Moving a thread's directory
 
-Workspace push and pull.
+`push_workspace` copies a thread directory into a sandbox and `pull_changes`
+brings the sandbox's edits back. `boat-workspace.ts` holds the rules and
+`boat-workspace.property.test.ts` checks them with real Git and tar against a
+sandbox that runs the scripts it is sent.
+
+Push:
+
+- The directory is the thread's working directory, or one of its other
+  directories named by absolute path. The gateway reads them through the same
+  resolver that reports MCP roots. Any other path is refused before a file is
+  read.
+- The file list is `git ls-files --cached --others --exclude-standard`: what
+  Git tracks, plus untracked files no ignore rule covers. A file named `.env`
+  or `.env.*` at any depth is left out even when it is tracked, and the answer
+  counts how many were.
+- The files go as one gzip tar (at most 200 MiB) to a signed upload URL from
+  `POST /sandboxes/{id}/files/upload-url`. The Boat key is not sent to that
+  URL.
+- A script unpacks it at `remotePath` (under `/home/user` or `/tmp`, plain
+  characters only), runs `git init`, commits, and tags the commit
+  `pwragent-base`. A `remotePath` that already holds files is refused unless
+  `replace` is true.
+
+Pull:
+
+- A script stages everything in the sandbox copy and writes
+  `git diff --binary --cached pwragent-base` to a file, which comes back
+  through a signed download URL (at most 100 MiB).
+- `git apply --check` runs against the local files as they are. If any change
+  does not fit, nothing is written and the answer quotes Git. Otherwise
+  `git apply` writes the changes to the working tree, uncommitted and
+  unstaged.
+- Uncommitted local changes are never discarded. A local change to a file the
+  sandbox also changed refuses the pull; a local change elsewhere stays, and
+  the answer says local changes were kept.
+- A patch that names a path inside `.git` is refused by PwrAgent, and one that
+  leaves the directory is refused by Git.
+- After a pull lands, the sandbox copy commits and moves `pwragent-base`, so
+  the next pull carries only newer changes.
+
+Neither tool writes to SQLite.

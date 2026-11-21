@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -11,6 +14,20 @@ import {
 } from "@pwragent/shared/contracts/mcp-connections";
 import { BoatApiError, type BoatApi, type BoatApiRequest } from "./boat-api";
 import { BoatTunnelError, readBoatTunnelTarget, type BoatPortForwards } from "./boat-port-forward";
+import {
+  applyWorkspacePatch,
+  BoatWorkspaceError,
+  diffScript,
+  listWorkspaceFiles,
+  packWorkspace,
+  PULL_LIMIT_BYTES,
+  rebaseScript,
+  resolveWorkspaceRoot,
+  transferName,
+  unpackScript,
+  workspaceRemotePath,
+  type BoatWorkspace,
+} from "./boat-workspace";
 
 /**
  * PwrAgent's tools for Boat sandboxes: what an agent may do, and nothing else.
@@ -46,6 +63,7 @@ export const BOAT_SERVER_INSTRUCTIONS = [
   "A command that may take longer than 30 seconds needs timeoutSeconds (up to 600) or detached: true with command_status to poll.",
   "Sandboxes start with none of the operator's credentials: no GitHub token, model keys or secrets. Write files in with write_file.",
   "host_port returns a private URL that works only with its token. Ports cannot be made public from here.",
+  "push_workspace copies this thread's working directory into a sandbox, without ignored or .env files; pull_changes brings the sandbox's edits back as uncommitted local changes, and changes nothing if they do not fit the local files.",
   "forward_port makes a sandbox port answer at 127.0.0.1 on the operator's computer, for tools running there such as a local browser or database client. It ends when the sandbox stops or resumes.",
   "fork_sandbox copies the source's last saved snapshot, not its live disk: to fork the current state, call stop_sandbox on the source first, then fork it.",
   "A size or auto-stop above the operator's limit asks the operator to approve that one request; say why you need it before you ask.",
@@ -77,6 +95,8 @@ export type BoatToolsContext = {
    * may be opened.
    */
   forwards?: { manager: BoatPortForwards; session: string };
+  /** The thread's directories and how to move them. Absent where none may move. */
+  workspace?: BoatWorkspace;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -184,6 +204,17 @@ export const BOAT_TOOLS: readonly Tool[] = [
     title: { type: "string", maxLength: NAME_LIMIT },
     localhost: { type: "boolean", description: "True when the service listens on 127.0.0.1 only." },
   }, ["sandboxId", "port"]),
+  tool("push_workspace", "Copy this thread's working directory from the operator's computer into a sandbox, so the code under work can build and run there. Sends the files Git tracks or does not ignore; files named .env or .env.* are never sent. The sandbox copy is a fresh Git repository, with no history or remotes. Refused when remotePath already holds files, unless replace is true.", {
+    sandboxId: sandboxIdProperty,
+    directory: { type: "string", description: "One of this thread's directories, as an absolute path. Omit for its working directory." },
+    remotePath: { type: "string", description: "Where it goes in the sandbox, under /home/user or /tmp. Omit for /home/user/<directory name>." },
+    replace: { type: "boolean", description: "Delete what is at remotePath first." },
+  }, ["sandboxId"]),
+  tool("pull_changes", "Bring the changes made in a sandbox copy since push_workspace (or the last pull) back to the thread's directory on the operator's computer, as edits to its files. Nothing is committed. If the local files changed in a way the sandbox's changes do not fit, nothing is changed and the answer says so; local changes are never discarded.", {
+    sandboxId: sandboxIdProperty,
+    directory: { type: "string", description: "The thread directory that was pushed. Omit for its working directory." },
+    remotePath: { type: "string", description: "Where it was pushed. Omit for /home/user/<directory name>." },
+  }, ["sandboxId"]),
   tool("forward_port", "Make a port in a running sandbox reachable on the operator's computer at http://127.0.0.1:<localPort>, over SSH. Only this computer can reach it; for a browser elsewhere use host_port. Returns the local URL. It closes when the sandbox stops or resumes, or when this session ends; call it again afterwards.", {
     sandboxId: sandboxIdProperty,
     port: { type: "integer", minimum: 1, maximum: 65_535, description: "The port inside the sandbox." },
@@ -407,6 +438,72 @@ export class BoatTools {
         }
         return { ...pick(answer, ["port", "url", "localhost"]), access: "private" };
       }
+      case "push_workspace": {
+        const sandboxId = this.owned(args);
+        return await this.moving(async (workspace) => {
+          const root = await resolveWorkspaceRoot(workspace, optionalString(args.directory, "directory", PATH_LIMIT));
+          const remotePath = workspaceRemotePath(optionalString(args.remotePath, "remotePath", PATH_LIMIT), root);
+          const { files, envFilesLeftOut } = await listWorkspaceFiles(root, workspace.git);
+          const packed = await packWorkspace(root, files);
+          try {
+            const archive = transferName("tgz");
+            const target = await send({
+              method: "POST", path: ["sandboxes", sandboxId, "files", "upload-url"], body: { path: archive },
+            });
+            await workspace.transfer.upload(signedUrl(target), packed.archive, signal);
+            const ran = await runScript(send, sandboxId, unpackScript({ archive, remotePath, replace: args.replace === true }));
+            if (ran.stdout.includes("PWRAGENT_EXISTS")) {
+              throw new Refusal(`${remotePath} in the sandbox already holds files. Pass replace: true to delete them first, or choose another remotePath.`);
+            }
+            if (!ran.ok) {
+              throw new Refusal(`The sandbox could not unpack the directory (it needs tar and git): ${ran.said}`);
+            }
+            return {
+              sandboxId, directory: root, remotePath, files: files.length, bytes: packed.bytes, envFilesLeftOut,
+              note: "The sandbox copy is a new Git repository with one commit and no remotes. Ignored files and .env files were not sent; create what the build needs in the sandbox.",
+            };
+          } finally {
+            await fs.rm(packed.directory, { recursive: true, force: true });
+          }
+        });
+      }
+      case "pull_changes": {
+        const sandboxId = this.owned(args);
+        return await this.moving(async (workspace) => {
+          const root = await resolveWorkspaceRoot(workspace, optionalString(args.directory, "directory", PATH_LIMIT));
+          const remotePath = workspaceRemotePath(optionalString(args.remotePath, "remotePath", PATH_LIMIT), root);
+          const patch = transferName("patch");
+          const diffed = await runScript(send, sandboxId, diffScript({ patch, remotePath }));
+          if (diffed.stdout.includes("PWRAGENT_NO_BASE")) {
+            throw new Refusal(`${remotePath} was not put there by push_workspace, so there is no starting point to compare it to.`);
+          }
+          if (!diffed.ok) throw new Refusal(`The sandbox could not list its changes at ${remotePath}: ${diffed.said}`);
+          if (Number(diffed.stdout.trim().split(/\s+/).at(-1)) === 0) {
+            return { sandboxId, directory: root, remotePath, files: [], note: "The sandbox copy has no changes since the last push or pull." };
+          }
+          const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-boat-pull-"));
+          try {
+            const local = path.join(directory, "changes.patch");
+            const source = await send({
+              method: "POST", path: ["sandboxes", sandboxId, "files", "download-url"], body: { path: patch },
+            });
+            await workspace.transfer.download(signedUrl(source), local, PULL_LIMIT_BYTES, signal);
+            const applied = await applyWorkspacePatch(root, local, workspace.git);
+            // The local files now hold these changes; the next pull starts here.
+            const moved = await runScript(send, sandboxId, rebaseScript({ patch, remotePath }));
+            return {
+              sandboxId, directory: root, remotePath, ...applied,
+              note: [
+                "The changes are in the local files, uncommitted.",
+                applied.localChangesKept ? "Uncommitted local changes that were already there are kept alongside them." : "",
+                moved.ok ? "" : `The sandbox did not record this pull (${moved.said}), so the next pull_changes will offer the same changes again and be refused; push_workspace with replace: true starts over.`,
+              ].filter(Boolean).join(" "),
+            };
+          } finally {
+            await fs.rm(directory, { recursive: true, force: true });
+          }
+        });
+      }
       case "forward_port": {
         const sandboxId = this.owned(args);
         const port = requiredInteger(args.port, "port", 1, 65_535);
@@ -545,6 +642,20 @@ export class BoatTools {
   }
 
   /** The id argument, when this session's thread holds that sandbox. */
+  /** A push or pull, with what the workspace refuses reported as a refusal. */
+  private async moving(
+    run: (workspace: BoatWorkspace) => Promise<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
+    const workspace = this.context.workspace;
+    if (!workspace) throw new Refusal("A directory can be pushed or pulled only from a thread's session.");
+    try {
+      return await run(workspace);
+    } catch (error) {
+      if (error instanceof BoatWorkspaceError) throw new Refusal(error.message);
+      throw error;
+    }
+  }
+
   private owned(args: Args): string {
     const sandboxId = args.sandboxId;
     if (typeof sandboxId !== "string" || !SANDBOX_ID_PATTERN.test(sandboxId)) {
@@ -699,6 +810,41 @@ export class BoatTools {
 }
 
 /** A sandbox without who owns the account: no creator, team or address. */
+type Send = (request: Omit<BoatApiRequest, "signal">) => Promise<Record<string, unknown>>;
+
+const SCRIPT_TIMEOUT_SECONDS = 600;
+
+/** Runs one of PwrAgent's own scripts in a sandbox and reads how it ended. */
+async function runScript(
+  send: Send,
+  sandboxId: string,
+  command: string,
+): Promise<{ ok: boolean; stdout: string; said: string }> {
+  const answer = await send({
+    method: "POST", path: ["sandboxes", sandboxId, "commands"],
+    body: { command, timeoutSeconds: SCRIPT_TIMEOUT_SECONDS },
+    timeoutMs: (SCRIPT_TIMEOUT_SECONDS + 30) * 1_000,
+  });
+  const stdout = typeof answer.stdout === "string" ? answer.stdout : "";
+  const stderr = typeof answer.stderr === "string" ? answer.stderr : "";
+  return {
+    ok: answer.exitCode === 0 && answer.timedOut !== true,
+    stdout,
+    said: answer.timedOut === true
+      ? "it did not finish in ten minutes."
+      : (stderr.trim() || stdout.trim() || "it gave no reason.").split(/\r?\n/).slice(-4).join(" ").slice(0, 600),
+  };
+}
+
+/** The URL Boat signed for one transfer. Anything but https is refused. */
+function signedUrl(answer: Record<string, unknown>): string {
+  const url = typeof answer.url === "string" ? answer.url : "";
+  if (!URL.canParse(url) || new URL(url).protocol !== "https:") {
+    throw new Refusal("Boat did not return a transfer URL PwrAgent can use.");
+  }
+  return url;
+}
+
 function describeSandbox(sandbox: unknown): Record<string, unknown> {
   if (!sandbox || typeof sandbox !== "object") return {};
   const described = pick(sandbox as Record<string, unknown>, [

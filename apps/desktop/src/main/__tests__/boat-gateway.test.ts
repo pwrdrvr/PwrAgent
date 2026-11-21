@@ -95,7 +95,9 @@ function requiredAction(method: string, segments: readonly string[]): string {
   }
   switch (segments[2]) {
     case "commands": return "exec";
-    case "files": return method === "PUT" ? "file.write" : "file.read";
+    case "files":
+      if (segments[3] === "upload-url") return "file.write";
+      return method === "PUT" ? "file.write" : "file.read";
     case "host": return "host";
     case "sshkey": return "ssh";
     case "stop": return "sandbox.stop";
@@ -307,10 +309,12 @@ describe("Boat through the MCP gateway", () => {
     }
 
     expect(boat.refused).toEqual([]);
-    // Closing a tunnel is local: Boat is not asked. A save needs the
-    // operator's approval, and this harness has nobody to ask: it read the
-    // snapshot list from Boat, then stopped.
-    expect(failed).toEqual(["close_port_forward", "save_snapshot"]);
+    // This harness's thread has no directory, so a push or pull stops before
+    // Boat; boat-workspace.property.test.ts takes them the whole way. Closing
+    // a tunnel is local: Boat is not asked. A save needs the operator's
+    // approval, and this harness has nobody to ask: it read the snapshot
+    // list from Boat, then stopped.
+    expect(failed).toEqual(["push_workspace", "pull_changes", "close_port_forward", "save_snapshot"]);
   });
 
   it("lets a window list, stop and delete only the sandboxes its thread created", async () => {

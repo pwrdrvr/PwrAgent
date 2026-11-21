@@ -34,6 +34,7 @@ import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import { BoatConnection, type BoatSessionScope } from "./boat-connection";
 import type { BoatTunnelRuntime } from "./boat-port-forward";
+import type { BoatWorkspaceGit } from "./boat-workspace";
 import { BoatSignIn } from "./boat-sign-in";
 import {
   McpStdioLaunchError,
@@ -367,6 +368,7 @@ export type McpConnectionGatewayServiceOptions = {
   /** Test seam: Boat's browser sign-in, which runs Boat's CLI. */
   boatSignIn?: BoatSignIn;
   boatTunnelRuntime?: BoatTunnelRuntime;
+  boatGit?: BoatWorkspaceGit;
   /** Test seam: the sandbox rows PwrAgent's Boat server reads and writes. */
   threadSandboxes?: Pick<ThreadSandboxStorage, "recordCreated" | "pendingForThread" | "markOutcome">;
   /**
@@ -907,6 +909,7 @@ export class McpConnectionGatewayService {
       policy: () => this.requireConnection(BOAT_MCP_CONNECTION_ID).boatPolicy!,
       openExternal: this.openExternal,
       ...(options.boatTunnelRuntime ? { tunnelRuntime: options.boatTunnelRuntime } : {}),
+      ...(options.boatGit ? { git: options.boatGit } : {}),
     });
     this.boat.onStatusChanged(() => {
       // A rejected or removed key ends what every open session could do.
@@ -1699,6 +1702,20 @@ export class McpConnectionGatewayService {
           connectionId: BOAT_MCP_CONNECTION_ID, sandboxId, status: "deleted", now: Date.now(),
         });
       },
+      // Read on each push or pull: a thread's directories change.
+      ...(role === "thread"
+        ? {
+            workspaceRoots: async () => {
+              const roots = owner.backend
+                ? await this.threadRootsResolver?.({
+                  backend: owner.backend as AppServerBackendKind,
+                  threadId: owner.threadId,
+                })
+                : undefined;
+              return (roots ?? []).map((root) => root.path);
+            },
+          }
+        : {}),
     };
   }
 
