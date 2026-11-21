@@ -35,6 +35,7 @@ const onMcpGatewayEnabledChange = vi.fn(async () => undefined);
 
 function PluginsSettings(props: {
   desktopApi?: DesktopApi;
+  revealConnectionId?: string;
   snapshot: DesktopSettingsSnapshot;
 }) {
   return (
@@ -2145,6 +2146,98 @@ describe("PluginsSettings GitHub connection", () => {
     );
     expect(within(setup).getByRole("radio", { name: /GitHub CLI sign-in/ }))
       .toHaveTextContent("Already used by GitHub. Choose it again only for different toolsets or access.");
+  });
+
+  describe("a route-named row", () => {
+    let scrolls: Array<{ element: Element; options: unknown }>;
+    let originalScrollIntoView: typeof Element.prototype.scrollIntoView;
+    beforeEach(() => {
+      scrolls = [];
+      originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (this: Element, options?: unknown) {
+        scrolls.push({ element: this, options });
+      };
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+    const scrollsOf = (row: Element) => scrolls.filter((scroll) => scroll.element === row);
+
+    async function revealedRow() {
+      return waitFor(() => {
+        const element = document.querySelector<HTMLElement>("[data-connection-id='builtin:pwrgit']");
+        expect(element).toHaveClass("settings-mcp-row--revealed");
+        return element!;
+      });
+    }
+
+    it("scrolls to the top of the pane, below its section's pinned header", async () => {
+      const originalRect = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        const height = this.classList.contains("settings-section__header-button") ? 96 : 0;
+        return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: height, width: 0, height, toJSON: () => ({}) };
+      };
+      try {
+        const desktopApi = githubApi({
+          listMcpConnections: vi.fn().mockResolvedValue({
+            connections: [status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" })],
+          }),
+        });
+        render(<PluginsSettings desktopApi={desktopApi} revealConnectionId="builtin:pwrgit" snapshot={createSnapshot()} />);
+        const row = await revealedRow();
+        expect(scrollsOf(row)).toEqual([{ element: row, options: { block: "start" } }]);
+        expect(row.style.scrollMarginTop).toBe("108px");
+      } finally {
+        Element.prototype.getBoundingClientRect = originalRect;
+      }
+    });
+
+    /** Reveal the row inside a settings pane while the Codex list is still loading. */
+    async function revealWhileCodexLoads() {
+      let finishCodexLoad!: () => void;
+      const desktopApi = githubApi({
+        listMcpConnections: vi.fn().mockResolvedValue({
+          connections: [status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" })],
+        }),
+        listCodexMcpServers: vi.fn(() => new Promise((resolve) => {
+          finishCodexLoad = () => resolve({ codexHome: "/tmp/codex", servers: [] });
+        })),
+      });
+      const pane = document.body.appendChild(document.createElement("div"));
+      pane.className = "settings-content";
+      render(<PluginsSettings desktopApi={desktopApi} revealConnectionId="builtin:pwrgit" snapshot={createSnapshot()} />, {
+        container: pane,
+      });
+      const row = await revealedRow();
+      expect(screen.getByText("Loading MCP servers...")).toBeInTheDocument();
+      expect(scrollsOf(row)).toHaveLength(1);
+      return { row, pane, finishCodexLoad };
+    }
+
+    it("scrolls to the top again once the Codex list fills in the pane below it", async () => {
+      const { row, finishCodexLoad } = await revealWhileCodexLoads();
+      expect(row).toContainElement(document.activeElement as HTMLElement);
+      await act(async () => finishCodexLoad());
+      expect(screen.queryByText("Loading MCP servers...")).not.toBeInTheDocument();
+      expect(scrollsOf(row)).toHaveLength(2);
+    });
+
+    it("leaves the pane where the operator scrolled it while the Codex list loaded", async () => {
+      const { row, pane, finishCodexLoad } = await revealWhileCodexLoads();
+      Object.defineProperty(pane, "scrollTop", { configurable: true, value: 400 });
+      await act(async () => finishCodexLoad());
+      expect(screen.queryByText("Loading MCP servers...")).not.toBeInTheDocument();
+      expect(row).toContainElement(document.activeElement as HTMLElement);
+      expect(scrollsOf(row)).toHaveLength(1);
+    });
+
+    it("leaves the pane where it is when focus has left the row", async () => {
+      const { row, finishCodexLoad } = await revealWhileCodexLoads();
+      screen.getByRole("button", { name: "Plugin store" }).focus();
+      await act(async () => finishCodexLoad());
+      expect(screen.queryByText("Loading MCP servers...")).not.toBeInTheDocument();
+      expect(scrollsOf(row)).toHaveLength(1);
+    });
   });
 
   it("outlines the row a store tile pointed at, then lets it go", async () => {
