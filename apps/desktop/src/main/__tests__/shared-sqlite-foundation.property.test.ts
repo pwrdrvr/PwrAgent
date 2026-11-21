@@ -17,8 +17,9 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
   // recovery guard, research, request-pricing, sub-agent dismissal,
-  // operator-request scope, pricing summary, and gate pricing indexes that followed it.
-  // Restore the v80 SQL for the two indexes the gate pricing migration replaced.
+  // operator-request scope, pricing summary, gate pricing, and usage completion
+  // indexes that followed it.
+  // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
@@ -42,6 +43,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_assumed_parent"
     && row.name !== "idx_thread_usage_lines_gate_child_source"
     && row.name !== "idx_thread_usage_lines_gate_usage_turn"
+    && row.name !== "idx_thread_usage_lines_completion_turn"
   ).map(row => {
     switch (row.name) {
       case "thread_usage_lines":
@@ -63,6 +65,16 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
             "ON thread_usage_lines(provider, backend, thread_id, source, source_item_id)",
           ),
         };
+      case "idx_thread_usage_turns_turn":
+        return {
+          ...row,
+          sql: row.sql?.replace(
+            "(backend, thread_id, turn_id)\n  WHERE turn_id IS NOT NULL",
+            "(provider, backend, thread_id, turn_id)",
+          ),
+        };
+      case "idx_thread_usage_lines_read_parent":
+        return { ...row, sql: row.sql?.replace("parent_thread_id IS NOT NULL AND ", "") };
       default:
         return row;
     }
