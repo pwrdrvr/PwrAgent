@@ -37911,7 +37911,6 @@ div.composer-error-row__toggle {
 
 .transcript-diff__path,
 .transcript-diff__hunk,
-.transcript-diff__separator,
 .transcript-diff__text,
 .transcript-diff__line-number,
 .transcript-diff__stat {
@@ -37940,19 +37939,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-diff__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   padding: 0 12px 12px;
-}
-
-.transcript-diff__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  min-width: 0;
 }
 
 .transcript-diff__stats {
@@ -37980,18 +37967,6 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
 }
 
-.transcript-diff__toggle {
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.transcript-diff__summary {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
 .transcript-diff__rows {
   display: flex;
   flex-direction: column;
@@ -38000,8 +37975,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-diff__row,
-.transcript-diff__hunk,
-.transcript-diff__separator {
+.transcript-diff__hunk {
   min-width: 100%;
 }
 
@@ -38066,19 +38040,11 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
 }
 
-.transcript-diff__hunk,
-.transcript-diff__separator {
+.transcript-diff__hunk {
   padding: 6px 12px;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.transcript-diff__hunk {
   background: var(--bg-panel-hover);
-}
-
-.transcript-diff__separator {
-  background: var(--bg-panel);
 }
 
 .skill-chip {

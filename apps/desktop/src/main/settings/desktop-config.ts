@@ -207,9 +207,6 @@ export type DesktopSettingsConfig = {
     codexSkillQuestionsWarningDismissed?: boolean;
     codexConfigWarningsDismissed?: string[];
     managedReview?: boolean;
-    diffCondensation?: {
-      enabled?: boolean;
-    };
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
@@ -470,6 +467,7 @@ type TomlScalar = TomlValue;
 
 const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
 const LEGACY_SETTINGS_MARKER = "pwragent-legacy-settings";
+const RETIRED_DIFF_CONDENSATION_HELPER_ID = "diff_condensation";
 const LEGACY_PROVIDER_DEFAULTS_LAST_VERSION = "1.4.10";
 const LEGACY_PROVIDER_DEFAULTS_SHAPE = "backend-table-array";
 const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
@@ -998,12 +996,6 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
-  if (patch.experimental?.diffCondensation?.enabled !== undefined) {
-    set(
-      ["experimental", "diff_condensation", "enabled"],
-      patch.experimental.diffCondensation.enabled,
-    );
-  }
   if (patch.experimental?.fullAccessRiskWarningDismissed !== undefined) {
     set(
       ["experimental", "full_access_risk_warning_dismissed"],
@@ -2117,11 +2109,21 @@ export function desktopSettingsPatchToEdits(
           ? { reasoning_effort: choice.reasoningEffort }
           : {}),
       }));
-    if (entries.length > 0) {
+    // Keep existing overrides for this retired helper when rewriting the
+    // array, so a downgrade can still recover the operator's choice.
+    const existingRows = currentTables.models?.helper_models;
+    const retiredRows = Array.isArray(existingRows)
+      ? existingRows.flatMap((row) => (
+        typeof row === "object" && readString(row.helper) === RETIRED_DIFF_CONDENSATION_HELPER_ID
+          ? [row]
+          : []
+      ))
+      : [];
+    if (entries.length > 0 || retiredRows.length > 0) {
       edits.push({
         op: "setTableArray",
         path: ["models", "helper_models"],
-        value: entries,
+        value: [...entries, ...retiredRows],
       });
     } else {
       edits.push({
@@ -2458,7 +2460,6 @@ function normalizeDesktopConfig(
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
-  const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
   const integratedTerminal = tables["integrated_terminal"];
@@ -2640,9 +2641,6 @@ function normalizeDesktopConfig(
         experimental?.codex_config_warnings_dismissed,
       ),
       managedReview: readBoolean(experimental?.managed_review),
-      diffCondensation: {
-        enabled: readBoolean(diffCondensation?.enabled),
-      },
     },
     imageUploads: {
       pastedImageMaxPatches: readNumber(
@@ -4051,6 +4049,7 @@ function normalizeHelperModelSettings(
   const helpers: Record<string, DesktopHelperModelChoice> = {};
   for (const [helper, choice] of Object.entries(value.helpers)) {
     const id = helper.trim();
+    if (id === RETIRED_DIFF_CONDENSATION_HELPER_ID) continue;
     const normalized = id ? normalizeHelperModelChoice(choice) : undefined;
     if (normalized) helpers[id] = normalized;
   }
@@ -4080,7 +4079,7 @@ function readHelperModelSettings(
         continue;
       }
       const helper = typeof item.helper === "string" ? item.helper.trim() : "";
-      if (!helper || helpers[helper]) continue;
+      if (!helper || helper === RETIRED_DIFF_CONDENSATION_HELPER_ID || helpers[helper]) continue;
       const choice = normalizeHelperModelChoice({
         backend: item.backend,
         model: item.model,

@@ -92,7 +92,6 @@ export function ExperimentalSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
-  onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDiagnosticsEnabledChange: (enabled: boolean) => Promise<void>;
@@ -107,7 +106,6 @@ export function ExperimentalSettings(props: {
   const [tokenMiserWriteTarget, setTokenMiserWriteTarget] = useState<
     boolean | undefined
   >();
-  const condensation = props.snapshot.experimental.diffCondensation;
   const codexToolDiscovery = props.snapshot.experimental.codexToolDiscovery
     ?? { value: true, source: "default" as const };
   const researchEnabled = props.snapshot.experimental.researchEnabled
@@ -165,7 +163,6 @@ export function ExperimentalSettings(props: {
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
-  const discontinuedEnabledCount = condensation.enabled.value ? 1 : 0;
 
   return (
     <SettingsSectionStack paneId="experimental" aria-label="Experimental settings">
@@ -376,33 +373,11 @@ export function ExperimentalSettings(props: {
         eyebrow="Deprecated"
         title="Soon to be discontinued"
         description="These features are being phased out and may be removed in a future release."
-        chip={discontinuedEnabledCount > 0 ? `${discontinuedEnabledCount} on` : "All off"}
-        chipKind={discontinuedEnabledCount > 0 ? "ok" : "default"}
+        chip="All off"
         defaultCollapsed
         aria-label="Soon to be discontinued experimental settings"
       >
-        <SettingsSection
-          eyebrow="Experimental"
-          title="Diff Condensation"
-          description="Send focused-diff hunks to Codex to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires."
-          chip={condensation.enabled.value ? "On" : "Off"}
-          chipKind={condensation.enabled.value ? "ok" : "default"}
-        >
-          <div className="settings-fields">
-            <ToggleField
-              checked={condensation.enabled.value}
-              disabled={props.saving}
-              label="Enable diff condensation"
-              sub="Use the helper model to hide low-signal diff hunks."
-              help="Each focused-diff request is sent to Codex, regardless of the launchpad default. If Codex is unavailable, the full diff remains visible."
-              source={sourceBadge(condensation.enabled)}
-              onChange={(enabled) => {
-                return props.onDiffCondensationEnabledChange(enabled);
-              }}
-            />
-
-          </div>
-        </SettingsSection>
+        {null}
       </SettingsSectionGroup>
     </SettingsSectionStack>
   );

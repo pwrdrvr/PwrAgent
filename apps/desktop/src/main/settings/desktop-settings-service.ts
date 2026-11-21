@@ -1300,11 +1300,6 @@ export class DesktopSettingsService {
           config.experimental?.managedReview,
           false,
         ),
-        diffCondensation: {
-          enabled: this.resolveDiffCondensationEnabled(
-            config.experimental?.diffCondensation?.enabled,
-          ),
-        },
       },
       imageUploads: {
         pastedImageMaxPatches: this.resolvePastedImageMaxPatches(
@@ -4253,15 +4248,6 @@ export class DesktopSettingsService {
     return {
       value: DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
       source: "default",
-    };
-  }
-
-  private resolveDiffCondensationEnabled(
-    configValue: boolean | undefined,
-  ): DesktopSettingsValue<boolean> {
-    return {
-      value: configValue ?? false,
-      source: configValue === undefined ? "default" : "config",
     };
   }
 

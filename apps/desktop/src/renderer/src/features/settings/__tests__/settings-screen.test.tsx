@@ -91,22 +91,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/**
- * The Experimental tab keeps deprecated features in the collapsed-by-default
- * "Soon to be discontinued" drawer, where they are hidden from the
- * accessibility tree until expanded. Idempotent (checks `aria-expanded`) so
- * it is safe regardless of the drawer's persisted collapse state from a
- * prior test in this file.
- */
-function openDiscontinuedDrawer() {
-  const header = screen.getByRole("button", {
-    name: /Soon to be discontinued/,
-  });
-  if (header.getAttribute("aria-expanded") !== "true") {
-    fireEvent.click(header);
-  }
-}
-
 function createSnapshot(
   overrides: Partial<DesktopSettingsSnapshot> = {},
 ): DesktopSettingsSnapshot {
@@ -251,9 +235,6 @@ function createSnapshot(
       codexSkillQuestionsWarningDismissed: {
         value: false,
         source: "default",
-      },
-      diffCondensation: {
-        enabled: { value: false, source: "default" },
       },
     },
     imageUploads: {
@@ -2560,18 +2541,7 @@ describe("SettingsScreen", () => {
         name: "Enable background pull request status",
       }),
     ).not.toBeInTheDocument();
-    openDiscontinuedDrawer();
-    expect(
-      screen.getByText(
-        "Send focused-diff hunks to Codex to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires.",
-      ),
-    ).toBeInTheDocument();
-    fireEvent.click(getLabeledSwitch("Enable diff condensation"));
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { diffCondensation: { enabled: true } },
-      });
-    });
+    expect(screen.queryByText("Diff Condensation")).not.toBeInTheDocument();
 
     expect(
       screen.queryByRole("heading", { name: "Tool Call Tracking" }),

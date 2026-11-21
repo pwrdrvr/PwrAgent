@@ -1524,14 +1524,6 @@ export type DesktopSettingsSnapshot = {
     codexConfigWarningsDismissed?: DesktopSettingsValue<string[]>;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
-    /**
-     * Diff condensation (a.k.a. "diff eliding") gates whether the configured
-     * backend may classify less-relevant diff hunks. When disabled, every diff
-     * renders in full and no structured-generation request fires.
-     */
-    diffCondensation: {
-      enabled: DesktopSettingsValue<boolean>;
-    };
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
@@ -1897,9 +1889,6 @@ export type DesktopSettingsConfigPatch = {
     codexConfigWarningsDismissed?: string[];
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
-    diffCondensation?: {
-      enabled?: boolean;
-    };
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;

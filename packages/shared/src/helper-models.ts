@@ -14,7 +14,6 @@ export const HELPER_MODEL_IDS = [
   "token_miser_evaluation",
   "token_miser_focused_summaries",
   "token_miser_polling_reviews",
-  "diff_condensation",
   "automation_prompts",
   "star_map_intake",
   "usage_analysis",
@@ -62,12 +61,6 @@ export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
     id: "token_miser_polling_reviews",
     label: "Polling reviews",
     defaultReasoningEffort: "medium",
-    backends: ["codex"],
-  },
-  {
-    id: "diff_condensation",
-    label: "Diff condensation",
-    defaultReasoningEffort: "low",
     backends: ["codex"],
   },
   {

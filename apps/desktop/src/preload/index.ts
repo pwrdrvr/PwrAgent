@@ -665,10 +665,6 @@ import type {
   UpdateSubthreadOrderRequest,
   UpdateSubthreadOrderResponse,
 } from "@pwragent/shared/contracts/navigation";
-import type {
-  FocusedDiffAnalysisRequest,
-  FocusedDiffAnalysisResponse,
-} from "@pwragent/shared/contracts/diff-focus";
 import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import type {
   InspectTokenMiserOutputRequest,
@@ -1124,7 +1120,6 @@ import {
   COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL,
   COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
-  FOCUSED_DIFF_ANALYZE_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
@@ -2740,10 +2735,6 @@ const desktopApi = Object.freeze({
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
-  analyzeFocusedDiff: async (
-    request: FocusedDiffAnalysisRequest
-  ): Promise<FocusedDiffAnalysisResponse> =>
-    await ipcRenderer.invoke(FOCUSED_DIFF_ANALYZE_CHANNEL, request),
   startThread: async (
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>

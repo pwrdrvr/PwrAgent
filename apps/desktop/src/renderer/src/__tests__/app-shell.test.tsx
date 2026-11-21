@@ -2764,9 +2764,6 @@ describe("App", () => {
           value: false,
           source: "default",
         },
-        diffCondensation: {
-          enabled: { value: false, source: "default" },
-        },
       },
       imageUploads: {
         pastedImageMaxPatches: { value: 1536, source: "default" },

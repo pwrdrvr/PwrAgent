@@ -1433,10 +1433,10 @@ describe("DesktopBackendRegistry", () => {
     await discoverCodexBackendForTest(registry);
 
     const result = await registry.generateStructuredObject({
-      helper: "diff_condensation",
+      helper: "star_map_intake",
       model: "gpt-5.6-luna",
-      system: "Keep behavioral changes visible.",
-      prompt: "Classify these diff hunks.",
+      system: "Return a short title and an optional directory.",
+      prompt: "Name this task and suggest a directory.",
       schema: {
         type: "object",
         required: ["title", "directoryKey", "confidence"],
@@ -1457,8 +1457,8 @@ describe("DesktopBackendRegistry", () => {
     const request = generateStructuredObject.mock.calls[0]?.[0];
     expect(request).toMatchObject({
       model: "gpt-5.6-luna",
-      system: "Keep behavioral changes visible.",
-      prompt: "Classify these diff hunks.",
+      system: "Return a short title and an optional directory.",
+      prompt: "Name this task and suggest a directory.",
     });
     expect(request?.isMatch({
       title: "Do a thing",
@@ -1483,7 +1483,7 @@ describe("DesktopBackendRegistry", () => {
     });
     const generateStructuredObject = vi.fn(async () => ({
       status: "ok" as const,
-      object: { decisions: [] },
+      object: { prompt: "Run daily checks." },
     }));
     (
       codexClient as unknown as {
@@ -1496,14 +1496,14 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await expect(registry.generateStructuredObject({
-      helper: "diff_condensation",
+      helper: "automation_prompts",
       model: "gpt-5.6-luna",
-      system: "Keep behavioral changes visible.",
-      prompt: "Classify these diff hunks.",
+      system: "Return a prompt for this automation.",
+      prompt: "Draft an automation prompt from this request.",
       schema: {
         type: "object",
-        required: ["decisions"],
-        properties: { decisions: { type: "array" } },
+        required: ["prompt"],
+        properties: { prompt: { type: "string" } },
       },
     })).resolves.toEqual({
       status: "unavailable",

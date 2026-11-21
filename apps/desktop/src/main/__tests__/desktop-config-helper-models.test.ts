@@ -28,7 +28,7 @@ describe("desktop config helper models", () => {
       defaultReasoningEffort: "high",
       helpers: {
         thread_titles: { reasoningEffort: "medium" },
-        diff_condensation: { model: "gpt-5.6-luna" },
+        automation_prompts: { model: "gpt-5.6-luna" },
         usage_analysis: { backend: "acp:grok", model: "grok-fast" },
       },
     });
@@ -39,7 +39,7 @@ describe("desktop config helper models", () => {
       "helper_default_reasoning_effort = \"high\"",
       "",
       "[[models.helper_models]]",
-      "helper = \"diff_condensation\"",
+      "helper = \"automation_prompts\"",
       "model = \"gpt-5.6-luna\"",
       "",
       "[[models.helper_models]]",
@@ -57,7 +57,7 @@ describe("desktop config helper models", () => {
         defaultModel: "gpt-6-luna",
         defaultReasoningEffort: "high",
         helpers: {
-          diff_condensation: { model: "gpt-5.6-luna" },
+          automation_prompts: { model: "gpt-5.6-luna" },
           thread_titles: { reasoningEffort: "medium" },
           usage_analysis: { backend: "acp:grok", model: "grok-fast" },
         },
@@ -106,6 +106,33 @@ describe("desktop config helper models", () => {
     });
   });
 
+  it("keeps a retired diff condensation override in TOML during helper settings saves", () => {
+    const retiredRow = {
+      helper: "diff_condensation",
+      model: "gpt-5.6-luna",
+      reasoning_effort: "low",
+    };
+    const existing = [
+      "[[models.helper_models]]",
+      'helper = "diff_condensation"',
+      'model = "gpt-5.6-luna"',
+      'reasoning_effort = "low"',
+      "",
+      "[[models.helper_models]]",
+      'helper = "thread_titles"',
+      'model = "gpt-6-luna"',
+      "",
+    ].join("\n");
+
+    expect(parseDesktopSettingsToml(existing, "test.toml").models?.helperModels).toEqual({
+      helpers: { thread_titles: { model: "gpt-6-luna" } },
+    });
+    const written = save(existing, { helpers: {} });
+    expect(parseTomlTables(written, "test.toml").models?.helper_models).toEqual([retiredRow]);
+    expect(parseDesktopSettingsToml(written, "test.toml").models?.helperModels).toBeUndefined();
+    expect(save("", { helpers: { diff_condensation: { model: "gpt-5.6-luna" } } })).toBe("");
+  });
+
   it("clears every key when the row returns to Automatic and overrides are cleared", () => {
     const existing = [
       "# Operator comment",
@@ -114,7 +141,7 @@ describe("desktop config helper models", () => {
       "helper_default_reasoning_effort = \"high\"",
       "",
       "[[models.helper_models]]",
-      "helper = \"diff_condensation\"",
+      "helper = \"automation_prompts\"",
       "model = \"gpt-5.6-luna\"",
       "",
       "[models.codex]",
