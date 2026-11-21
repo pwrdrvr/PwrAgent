@@ -33,6 +33,7 @@ import {
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { randomBytes, randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import {
   findLiveProfileRuntimeMarkers,
@@ -83,6 +84,7 @@ import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
+import { WORKTREE_FOLDER_MARKER } from "../settings/worktree-folder-check";
 import { WorktreeContainerService } from "./worktree-container-service";
 import { createCompositeJsonRpcObserver, createProtocolLogObserverFromEnv } from "./protocol-log-observer";
 import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
@@ -203,14 +205,19 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   ownerAdmission = options?.ownerAdmission;
   const managedMaintenanceRoots = options?.managedWorktreeRoots
     ?? (async () => {
-      // A worktree folder adds its root; the home root stays managed so
-      // worktrees created before the folder was chosen still age out.
+      // A worktree folder adds its root once PwrAgent has marked it; the home
+      // root and the folder's earlier `.pwragent/worktrees` stay managed so
+      // worktrees created before still age out.
       let folder: ReturnType<ReturnType<typeof getDesktopSettingsService>["resolveWorktreeFolder"]>;
       try { folder = getDesktopSettingsService().resolveWorktreeFolder(); }
       catch { folder = undefined; }
+      const marked = folder
+        ? await access(path.join(folder.directory, WORKTREE_FOLDER_MARKER)).then(() => true, () => false)
+        : false;
       return [
         userHomeWorktreesRoot(),
         ...(folder ? [userHomeWorktreesRoot(folder.directory)] : []),
+        ...(folder && marked ? [folder.directory] : []),
         resolveActiveProfilePath("worktrees"),
       ];
     });

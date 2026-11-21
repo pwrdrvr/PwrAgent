@@ -4979,7 +4979,7 @@ export class DesktopSettingsService {
       storage: resolved,
       effectivePath:
         resolved.value === "user-home"
-          ? toForwardSlashes(userHomeWorktreesRoot(baseDirectory))
+          ? toForwardSlashes(baseDirectory ?? userHomeWorktreesRoot())
           : ".worktrees",
       // Availability is checked on demand (settings:worktree-folder), never
       // here: a stat on a stale network mount would block the main process.

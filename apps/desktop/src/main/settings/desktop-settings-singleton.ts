@@ -19,6 +19,7 @@ import { resolveDesktopConfigPath } from "./desktop-config";
 import { readEvalManagedRuntime } from "../eval-managed-runtime";
 import { closeSharedCommandDiscovery } from "./command-discovery";
 import { onManagedGitVerificationFailed } from "../managed-git-runtime";
+import { setConfiguredWorktreeFolder } from "@pwragent/shared/worktree-paths";
 
 let unsubscribeAuth: (() => void) | undefined;
 let unsubscribeManagedGitFailure: (() => void) | undefined;
@@ -124,6 +125,11 @@ export function initializeDesktopSettingsService(): DesktopSettingsService {
       getOwnerHostServices().appearance.syncDock(values.general.appearance);
     });
     getOwnerHostServices().appearance.syncDock(configStore.read("general").appearance);
+    // Worktrees in the operator's folder carry no `.pwragent/worktrees` in
+    // their path; path recognition needs to know where the folder is.
+    const registerWorktreeFolder = () => setConfiguredWorktreeFolder(service.resolveWorktreeFolder()?.directory);
+    configStore.subscribe(["worktrees"], registerWorktreeFolder);
+    registerWorktreeFolder();
     configStore.subscribeUpdates(
       ({ version, configRevision, changedDomains }) => {
         const payload = {
@@ -148,6 +154,7 @@ export function disposeDesktopSettingsService(): void {
   unsubscribeManagedGitFailure?.();
   unsubscribeManagedGitFailure = undefined;
   desktopSettingsService = undefined;
+  setConfiguredWorktreeFolder(undefined);
   commandDiscoveryClosed = false;
   setGitCommandResolver(undefined);
   setManagedGitSelectionResolver(undefined);
