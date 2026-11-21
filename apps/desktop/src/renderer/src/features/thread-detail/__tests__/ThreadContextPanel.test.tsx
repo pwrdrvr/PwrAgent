@@ -18,6 +18,13 @@ import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shar
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import {
+  CalendarPlusIcon,
+  DraftIcon,
+  FolderIcon,
+  HistoryIcon,
+  ServerIcon,
+} from "../../../icons";
+import {
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
@@ -898,6 +905,44 @@ describe("ThreadContextPanel", () => {
     expect(document.activeElement).toBe(tabs.at(-1));
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it("explains every rail tab through the shared portal tooltip layer", () => {
+    renderPanel({ pinned: true });
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.length).toBeGreaterThan(5);
+    for (const tab of tabs) {
+      const name = tab.getAttribute("aria-label")!;
+      // `DataTooltipLayer` draws `.tooltip-target[data-tooltip]` in a body
+      // portal clamped into the window. A native `title` would add a second,
+      // unclamped tooltip on top of it.
+      expect(tab).toHaveClass("tooltip-target");
+      expect(tab).not.toHaveAttribute("title");
+      expect(tab.getAttribute("data-tooltip")).toMatch(
+        new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — \\S`),
+      );
+    }
+  });
+
+  it("draws every rail tab with its own glyph, none shared with the lens switch or machines", () => {
+    renderPanel({ pinned: true });
+    const glyph = (svg: Element | null): string => svg?.innerHTML ?? "";
+    const tabGlyphs = screen.getAllByRole("tab").map((tab) => glyph(tab.querySelector("svg")));
+    expect(new Set(tabGlyphs).size).toBe(tabGlyphs.length);
+    // Glyphs that already mean something else: the Updated, Created, Drafts,
+    // and Directories lenses, and a machine.
+    const { container } = render(
+      <>
+        <HistoryIcon />
+        <CalendarPlusIcon />
+        <DraftIcon />
+        <FolderIcon />
+        <ServerIcon />
+      </>,
+    );
+    for (const svg of Array.from(container.querySelectorAll("svg"))) {
+      expect(tabGlyphs).not.toContain(glyph(svg));
+    }
   });
 
   it("shows the Pricing tab by default", () => {
