@@ -4,7 +4,6 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  contentTracing,
   Menu,
   shell,
   type ContextMenuParams,
@@ -35,6 +34,8 @@ import { RendererHeapMonitor } from "../diagnostics/renderer-heap-monitor";
 import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-cpu-target";
 import { SharedHotCpuProfiler } from "../diagnostics/shared-hot-cpu-profiler";
 import { ChromiumTrace } from "../diagnostics/chromium-trace";
+import { chromiumTracePublisher } from "../diagnostics/chromium-trace-publisher";
+import { createChromiumTraceSession } from "./diagnostics/chromium-trace-session";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
@@ -130,7 +131,11 @@ const sharedMainHotCpuProfiler = new SharedHotCpuProfiler();
 type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmListingDiagnostics">;
 
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
-const chromiumTrace = new ChromiumTrace(() => contentTracing, (message) => hotCpuLog.warn(message));
+const chromiumTrace = new ChromiumTrace(
+  createChromiumTraceSession,
+  chromiumTracePublisher(join(moduleDirectory, "chromium-trace-worker.js")),
+  (message) => hotCpuLog.warn(message),
+);
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
 const windowDiagnosticsStopHandlers = new Map<number, (reason: string) => Promise<void>>();
 

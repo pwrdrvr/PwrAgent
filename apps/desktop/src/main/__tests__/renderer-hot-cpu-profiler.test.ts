@@ -279,23 +279,34 @@ describe("HotCpuProfiler", () => {
       if (!created.ok) throw new Error(created.message);
       let recording = false;
       const released = deferred<void>();
-      const startRecording = vi.fn(async () => { recording = true; });
-      const stopRecording = vi.fn(async (file: string) => {
+      const start = vi.fn(async () => { recording = true; });
+      const dispose = vi.fn(() => {
         recording = false;
         released.resolve();
-        await fs.writeFile(file, JSON.stringify({ traceEvents: [] }));
-        return file;
+      });
+      const read = vi.fn(async function* () {
+        yield { data: JSON.stringify({ traceEvents: [] }) };
       });
       if (transition === "native-timeout") {
-        stopRecording.mockImplementationOnce(() => new Promise<string>(() => {}));
+        read.mockImplementationOnce(async function* () {
+          await released.promise;
+          yield { data: JSON.stringify({ traceEvents: [] }) };
+        });
       }
       const onProfileWritten = vi.fn();
       const written = deferred<void>();
       const profiler = createProfiler({
         config,
-        chromiumTrace: new ChromiumTrace(() => ({ startRecording, stopRecording }), vi.fn(), {
-          stopTimeoutMs: transition === "native-timeout" ? 200 : undefined,
-        }),
+        chromiumTrace: new ChromiumTrace(
+          () => ({ start, read, dispose }),
+          async (chunks, file, signal) => {
+            for await (const { data } of chunks) {
+              signal.throwIfAborted();
+              await fs.writeFile(file, data);
+            }
+          },
+          vi.fn(), { stopTimeoutMs: transition === "native-timeout" ? 200 : undefined },
+        ),
         target: createTarget().target,
         session: created.session,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -315,7 +326,8 @@ describe("HotCpuProfiler", () => {
       }
       await released.promise;
       expect(recording).toBe(false);
-      expect(startRecording).toHaveBeenCalledOnce();
+      expect(start).toHaveBeenCalledOnce();
+      expect(read).toHaveBeenCalledTimes(transition === "window-closed" ? 0 : 1);
       const { directoryPath } = created.session;
       const { artifacts } = JSON.parse(await fs.readFile(`${directoryPath}/session.json`, "utf8"));
       if (transition === "window-closed") {

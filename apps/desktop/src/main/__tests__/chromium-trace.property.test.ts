@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import { ChromiumTrace, filterChromiumTrace } from "../diagnostics/chromium-trace";
+import { ChromiumTrace, type PublishChromiumTrace } from "../diagnostics/chromium-trace";
+import { filterChromiumTrace } from "../diagnostics/chromium-trace-filter";
 import { acquireChromiumTrace, tryAcquireChromiumTrace } from "../diagnostics/chromium-trace-lease";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 
 const layout = { name: "Layout", pid: 4, tid: 2, ph: "X", cat: "devtools.timeline", ts: 312, dur: 5 };
 const rawTrace = JSON.stringify({ traceEvents: [layout] });
-const noTrace = new Error("Failed to stop tracing - no trace in progress");
+const publish: PublishChromiumTrace = async (chunks, file, signal) => {
+  for await (const chunk of chunks) {
+    signal.throwIfAborted();
+    await fs.writeFile(file, chunk.data);
+  }
+};
 
 it("keeps timing and known labels while reconstructing events from untrusted native exports", () => {
   fc.assert(fc.property(fc.string(), fc.integer(), (text, timestamp) => {
@@ -47,16 +53,14 @@ it("assigns each trace to one overlapping trigger across arbitrary wall-clock ch
           expect(recording).toBe(false);
           recording = true;
         });
-        const stopRecording = vi.fn(async (file: string) => {
+        const read = vi.fn(async function* () {
           expect(recording).toBe(true);
-          recording = false;
-          expect(path.dirname(file)).not.toBe(root.path);
-          await fs.writeFile(file, rawTrace);
-          return file;
+          yield { data: rawTrace };
         });
+        const dispose = () => { recording = false; };
         const warn = vi.fn();
         const times = [...wallTimes];
-        const trace = new ChromiumTrace(() => ({ startRecording, stopRecording }), warn, {
+        const trace = new ChromiumTrace(() => ({ start: startRecording, read, dispose }), publish, warn, {
           monotonicNow: () => ++mono,
           wallNow: () => times.shift() ?? 0,
         });
@@ -67,7 +71,7 @@ it("assigns each trace to one overlapping trigger across arbitrary wall-clock ch
         try {
           await Promise.all(owners.map((owner) => trace.arm(owner)));
           expect(startRecording).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-            record_mode: "record-continuously", trace_buffer_size_in_kb: 32 * 1024,
+            recordMode: "recordContinuously", traceBufferSizeInKb: 32 * 1024,
           }));
           const trigger = ++mono;
           const first = trace.capture(firstOwner, files[0], trigger);
@@ -97,8 +101,9 @@ it("reconciles with a manual trace owner and discards only when the last rendere
   let started!: () => void;
   const armed = new Promise<void>((resolve) => { started = resolve; });
   const startRecording = vi.fn(async () => started());
-  const stopRecording = vi.fn(async (file: string) => file);
-  const trace = new ChromiumTrace(() => ({ startRecording, stopRecording }), vi.fn());
+  const read = vi.fn();
+  const dispose = vi.fn();
+  const trace = new ChromiumTrace(() => ({ start: startRecording, read, dispose }), publish, vi.fn());
   const first = {};
   const last = {};
   const manual = acquireChromiumTrace();
@@ -106,14 +111,15 @@ it("reconciles with a manual trace owner and discards only when the last rendere
     await trace.arm(first);
     await trace.arm(last);
     expect(startRecording).not.toHaveBeenCalled();
-    expect(stopRecording).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
     manual();
     await armed;
     await trace.release(first);
-    expect(stopRecording).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
     expect(tryAcquireChromiumTrace()).toBeUndefined();
     await trace.release(last);
-    expect(stopRecording).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
     const available = acquireChromiumTrace();
     available();
   } finally {
@@ -123,45 +129,66 @@ it("reconciles with a manual trace owner and discards only when the last rendere
   }
 });
 
-it("bounds missing native start and stop acknowledgements and recovers before reusing the recorder", async () => {
-  let nativeRecording = false;
+it.each(["reject", "timeout"] as const)(
+  "disposes an unacknowledged session without ending or exporting it on %s",
+  async (failure) => {
+    const start = vi.fn(() => failure === "reject"
+      ? Promise.reject(new Error("Tracing is already started"))
+      : new Promise<void>(() => {}));
+    const read = vi.fn();
+    const dispose = vi.fn();
+    const trace = new ChromiumTrace(() => ({ start, read, dispose }), publish, vi.fn(), {
+      startTimeoutMs: 20,
+    });
+    const owner = {};
+    try {
+      await trace.arm(owner);
+      expect(await trace.capture(owner, "unused.json", performance.now())).toMatchObject({ status: "skipped" });
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(read).not.toHaveBeenCalled();
+      const available = acquireChromiumTrace();
+      available();
+    } finally {
+      await trace.release(owner);
+    }
+  },
+);
+
+it("closes a timed-out export before rearming, even if the old chunk arrives late", async () => {
+  const root = await createTemporaryTestDirectory();
+  let deliverLateChunk!: () => void;
+  let finishRead!: () => void;
+  const late = new Promise<void>((resolve) => { deliverLateChunk = resolve; });
+  const finished = new Promise<void>((resolve) => { finishRead = resolve; });
   let mono = 0;
-  let privatePath = "";
-  const startRecording = vi.fn(async () => {
-    nativeRecording = true;
-  }).mockImplementationOnce(() => {
-    nativeRecording = true;
-    return new Promise<void>(() => {});
-  });
-  const stopRecording = vi.fn(async (file: string) => {
-    if (!nativeRecording) throw noTrace;
-    nativeRecording = false;
-    return file;
-  });
-  const warning = vi.fn();
-  const trace = new ChromiumTrace(() => ({ startRecording, stopRecording }), warning, {
-    monotonicNow: () => ++mono, startTimeoutMs: 20, stopTimeoutMs: 20,
+  const reading = vi.fn(async function* () { yield { data: rawTrace }; })
+    .mockImplementationOnce(async function* () {
+      try {
+        await late;
+        yield { data: rawTrace };
+      } finally {
+        finishRead();
+      }
+    });
+  const start = vi.fn(async () => {});
+  const dispose = vi.fn();
+  const trace = new ChromiumTrace(() => ({ start, dispose, read: reading }), publish, vi.fn(), {
+    monotonicNow: () => ++mono, stopTimeoutMs: 100,
   });
   const owner = {};
-  const root = await createTemporaryTestDirectory();
   const file = path.join(root.path, "never-published.trace.json");
   try {
     await trace.arm(owner);
-    expect(await trace.capture(owner, file, ++mono)).toMatchObject({ status: "skipped" });
-    await trace.arm(owner);
-    expect(startRecording).toHaveBeenCalledTimes(2);
-    stopRecording.mockImplementationOnce((destination) => {
-      nativeRecording = false;
-      privatePath = destination;
-      return new Promise<string>(() => {});
-    });
     expect(await trace.capture(owner, file, ++mono)).toEqual({ status: "failed" });
-    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(path.dirname(privatePath))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(warning).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledOnce();
     await trace.arm(owner);
-    expect(startRecording).toHaveBeenCalledTimes(3);
+    deliverLateChunk();
+    await finished;
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(await fs.readdir(root.path)).toEqual([]);
   } finally {
+    deliverLateChunk();
     await trace.release(owner);
     await root.cleanup();
   }

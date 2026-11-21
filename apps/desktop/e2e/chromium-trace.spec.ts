@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import type { ChromiumTrace } from "../src/main/diagnostics/chromium-trace";
+import type { chromiumTracePublisher } from "../src/main/diagnostics/chromium-trace-publisher";
+import type { createChromiumTraceSession } from "../src/main/shell/diagnostics/chromium-trace-session";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { expect, test } from "./fixtures/electron-test";
 
@@ -18,12 +20,22 @@ test("native rolling trace evicts old events and publishes only filtered timing 
     async preLaunchHook(homeRoot) {
       controller = path.join(homeRoot, "production-chromium-trace.cjs");
       await build({
-        entryPoints: [path.join(here, "../src/main/diagnostics/chromium-trace.ts")],
-        outfile: controller, bundle: true, platform: "node", format: "cjs", logLevel: "silent",
+        stdin: {
+          contents: `
+            export { ChromiumTrace } from "./diagnostics/chromium-trace";
+            export { chromiumTracePublisher } from "./diagnostics/chromium-trace-publisher";
+            export { createChromiumTraceSession } from "./shell/diagnostics/chromium-trace-session";
+          `,
+          resolveDir: path.join(here, "../src/main"),
+        },
+        outfile: controller, bundle: true, platform: "node", format: "cjs",
+        external: ["electron"], logLevel: "silent",
       });
     },
   });
   const artifact = info.outputPath("renderer.trace.json");
+  const externalFile = path.join(app.homeRoot, "external-oracle.json");
+  const worker = path.join(here, "../out/main/chromium-trace-worker.js");
   const privateValue = "synthetic-private-trace-value";
   const server = createServer((_request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
@@ -40,27 +52,53 @@ test("native rolling trace evicts old events and publishes only filtered timing 
     const url = `${origin}/trace-resource?token=${privateValue}`;
     const result = await app.electronApp.evaluate(async ({ BrowserWindow, contentTracing }, args) => {
       const require = process.getBuiltinModule("node:module").createRequire(args.controller);
-      const { ChromiumTrace: Trace } = require(args.controller) as { ChromiumTrace: typeof ChromiumTrace };
+      const {
+        ChromiumTrace: Trace, createChromiumTraceSession: createSession, chromiumTracePublisher: createPublisher,
+      } = require(args.controller) as {
+        ChromiumTrace: typeof ChromiumTrace;
+        createChromiumTraceSession: typeof createChromiumTraceSession;
+        chromiumTracePublisher: typeof chromiumTracePublisher;
+      };
       const fs = require("node:fs/promises") as typeof import("node:fs/promises");
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const target = new BrowserWindow({ width: 640, height: 480, webPreferences: { backgroundThrottling: false } });
       const warnings: string[] = [];
-      let raw = "";
+      const publish = createPublisher(args.worker);
       try {
-        async function run(useOldKey: boolean) {
+        await target.loadURL(args.origin);
+        const owner = {};
+        await contentTracing.startRecording({
+          included_categories: ["blink.user_timing"], excluded_categories: ["*"],
+        });
+        const rejected = new Trace(createSession, publish, (message) => warnings.push(message));
+        let externalConflict: Awaited<ReturnType<ChromiumTrace["capture"]>>;
+        try {
+          await rejected.arm(owner);
+          externalConflict = await rejected.capture(owner, args.artifact, performance.now());
+          await rejected.release(owner);
+          await target.webContents.executeJavaScript("performance.mark('external-owner-still-recording')");
+        } finally {
+          await contentTracing.stopRecording(args.externalFile);
+        }
+        const externalStillOwned = (await fs.readFile(args.externalFile, "utf8")).includes("external-owner-still-recording");
+        const conflictWarnings = warnings.splice(0);
+
+        async function run(untilFull: boolean) {
           await target.loadURL(args.origin);
-          const trace = new Trace(() => ({
-            startRecording: (config) => {
-              if (!useOldKey) return contentTracing.startRecording(config);
-              const { record_mode, ...rest } = config;
-              return contentTracing.startRecording({ ...rest, recording_mode: record_mode });
-            },
-            async stopRecording(file) {
-              const written = await contentTracing.stopRecording(file);
-              raw = await fs.readFile(written, "utf8");
-              return written;
-            },
-          }), (message) => warnings.push(message), { bufferSizeKb: 1024 });
+          const raw: Buffer[] = [];
+          const trace = new Trace(() => {
+            const session = createSession();
+            return {
+              ...session,
+              start: (config) => session.start(untilFull ? { ...config, recordMode: "recordUntilFull" } : config),
+              async *read(signal) {
+                for await (const chunk of session.read(signal)) {
+                  raw.push(Buffer.from(chunk.data, chunk.base64Encoded ? "base64" : "utf8"));
+                  yield chunk;
+                }
+              },
+            };
+          }, publish, (message) => warnings.push(message), { bufferSizeKb: 1024 });
           const owner = {};
           try {
             await trace.arm(owner);
@@ -96,12 +134,13 @@ test("native rolling trace evicts old events and publishes only filtered timing 
             `);
             await wait(100);
             const capture = await trace.capture(owner, args.artifact, trigger);
-            const events: { name?: string }[] = JSON.parse(raw).traceEvents;
+            const exported = Buffer.concat(raw).toString("utf8");
+            const events: { name?: string }[] = JSON.parse(exported).traceEvents;
             return {
               capture,
               early: events.some((event) => event.name === "early-overflow-marker"),
               recent: events.some((event) => event.name === "recent-overflow-marker"),
-              hadPrivateUrl: raw.includes(args.url),
+              hadPrivateUrl: exported.includes(args.url),
               widths,
             };
           } finally {
@@ -110,12 +149,18 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         }
         const old = await run(true);
         const rolling = await run(false);
-        return { old, rolling, warnings, electron: process.versions.electron, chromium: process.versions.chrome };
+        return {
+          old, rolling, warnings, externalConflict, externalStillOwned, conflictWarnings,
+          electron: process.versions.electron, chromium: process.versions.chrome,
+        };
       } finally {
         target.destroy();
       }
-    }, { controller, artifact, origin, privateValue, url });
+    }, { controller, artifact, externalFile, worker, origin, privateValue, url });
 
+    expect(result.externalConflict).toEqual({ status: "skipped", reason: "not-recording" });
+    expect(result.externalStillOwned).toBe(true);
+    expect(result.conflictWarnings).toEqual(["Could not arm Chromium trace"]);
     expect(result.warnings).toEqual([]);
     expect(result.old).toMatchObject({ capture: { status: "written" }, early: true, recent: false });
     expect(result.rolling).toMatchObject({
