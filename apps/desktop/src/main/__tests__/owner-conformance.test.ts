@@ -1472,15 +1472,20 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   it("the enrolled Outpost retries an unclaimed workspace refusal without replacing its native owner", async ({ signal, onTestFinished }) => {
-    const host = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES });
-    const displaced = `${host.workspace}-unavailable`;
+    const starting = startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES });
+    let displaced: string | undefined;
     onTestFinished(async () => {
+      const host = await starting.catch(() => undefined);
+      if (!host) return;
       try {
-        if (existsSync(displaced)) await rename(displaced, host.workspace);
+        if (displaced && existsSync(displaced)) await rename(displaced, host.workspace);
       } finally {
         await host.close();
       }
     });
+    const host = await starting;
+    signal.throwIfAborted();
+    displaced = `${host.workspace}-unavailable`;
     host.subscribe(EVENT_CLASSES);
     const data = host.env.PWRAGENT_TEST_DATA!;
     const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
@@ -1496,7 +1501,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
     // The provider has claimed the gate steer and has yet to acknowledge it.
     // The queue keeps the next steer waiting while this admission is in flight.
-    const guidance = request("held-guidance", "Invented recoverable workspace guidance");
+    const guidanceText = "Invented recoverable workspace guidance";
+    const guidance = request("held-guidance", guidanceText);
     expect(await host.client.startTurn(guidance)).toMatchObject({ queueStatus: "queued", queueEntryId: guidance.queueEntryId });
     await rename(host.workspace, displaced);
     await writeFile(path.join(data, "steer.release"), "release");
@@ -1509,12 +1515,15 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
     const projection = () => host.client.getNavigationQueueProjection({ protocol: 2, ref: identity });
     const activeTurnId = async () => (await host.client.resolveThreadAdmissionState(identity)).activeTurn?.turnId;
+    // Include native attempts on this thread and any delivery of the guidance.
     const nativeCalls = () => readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n")
       .map(line => JSON.parse(line))
-      .filter(call => call.params?.threadId === identity.threadId && (call.method === "turn/start" || call.method === "turn/steer"));
+      .filter(call => (call.method === "turn/start" || call.method === "turn/steer")
+        && (call.params?.threadId === identity.threadId
+          || call.params?.input?.some((item: { text?: string }) => item.text === guidanceText)));
     const originalCalls = [
-      { method: "turn/start", params: { input: [{ type: "text", text: "slow" }] } },
-      { method: "turn/steer", params: { expectedTurnId: active.turnId, input: gate.input } },
+      { method: "turn/start", params: { threadId: identity.threadId, input: [{ type: "text", text: "slow" }] } },
+      { method: "turn/steer", params: { threadId: identity.threadId, expectedTurnId: active.turnId, input: gate.input } },
     ];
     const held = await projection();
     expect(held.entries).toMatchObject([{ queueEntryId: guidance.queueEntryId, manualReleaseRequired: true }]);
@@ -1533,7 +1542,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     expect((await projection()).entries).toEqual([]);
     expect(await activeTurnId()).toBe(active.turnId);
     expect(nativeCalls()).toMatchObject([...originalCalls,
-      { method: "turn/steer", params: { expectedTurnId: active.turnId, input: guidance.input } },
+      { method: "turn/steer", params: { threadId: identity.threadId, expectedTurnId: active.turnId, input: guidance.input } },
     ]);
     await host.client.interruptTurn(active);
   });
