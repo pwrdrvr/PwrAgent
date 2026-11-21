@@ -178,6 +178,72 @@ describe("McpAccessPanel", () => {
     expect(screen.queryByRole("switch", { name: /Sentry/ })).toBeNull();
   });
 
+  it("says nothing about a suggested connection that was never set up", async () => {
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [
+              READY,
+              connection({
+                id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer",
+                enabled: false, configured: false, state: "disconnected",
+              }),
+            ],
+          }),
+        }}
+        selection={{ connectionIds: [], providerServersEnabled: true }}
+        onDismiss={vi.fn()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("switch", { name: "Use Datadog in this thread" });
+    expect(screen.queryByText(/turned off for every thread/)).toBeNull();
+  });
+
+  it("holds the place of what the thread loaded while the agent is asked", async () => {
+    let answer!: (report: unknown) => void;
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [READY] }),
+          describeThreadMcpConnections: async () =>
+            await new Promise((resolve) => { answer = resolve as (report: unknown) => void; }),
+        }}
+        selection={{ connectionIds: ["datadog"], providerServersEnabled: true }}
+        threadId="thread-1"
+        onDismiss={vi.fn()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+
+    // The rows are there before the agent answers, one per selected connection.
+    const pending = (await screen.findByText("Checking…")).closest("section");
+    expect(pending?.getAttribute("aria-busy")).toBe("true");
+    expect(pending?.querySelectorAll("li")).toHaveLength(1);
+    expect(pending?.textContent).toContain("In this thread");
+    expect(pending?.textContent).toContain("Datadog");
+
+    await act(async () => {
+      answer({
+        backend: "codex", threadId: "thread-1", providerServersEnabled: true, appliesAt: "next_turn",
+        agentInventoryAvailable: true,
+        connections: [{
+          connectionId: "datadog", displayName: "Datadog", serverNameInAgent: "pwragent_datadog_0",
+          state: "ready", configured: true, enabled: true, toolCount: 18,
+        }],
+      });
+    });
+    // The same section, the same number of rows: nothing below it moved.
+    const loaded = screen.getByText("18 tools").closest("section");
+    expect(loaded?.querySelectorAll("li")).toHaveLength(1);
+    expect(loaded?.hasAttribute("aria-busy")).toBe(false);
+    expect(screen.queryByText("Checking…")).toBeNull();
+  });
+
   it("states when a change reaches a Codex thread", async () => {
     render(
       <McpAccessPanel

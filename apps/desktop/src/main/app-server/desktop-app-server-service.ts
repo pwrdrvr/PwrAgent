@@ -6311,8 +6311,8 @@ class DesktopAppServerService {
             ]),
             signal: params.signal,
           }),
-        isEnabled: () =>
-          getMcpConnectionGatewayService().isSandboxerCleanupOnPrCloseEnabled(),
+        isEnabled: (connectionId) =>
+          getMcpConnectionGatewayService().isSandboxCleanupOnPrCloseEnabled(connectionId),
         onReport: (report) => this.recordSandboxCleanup(report),
       });
     }
@@ -8406,7 +8406,7 @@ class DesktopAppServerService {
           if (report === "timeout") {
             return [
               "",
-              "Sandboxer cleanup by PwrAgent is still running; its result will appear in PR activity.",
+              "Sandbox cleanup by PwrAgent is still running; its result will appear in PR activity.",
             ];
           }
           return formatSandboxCleanupLines(report);

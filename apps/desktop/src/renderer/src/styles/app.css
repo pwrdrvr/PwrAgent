@@ -322,6 +322,8 @@
   --theme-swatch-tangerine-dark-sidebar: #050505;
   --theme-swatch-tangerine-dark-accent: #ff8a1f;
   --theme-swatch-tangerine-dark-text: #f7f3eb;
+  /* Behind a third-party mark published for a light page, in every theme. */
+  --brand-mark-plate: #ffffff;
   --theme-swatch-tangerine-light-app: #ffffff;
   --theme-swatch-tangerine-light-sidebar: #f7f4ef;
   --theme-swatch-tangerine-light-accent: #b74c00;
@@ -26021,6 +26023,129 @@ a.button {
   height: 40px;
   border-radius: 8px;
   box-shadow: 0 6px 16px var(--shadow-tint-medium);
+}
+
+/* A transparent, non-square mark: fitted whole onto a light plate. */
+.mcp-connection__icon--plate,
+.plugin-store__tile-icon--plate {
+  box-sizing: border-box;
+  padding: 5px;
+  background: var(--brand-mark-plate);
+  object-fit: contain;
+}
+
+.plugin-store__tile-icon--plate {
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.settings-boat-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  margin: 4px 0 2px;
+}
+
+.settings-boat-setup__pitch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-boat-setup__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.settings-boat-setup__pitch p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.settings-boat-setup__points {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-boat-setup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-boat-setup__actions .settings-mcp-row__state {
+  flex: 1 1 100%;
+}
+
+.settings-boat-code {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.settings-boat-code__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-boat-code__label,
+.settings-boat-code__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-boat-code__value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  user-select: all;
+}
+
+.settings-boat-key {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-boat-key .settings-input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.settings-boat-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.settings-boat-limit {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .mcp-connection__copy {

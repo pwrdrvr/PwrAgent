@@ -71,6 +71,7 @@ import {
   type ManagedMcpToolInventory,
 } from "./mcp-server-health";
 import { SettingsCopyValue } from "./SettingsCopyValue";
+import { BoatPolicyControls, BoatSetupDetail } from "./BoatConnectionSetup";
 import {
   SandboxerCompactRow,
   SandboxerDrawerDetail,
@@ -277,6 +278,8 @@ export function PluginsSettings(props: {
   desktopApi?: DesktopApi;
   /** Section the Settings nav asked to open, by `sectionId`. */
   focusSectionId?: string;
+  /** A connection whose row the route asked for: scrolled to and focused. */
+  revealConnectionId?: string;
   saving?: boolean;
   snapshot: DesktopSettingsSnapshot;
   onMcpGatewayEnabledChange: (enabled: boolean) => Promise<void>;
@@ -1301,7 +1304,9 @@ export function PluginsSettings(props: {
     if (!row) return;
     setHighlightConnectionId(revealConnectionId);
     row.scrollIntoView?.({ block: "nearest" });
-    row.querySelector<HTMLElement>("button")?.focus();
+    // The row's own next step when it marks one, else its first control.
+    (row.querySelector<HTMLElement>("[data-reveal-focus]:not(:disabled)")
+      ?? row.querySelector<HTMLElement>("button"))?.focus();
   }, [connections, revealConnectionId, storeView]);
 
   // Sandboxer's store page closes onto its row once it works, as adding
@@ -1314,6 +1319,20 @@ export function PluginsSettings(props: {
     setStoreView(undefined);
     setRevealConnectionId(sandboxerConfiguredId);
   }, [sandboxerConfiguredId, storeView]);
+
+  // A route that names a row is honored once the list has loaded, and once
+  // per route: a later reload must not pull focus back to it.
+  const routeRevealRef = useRef<string | undefined>(undefined);
+  const routeRevealConnectionId = props.revealConnectionId;
+  useEffect(() => {
+    if (!routeRevealConnectionId) {
+      routeRevealRef.current = undefined;
+      return;
+    }
+    if (connectionsLoading || routeRevealRef.current === routeRevealConnectionId) return;
+    routeRevealRef.current = routeRevealConnectionId;
+    setRevealConnectionId(routeRevealConnectionId);
+  }, [connectionsLoading, routeRevealConnectionId]);
 
   useEffect(() => {
     if (!highlightConnectionId) return;
@@ -3187,6 +3206,7 @@ function ManagedMcpConnectionRow(props: {
   const toolApproval = connection.toolApproval ?? "auto";
   const sandboxer = connection.kind === "sandboxer";
   const localSandboxer = sandboxer && connection.authMode === "local_cli";
+  const boat = connection.kind === "boat";
   const [transportBusy, setTransportBusy] = useState(false);
   const stdio = connection.kind === "stdio";
   const github = connection.kind === "github";
@@ -3424,7 +3444,7 @@ function ManagedMcpConnectionRow(props: {
                   onChanged={refreshStatus}
                   onNotice={props.onNotice}
                 />
-              ) : stdio || ipc || github ? null : (
+              ) : stdio || ipc || github || boat ? null : (
                 <button
                   className="button button--secondary"
                   disabled={props.disabled}
@@ -3518,6 +3538,16 @@ function ManagedMcpConnectionRow(props: {
             connection={connection}
             desktopApi={props.desktopApi}
             detail={setup.detail}
+            onNotice={props.onNotice}
+          />
+        ) : boat ? (
+          // The key field stands where another row shows its URL.
+          <BoatSetupDetail
+            connection={connection}
+            desktopApi={props.desktopApi}
+            detail={setup.detail}
+            disabled={disabled}
+            onChanged={props.onChanged}
             onNotice={props.onNotice}
           />
         ) : (
@@ -3708,6 +3738,15 @@ function ManagedMcpConnectionRow(props: {
               </span>
             </div>
           ) : null}
+          {boat ? (
+            <BoatPolicyControls
+              connection={connection}
+              desktopApi={props.desktopApi}
+              disabled={disabled}
+              onChanged={props.onChanged}
+              onNotice={props.onNotice}
+            />
+          ) : null}
           {/*
             * A choice of three, not a switch: each mode is a different
             * question about every tool, and its line under the field says
@@ -3730,8 +3769,8 @@ function ManagedMcpConnectionRow(props: {
                   onChange={props.onToolApprovalChange}
                 />
                 <span className="settings-mcp-row__policy-hint" id={toolApprovalHintId}>
-                  {sandboxer && toolApproval === "approve"
-                    ? "Selecting Sandboxer in a conversation allows its sandbox tools, including commands and file writes. Creating or resuming starts billing."
+                  {(sandboxer || boat) && toolApproval === "approve"
+                    ? `Selecting ${connection.displayName} in a conversation allows its sandbox tools, including commands and file writes. Creating or resuming starts billing.`
                     : TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
                   {" "}Full Access threads never ask.
                 </span>

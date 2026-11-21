@@ -137,6 +137,22 @@ export function describeMcpConnectionAuth(
           canSignIn: false,
         };
   }
+  if (connection.kind === "boat") {
+    // PwrAgent holds the pasted key; no agent, sandbox or peer ever sees it.
+    return connection.configured
+      ? {
+          label: "API key",
+          description: "The Boat API key is stored encrypted in this profile. Only PwrAgent's Boat server reads it.",
+          tone: "ok",
+          canSignIn: false,
+        }
+      : {
+          label: connection.state === "reauthorization_required" ? "Key rejected" : "Not connected",
+          description: connection.detail ?? "Paste a Boat API key to connect.",
+          tone: "warn",
+          canSignIn: false,
+        };
+  }
   if (connection.authMode === "none") {
     // A local command signs in to nothing. What it can be missing is a
     // stored secret that encrypted storage no longer gives back.

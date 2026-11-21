@@ -39,6 +39,7 @@ import { modelServiceEntries, providerKindLabel } from "./provider-kinds";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { pluginsRouteConnectionId } from "./plugins-route";
 import {
   PLUGINS_CODEX_MCP_SECTION_ID,
   PLUGINS_MCP_GATEWAY_SECTION_ID,
@@ -673,12 +674,16 @@ export function SettingsScreen(props: {
   // Crumb label from the same catalog the nav renders. An unknown sub
   // gets no crumb rather than leaking the raw route id into the
   // breadcrumb.
+  // A Plugins route to one connection's row belongs to the gateway child.
+  const navSub = section === "plugins" && pluginsRouteConnectionId(route.sub)
+    ? PLUGINS_MCP_GATEWAY_SECTION_ID
+    : route.sub;
   // Environments routes name a project and file rather than a nav child.
   const activeSubLabel = !route.sub
     ? undefined
     : section === "environments"
       ? environmentsRouteLabel(route.sub)
-      : navChildren(section).find((child) => child.sub === route.sub)?.label;
+      : navChildren(section).find((child) => child.sub === navSub)?.label;
   // Platform-chip clicks in the title-bar strip route to the top-level
   // Messaging Activity overlay (NOT a settings section). The App-level
   // handler swaps mainView for us; no internal state change here.
@@ -747,8 +752,8 @@ export function SettingsScreen(props: {
                 const children = isGroup ? navChildren(item.id) : [];
                 const childHoldsRoute = (child: SettingsNavChild): boolean =>
                   groupHoldsRoute
-                  && (route.sub === child.sub
-                    || (route.sub === undefined && child.bareRoute === true));
+                  && (navSub === child.sub
+                    || (navSub === undefined && child.bareRoute === true));
                 // A section without children (Environments) owns every sub-route.
                 const parentActive =
                   groupHoldsRoute
@@ -1525,7 +1530,9 @@ function SettingsSectionBody(props: {
     return (
       <PluginsSettings
         desktopApi={props.desktopApi}
-        focusSectionId={props.sub}
+        // A route to one connection's row scrolls to that row, not the section.
+        focusSectionId={pluginsRouteConnectionId(props.sub) ? undefined : props.sub}
+        revealConnectionId={pluginsRouteConnectionId(props.sub)}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onMcpGatewayEnabledChange={async (mcpGatewayEnabled: boolean) => {
