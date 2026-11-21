@@ -5,6 +5,7 @@ import {
   BOAT_SANDBOX_TYPE_LABELS,
   DEFAULT_BOAT_SANDBOX_POLICY,
   boatSandboxTypeRank,
+  boatStartBlockHeadline,
   normalizeBoatApiKey,
   type BoatLinkTarget,
   type BoatSandboxPolicy,
@@ -253,13 +254,16 @@ export function BoatSetupDetail(props: {
 
   if (!needsKey) {
     const account = accountLine(props.connection);
-    // Blocked, the row's detail says why and what frees the next start
-    // (`resolveMcpConnectionSetup`), so it reads as the problem it is.
-    const blocked = props.connection.boatAccount?.canStart === false;
+    // Blocked: the block's name carries the tone, and the row's detail says
+    // what frees the next start (`resolveMcpConnectionSetup`).
+    const blocked = props.connection.boatAccount?.canStart === false
+      ? boatStartBlockHeadline(props.connection.boatAccount.startBlock ?? "other")
+      : undefined;
     return (
       <>
         {account ? <p className="settings-mcp-row__state">{account}</p> : null}
-        <p className={blocked ? "settings-mcp-row__error" : "settings-mcp-row__state"}>{props.detail}</p>
+        {blocked ? <p className="settings-mcp-row__error">{blocked}</p> : null}
+        <p className="settings-mcp-row__state">{props.detail}</p>
         {links}
       </>
     );

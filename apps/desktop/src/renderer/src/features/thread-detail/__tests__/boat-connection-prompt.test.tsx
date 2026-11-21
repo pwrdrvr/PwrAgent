@@ -184,6 +184,17 @@ describe("BoatSetupDetail", () => {
     expect(screen.getByText("pro plan · 1 of 5 sandboxes running")).toBeInTheDocument();
     expect(screen.queryByLabelText("Boat API key")).not.toBeInTheDocument();
   });
+
+  it("names the block by what frees a start, not by Boat's code", () => {
+    renderDetail(vi.fn(), boat({
+      boatAccount: {
+        plan: "trial", activeSandboxes: 0, maxActiveSandboxes: 2, canStart: false,
+        blockedReason: "trial_compute_limit_reached", startBlock: "trial_compute_used",
+      },
+    }));
+    expect(screen.getByText("Trial used")).toBeInTheDocument();
+    expect(screen.queryByText("trial_compute_limit_reached")).not.toBeInTheDocument();
+  });
 });
 
 describe("BoatSetupDetail sign-in", () => {
