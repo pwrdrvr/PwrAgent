@@ -280,11 +280,16 @@ models = ["proxy-model"]
     }
   });
 
-  it("queued replacement preserves sender ownership and held guidance returns to the same native turn", async () => {
+  it("preserves queued sender ownership and retries held guidance on the same native turn without a release notification", async () => {
     const host = await startOutpostDaemon({ packageRoot: directory, fixturePreload: preload,
       capabilities: [...OUTPOST_VIEWER_CAPABILITIES, "turn_queue_pause"], env: { PWRAGENT_OUTPOST_OPENAI_PROVIDER: undefined } });
     const displaced = `${host.workspace}-unavailable`;
+    const fixtureData = host.env.PWRAGENT_TEST_DATA!;
+    const releaseTarget = path.join(path.dirname(fixtureData), "steer.release");
     try {
+      // Install a dangling link before the gate starts. Creating its target
+      // later makes the marker visible without changing the watched directory.
+      fs.symlinkSync(releaseTarget, path.join(fixtureData, "steer.release"));
       const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       // A creation response also includes executionMode. Sending it back as
       // guidance would explicitly select turn settings and request a new turn.
@@ -299,12 +304,12 @@ models = ["proxy-model"]
       expect(replacement.queueEntryId).not.toBe(queued.queueEntryId);
       await host.client.cancelQueuedTurn({ queueEntryId: replacement.queueEntryId! });
       await host.client.startTurn({ ...ref, queueEntryId: "stdio-agent-guidance", input: [{ type: "text", text: "hold-steer-ack" }], messageOrigin });
-      await vi.waitFor(() => expect(fs.existsSync(path.join(host.env.PWRAGENT_TEST_DATA!, "steer.ready"))).toBe(true));
+      await vi.waitFor(() => expect(fs.readFileSync(path.join(fixtureData, "steer.ready"), "utf8")).toBe(active.turnId));
       const heldInput = [{ type: "text" as const, text: "Invented held guidance" }];
       const held = await host.client.startTurn({ ...ref, queueEntryId: "stdio-held", input: heldInput, messageOrigin });
       await host.client.setQueuedTurnPaused({ queueEntryId: held.queueEntryId!, paused: true });
       fs.renameSync(host.workspace, displaced);
-      fs.writeFileSync(path.join(host.env.PWRAGENT_TEST_DATA!, "steer.release"), "release");
+      fs.writeFileSync(releaseTarget, "release");
       await host.client.setQueuedTurnPaused({ queueEntryId: held.queueEntryId!, paused: false });
       const projection = () => host.client.getNavigationQueueProjection({ protocol: 2, ref });
       await vi.waitFor(async () => expect((await projection()).entries[0]?.manualReleaseRequired).toBe(true));
@@ -315,8 +320,10 @@ models = ["proxy-model"]
       expect(await host.client.releaseQueuedTurn({ queueEntryId: held.queueEntryId! })).toMatchObject({ disposition: "started", turnId: active.turnId });
       expect((await projection()).entries).toEqual([]);
       expect((await host.client.resolveThreadAdmissionState(ref)).activeTurn?.turnId).toBe(active.turnId);
-      const calls = fs.readFileSync(path.join(host.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-      expect(calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === heldInput[0].text)).toHaveLength(1);
+      const calls = fs.readFileSync(path.join(fixtureData, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === heldInput[0].text)).toEqual([
+        expect.objectContaining({ params: expect.objectContaining({ threadId: ref.threadId, expectedTurnId: active.turnId }) }),
+      ]);
       await host.client.interruptTurn(active);
     } finally {
       if (fs.existsSync(displaced)) fs.renameSync(displaced, host.workspace);
