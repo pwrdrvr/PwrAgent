@@ -453,7 +453,12 @@ export class MessagingCommandHandlers {
       });
       return;
     }
-    if (!await this.context.host().reviewSupportedForBinding(binding)) {
+    // A Claude owner has no review/start, but its picker runs Claude Code's
+    // /code-review. Typed targets still need review/start.
+    if (
+      !await this.context.host().reviewSupportedForBinding(binding)
+      && (event.args.length > 0 || !await this.context.host().claudeCodeReviewSupportedForBinding(binding))
+    ) {
       await this.context.host().deliverReviewUnsupported(binding, event);
       return;
     }
@@ -514,6 +519,7 @@ export class MessagingCommandHandlers {
     const binding = await this.context.store.findActiveBindingForChannel(event.channel);
     const reviewSupported = binding
       ? await this.context.host().reviewSupportedForBinding(binding)
+        || await this.context.host().claudeCodeReviewSupportedForBinding(binding)
       : false;
     const actionCatalog =
       reviewSupported

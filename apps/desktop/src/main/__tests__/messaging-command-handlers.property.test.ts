@@ -243,3 +243,24 @@ describe("messaging /code-review", () => {
     ));
   });
 });
+
+describe("messaging /review on an owner without review/start", () => {
+  /**
+   * Rule: a bare /review opens the picker where the owner runs review/start
+   * or Claude Code's /code-review; typed targets still need review/start.
+   */
+  it("opens the picker for Claude Code and refuses typed targets it cannot run", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(), fc.boolean(), fc.constantFrom<string[]>([], ["--custom", "Fixture"], ["main"]),
+      async (startReview, claudeCode, args) => {
+        const f = commandHarness({
+          reviewSupportedForBinding: async () => startReview,
+          claudeCodeReviewSupportedForBinding: async () => claudeCode,
+        });
+        await f.owner.handleCommand(commandEvent("review", args));
+        const runs = startReview || (args.length === 0 && claudeCode);
+        expect(f.trace.at(-1)).toBe(!runs ? "unsupported" : args.length === 0 ? "review-picker" : "review");
+      },
+    ));
+  });
+});

@@ -149,12 +149,21 @@ comma-separated argument, which Claude Code reviews as one report; Separately
 queues one command per PR.
 
 A bare `/code-review` typed in such a thread, or picked from the command menu,
-opens this panel the same way `/review` does. A bare `/code-review` from a
-bound messaging conversation starts a Claude Code review of the current
-changes at the default effort, with the same reply permission, peer scope and
-contact retention as `/review --pr`. With arguments (`/code-review ultra`,
-`/code-review high 12`), and on a thread that does not review as Claude Code,
-it is Claude Code's own command and is sent as typed.
+opens this panel the same way `/review` does. With arguments (`/code-review
+ultra`, `/code-review high 12`), and on a thread that does not review as Claude
+Code, it is Claude Code's own command and is sent as typed.
+
+From a bound messaging conversation, a bare `/code-review` starts a Claude
+Code review of the current changes at the default effort, with the same reply
+permission, peer scope and contact retention as `/review --pr`. A bare
+`/review` opens the messaging picker, which on such a thread defaults to the
+**Claude Code** mode like the panel: Review Scope offers Current changes,
+Attached PR, Branch and Path (a branch or path can be typed as a reply), an
+Effort button offers low to max, and the summary shows the exact command. A
+Reviewer from another provider switches the review to the PwrAgent Sub Agent;
+choosing Claude Code again drops it. A Claude owner has no `review/start`, so
+`/review` with a typed target (`/review main`, `/review --custom ...`) is still
+refused there.
 
 `claudeCodeReviewCommand` builds the command on the owner. A PR is its bare
 number when the checkout has exactly one GitHub remote and the PR is that

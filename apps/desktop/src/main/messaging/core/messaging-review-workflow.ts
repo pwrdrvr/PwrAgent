@@ -1,7 +1,8 @@
 import path from "node:path";
 import { findThreadForBinding } from "./messaging-callback-helpers";
 import { asPlainRecord, federationTargetForBinding } from "./messaging-backend-event-helpers";
-import { DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
+import { CLAUDE_CODE_REVIEW_LEVELS, claudeCodeReviewCommand, DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, isClaudeCodeReviewLevel, parseReviewPullRequestArguments, prefersClaudeCodeReview } from "../../../shared/review-command";
+import { messagingReviewTargetForMode, resolveMessagingReviewRunMode } from "./messaging-review-claude-code";
 import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import {
@@ -99,6 +100,7 @@ export class MessagingReviewWorkflow {
     phase: MessagingReviewIntent["review"]["phase"];
     runMode?: ReviewRunMode;
     afterReview?: ReviewAfterAction;
+    codeReviewLevel?: string;
     cwd?: string;
     repositoryPath?: string;
     workspacePageIndex?: number;
@@ -136,7 +138,7 @@ export class MessagingReviewWorkflow {
     const defaultBaseBranch =
       buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
       ?? "main";
-    const target =
+    const requestedTarget: AppServerReviewTarget =
       params.target
       ?? {
         type: "baseBranch" as const,
@@ -183,23 +185,62 @@ export class MessagingReviewWorkflow {
       ? "This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review."
       : undefined;
     const primaryCwd = thread ? findPrimaryReviewWorkspaceCwd(thread) : undefined;
+    const secondaryWorkspace = Boolean(
+      params.cwd && primaryCwd && !reviewWorkspaceMatches(params.cwd, primaryCwd),
+    );
     const managedReason = reviewerBackendKind !== params.binding.backend
       ? "PwrAgent Sub Agent is required for a different review provider."
       : params.binding.backend.startsWith("acp:")
         ? "PwrAgent Sub Agent is required for ACP reviews."
-        : params.cwd && primaryCwd && !reviewWorkspaceMatches(params.cwd, primaryCwd)
+        : secondaryWorkspace
           ? "PwrAgent Sub Agent is required for a secondary workspace."
           : undefined;
-    const runMode = !modeSupported
-      ? params.runMode
-      : managedReason ? "pwragent-sub-agent" : params.runMode ?? "codex-sub-agent";
-    const modeUnavailable = !modeSupported && runMode !== undefined
-      ? "This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review."
-      : undefined;
+    // A Claude thread reviews as Claude Code's /code-review in its own
+    // workspace unless the operator picks another mode or reviewer. Choosing
+    // Claude Code drops a picked reviewer, so only the workspace rules it out.
+    const claudeCodeOwner = params.binding.backend === "claude"
+      && owner?.capabilities?.reviewClaudeCodeReview === true;
     const modeOptions: { label: string; value: ReviewRunMode; supported: boolean }[] = [
       { label: "Codex Sub Agent", value: "codex-sub-agent", supported: owner?.capabilities?.reviewCodexSubAgent === true && !managedReason },
       { label: "PwrAgent Sub Agent", value: "pwragent-sub-agent", supported: reviewerEntry?.capabilities?.reviewRunner === true },
+      { label: "Claude Code", value: "claude-code-review", supported: claudeCodeOwner && !secondaryWorkspace },
     ];
+    const runMode = resolveMessagingReviewRunMode({
+      claudeCodeAvailable: claudeCodeOwner && !managedReason,
+      managed: Boolean(managedReason),
+      modeSupported,
+      // A mode this owner cannot run (a Claude thread has no Codex Sub
+      // Agent) falls back to the default instead of being submitted.
+      requested: !modeSupported || modeOptions.find((option) => option.value === params.runMode)?.supported
+        ? params.runMode
+        : undefined,
+    });
+    const claudeCodeReview = runMode === "claude-code-review";
+    const target = messagingReviewTargetForMode(requestedTarget, runMode, defaultBaseBranch);
+    const codeReviewLevel = isClaudeCodeReviewLevel(params.codeReviewLevel)
+      ? params.codeReviewLevel
+      : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
+    const attachedPullRequests = thread?.prs ?? [];
+    // The command preview names a PR by number only for the checkout's one
+    // remote repository, as the owner does when it builds the command.
+    const remoteRepositories = new Set(directory?.gitStatus?.remoteRepositories
+      ?.map((repository) => repository.trim().toLowerCase()) ?? []);
+    let codeReviewCommand: string | undefined;
+    let codeReviewProblem: string | undefined;
+    if (claudeCodeReview) {
+      try {
+        codeReviewCommand = claudeCodeReviewCommand({
+          target,
+          level: codeReviewLevel,
+          repository: remoteRepositories.size === 1 ? [...remoteRepositories][0] : undefined,
+        });
+      } catch (error) {
+        codeReviewProblem = error instanceof Error ? error.message : String(error);
+      }
+    }
+    const modeUnavailable = !modeSupported && runMode !== undefined
+      ? "This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review."
+      : undefined;
     const modeLabel = modeOptions.find((option) => option.value === runMode)?.label ?? "Owner default";
 
     let title = "Review";
@@ -240,13 +281,23 @@ export class MessagingReviewWorkflow {
         );
       } else if (target.type === "custom") {
         summaryLines.push(`Instructions: ${target.instructions}`);
+      } else if (target.type === "pullRequest") {
+        summaryLines.push(`Pull Request: ${target.url}`);
+      } else if (target.type === "branch") {
+        summaryLines.push(`Branch: ${target.branch || "[needs selection]"}`);
+      } else if (target.type === "path") {
+        summaryLines.push(`Path: ${target.path || "[needs selection]"}`);
       }
-      if (reviewerOverridesSupported) {
+      if (reviewerOverridesSupported && !claudeCodeReview) {
         summaryLines.push(
           `Reviewer: ${reviewerSummaryLabel}${params.reviewer ? "" : " (thread default)"}`,
         );
       }
       if (runMode) summaryLines.push(`Mode: ${modeLabel}`);
+      if (claudeCodeReview) {
+        summaryLines.push(`Effort: ${codeReviewLevel}`);
+        summaryLines.push(codeReviewCommand ? `Command: ${codeReviewCommand}` : codeReviewProblem ?? "");
+      }
       if (modeUnavailable) summaryLines.push(modeUnavailable);
       if (modeSupported && managedReason) summaryLines.push(managedReason);
       if (autoFixSupported) summaryLines.push(`Auto-fix findings: ${afterReview === "auto-fix" ? "On" : "Off"}`);
@@ -267,7 +318,28 @@ export class MessagingReviewWorkflow {
           fallbackText: "review scope",
           priority: 11,
         },
-        ...(target.type === "baseBranch"
+        ...(target.type === "pullRequest"
+          ? [{
+              id: "review:summary:pull-request",
+              label: "Pull Request",
+              fallbackText: "pull request",
+              priority: 12,
+            }]
+          : target.type === "branch"
+          ? [{
+              id: "review:summary:branch",
+              label: "Branch",
+              fallbackText: "branch",
+              priority: 12,
+            }]
+          : target.type === "path"
+          ? [{
+              id: "review:summary:path",
+              label: "Path",
+              fallbackText: "path",
+              priority: 12,
+            }]
+          : target.type === "baseBranch"
           ? [{
               id: "review:summary:base-branch",
               label: "Base Branch",
@@ -289,6 +361,14 @@ export class MessagingReviewWorkflow {
                   priority: 12,
                 }]
               : []),
+        ...(claudeCodeReview
+          ? [{
+              id: "review:summary:code-review-effort",
+              label: "Effort",
+              fallbackText: "effort",
+              priority: 5,
+            }]
+          : []),
         ...(reviewerOverridesSupported
           ? [{
               id: "review:summary:reviewer",
@@ -375,6 +455,99 @@ export class MessagingReviewWorkflow {
               value: { pageIndex: page.pageIndex + 1 },
             }]
           : []),
+        backAction,
+        cancelAction,
+      ];
+    } else if (params.phase === "target" && claudeCodeReview) {
+      title = "Review scope";
+      body = "Choose what Claude Code's /code-review should review.";
+      actions = [
+        {
+          id: "review:target:current-changes",
+          label: "Current changes",
+          description: "Review staged, unstaged, and untracked files",
+          fallbackText: "current changes",
+          value: { targetType: "uncommittedChanges" },
+        },
+        ...(attachedPullRequests.length > 0
+          ? [{
+              id: "review:target:pull-request",
+              label: "Attached PR",
+              description: "Review a pull request attached to this thread",
+              fallbackText: "attached pr",
+              value: { targetType: "pullRequest" },
+            }]
+          : []),
+        {
+          id: "review:target:branch",
+          label: "Branch",
+          description: "Review a branch's changes",
+          fallbackText: "branch",
+          value: { targetType: "branch" },
+        },
+        {
+          id: "review:target:path",
+          label: "Path",
+          description: "Review one file or folder",
+          fallbackText: "path",
+          value: { targetType: "path" },
+        },
+        backAction,
+        cancelAction,
+      ];
+    } else if (params.phase === "pull_request") {
+      title = "Pull request";
+      body = [
+        "Choose an attached pull request.",
+        attachedPullRequests.length > 1
+          ? "To review several together, reply /review --pr with their numbers."
+          : undefined,
+      ].filter((line): line is string => Boolean(line)).join("\n");
+      actions = [
+        ...attachedPullRequests.map((pr, index) => ({
+          id: `review:pull-request:${index}`,
+          label: `#${pr.number}${pr.title ? ` ${pr.title}` : ""}`,
+          fallbackText: pr.url,
+          priority: 10 + index,
+          value: { url: pr.url },
+        })),
+        backAction,
+        cancelAction,
+      ];
+    } else if (params.phase === "branch") {
+      title = "Branch";
+      body = "Choose a branch or reply with any branch name.";
+      allowFreeform = true;
+      actions = [
+        ...messagingReviewBranchOptions({
+          directory,
+          thread: workspaceThread,
+        }).map((branch, index) => ({
+          id: `review:branch:${index}`,
+          label: branch,
+          fallbackText: branch,
+          priority: 10 + index,
+          value: { branch },
+        })),
+        backAction,
+        cancelAction,
+      ];
+    } else if (params.phase === "path") {
+      title = "Path";
+      body = "Reply with the file or folder to review, relative to the project.";
+      allowFreeform = true;
+      actions = [backAction, cancelAction];
+    } else if (params.phase === "code_review_effort") {
+      title = "Review effort";
+      body = "Choose how thoroughly Claude Code reviews.";
+      actions = [
+        ...CLAUDE_CODE_REVIEW_LEVELS.map((level, index) => ({
+          id: `review:code-review-effort:${level}`,
+          label: level,
+          fallbackText: level,
+          priority: 10 + index,
+          value: { level },
+        })),
         backAction,
         cancelAction,
       ];
@@ -550,7 +723,8 @@ export class MessagingReviewWorkflow {
         phase: params.phase,
         ...(runMode ? { runMode } : {}),
         ...(afterReview ? { afterReview } : {}),
-        ...(params.reviewer ? { reviewer: params.reviewer } : {}),
+        ...(claudeCodeReview ? { codeReviewLevel } : {}),
+        ...(params.reviewer && !claudeCodeReview ? { reviewer: params.reviewer } : {}),
         ...(reviewerBackends.length > 0 ? { reviewerBackends } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         ...(params.repositoryPath
@@ -603,6 +777,10 @@ export class MessagingReviewWorkflow {
       }
     } else if (pendingIntent.intent.review.phase === "custom") {
       target = { type: "custom", instructions: value };
+    } else if (pendingIntent.intent.review.phase === "branch") {
+      target = { type: "branch", branch: value };
+    } else if (pendingIntent.intent.review.phase === "path") {
+      target = { type: "path", path: value };
     }
 
     if (!target) {
@@ -660,6 +838,14 @@ export class MessagingReviewWorkflow {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "custom",
         });
+      } else if (action.id === "review:summary:pull-request") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "pull_request" });
+      } else if (action.id === "review:summary:branch") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "branch" });
+      } else if (action.id === "review:summary:path") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "path" });
+      } else if (action.id === "review:summary:code-review-effort") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "code_review_effort" });
       } else if (action.id === "review:summary:mode") {
         await this.updateReviewPendingIntent(pendingIntent, event, { phase: "run_mode" });
       } else if (action.id === "review:summary:auto-fix") {
@@ -702,6 +888,41 @@ export class MessagingReviewWorkflow {
       const runMode = value?.runMode;
       if (runMode === "codex-sub-agent" || runMode === "pwragent-sub-agent") {
         await this.updateReviewPendingIntent(pendingIntent, event, { phase: "summary", runMode });
+      } else if (runMode === "claude-code-review") {
+        // Claude Code reviews as the thread itself, so a picked reviewer goes.
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary", runMode, clearReviewer: true,
+        });
+      }
+      return;
+    }
+
+    if (phase === "code_review_effort") {
+      const level = value?.level;
+      if (isClaudeCodeReviewLevel(level)) {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "summary", codeReviewLevel: level });
+      }
+      return;
+    }
+
+    if (phase === "pull_request") {
+      const url = typeof value?.url === "string" ? value.url.trim() : "";
+      if (url) {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          target: { type: "pullRequest", url },
+        });
+      }
+      return;
+    }
+
+    if (phase === "branch") {
+      const branch = typeof value?.branch === "string" ? value.branch.trim() : "";
+      if (branch) {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          target: { type: "branch", branch },
+        });
       }
       return;
     }
@@ -840,6 +1061,12 @@ export class MessagingReviewWorkflow {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "custom",
         });
+      } else if (targetType === "pullRequest") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "pull_request" });
+      } else if (targetType === "branch") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "branch" });
+      } else if (targetType === "path") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "path" });
       }
       return;
     }
@@ -874,6 +1101,7 @@ export class MessagingReviewWorkflow {
       phase: MessagingReviewIntent["review"]["phase"];
       runMode?: ReviewRunMode;
       afterReview?: ReviewAfterAction;
+      codeReviewLevel?: string;
       cwd?: string;
       repositoryPath?: string;
       workspacePageIndex?: number;
@@ -941,6 +1169,7 @@ export class MessagingReviewWorkflow {
       phase: review.phase,
       runMode: review.runMode ?? pendingIntent.intent.review.runMode,
       afterReview: review.afterReview ?? pendingIntent.intent.review.afterReview,
+      codeReviewLevel: review.codeReviewLevel ?? pendingIntent.intent.review.codeReviewLevel,
       cwd,
       repositoryPath,
       workspacePageIndex: review.workspacePageIndex,
@@ -1007,7 +1236,8 @@ export class MessagingReviewWorkflow {
       return;
     }
 
-    const reviewer = pendingIntent.intent.review.reviewer;
+    const claudeCodeReview = pendingIntent.intent.review.runMode === "claude-code-review";
+    const reviewer = claudeCodeReview ? undefined : pendingIntent.intent.review.reviewer;
     const reviewerBackends = pendingIntent.intent.review.reviewerBackends;
     const reviewerBackend = reviewer?.backend ?? binding.backend;
     await this.submitMessagingReview({
@@ -1017,6 +1247,9 @@ export class MessagingReviewWorkflow {
       cwd: pendingIntent.intent.review.cwd,
       runMode: pendingIntent.intent.review.runMode,
       afterReview: pendingIntent.intent.review.afterReview,
+      ...(claudeCodeReview
+        ? { reasoningEffort: pendingIntent.intent.review.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+        : {}),
       reviewerLabel: reviewerBackends?.find(
         (candidate) => candidate.backend === reviewerBackend,
       )?.label,
@@ -1042,10 +1275,14 @@ export class MessagingReviewWorkflow {
     // Claude Code's own /code-review runs on an owner that advertises it, not
     // through review/start, so it is checked against that capability instead.
     const requestedClaudeCodeReview = params.runMode === "claude-code-review";
+    // A managed review runs on the PwrAgent Sub Agent, which the owner checks
+    // below, so a Claude thread can still be reviewed by another provider.
+    const managedReview = params.runMode === "pwragent-sub-agent"
+      || (params.reviewBackend !== undefined && params.reviewBackend !== params.binding.backend);
     if (!submitReview || (
       requestedClaudeCodeReview
         ? !await this.claudeCodeReviewSupportedForBinding(params.binding)
-        : !pullRequestCommand && !await this.reviewSupportedForBinding(params.binding)
+        : !pullRequestCommand && !managedReview && !await this.reviewSupportedForBinding(params.binding)
     )) {
       await this.deliverReviewUnsupported(params.binding, params.event);
       return;
@@ -1076,7 +1313,7 @@ export class MessagingReviewWorkflow {
       if (runMode !== undefined && owner?.capabilities.reviewRunMode !== true) {
         throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
       }
-      if (combined && runMode === "pwragent-sub-agent" && !params.reviewBackend
+      if (runMode === "pwragent-sub-agent" && !params.reviewBackend
         && owner?.capabilities.reviewRunner !== true) {
         throw new Error("PwrAgent Sub Agent is unavailable for this thread's provider.");
       }
@@ -1094,11 +1331,15 @@ export class MessagingReviewWorkflow {
       if (claudeCodeReview && !messagingSource) {
         throw new Error("Claude Code review needs a messaging connection that can preserve the requesting contact's permissions.");
       }
+      // The picker's effort, or high; never the thread's own model effort.
+      const codeReviewLevel = isClaudeCodeReviewLevel(params.reasoningEffort)
+        ? params.reasoningEffort
+        : DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
       const reviewer = {
         backend: params.reviewBackend ?? params.binding.backend,
         ...(params.reviewerLabel ? { label: params.reviewerLabel } : {}),
         ...(claudeCodeReview
-          ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL, source: "thread_default" as const }
+          ? { reasoningEffort: codeReviewLevel, source: "thread_default" as const }
           : params.reviewBackend
           ? {
               ...(params.model ? { model: params.model } : {}),
@@ -1128,7 +1369,7 @@ export class MessagingReviewWorkflow {
         // An explicit reviewer replaces the binding's inherited settings
         // wholesale — its model belongs to a different catalog.
         ...(claudeCodeReview
-          ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL }
+          ? { reasoningEffort: codeReviewLevel }
           : params.reviewBackend
           ? {
               reviewBackend: params.reviewBackend,

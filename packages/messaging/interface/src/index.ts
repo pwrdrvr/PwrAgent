@@ -1092,6 +1092,10 @@ export type MessagingReviewPhase =
   | "reviewer_provider"
   | "reviewer_model"
   | "reviewer_effort"
+  | "pull_request"
+  | "branch"
+  | "path"
+  | "code_review_effort"
   | "submitted";
 
 export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
@@ -1112,6 +1116,8 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     workspacePageIndex?: number;
     targetType?: AppServerReviewTarget["type"];
     target?: AppServerReviewTarget;
+    /** Claude Code's `/code-review` effort, low to max; unset is high. */
+    codeReviewLevel?: string;
     /**
      * Reviewer override picked from the configurator. Absent means the review
      * inherits the thread's own provider/model/reasoning — the summary shows
