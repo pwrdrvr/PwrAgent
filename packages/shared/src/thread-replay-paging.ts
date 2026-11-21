@@ -326,32 +326,38 @@ function compactReplayWithinByteBudget(
   { replay, maxBytes, measureJsonBytes }: ReplayByteBudget,
 ): AppServerThreadReplay {
   const { pagination } = replay;
-  if (replay.entries.length > 0) {
-    const entries = [...replay.entries];
-    entries[0] = compactOversizedEntry(entries[0]!);
-    // Rebuild the message projections once for the first candidate. The input
-    // can come from a read that left those projections empty.
-    const firstCandidate = replayWithEntries(replay, entries, pagination);
-    let bytes = measureJsonBytes(firstCandidate);
-    if (bytes <= maxBytes) {
-      return firstCandidate;
-    }
-
-    const lastUserIndex = entries.findLastIndex((entry) => entry.type === "message" && entry.role === "user");
-    const lastAssistantIndex = entries.findLastIndex((entry) => entry.type === "message" && entry.role === "assistant");
-    for (let index = 1; index < entries.length; index += 1) {
-      const entry = entries[index]!;
-      const compacted = compactOversizedEntry(entry);
-      const isLastMessage = index === lastUserIndex || index === lastAssistantIndex;
-      bytes += measureEntryFragment(compacted, isLastMessage, measureJsonBytes)
-        - measureEntryFragment(entry, isLastMessage, measureJsonBytes);
-      entries[index] = compacted;
-      if (bytes <= maxBytes) {
-        return replayWithEntries(replay, entries, pagination);
-      }
-    }
+  const empty = replayWithEntries(replay, [], pagination);
+  if (replay.entries.length === 0) {
+    return empty;
   }
-  return replayWithEntries(replay, [], pagination);
+
+  // Size the first candidate from its rebuilt projections and keep the row
+  // sizes for later omissions. The first row is already compacted here.
+  const entries = [...replay.entries];
+  entries[0] = compactOversizedEntry(entries[0]!);
+  const lastUserIndex = entries.findLastIndex((entry) => entry.type === "message" && entry.role === "user");
+  const lastAssistantIndex = entries.findLastIndex((entry) => entry.type === "message" && entry.role === "assistant");
+  const measureRow = (entry: AppServerThreadEntry, index: number) =>
+    measureEntryFragment(entry, index === lastUserIndex || index === lastAssistantIndex, measureJsonBytes);
+  const emptyRowsBytes = measureJsonBytes({ entries: [], messages: [] });
+  let bytes = measureJsonBytes(empty) + entries.length - 1; // Entries array commas.
+  let messageCount = 0;
+  const rowBytes = entries.map((entry, index) => {
+    const size = measureRow(entry, index);
+    bytes += size - emptyRowsBytes;
+    if (entry.type === "message") {
+      messageCount += 1;
+    }
+    return size;
+  });
+  bytes += Math.max(0, messageCount - 1); // Messages array commas.
+
+  for (let index = 1; bytes > maxBytes && index < entries.length; index += 1) {
+    const compacted = compactOversizedEntry(entries[index]!);
+    bytes += measureRow(compacted, index) - rowBytes[index]!;
+    entries[index] = compacted;
+  }
+  return bytes <= maxBytes ? replayWithEntries(replay, entries, pagination) : empty;
 }
 
 // Include precisely the copies of an entry that appear in the rebuilt replay.

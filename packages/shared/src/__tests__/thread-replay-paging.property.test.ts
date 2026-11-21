@@ -199,10 +199,46 @@ it("stops at the first fitting compaction when the next omission adds bytes", ()
   })).toEqual(firstCompaction.replay);
 });
 
+it.each([0, 1, 2])("bounds encodes of a dominant command at native page index %i", (commandIndex) => {
+  const output = "verbose command output\n".repeat(512);
+  const source = fixture(Array.from({ length: 4 }, (_, index) => ({
+    type: "activity",
+    id: `provider-${index}`,
+    summary: index === commandIndex ? "Ran command" : "Read file",
+    details: index === commandIndex ? [{
+      id: "command",
+      kind: "command",
+      label: "List fixture rows",
+      command: { displayCommand: "list-rows", output },
+    }] : [],
+  })));
+  const budget = 4 * 1024;
+  const { pages } = candidates(source, "provider-cursor");
+  const firstFit = pages.findIndex(({ bytes }) => bytes <= budget);
+  expect(firstFit).toBe(commandIndex + 1);
+
+  const encodedOutput = JSON.stringify(output);
+  let outputEncodes = 0;
+  const fitted = fitThreadReplayWithinByteBudget({
+    cursorIdSpace: "provider-cursor",
+    replay: source,
+    maxBytes: budget - responseWrapperBytes,
+    measureJsonBytes: (value) => {
+      const json = JSON.stringify(value);
+      if (json.includes(encodedOutput)) {
+        outputEncodes += 1;
+      }
+      return Buffer.byteLength(json);
+    },
+  });
+  expect(fitted).toEqual(pages[firstFit]!.replay);
+  expect(outputEncodes).toBeLessThanOrEqual(commandIndex === 0 ? 1 : 2);
+});
+
 const workloads = cursorSpaces.flatMap((space) => [
-  [space, 64, 16 * 1024, 1024 * 1024],
-  [space, 128, 16 * 1024, 1024 * 1024],
-  [space, 140, 64 * 1024, 16 * 1024 * 1024 - 64 * 1024],
+  [space, 64, 512, 32 * 1024],
+  [space, 128, 512, 32 * 1024],
+  [space, 140, 512, 128 * 1024],
 ] as const);
 
 it.each(workloads)("bounds encoded work for %s overflow with %i entries", (cursorIdSpace, count, textBytes, budget) => {
@@ -234,7 +270,7 @@ it.each(workloads)("bounds encoded work for %s overflow with %i entries", (curso
   });
   expect(responseBytes(fitted)).toBeLessThanOrEqual(budget);
   expect(fitted.entries.length).toBeGreaterThan(1);
-  expect.soft(fullEncodes).toBeLessThanOrEqual(2);
+  expect.soft(fullEncodes).toBeLessThanOrEqual(1);
   expect.soft(encodes).toBeLessThanOrEqual(2 * count + 4);
   expect.soft(encodedBytes).toBeLessThanOrEqual(4 * inputBytes);
 });
