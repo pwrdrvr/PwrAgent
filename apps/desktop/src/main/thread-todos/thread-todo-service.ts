@@ -26,6 +26,7 @@ import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
   THREAD_TODO_MERGE_METHODS,
+  THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
   THREAD_TODO_RESOLUTION_RESULTS,
   mergeThreadTodoItems,
   resolveThreadTodoPlacement,
@@ -762,9 +763,7 @@ export class ThreadTodoService {
     if (placement?.refused) {
       throw new ThreadTodoError(
         "invalid_arguments",
-        placement.lock === "project"
-          ? "Work for another project cannot be a sub-thread of this thread. Start it as a top-level thread."
-          : "A thread on another machine cannot be a sub-thread of this thread. Start it as a top-level thread.",
+        `${THREAD_TODO_PLACEMENT_LOCK_MESSAGES[placement.lock ?? "project"]} It cannot be a sub-thread of this thread.`,
       );
     }
     // The card's own title: the action's names the new thread, which shows it.

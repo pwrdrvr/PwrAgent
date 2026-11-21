@@ -13,7 +13,6 @@ import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
   THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
   resolveThreadTodoModelSettings,
-  resolveThreadTodoPlacement,
   threadTodoActionProject,
 } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -36,9 +35,11 @@ import {
   fitTodoDispatchSettings,
   formatTodoDispatchSettings,
   todoDispatchMachines,
+  todoDispatchPlacement,
   todoDispatchSpeed,
   type TodoDispatchFit,
   type TodoDispatchMachine,
+  type TodoDispatchPlacement,
 } from "./todo-dispatch-model";
 import type { ThreadTodoInstance, ThreadTodoLocalMachine, ThreadTodoRunOptions } from "./thread-todos-view";
 
@@ -84,57 +85,6 @@ export type TodoDispatchTarget = {
   /** The run request's dispatch fields, as the chips show them. */
   runOptions: () => ThreadTodoRunOptions;
 };
-
-/**
- * Where the started thread is filed. `lock` says why the operator cannot
- * choose: another project or machine is always top-level, and an owner that
- * predates placement always makes a sub-thread here.
- */
-export type TodoDispatchPlacement = {
-  value: ThreadTodoPlacement;
-  /** The value before the operator's pick: the agent's proposal, else a sub-thread. */
-  defaultValue: ThreadTodoPlacement;
-  proposed: boolean;
-  lock?: "project" | "machine" | "owner";
-  changed: boolean;
-};
-
-/**
- * Where a card's thread will be filed, and what the run request carries.
- * Only an owner that honors placement hears a pick, and only one that
- * differs from the card's own default.
- */
-export function todoDispatchPlacement(params: {
-  todo: ThreadTodo;
-  picked?: ThreadTodoPlacement;
-  onOwner: boolean;
-  ownerHonorsPlacement: boolean;
-}): TodoDispatchPlacement & { send?: ThreadTodoPlacement } {
-  const action = params.todo.action?.type === "start_thread" ? params.todo.action : undefined;
-  const situation = { crossProject: params.todo.targetProject !== undefined, otherMachine: !params.onOwner };
-  const proposed = action?.placement;
-  const settledDefault = resolveThreadTodoPlacement({ ...(proposed ? { proposed } : {}), ...situation });
-  if (settledDefault.lock) {
-    return { value: settledDefault.placement, defaultValue: settledDefault.placement, proposed: false, lock: settledDefault.lock, changed: false };
-  }
-  // An older owner ignores placement: it files the thread as a sub-thread.
-  if (!params.ownerHonorsPlacement) {
-    return { value: "sub_thread", defaultValue: "sub_thread", proposed: false, lock: "owner", changed: false };
-  }
-  const value = resolveThreadTodoPlacement({
-    ...(params.picked ? { requested: params.picked } : {}),
-    ...(proposed ? { proposed } : {}),
-    ...situation,
-  }).placement;
-  const changed = value !== settledDefault.placement;
-  return {
-    value,
-    defaultValue: settledDefault.placement,
-    proposed: proposed !== undefined,
-    changed,
-    ...(changed ? { send: value } : {}),
-  };
-}
 
 /**
  * The machine, model, speed, Where and environment a start-thread card

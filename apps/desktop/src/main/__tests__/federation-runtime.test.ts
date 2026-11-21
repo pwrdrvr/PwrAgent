@@ -2464,6 +2464,15 @@ describe("DesktopFederationRuntime", () => {
       void current.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }).catch(() => undefined);
       await vi.waitFor(() => expect(current.sent).toHaveLength(1));
       expect(current.sent[0]).toMatchObject({ method: "threadTodos.runAction", params: { id: "card", placement: "top_level" } });
+
+      // A disconnected owner is reported as disconnected, not as outdated.
+      const offline = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement"], "remembered");
+      await expect(offline.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }))
+        .rejects.toThrow("is disconnected");
+      await expect(offline.runtime.requestThreadTodoOperation(target, "runAction", {
+        id: "card", messageTarget: { backend: "codex", threadId: "existing-owner" },
+      })).rejects.toThrow("is disconnected");
+      expect(offline.sent).toEqual([]);
     });
 
     it("names To-dos when the owner lacks thread_todos", async () => {
