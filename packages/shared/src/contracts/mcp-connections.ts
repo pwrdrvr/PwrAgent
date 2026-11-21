@@ -883,6 +883,22 @@ export function mcpConnectionIdsForNewThread(
     .map((connection) => connection.id);
 }
 
+/**
+ * Whether a local IPC connection has a session bearer token stored, for the
+ * line under the edit dialog's token box. A read of its own, made when the
+ * dialog opens, because the token lives in the encrypted credential vault and
+ * `McpConnectionStatus` is read far too often to decrypt it for every row.
+ */
+export type ReadMcpIpcBearerTokenStateRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type ReadMcpIpcBearerTokenStateResponse = {
+  connectionId: McpConnectionId;
+  /** False for a connection that is not a local IPC URL: it holds none. */
+  stored: boolean;
+};
+
 export type RemoveMcpConnectionRequest = {
   connectionId: McpConnectionId;
 };

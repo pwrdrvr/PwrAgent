@@ -393,6 +393,15 @@ export function PluginsSettings(props: {
   const [connectionEditTest, setConnectionEditTest] =
     useState<TestMcpStdioConnectionResponse>();
   const [connectionEdit, setConnectionEdit] = useState<ConnectionEditDraft>();
+  /**
+   * The owner's answer to "is a session bearer token stored?" for the IPC
+   * connection being edited. Kept beside the draft, not in it, so a keystroke
+   * that spreads an older draft cannot drop it.
+   */
+  const [ipcBearerTokenState, setIpcBearerTokenState] = useState<{
+    connectionId: string;
+    stored: boolean;
+  }>();
   const [connectionRemoveCandidate, setConnectionRemoveCandidate] =
     useState<McpConnectionStatus>();
   const [activeCodexHome, setActiveCodexHome] = useState<string>();
@@ -678,6 +687,53 @@ export function PluginsSettings(props: {
     ),
     [loadConnections, props.desktopApi],
   );
+
+  // Asked when the edit dialog opens for a local IPC connection, again each
+  // time it reopens (a save may have replaced or removed the token), and
+  // whenever this machine changes the connection while the dialog is open.
+  const editingIpcConnectionId = connectionEdit
+    && !connectionEdit.local
+    && !connectionEdit.github
+    && isMcpIpcUrl(connectionEdit.originalServerUrl)
+    ? connectionEdit.connectionId
+    : undefined;
+  useEffect(() => {
+    const api = props.desktopApi;
+    const read = api?.readMcpIpcBearerTokenState;
+    if (!editingIpcConnectionId || !read) return;
+    const connectionId = editingIpcConnectionId;
+    let current = true;
+    let latest = 0;
+    const ask = () => {
+      const asked = ++latest;
+      read({ connectionId }).then(
+        ({ stored }) => {
+          if (!current || asked !== latest) return;
+          setIpcBearerTokenState({ connectionId, stored });
+          // Remove is offered before the answer arrives. With nothing
+          // stored, a removal marked meanwhile has nothing to remove.
+          if (!stored) {
+            setConnectionEdit((draft) =>
+              draft?.connectionId === connectionId && draft.ipcBearerToken === ""
+                ? { ...draft, ipcBearerToken: undefined }
+                : draft,
+            );
+          }
+        },
+        // Unanswered (an older owner), the line claims neither.
+        () => undefined,
+      );
+    };
+    ask();
+    const unsubscribe = api?.onMcpConnectionsChanged?.((event) => {
+      if (event.connectionIds.includes(connectionId)) ask();
+    });
+    return () => {
+      current = false;
+      unsubscribe?.();
+      setIpcBearerTokenState(undefined);
+    };
+  }, [editingIpcConnectionId, props.desktopApi]);
 
   useEffect(() => {
     const signIns = codexSignInsRef.current;
@@ -2819,9 +2875,13 @@ export function PluginsSettings(props: {
                     removing={connectionEdit.ipcBearerToken === ""}
                     value={connectionEdit.ipcBearerToken ?? ""}
                     view={describeFormSecret(
-                      // The owner never says whether a token is stored, so
-                      // the words claim neither. A changed URL drops it.
-                      editDraftRepointsServer(connectionEdit) ? secretStoreState(false) : undefined,
+                      // A changed URL drops the token. Until the owner says
+                      // whether one is stored, the words claim neither.
+                      editDraftRepointsServer(connectionEdit)
+                        ? secretStoreState(false)
+                        : ipcBearerTokenState?.connectionId === connectionEdit.connectionId
+                          ? secretStoreState(ipcBearerTokenState.stored)
+                          : undefined,
                       {
                         dirty: Boolean(connectionEdit.ipcBearerToken?.trim()),
                         removing: connectionEdit.ipcBearerToken === "",

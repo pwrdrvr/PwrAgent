@@ -92,6 +92,8 @@ import {
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
   type ProbeMcpConnectionRequest,
+  type ReadMcpIpcBearerTokenStateRequest,
+  type ReadMcpIpcBearerTokenStateResponse,
   type ProbeMcpConnectionResponse,
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
@@ -1891,6 +1893,33 @@ export class McpConnectionGatewayService {
     if (!pending) return;
     this.pendingAuthorizations.delete(connectionId);
     pending.abandon(reason);
+  }
+
+  /**
+   * Whether a local IPC connection has a session bearer token stored.
+   *
+   * The edit dialog asks once, when it opens, so its token box can say
+   * `Saved in keychain` or `Not set`. `connectionStatus` cannot carry it:
+   * status is read on every listing, window focus and federation peer read,
+   * and a tokenless IPC connection must never decrypt the credential vault
+   * for that. Nothing is persisted, so the answer cannot drift from the vault.
+   */
+  async readIpcBearerTokenState(
+    request: ReadMcpIpcBearerTokenStateRequest,
+  ): Promise<ReadMcpIpcBearerTokenStateResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ReadMcpIpcBearerTokenStateResponse>(
+        ownership.holder,
+        "broker/ipc-bearer-token-state",
+        request,
+      );
+    }
+    const connection = this.requireConnection(request.connectionId);
+    if (!isMcpIpcUrl(connection.serverUrl)) return { connectionId: connection.id, stored: false };
+    // Keyed by URL: a token issued for an old URL is not this server's.
+    const credential = await this.credentialVault.read(connection.id, connection.serverUrl);
+    return { connectionId: connection.id, stored: Boolean(credential?.ipcBearerToken) };
   }
 
   /**
@@ -4710,6 +4739,12 @@ export class McpConnectionGatewayService {
         // Validated field by field in prepareGithubSettings.
         ...(values.github !== undefined ? { github: values.github as GithubMcpSettingsInput } : {}),
       });
+    }
+    if (operation === "broker/ipc-bearer-token-state") {
+      if (typeof values.connectionId !== "string") {
+        throw new Error("Invalid MCP connection bearer token state request.");
+      }
+      return await this.readIpcBearerTokenState({ connectionId: values.connectionId });
     }
     if (operation === "broker/github-inspect") {
       return await this.inspectGithubSetup(typeof values.command === "string" ? { command: values.command } : {});
