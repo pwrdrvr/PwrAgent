@@ -108,6 +108,19 @@ export function portalViewportTop(): number {
   return gutterFloor;
 }
 
+/**
+ * The plain tooltip showing in this window, if any.
+ *
+ * Every instance of the hook owns its own state, so two surfaces could each
+ * show one: a rail tab still hovered after a click kept its data-tooltip while
+ * keyboard focus raised a linked directory's rail tooltip beside it. Showing
+ * any plain tooltip hides this one first, so the window never shows two.
+ * Enterable cards (`interactive`) stay out of it: `hover-card-bridge.ts` owns
+ * their lifecycle, and a card's pointer bridge must not be cut short by an
+ * unrelated tooltip.
+ */
+let activePlainTooltip: { hide: () => void } | null = null;
+
 export type TooltipPoint = { x: number; y: number };
 
 type TooltipState = {
@@ -473,8 +486,16 @@ export function useViewportTooltip(options: {
     hoverDelayTimerRef.current = null;
   }, []);
 
+  // This instance's identity in `activePlainTooltip`. Stable for the hook's
+  // life; `hide` is read through the ref so the entry never goes stale.
+  const hideRef = useRef<() => void>(() => {});
+  const registryEntryRef = useRef({ hide: () => hideRef.current() });
+
   const hide = useCallback((): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
+    if (activePlainTooltip === registryEntryRef.current) {
+      activePlainTooltip = null;
+    }
     clearHoverDelay();
     setDelayPending(false);
     anchorGenerationRef.current += 1;
@@ -488,6 +509,19 @@ export function useViewportTooltip(options: {
     }
     setState(undefined);
   }, [clearHoverDelay, tooltipId]);
+  hideRef.current = hide;
+
+  /** Take the window's one plain-tooltip slot, hiding whoever held it. */
+  const claimPlainTooltipSlot = useCallback((): void => {
+    if (interactiveRef.current) {
+      return;
+    }
+    const previous = activePlainTooltip;
+    activePlainTooltip = registryEntryRef.current;
+    if (previous && previous !== registryEntryRef.current) {
+      previous.hide();
+    }
+  }, []);
 
   /**
    * Wait out the motion, then re-baseline the anchor and re-anchor the tooltip
@@ -651,6 +685,7 @@ export function useViewportTooltip(options: {
       setState(undefined);
       return;
     }
+    claimPlainTooltipSlot();
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
     pointerBoundsRef.current = horizontalBounds;
@@ -662,7 +697,7 @@ export function useViewportTooltip(options: {
       targetLeft: rect.left,
       targetRight: rect.left + rect.width,
     });
-  }, [clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
+  }, [claimPlainTooltipSlot, clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
 
   const showAtPointer = useCallback(
     (target: HTMLElement, point: TooltipPoint, content: ReactNode): void => {
@@ -707,6 +742,9 @@ export function useViewportTooltip(options: {
   }, []);
 
   useEffect(() => () => {
+    if (activePlainTooltip === registryEntryRef.current) {
+      activePlainTooltip = null;
+    }
     anchorGenerationRef.current += 1;
     if (pointerFrameRef.current !== null) {
       window.cancelAnimationFrame(pointerFrameRef.current);

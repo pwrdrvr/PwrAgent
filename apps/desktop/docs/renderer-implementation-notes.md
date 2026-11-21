@@ -44,6 +44,11 @@ says when to read this document. Relative links were updated for this location.
   bar until the declarative path moved onto the portal. When a tooltip is
   clipped or buried, fix the layer it renders in. Do not move one
   tooltip's x or raise one control's z-index.
+  - **A window shows one plain tooltip at a time.** Every hook instance,
+    including the one `DataTooltipLayer` owns, takes a module-level slot on
+    `show`, which hides the instance that held it. Without the slot, a hovered
+    data-tooltip and a focused surface's tooltip were both on screen.
+    `interactive` cards stay out of the slot; `hover-card-bridge.ts` owns them.
   - **Structured hover cards pass their own class instead of
     `.viewport-tooltip`.** The hook takes a `ReactNode`, so a card with
     sections and meters (`.context-usage-card`, `.pr-status-card`) styles
