@@ -1408,6 +1408,10 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(initial.general.hotCpuProfilingCaptureChromiumTrace).toEqual({
+      value: false,
+      source: "default",
+    });
     expect(initial.general.hotCpuProfilingHeapSnapshotLimit).toEqual({
       value: 2,
       source: "default",
@@ -1425,6 +1429,7 @@ describe("DesktopSettingsService", () => {
         hotCpuProfilingStartDelayMs: 5000,
         hotCpuProfilingTriggerMode: "slowburn",
         hotCpuProfilingSlowburnThresholdPercent: 20,
+        hotCpuProfilingCaptureChromiumTrace: true,
         hotCpuProfilingCaptureHeapSnapshot: true,
         hotCpuProfilingHeapSnapshotLimit: 3,
       },
@@ -1437,6 +1442,7 @@ describe("DesktopSettingsService", () => {
     expect(saved).toContain('hot_cpu_profiling_trigger_mode = "slowburn"');
     expect(saved).toContain("hot_cpu_profiling_slowburn_threshold_percent = 20");
     expect(saved).toContain("hot_cpu_profiling_capture_heap_snapshot = true");
+    expect(saved).toContain("hot_cpu_profiling_capture_chromium_trace = true");
     expect(saved).toContain("hot_cpu_profiling_heap_snapshot_limit = 3");
     expect((await service.readSettingsProjection()).general.hotCpuProfilingEnabled).toEqual({
       value: true,
@@ -1463,6 +1469,10 @@ describe("DesktopSettingsService", () => {
     expect(
       (await service.readSettingsProjection()).general.hotCpuProfilingCaptureHeapSnapshot,
     ).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect((await service.readSettingsProjection()).general.hotCpuProfilingCaptureChromiumTrace).toEqual({
       value: true,
       source: "config",
     });

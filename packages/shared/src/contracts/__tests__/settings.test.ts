@@ -71,6 +71,7 @@ describe("desktop settings contracts", () => {
           value: 15,
           source: "default",
         },
+        hotCpuProfilingCaptureChromiumTrace: { value: false, source: "default" },
         hotCpuProfilingCaptureHeapSnapshot: {
           value: false,
           source: "default",

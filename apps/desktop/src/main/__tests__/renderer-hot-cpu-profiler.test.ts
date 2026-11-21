@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
+import { ChromiumTrace } from "../diagnostics/chromium-trace";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
 import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
 import { HotCpuProfiler } from "../shell/diagnostics/hot-cpu-profiler";
@@ -261,6 +262,88 @@ describe("HotCpuProfiler", () => {
       );
     }
   });
+
+  it.each(["settings-changed", "exhausted", "window-closed", "native-timeout"] as const)(
+    "settles renderer trace ownership when %s",
+    async (transition) => {
+      const workspace = await createTemporaryTestDirectory();
+      cleanups.push(workspace.cleanup);
+      const config = createEnabledConfig(workspace.path, {
+        PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+        PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
+        PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: transition === "settings-changed" ? "60000" : "10",
+      });
+      const created = await createHotCpuProfileSession({
+        config, versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version },
+      });
+      if (!created.ok) throw new Error(created.message);
+      let recording = false;
+      const released = deferred<void>();
+      const start = vi.fn(async () => { recording = true; });
+      const dispose = vi.fn(() => {
+        recording = false;
+        released.resolve();
+      });
+      const read = vi.fn(async function* () {
+        yield { data: JSON.stringify({ traceEvents: [] }) };
+      });
+      if (transition === "native-timeout") {
+        read.mockImplementationOnce(async function* () {
+          await released.promise;
+          yield { data: JSON.stringify({ traceEvents: [] }) };
+        });
+      }
+      const onProfileWritten = vi.fn();
+      const written = deferred<void>();
+      const profiler = createProfiler({
+        config,
+        chromiumTrace: new ChromiumTrace(
+          () => ({ start, read, dispose }),
+          async (chunks, file, signal) => {
+            for await (const { data } of chunks) {
+              signal.throwIfAborted();
+              await fs.writeFile(file, data);
+            }
+          },
+          vi.fn(), { stopTimeoutMs: transition === "native-timeout" ? 200 : undefined },
+        ),
+        target: createTarget().target,
+        session: created.session,
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        getAppMetrics: () => [createMetric(transition === "window-closed" ? 0 : 95)],
+        onProfileWritten: (event) => {
+          onProfileWritten(event);
+          written.resolve();
+        },
+      });
+      await profiler.start();
+      expect(recording).toBe(true);
+      await samplesOf(profiler).waitForCount(1);
+      if (transition === "settings-changed" || transition === "window-closed") {
+        await profiler.stop(transition);
+      } else {
+        await written.promise;
+      }
+      await released.promise;
+      expect(recording).toBe(false);
+      expect(start).toHaveBeenCalledOnce();
+      expect(read).toHaveBeenCalledTimes(transition === "window-closed" ? 0 : 1);
+      const { directoryPath } = created.session;
+      const { artifacts } = JSON.parse(await fs.readFile(`${directoryPath}/session.json`, "utf8"));
+      if (transition === "window-closed") {
+        expect(artifacts).toEqual([]);
+        expect(onProfileWritten).not.toHaveBeenCalled();
+      } else {
+        const traceFilename = "renderer-hot-0001.trace.json";
+        const hasTrace = transition !== "native-timeout";
+        expect(artifacts).toEqual(["renderer-hot-0001.cpuprofile", ...(hasTrace ? [traceFilename] : [])]);
+        expect(onProfileWritten).toHaveBeenCalledOnce();
+        expect(onProfileWritten.mock.calls[0][0].chromiumTracePath).toBe(
+          hasTrace ? created.session.createProfilePath(1).replace(/\.cpuprofile$/, ".trace.json") : undefined,
+        );
+      }
+    },
+  );
 
   it("captures a real main-thread burst that finishes before the trigger is evaluated", async () => {
     const workspace = await createTemporaryTestDirectory();

@@ -1124,6 +1124,10 @@ export class DesktopSettingsService {
         hotCpuProfilingSlowburnThresholdPercent: this.resolveHotCpuSlowburnThresholdPercent(
           config.general?.hotCpuProfilingSlowburnThresholdPercent,
         ),
+        hotCpuProfilingCaptureChromiumTrace: this.resolveConfigBoolean(
+          config.general?.hotCpuProfilingCaptureChromiumTrace,
+          false,
+        ),
         hotCpuProfilingCaptureHeapSnapshot: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingCaptureHeapSnapshot,
           false,
