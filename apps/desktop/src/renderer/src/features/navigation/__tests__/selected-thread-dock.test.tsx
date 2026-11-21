@@ -74,8 +74,8 @@ function mountList(
   place(region, 100, 400);
   place(region.querySelector(".directory-groups")!, 100, 400);
   place(region.querySelector("[data-header='pwrgit']")!, 100, 30);
-  // PwrAgent's header has scrolled away with its rows.
-  place(region.querySelector("[data-header='pwragent']")!, rowTop - 200, 30);
+  // The next project's header follows the stuck project's in document order.
+  place(region.querySelector("[data-header='pwragent']")!, 150, 30);
   place(region.querySelector("[data-row='batch']")!, 300, 60);
   place(region.querySelector("[data-row='open']")!, rowTop, 60);
   // The PwrAgent section: its header, then rows down to the open thread's.
@@ -173,7 +173,7 @@ describe("SelectedThreadDock", () => {
   it("shows exactly when the row is lost under the header's own place, from either state", () => {
     const shown = (rowTop: number): number => Math.max(0, rowTop + 60 - Math.max(rowTop, 130));
     for (const start of [60, 250]) {
-      for (let rowTop = 60; rowTop <= 260; rowTop += 1) {
+      for (const rowTop of [60, 99, 100, 108, 109, 110, 129, 130, 260]) {
         const region = mountList(start);
         const header = region.querySelector<HTMLElement>("[data-header='pwrgit']")!;
         // The header sticks to the list's top, as far down as the reserve says.

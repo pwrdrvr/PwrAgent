@@ -76,6 +76,29 @@ export function selectedThreadDockPlacement(
 // is this close to the list's top at the moment the last one leaves.
 const STUCK_SLACK_PX = 4;
 
+function firstStuckExtent<T>(
+  nodes: readonly T[],
+  edge: number,
+  read: (node: T) => DockExtent,
+): DockExtent | undefined {
+  // Project headers and dividers are each confined to their own section.
+  // Their bottoms stay in document order, including as sticky boxes leave.
+  let first = 0;
+  let end = nodes.length;
+  let candidate: DockExtent | undefined;
+  while (first < end) {
+    const middle = first + Math.floor((end - first) / 2);
+    const extent = read(nodes[middle]!);
+    if (extent.bottom <= edge) {
+      first = middle + 1;
+    } else {
+      end = middle;
+      candidate = extent;
+    }
+  }
+  return candidate && candidate.top <= edge + STUCK_SLACK_PX ? candidate : undefined;
+}
+
 /**
  * Where the band starts: under the project header stuck to the top of the
  * list, and under that project's divider when it is stuck there too. Both
@@ -86,15 +109,14 @@ const STUCK_SLACK_PX = 4;
  * the incoming header slides under it, instead of the dock riding the
  * outgoing header up and jumping back down.
  */
-export function stuckBandTop(
+export function stuckBandTop<T>(
   listTop: number,
-  headers: readonly DockExtent[],
-  dividers: readonly DockExtent[],
+  headers: readonly T[],
+  dividers: readonly T[],
+  read: (node: T) => DockExtent,
 ): number {
-  const header = headers.find((extent) =>
-    extent.top <= listTop + STUCK_SLACK_PX && extent.bottom > listTop);
+  const header = firstStuckExtent(headers, listTop, read);
   const top = header ? listTop + (header.bottom - header.top) : listTop;
-  const divider = dividers.find((extent) =>
-    extent.top <= top + STUCK_SLACK_PX && extent.bottom > top);
+  const divider = firstStuckExtent(dividers, top, read);
   return divider ? divider.bottom : top;
 }
