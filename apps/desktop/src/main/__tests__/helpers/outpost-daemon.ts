@@ -1,6 +1,7 @@
 import { buildOwnerFixture } from "./built-owner-fixture";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -29,7 +30,7 @@ export type OutpostViewer = {
   /** `backend.event` payloads, in arrival order, once `subscribe` is called. */
   events: AgentEvent[];
   subscribe(eventClasses: string[]): void;
-  waitForEvent(method: string, matches: (event: AgentEvent) => boolean): Promise<AgentEvent>;
+  waitForEvent(method: string, matches: (event: AgentEvent) => boolean, signal?: AbortSignal): Promise<AgentEvent>;
   viewerId: string;
   ownerInstanceId: string;
   close(): Promise<void>;
@@ -127,14 +128,21 @@ export async function startOutpostDaemon(options: {
     return {
       client: new FederationRemoteBackendClient(rpc), rpc, events, viewerId, ownerInstanceId: invite.gatewayInstanceId,
       close: async () => { connected.close(); connections.delete(connected); },
-      waitForEvent: (method, matches) => {
+      waitForEvent: (method, matches, signal) => {
+        if (signal?.aborted) return Promise.reject(signal.reason);
         const found = events.find(event => event.notification.method === method && matches(event));
         if (found) return Promise.resolve(found);
-        return new Promise(resolve => {
+        return new Promise((resolve, reject) => {
           const waiter = (event: AgentEvent) => {
             if (event.notification.method !== method || !matches(event)) return;
-            eventWaiters.delete(waiter); resolve(event);
+            eventWaiters.delete(waiter);
+            abort?.[Symbol.dispose]();
+            resolve(event);
           };
+          const abort = signal && addAbortListener(signal, () => {
+            eventWaiters.delete(waiter);
+            reject(signal.reason);
+          });
           eventWaiters.add(waiter);
         });
       },
