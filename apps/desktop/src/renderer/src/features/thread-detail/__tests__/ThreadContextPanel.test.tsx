@@ -916,6 +916,7 @@ describe("ThreadContextPanel", () => {
       const name = tab.getAttribute("aria-label")!;
       // A native `title` would draw a second, unclamped tooltip.
       expect(tab).not.toHaveAttribute("title");
+      expect(tab).toHaveAccessibleDescription(/\S/);
       fireEvent.focus(tab);
       const tooltips = screen.getAllByRole("tooltip");
       expect(tooltips).toHaveLength(1);

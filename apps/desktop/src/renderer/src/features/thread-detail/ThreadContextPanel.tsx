@@ -798,6 +798,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         key={tab.id}
         id={`context-rail-tab-${tab.id}`}
         aria-label={label}
+        aria-describedby={`context-rail-tab-${tab.id}-hint`}
         aria-selected={isActive && open}
         aria-controls={open ? "context-rail-panel" : undefined}
         className={`context-rail__tab${isActive ? " is-active" : ""}${
@@ -817,6 +818,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         onAnimationEnd={landing ? () => setLandedRingPlayed(connectionsLanding) : undefined}
       >
         <TabIcon size={18} aria-hidden="true" />
+        {/* The tooltip is sighted-only; this carries its explanation to
+            assistive tech without changing the tab's accessible name. */}
+        <span id={`context-rail-tab-${tab.id}-hint`} hidden>{tab.hint}</span>
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
         {todoBadge ? (
           <span
