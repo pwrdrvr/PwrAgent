@@ -902,6 +902,7 @@ const registerDirectoryFromDiskService = vi.fn(async (request: { path: string })
 });
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
+const readNavigationPullRequests = vi.fn();
 const readDetachedThreadPullRequests = vi.fn(() => ({}));
 const addLinkedDirectory = vi.fn(async (request: {
   backend: "codex" | "acp:grok";
@@ -1180,6 +1181,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,
+    readNavigationPullRequests,
     addLinkedDirectory,
     removeLinkedDirectory,
     setThreadPullRequests,
@@ -1672,6 +1674,7 @@ describe("app server ipc", () => {
     removeLinkedDirectory.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
+    readNavigationPullRequests.mockReset();
     readDetachedThreadPullRequests.mockReset();
     readDetachedThreadPullRequests.mockReturnValue({});
     getThreadOverlayStates.mockReset();
@@ -2505,6 +2508,8 @@ describe("app server ipc", () => {
     }));
     overlayStoreFixture.stable = getDesktopOverlayStore();
     listThreads.mockResolvedValue(rows as never);
+    readNavigationPullRequests.mockImplementation((refs: { threadId: string }[]) =>
+      refs.map(({ threadId }) => rows.find(({ id }) => id === threadId)?.prs ?? []));
     registerAppServerIpcHandlers();
     const canonicalizer = setThreadPullRequestCanonicalizer.mock.lastCall?.[0] as import("../app-server/backend-registry-types").ThreadPullRequestCanonicalizer;
     canonicalizeNavigationThreadPullRequests.mockImplementation(async (threads, _demand, verify) =>
@@ -2517,12 +2522,14 @@ describe("app server ipc", () => {
         ...(known ? { completeBaselineRevision: known.countsRevision } : {}) }) as NavigationQueryPage;
 
     await read({ kind: "directory-index" });
-    const group = await read({ kind: "group-members", roots: [{ backend: "codex", threadId: "page-0" }] });
+    const group = await read({ kind: "group-members", roots: [{ backend: "codex", threadId: "page-0" }], membershipOnly: true });
     expect(group.entries.map(({ row }) => row.id)).toEqual(["page-0"]);
     expect(runner).not.toHaveBeenCalled();
+    expect(readNavigationPullRequests).not.toHaveBeenCalled();
     const exact = (index: number) => ({ kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: `page-${index}` }] });
     const first = await read(exact(0));
     expect(first.entries[0]?.row.prs ?? []).toEqual([]);
+    expect(readNavigationPullRequests).toHaveBeenCalledExactlyOnceWith([{ backend: "codex", threadId: "page-0" }]);
     expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual(Array(4).fill(`${root}-0`));
     expect((await read(exact(0), first)).unchanged).toBe(true);
     const missing = await read(exact(1));

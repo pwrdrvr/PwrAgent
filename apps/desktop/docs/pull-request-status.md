@@ -49,10 +49,13 @@ when attachments exceed that preview. The preview retains the lead and the
 PRs whose readiness determines the two rollup indicators. The shared
 membership index projects stored statuses in memory. The owner validates
 automatic attachments for a page before calculating its preview, attachment
-count, and wire bytes. Directory index and group planning reads use
-membership alone. A continuation keeps the same row offsets and reuses PR
-projections it already observed. A retained-range acknowledgment checks the
-observations for that range within the page work budget. Owner polling and
+count, and wire bytes. Cursor backing keeps compact row references and observed
+previews. The owner reads full attachments only when the page demands them.
+Directory index and archive planning reads use membership alone. Federated pins
+and watched threads receive owner-validated previews. A continuation keeps the
+same row offsets and reuses PR projections it already observed. A fresh read
+reuses a cursor generation only if its baseline proves every retained PR
+observation within the page work budget. Owner polling and
 Auto-fix validate their complete attachment inventory independently. Star Map
 facets and filtering use validated PR membership across their inventory.
 Selected detail and bounded pages take priority over those inventory checks.

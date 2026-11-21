@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, readNavigationPagePullRequests } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import type {
@@ -308,7 +308,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         }
         options.signal.throwIfAborted();
         return getDesktopNavigationQueryStore().readPage({ request, scopeKey: "renderer-local",
-          loadPullRequests: (batches) => readNavigationPagePullRequests(batches, { kind: request.query.kind, signal: options.signal, registry: this.registry }),
+          pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: options.signal, registry: this.registry }),
           loadIndex: async () => {
             await awaitStartupProviderCoverage({ query: request.query, deadlineAt: options.deadlineAt,
               registry: this.registry, signal: options.signal });

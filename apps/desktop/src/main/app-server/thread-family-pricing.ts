@@ -54,7 +54,7 @@ export async function readThreadFamilyPricing(params: {
     request: {
       protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
       consumer: "main-sidebar",
-      query: { kind: "group-members", roots: [root] },
+      query: { kind: "group-members", roots: [root], membershipOnly: true },
     },
   });
   const members: ThreadFamilyPricingInputMember[] = [];

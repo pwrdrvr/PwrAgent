@@ -65,8 +65,8 @@ export type NavigationQueryMaterialization = {
   directories: NavigationDirectoryRow[];
   collectionKind?: "directories";
   entries: NavigationQueryEntry[];
-  /** Owner-only attachment input, indexed by entry position. Charged to cursor backing. */
-  deferredPullRequests?: Array<PrSummary[] | undefined>;
+  /** Entry positions whose owner attachments are read on demand. */
+  pullRequestPositions?: number[];
   modelGroups?: NavigationModelInventoryRow[];
   queryKey: string;
 };
@@ -1431,14 +1431,12 @@ export function projectNavigationQuery(params: {
       sortSubthreadSummaries(parents.get(key)!, children).forEach((thread, order) => siblingOrders.set(threadKey(thread), order));
     }
   }
-  let deferredPullRequests: NavigationQueryMaterialization["deferredPullRequests"];
-  const membershipOnly = query.kind === "group-members" || query.kind === "directory-index" || query.kind === "star-map-geometry";
+  const pullRequestPositions: number[] = [];
+  const membershipOnly = (query.kind === "group-members" && query.membershipOnly)
+    || query.kind === "directory-index" || query.kind === "star-map-geometry";
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const defer = params.deferPullRequests && !thread.federation && Boolean(thread.prs?.length);
-    if (defer && !membershipOnly) {
-      deferredPullRequests ??= [];
-      deferredPullRequests[index] = thread.prs;
-    }
+    if (defer && !membershipOnly) pullRequestPositions.push(index);
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
       ? undefined
@@ -1456,7 +1454,7 @@ export function projectNavigationQuery(params: {
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
         homeProject: homeProjects?.get(thread),
         checkoutProject: checkoutProjectForThread(thread, checkoutProjects),
-        omitPullRequests: (params.deferPullRequests && membershipOnly) || defer,
+        omitPullRequests: membershipOnly || defer,
       }),
       orderKey: rowOrderKey(index),
       ...(siblingOrders.has(threadKey(thread)) ? { siblingOrder: siblingOrders.get(threadKey(thread))! } : {}),
@@ -1524,7 +1522,7 @@ export function projectNavigationQuery(params: {
         parentCandidates,
       }) : [],
     entries,
-    ...(deferredPullRequests ? { deferredPullRequests } : {}),
+    ...(pullRequestPositions.length ? { pullRequestPositions } : {}),
     queryKey: navigationQueryKey(params.request),
   };
 }

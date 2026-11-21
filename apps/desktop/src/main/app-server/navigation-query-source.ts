@@ -9,6 +9,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backen
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
+import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
@@ -24,14 +25,23 @@ import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 
 const indexReads = new NavigationIndexReadPool(1_000);
 
-export function readNavigationPagePullRequests(batches: PrSummary[][], options: {
+export function navigationPullRequestProjection(options: {
   kind: NavigationQueryRequest["query"]["kind"];
   signal?: AbortSignal;
   registry?: DesktopBackendRegistry;
-}): Promise<PrSummary[][]> {
-  const registry = options.registry ?? getDesktopBackendRegistry();
+}): NavigationPullRequestProjection {
   const priority = options.kind === "star-map" ? PR_METADATA_PRIORITY.background : PR_METADATA_PRIORITY.page;
-  return Promise.all(batches.map((prs) => registry.canonicalizeNavigationPullRequests(prs, { signal: options.signal, priority: () => priority })));
+  const verify = (batches: PrSummary[][]) => {
+    const registry = options.registry ?? getDesktopBackendRegistry();
+    return Promise.all(batches.map((prs) => registry.canonicalizeNavigationPullRequests(prs, { signal: options.signal, priority: () => priority })));
+  };
+  return {
+    verify,
+    read: (threads) => {
+      options.signal?.throwIfAborted();
+      return verify(getDesktopOverlayStore().readNavigationPullRequests(threads));
+    },
+  };
 }
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
 const sourceIds = new WeakMap<object, number>();

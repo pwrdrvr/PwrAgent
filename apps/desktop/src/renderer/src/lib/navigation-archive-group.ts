@@ -70,7 +70,7 @@ export async function readNavigationArchiveGroup(params: {
     do {
       if (Date.now() >= deadlineAt) throw new Error("Thread group discovery timed out. No threads were archived.");
       const page = await params.api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar",
-        inventory: viewer ? "viewer" : "owner", query: { kind: "group-members", roots }, pageSize: 10,
+        inventory: viewer ? "viewer" : "owner", query: { kind: "group-members", roots, membershipOnly: true }, pageSize: 10,
         federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined, cursor, deadlineAt }, token);
       if (page.coverage.state === "degraded") {
         throw new Error("Thread group membership is incomplete: a provider did not list its threads. No threads were archived. Try again once it reconnects.");

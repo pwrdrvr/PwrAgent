@@ -420,7 +420,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, readNavigationPagePullRequests } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -2033,7 +2033,7 @@ class DesktopAppServerService {
         ? { ...page, remoteOwner: { ...page.remoteOwner!, directoryThreadsCollapsed } } : page;
     }
     return await getDesktopNavigationQueryStore().readPage({
-      loadPullRequests: (batches) => readNavigationPagePullRequests(batches, { kind: request.query.kind, signal: rpcOptions?.signal }),
+      pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal }),
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
         await awaitStartupProviderCoverage({ query: request.query,
