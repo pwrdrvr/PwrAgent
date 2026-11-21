@@ -19547,6 +19547,11 @@ a.button {
   gap: 8px;
 }
 
+/* A secret's stored state, under its value and not under its name. */
+.settings-mcp-local__env > .settings-secret__status {
+  grid-column: 2 / -1;
+}
+
 .settings-mcp-local .settings-mcp-local__secret {
   display: inline-flex;
   align-items: center;

@@ -1392,8 +1392,12 @@ describe("PluginsSettings", () => {
       const reads = vi.mocked(api.listMcpConnectionTools!).mock.calls.length;
       fireEvent.click(row.getByRole("button", { name: "Edit" }));
       const dialog = within(screen.getByRole("dialog", { name: "Edit connection" }));
-      if (token) fireEvent.change(dialog.getByLabelText("New session bearer token (leave blank to keep)"), { target: { value: token } });
-      else fireEvent.click(dialog.getByRole("button", { name: "Clear saved token" }));
+      if (token) fireEvent.change(dialog.getByLabelText("Session bearer token"), { target: { value: token } });
+      else {
+        fireEvent.click(dialog.getByRole("button", { name: "Remove saved session bearer token" }));
+        // Removal waits for Save, and the line under the box says so.
+        expect(dialog.getByText("Not removed yet. Removed when you save.")).toBeInTheDocument();
+      }
       fireEvent.click(dialog.getByRole("button", { name: "Save" }));
       await screen.findByText("Native app was updated.");
       expect(api.updateMcpConnection).toHaveBeenCalledWith(expect.objectContaining({ ipcBearerToken: token }));

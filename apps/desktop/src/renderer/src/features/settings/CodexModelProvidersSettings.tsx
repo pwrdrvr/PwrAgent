@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   BONSAI_2_27B_MODEL_ID,
   CODEX_MODEL_PROVIDER_LIMIT,
@@ -22,7 +22,9 @@ import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import { formatRelativeTime } from "../navigation/thread-time";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
+import { SecretStatusLine } from "./SecretStatusLine";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { describeFormSecret, secretStoreState } from "./secret-field-state";
 import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
 import { Select } from "../../components/Select";
 
@@ -473,13 +475,16 @@ function ProviderEditor(props: {
       ? `"${draft.id}" is reserved. Choose another id.`
       : "Lowercase letters, digits, - or _, starting with a letter."
     : undefined;
-  const keyHelp = props.editing?.hasApiKey
-    ? draft.removeKey
-      ? "The stored key is removed when you save."
-      : "A key is stored. Leave blank to keep it."
-    : draft.imported?.needsApiKey
-      ? `Codex ${draft.imported.apiKeyEnv ? `read it from $${draft.imported.apiKeyEnv}` : "sent a key"}. Keys are not copied from files, so paste it here. It is stored in the system keychain.`
-      : "Stored in the system keychain. Codex receives it in its environment; commands a model runs do not.";
+  // Whether a key is stored is the status line's to say, under the box.
+  const keyHelp = !props.editing?.hasApiKey && draft.imported?.needsApiKey
+    ? `Codex ${draft.imported.apiKeyEnv ? `read it from $${draft.imported.apiKeyEnv}` : "sent a key"}. Keys are not copied from files, so paste it here.`
+    : "Codex receives it in its environment; commands a model runs do not.";
+  const keyStatusId = useId();
+  const keyView = describeFormSecret(
+    secretStoreState(Boolean(props.editing?.hasApiKey)),
+    { dirty: draft.apiKey.trim().length > 0, removing: draft.removeKey },
+    draft.existingId ? "save and reconnect" : "add and reconnect",
+  );
 
   return (
     <div
@@ -566,17 +571,44 @@ function ProviderEditor(props: {
         sub={keyHelp}
         control={
           <>
-            <input
-              aria-label="API key"
-              autoComplete="off"
-              className="settings-input"
-              disabled={props.disabled || draft.removeKey}
-              placeholder={props.editing?.hasApiKey ? "Stored" : "Not set"}
-              spellCheck={false}
-              type="password"
-              value={draft.apiKey}
-              onChange={(event) => props.onChange({ apiKey: event.currentTarget.value })}
-            />
+            <div className="settings-secret settings-secret--status">
+              <input
+                aria-describedby={keyStatusId}
+                aria-label="API key"
+                autoComplete="off"
+                className="settings-input"
+                disabled={props.disabled || draft.removeKey}
+                placeholder={keyView.placeholder}
+                spellCheck={false}
+                type="password"
+                value={draft.apiKey}
+                onChange={(event) => props.onChange({ apiKey: event.currentTarget.value })}
+              />
+              {/* Marks the key for removal; Save is the confirmation, so
+                  the mark needs no second question, and Keep undoes it. */}
+              {keyView.canRemove ? (
+                <button
+                  aria-label="Remove saved API key"
+                  className="button button--ghost"
+                  disabled={props.disabled}
+                  type="button"
+                  onClick={() => props.onChange({ removeKey: true, apiKey: "" })}
+                >
+                  Remove
+                </button>
+              ) : draft.removeKey ? (
+                <button
+                  aria-label="Keep saved API key"
+                  className="button button--ghost"
+                  disabled={props.disabled}
+                  type="button"
+                  onClick={() => props.onChange({ removeKey: false })}
+                >
+                  Keep
+                </button>
+              ) : null}
+              <SecretStatusLine id={keyStatusId} view={keyView} />
+            </div>
             {props.canTest && testModels.length ? (
               <Select
                 aria-label="Model to test"
@@ -589,8 +621,8 @@ function ProviderEditor(props: {
                 }))]}
               />
             ) : null}
-            <div className="settings-inline-actions">
-              {props.canTest ? (
+            {props.canTest ? (
+              <div className="settings-inline-actions">
                 <button
                   className="button button--secondary"
                   disabled={props.disabled || props.test?.running}
@@ -599,18 +631,8 @@ function ProviderEditor(props: {
                 >
                   {props.test?.running ? "Testing…" : "Test connection"}
                 </button>
-              ) : null}
-              {props.editing?.hasApiKey ? (
-                <button
-                  className="button button--ghost"
-                  disabled={props.disabled}
-                  type="button"
-                  onClick={() => props.onChange({ removeKey: !draft.removeKey, apiKey: "" })}
-                >
-                  {draft.removeKey ? "Keep stored key" : "Remove stored key"}
-                </button>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
             {props.test && !props.test.running ? <ProviderTestResult test={props.test} /> : null}
             {props.canTest ? (
               <p className="settings-field__help">

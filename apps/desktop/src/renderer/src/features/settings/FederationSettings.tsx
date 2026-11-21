@@ -7,6 +7,7 @@ import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type {
   DesktopFederationMode,
   DesktopSettingsSecretName,
+  DesktopSettingsSecretState,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
@@ -46,7 +47,9 @@ import {
   SettingsSectionStack,
 } from "./SettingsLayout";
 import { FederationShortNameField } from "./FederationShortNameField";
+import { SecretStatusLine, useSecretRemoveConfirm } from "./SecretStatusLine";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { describeFormSecret } from "./secret-field-state";
 import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
 import { useSettingsDraft } from "./useSettingsDraft";
 
@@ -204,6 +207,9 @@ export function FederationSettings(props: FederationSettingsProps) {
     edgePolicy.set("cloudflareAccessClientId", value);
   const setCloudflareAccessClientSecret = (value: string) =>
     edgePolicy.set("cloudflareAccessClientSecret", value);
+  // Clearing deletes four stored credentials at once, none of which can be
+  // shown again, so it asks first like every secret's Remove.
+  const clearCredentials = useSecretRemoveConfirm();
 
   const loadHealth = async () => {
     const diagnosticsReader = props.desktopApi?.readFederationDiagnostics;
@@ -1760,37 +1766,27 @@ export function FederationSettings(props: FederationSettingsProps) {
             />
             <SettingsField
               label="Client certificate"
-              sub={secretStatus(
-                props.snapshot.federation.cloudflareClientCertificate.configured,
-              )}
+              sub="PEM certificate."
               control={
-                <textarea
-                  className="settings-input settings-input--multiline"
-                  aria-label="Client certificate"
-                  rows={3}
+                <EdgePolicySecret
+                  label="Client certificate"
+                  multiline
+                  state={props.snapshot.federation.cloudflareClientCertificate}
                   value={cloudflareClientCertificate}
-                  placeholder="PEM certificate"
-                  onChange={(event) =>
-                    setCloudflareClientCertificate(event.target.value)
-                  }
+                  onChange={setCloudflareClientCertificate}
                 />
               }
             />
             <SettingsField
               label="Client private key"
-              sub={secretStatus(
-                props.snapshot.federation.cloudflareClientPrivateKey.configured,
-              )}
+              sub="PEM private key."
               control={
-                <textarea
-                  className="settings-input settings-input--multiline"
-                  aria-label="Client private key"
-                  rows={3}
+                <EdgePolicySecret
+                  label="Client private key"
+                  multiline
+                  state={props.snapshot.federation.cloudflareClientPrivateKey}
                   value={cloudflareClientPrivateKey}
-                  placeholder="PEM private key"
-                  onChange={(event) =>
-                    setCloudflareClientPrivateKey(event.target.value)
-                  }
+                  onChange={setCloudflareClientPrivateKey}
                 />
               }
             />
@@ -1807,37 +1803,25 @@ export function FederationSettings(props: FederationSettingsProps) {
             />
             <SettingsField
               label="Access client ID"
-              sub={secretStatus(
-                props.snapshot.federation.cloudflareAccessClientId.configured,
-              )}
+              sub="From a Cloudflare Access service token."
               control={
-                <input
-                  className="settings-input"
-                  aria-label="Access client ID"
-                  type="password"
+                <EdgePolicySecret
+                  label="Access client ID"
+                  state={props.snapshot.federation.cloudflareAccessClientId}
                   value={cloudflareAccessClientId}
-                  placeholder="Cloudflare Access client ID"
-                  onChange={(event) =>
-                    setCloudflareAccessClientId(event.target.value)
-                  }
+                  onChange={setCloudflareAccessClientId}
                 />
               }
             />
             <SettingsField
               label="Access client secret"
-              sub={secretStatus(
-                props.snapshot.federation.cloudflareAccessClientSecret.configured,
-              )}
+              sub="From the same service token."
               control={
-                <input
-                  className="settings-input"
-                  aria-label="Access client secret"
-                  type="password"
+                <EdgePolicySecret
+                  label="Access client secret"
+                  state={props.snapshot.federation.cloudflareAccessClientSecret}
                   value={cloudflareAccessClientSecret}
-                  placeholder="Cloudflare Access client secret"
-                  onChange={(event) =>
-                    setCloudflareAccessClientSecret(event.target.value)
-                  }
+                  onChange={setCloudflareAccessClientSecret}
                 />
               }
             />
@@ -1861,62 +1845,96 @@ export function FederationSettings(props: FederationSettingsProps) {
               >
                 Save edge policy
               </button>
-              <button
-                className="button button--ghost"
-                type="button"
-                disabled={props.saving}
-                onClick={() => {
-                  setActionError(undefined);
-                  void Promise.all([
-                    props.onClearSecret(
-                      "federationCloudflareClientCertificate",
-                    ),
-                    props.onClearSecret(
-                      "federationCloudflareClientPrivateKey",
-                    ),
-                    props.onClearSecret("federationCloudflareAccessClientId"),
-                    props.onClearSecret(
-                      "federationCloudflareAccessClientSecret",
-                    ),
-                  ])
-                    .then(async (cleared) => {
-                      if (cleared.some((result) => !result)) {
-                        throw new Error(
-                          "One or more Cloudflare credentials could not be cleared.",
+              {clearCredentials.confirming ? (
+                <>
+                  <button
+                    aria-label="Clear Cloudflare credentials now"
+                    className="button button--secondary"
+                    type="button"
+                    disabled={props.saving}
+                    onClick={() => {
+                      clearCredentials.cancel();
+                      setActionError(undefined);
+                      void Promise.all([
+                        props.onClearSecret(
+                          "federationCloudflareClientCertificate",
+                        ),
+                        props.onClearSecret(
+                          "federationCloudflareClientPrivateKey",
+                        ),
+                        props.onClearSecret("federationCloudflareAccessClientId"),
+                        props.onClearSecret(
+                          "federationCloudflareAccessClientSecret",
+                        ),
+                      ])
+                        .then(async (cleared) => {
+                          if (cleared.some((result) => !result)) {
+                            throw new Error(
+                              "One or more Cloudflare credentials could not be cleared.",
+                            );
+                          }
+                          const written = await props.onWriteConfig({
+                            federation: {
+                              cloudflareEndpoint: "",
+                              cloudflareMtlsEnabled: false,
+                              cloudflareAccessServiceAuthEnabled: false,
+                              cloudflareAccessOAuthEnabled: false,
+                            },
+                          });
+                          if (!written) {
+                            throw new Error(
+                              "Cloudflare edge policy could not be updated.",
+                            );
+                          }
+                          edgePolicy.discard(
+                            "cloudflareEndpoint",
+                            "cloudflareMtlsEnabled",
+                            "cloudflareAccessServiceAuthEnabled",
+                            "cloudflareAccessOAuthEnabled",
+                          );
+                          await props.onSettingsChanged();
+                          await loadHealth();
+                        })
+                        .catch((err: unknown) =>
+                          setActionError(
+                            err instanceof Error ? err.message : String(err),
+                          ),
                         );
-                      }
-                      const written = await props.onWriteConfig({
-                        federation: {
-                          cloudflareEndpoint: "",
-                          cloudflareMtlsEnabled: false,
-                          cloudflareAccessServiceAuthEnabled: false,
-                          cloudflareAccessOAuthEnabled: false,
-                        },
-                      });
-                      if (!written) {
-                        throw new Error(
-                          "Cloudflare edge policy could not be updated.",
-                        );
-                      }
-                      edgePolicy.discard(
-                        "cloudflareEndpoint",
-                        "cloudflareMtlsEnabled",
-                        "cloudflareAccessServiceAuthEnabled",
-                        "cloudflareAccessOAuthEnabled",
-                      );
-                      await props.onSettingsChanged();
-                      await loadHealth();
-                    })
-                    .catch((err: unknown) =>
-                      setActionError(
-                        err instanceof Error ? err.message : String(err),
-                      ),
-                    );
-                }}
-              >
-                Clear credentials
-              </button>
+                    }}
+                  >
+                    Clear credentials
+                  </button>
+                  <button
+                    ref={clearCredentials.keepRef}
+                    aria-label="Keep Cloudflare credentials"
+                    className="button button--ghost"
+                    type="button"
+                    onClick={clearCredentials.keep}
+                  >
+                    Keep
+                  </button>
+                </>
+              ) : (
+                <button
+                  ref={clearCredentials.removeRef}
+                  className="button button--ghost"
+                  type="button"
+                  disabled={props.saving}
+                  onClick={clearCredentials.ask}
+                >
+                  Clear credentials
+                </button>
+              )}
             </div>
+            {clearCredentials.confirming ? (
+              <SecretStatusLine
+                announce
+                view={{
+                  tone: "draft",
+                  status: "Remove all four Cloudflare credentials and turn the edge policy off? You would have to paste them again.",
+                }}
+              />
+            ) : null}
           </div>
         }
       />
@@ -1954,10 +1972,51 @@ async function saveCloudflareSettings(params: {
   }
 }
 
-function secretStatus(configured: boolean): string {
-  return configured
-    ? "Stored securely. Leave blank to keep it."
-    : "Not configured.";
+/**
+ * One of the edge policy's credentials. The policy writes on its own Save,
+ * so typing only changes the draft, and a blank box keeps what is stored.
+ * Removing one credential alone is not offered; Clear credentials removes
+ * the set.
+ */
+function EdgePolicySecret(props: {
+  label: string;
+  multiline?: boolean;
+  state: DesktopSettingsSecretState;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const statusId = useId();
+  const view = describeFormSecret(
+    props.state,
+    { dirty: props.value.trim().length > 0 },
+    "save the edge policy",
+  );
+  const shared = {
+    "aria-describedby": statusId,
+    "aria-label": props.label,
+    placeholder: view.placeholder,
+    value: props.value,
+  };
+  return (
+    <div className="settings-secret settings-secret--status">
+      {props.multiline ? (
+        <textarea
+          {...shared}
+          className="settings-input settings-input--multiline"
+          rows={3}
+          onChange={(event) => props.onChange(event.target.value)}
+        />
+      ) : (
+        <input
+          {...shared}
+          className="settings-input"
+          type="password"
+          onChange={(event) => props.onChange(event.target.value)}
+        />
+      )}
+      <SecretStatusLine id={statusId} view={view} />
+    </div>
+  );
 }
 
 function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {

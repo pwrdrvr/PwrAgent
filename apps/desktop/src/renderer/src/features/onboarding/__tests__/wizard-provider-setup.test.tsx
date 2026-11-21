@@ -541,7 +541,6 @@ describe("SecretFieldRow live-write contract", () => {
           kind: "secret",
           name: "telegramBotToken",
           label: "Bot token",
-          placeholder: "0000000000:AAEx",
         }}
         bufferedValue=""
         onBuffer={onBuffer}
@@ -550,11 +549,11 @@ describe("SecretFieldRow live-write contract", () => {
       />,
     );
 
-    const tokenInput = screen.getByPlaceholderText(/0000000000:AAEx/);
+    const tokenInput = screen.getByLabelText("Bot token");
     fireEvent.change(tokenInput, {
       target: { value: "0000000000:AAEx-fake-telegram-token" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Use this/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(replaceSecret).toHaveBeenCalledWith(
@@ -566,7 +565,7 @@ describe("SecretFieldRow live-write contract", () => {
       "0000000000:AAEx-fake-telegram-token",
     );
   });
-  it("messaging secret Clear: calls clearSecret on the runtime AND buffers empty", async () => {
+  it("messaging secret Remove: asks once, then buffers empty", async () => {
     const onBuffer = vi.fn();
     const replaceSecret = vi.fn(
       async (_secret: DesktopSettingsSecretName, _value: string) => true,
@@ -581,7 +580,6 @@ describe("SecretFieldRow live-write contract", () => {
           kind: "secret",
           name: "telegramBotToken",
           label: "Bot token",
-          placeholder: "0000000000:AAEx",
         }}
         // Pre-populated buffer simulates a value already typed in.
         bufferedValue="0000000000:AAEx-existing"
@@ -591,7 +589,9 @@ describe("SecretFieldRow live-write contract", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^Clear$/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token" }));
+    expect(onBuffer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token now" }));
 
     expect(onBuffer).toHaveBeenCalledWith("");
     // The runtime clear is skipped when nothing is configured server-side
@@ -617,7 +617,6 @@ describe("SecretFieldRow saves on the way out", () => {
           kind: "secret",
           name: "slackBotToken",
           label: "Bot token",
-          placeholder: "xoxb-",
           validate,
         }}
         bufferedValue=""
@@ -627,7 +626,7 @@ describe("SecretFieldRow saves on the way out", () => {
       />,
     );
     return {
-      input: screen.getByPlaceholderText("xoxb-"),
+      input: screen.getByLabelText("Bot token"),
       onBuffer,
       replaceSecret,
     };
@@ -662,7 +661,7 @@ describe("SecretFieldRow saves on the way out", () => {
     const { input, replaceSecret } = renderRow();
     fireEvent.change(input, { target: { value: "xoxb-0000-fake" } });
     fireEvent.blur(input, {
-      relatedTarget: screen.getByRole("button", { name: "Use this" }),
+      relatedTarget: screen.getByRole("button", { name: "Save" }),
     });
 
     expect(replaceSecret).not.toHaveBeenCalled();

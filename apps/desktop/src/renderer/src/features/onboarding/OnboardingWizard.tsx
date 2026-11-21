@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -40,6 +41,8 @@ import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connec
 import { slackCredentialProblem } from "../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+import { SecretStatusLine, useSecretRemoveConfirm } from "../settings/SecretStatusLine";
+import { describeSecretField, secretStoreState } from "../settings/secret-field-state";
 import { DensityPicker, densityLabel } from "../settings/DensityPicker";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
 import {
@@ -3790,7 +3793,6 @@ type ProviderField =
       name: DesktopSettingsSecretName;
       label: string;
       sub?: string;
-      placeholder?: string;
       /** Rejects a value before it is buffered or written; see `SecretFieldRow`. */
       validate?: (value: string) => string | undefined;
     }
@@ -3840,8 +3842,7 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         kind: "secret",
         name: "telegramBotToken",
         label: "Bot token",
-        sub: "Stored in your system keychain.",
-        placeholder: "0000000000:AAEx………",
+        sub: "From @BotFather. It looks like 0000000000:AAEx…",
       },
     ],
     pairingTitle: "Pair a Telegram conversation",
@@ -3913,7 +3914,7 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         kind: "secret",
         name: "discordBotToken",
         label: "Bot token",
-        placeholder: "Paste from Bot → Reset Token",
+        sub: "Bot → Reset Token.",
       },
       {
         kind: "text",
@@ -4494,11 +4495,24 @@ export function SecretFieldRow(props: {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [liveError, setLiveError] = useState<string | undefined>(undefined);
+  const removal = useSecretRemoveConfirm();
+  const statusId = useId();
   const state = readSecretState(props.snapshot, props.field.name);
   const configured = state?.configured ?? false;
   const buffered = props.bufferedValue.length > 0;
   const isRuntimeSecret = isMessagingRuntimeSecret(props.field.name);
-
+  const dirty = value.trim().length > 0;
+  // The same words as Settings. A runtime secret was written to the keychain
+  // when it was taken; any other is held until setup finishes.
+  const view = describeSecretField(state ?? secretStoreState(false), {
+    dirty,
+    saved: buffered && isRuntimeSecret,
+    held: buffered && !isRuntimeSecret,
+    confirmingRemove: removal.confirming,
+  });
+  // Onboarding removes only what it holds or what the runtime reads now.
+  const canRemove = view.canRemove && (buffered || isRuntimeSecret);
+  const confirming = removal.confirming && canRemove && !dirty;
   const save = async (): Promise<void> => {
     // What is checked is what is stored: a copy often brings a newline.
     const nextValue = value.trim();
@@ -4546,21 +4560,14 @@ export function SecretFieldRow(props: {
     <div className="onboarding-wizard__field">
       <div className="onboarding-wizard__field-head">
         <span className="onboarding-wizard__field-label">{props.field.label}</span>
-        <span className="onboarding-wizard__field-status">
-          {buffered ? (
-            <span className="onboarding-wizard__field-pill is-ok">✓ Ready</span>
-          ) : configured ? (
-            <span className="onboarding-wizard__field-pill is-ok">✓ saved</span>
-          ) : (
-            <span className="onboarding-wizard__field-pill">not set</span>
-          )}
-        </span>
       </div>
       {props.field.sub ? (
         <span className="onboarding-wizard__field-sub">{props.field.sub}</span>
       ) : null}
       <div
-        className="onboarding-wizard__field-row"
+        // Wraps so the status line takes its own line under the input. In
+        // the card's column it would size against the card, not its text.
+        className="onboarding-wizard__field-row settings-secret--status"
         onBlur={(event) => {
           // Leaving the row keeps what was pasted. An operator pasted both
           // Slack tokens, never pressed the button, and the adapter never
@@ -4572,18 +4579,17 @@ export function SecretFieldRow(props: {
         }}
       >
         <input
+          aria-describedby={statusId}
+          aria-label={props.field.label}
           type="password"
           className="onboarding-wizard__input"
-          placeholder={
-            buffered
-              ? "Replace the buffered value"
-              : configured
-                ? "Replace stored value"
-                : props.field.placeholder
-          }
+          placeholder={view.placeholder}
           value={value}
           disabled={busy}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            removal.cancel();
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -4591,24 +4597,54 @@ export function SecretFieldRow(props: {
             }
           }}
         />
-        <button
-          type="button"
-          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-          disabled={!value || busy}
-          onClick={() => void save()}
-        >
-          {busy ? "Saving…" : buffered || configured ? "Replace" : "Use this"}
-        </button>
-        {buffered || (isRuntimeSecret && configured) ? (
+        {confirming ? null : (
           <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+            disabled={!value || busy}
+            onClick={() => void save()}
+          >
+            {busy ? "Saving…" : view.commitLabel}
+          </button>
+        )}
+        {dirty ? null : confirming ? (
+          <>
+            <button
+              aria-label={`Remove saved ${props.field.label} now`}
+              type="button"
+              className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+              disabled={busy}
+              onClick={() => {
+                removal.cancel();
+                void clear();
+              }}
+            >
+              Remove
+            </button>
+            <button
+              ref={removal.keepRef}
+              aria-label={`Keep saved ${props.field.label}`}
+              type="button"
+              className="onboarding-wizard__btn onboarding-wizard__btn--link"
+              disabled={busy}
+              onClick={removal.keep}
+            >
+              Keep
+            </button>
+          </>
+        ) : canRemove ? (
+          <button
+            ref={removal.removeRef}
+            aria-label={`Remove saved ${props.field.label}`}
             type="button"
             className="onboarding-wizard__btn onboarding-wizard__btn--link"
             disabled={busy}
-            onClick={() => void clear()}
+            onClick={removal.ask}
           >
-            Clear
+            Remove
           </button>
         ) : null}
+        <SecretStatusLine announce={confirming} id={statusId} pending={busy} view={view} />
       </div>
       {liveError ? (
         <span className="onboarding-wizard__field-error">{liveError}</span>

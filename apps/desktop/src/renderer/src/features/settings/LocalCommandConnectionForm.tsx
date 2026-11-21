@@ -8,6 +8,8 @@ import {
   type TestMcpStdioConnectionResponse,
 } from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { SecretStatusLine } from "./SecretStatusLine";
+import { describeFormSecret, secretStoreState } from "./secret-field-state";
 
 /**
  * One environment variable as the form holds it.
@@ -141,6 +143,8 @@ export function localCommandDraftReady(draft: LocalCommandDraft): boolean {
 
 /** The command line, folder and variables of a local command. */
 export function LocalCommandFields(props: {
+  /** Completes "when you …" on a secret's status line: the form's button. */
+  commit?: string;
   draft: LocalCommandDraft;
   desktopApi?: DesktopApi;
   disabled: boolean;
@@ -248,63 +252,74 @@ export function LocalCommandFields(props: {
           <small>Only these, plus PATH and HOME</small>
         </span>
         <div aria-labelledby={`${id}-env`} className="settings-mcp-local__control" role="group">
-          {draft.env.map((entry, index) => (
-            <div key={entry.key} className="settings-mcp-local__env">
-              <input
-                aria-label={`Variable ${index + 1} name`}
-                autoCapitalize="characters"
-                autoComplete="off"
-                className="settings-input"
-                disabled={disabled}
-                placeholder="NAME"
-                spellCheck={false}
-                value={entry.name}
-                onChange={(event) => changeEnv(entry.key, { name: event.target.value })}
-              />
-              <input
-                aria-label={`${entry.name || `Variable ${index + 1}`} value`}
-                autoComplete="off"
-                className="settings-input"
-                disabled={disabled}
-                placeholder={entry.secret && entry.stored ? "Stored encrypted" : "value"}
-                spellCheck={false}
-                title={entry.secret && entry.stored
-                  ? "Leave blank to keep the stored value, or type a new one to replace it."
-                  : undefined}
-                type={entry.secret ? "password" : "text"}
-                value={entry.value}
-                onChange={(event) => changeEnv(entry.key, { value: event.target.value })}
-              />
-              <button
-                aria-label={`Keep ${entry.name || `variable ${index + 1}`} secret`}
-                aria-pressed={entry.secret}
-                className={`settings-mcp-local__secret${entry.secret ? " is-on" : ""}`}
-                disabled={disabled}
-                title={entry.secret
-                  ? "Stored encrypted in this profile. Never written to config.toml or shown again."
-                  : "Stored in config.toml as plain text."}
-                type="button"
-                onClick={() => changeEnv(entry.key, {
-                  secret: !entry.secret,
-                  // A stored value never comes back to the window, so a
-                  // secret turned plain has to be typed again.
-                  stored: entry.secret ? false : entry.stored,
-                })}
-              >
-                <span aria-hidden="true" className="settings-mcp-local__secret-box" />
-                Secret
-              </button>
-              <button
-                aria-label={`Remove ${entry.name || `variable ${index + 1}`}`}
-                className="button button--ghost settings-mcp-local__remove"
-                disabled={disabled}
-                type="button"
-                onClick={() => change({ env: draft.env.filter((item) => item.key !== entry.key) })}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+          {draft.env.map((entry, index) => {
+            // Removing a stored secret is removing its variable: the × below.
+            const secretView = entry.secret
+              ? describeFormSecret(
+                  secretStoreState(entry.stored),
+                  { dirty: entry.value.trim().length > 0 },
+                  props.commit,
+                )
+              : undefined;
+            return (
+              <div key={entry.key} className="settings-mcp-local__env">
+                <input
+                  aria-label={`Variable ${index + 1} name`}
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  className="settings-input"
+                  disabled={disabled}
+                  placeholder="NAME"
+                  spellCheck={false}
+                  value={entry.name}
+                  onChange={(event) => changeEnv(entry.key, { name: event.target.value })}
+                />
+                <input
+                  aria-describedby={secretView ? `${id}-${entry.key}-status` : undefined}
+                  aria-label={`${entry.name || `Variable ${index + 1}`} value`}
+                  autoComplete="off"
+                  className="settings-input"
+                  disabled={disabled}
+                  placeholder={secretView?.placeholder ?? "value"}
+                  spellCheck={false}
+                  type={entry.secret ? "password" : "text"}
+                  value={entry.value}
+                  onChange={(event) => changeEnv(entry.key, { value: event.target.value })}
+                />
+                <button
+                  aria-label={`Keep ${entry.name || `variable ${index + 1}`} secret`}
+                  aria-pressed={entry.secret}
+                  className={`settings-mcp-local__secret${entry.secret ? " is-on" : ""}`}
+                  disabled={disabled}
+                  title={entry.secret
+                    ? "Saved in the keychain. Never written to config.toml or shown again."
+                    : "Stored in config.toml as plain text."}
+                  type="button"
+                  onClick={() => changeEnv(entry.key, {
+                    secret: !entry.secret,
+                    // A stored value never comes back to the window, so a
+                    // secret turned plain has to be typed again.
+                    stored: entry.secret ? false : entry.stored,
+                  })}
+                >
+                  <span aria-hidden="true" className="settings-mcp-local__secret-box" />
+                  Secret
+                </button>
+                <button
+                  aria-label={`Remove ${entry.name || `variable ${index + 1}`}`}
+                  className="button button--ghost settings-mcp-local__remove"
+                  disabled={disabled}
+                  type="button"
+                  onClick={() => change({ env: draft.env.filter((item) => item.key !== entry.key) })}
+                >
+                  ×
+                </button>
+                {secretView ? (
+                  <SecretStatusLine id={`${id}-${entry.key}-status`} view={secretView} />
+                ) : null}
+              </div>
+            );
+          })}
           <button
             className="button button--secondary settings-mcp-local__add"
             disabled={disabled}

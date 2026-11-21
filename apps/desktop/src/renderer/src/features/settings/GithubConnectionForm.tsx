@@ -19,7 +19,9 @@ import {
   type TestGithubMcpConnectionResponse,
 } from "@pwragent/shared/github-mcp";
 import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
+import { SecretStatusLine } from "./SecretStatusLine";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { describeFormSecret, secretStoreState } from "./secret-field-state";
 
 /**
  * A GitHub connection as the add form and the edit dialog hold it.
@@ -194,6 +196,8 @@ export function GithubConnectionFields(props: {
    * access, so the choice says so.
    */
   cliUsedBy?: readonly string[];
+  /** Completes "when you …" on the token's status line: the form's button. */
+  commit?: string;
   draft: GithubConnectionDraft;
   disabled: boolean;
   /** The CLI sign-in and the local server, as last inspected. */
@@ -214,6 +218,13 @@ export function GithubConnectionFields(props: {
   const cli = props.test?.account?.source === "gh_cli" ? props.test.account : props.inspect?.cli;
   const cliLine = cliStatus(props.inspecting, cli);
   const cliProblem = cli && cli.state !== "ready" && cli.state !== "unreachable";
+  // A blank box keeps the stored token, so there is no Remove: choosing the
+  // GitHub CLI sign-in is how a connection stops using it.
+  const tokenView = describeFormSecret(
+    secretStoreState(draft.tokenStored),
+    { dirty: draft.token.trim().length > 0 },
+    props.commit,
+  );
   const tokenAccount = props.test?.account?.source === "token" ? props.test.account : undefined;
   const missing = missingGithubMcpScopes({
     toolsets: draft.toolsets,
@@ -275,8 +286,8 @@ export function GithubConnectionFields(props: {
               onKeyDown={accountGroup.onKeyDown}
               onSelect={() => change({ account: "token" })}
             >
-              A fine-grained or classic token, stored encrypted in this profile and never shown
-              again. Use it to give threads less access than your own account.
+              A fine-grained (github_pat_…) or classic (ghp_…) token, saved in the keychain and
+              never shown again. Use it to give threads less access than your own account.
             </ChoiceCard>
           </div>
           {draft.account === "gh_cli" && cliProblem && props.onRecheck ? (
@@ -290,18 +301,22 @@ export function GithubConnectionFields(props: {
             </button>
           ) : null}
           {draft.account === "token" ? (
-            <input
-              aria-label="Personal access token"
-              autoCapitalize="off"
-              autoComplete="off"
-              className="settings-input"
-              disabled={disabled}
-              placeholder={draft.tokenStored ? "Stored encrypted. Paste a new one to replace it." : "github_pat_… or ghp_…"}
-              spellCheck={false}
-              type="password"
-              value={draft.token}
-              onChange={(event) => change({ token: event.target.value })}
-            />
+            <div className="settings-secret settings-secret--status">
+              <input
+                aria-describedby={`${id}-token-status`}
+                aria-label="Personal access token"
+                autoCapitalize="off"
+                autoComplete="off"
+                className="settings-input"
+                disabled={disabled}
+                placeholder={tokenView.placeholder}
+                spellCheck={false}
+                type="password"
+                value={draft.token}
+                onChange={(event) => change({ token: event.target.value })}
+              />
+              <SecretStatusLine id={`${id}-token-status`} view={tokenView} />
+            </div>
           ) : null}
         </div>
       </div>

@@ -97,6 +97,8 @@ import {
   type GithubConnectionDraft,
 } from "./GithubConnectionForm";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { SecretStatusLine } from "./SecretStatusLine";
+import { describeFormSecret, secretStoreState } from "./secret-field-state";
 import { sourceBadge } from "./settings-fields";
 import { shortenCodexHome } from "./shorten-codex-home";
 import { getHomeDir } from "../../lib/tildify-path";
@@ -1937,6 +1939,7 @@ export function PluginsSettings(props: {
         </label>
       </div>
       <GithubConnectionFields
+        commit="add the connection"
         cliUsedBy={githubConnections
           .filter((connection) => connection.github?.account === "gh_cli")
           .map((connection) => connection.displayName)}
@@ -2478,9 +2481,18 @@ export function PluginsSettings(props: {
                     {isMcpIpcUrl(connectionUrl) ? (
                       <label>
                         <span>Session bearer token (optional)</span>
-                        <input className="settings-input" type="password" autoComplete="off"
-                          disabled={Boolean(connectionPending)} value={ipcBearerToken}
-                          onChange={(event) => setIpcBearerToken(event.target.value)} />
+                        <McpBearerTokenInput
+                          disabled={Boolean(connectionPending)}
+                          label="Session bearer token (optional)"
+                          value={ipcBearerToken}
+                          view={describeFormSecret(
+                            // A connection being added has nothing stored yet.
+                            secretStoreState(false),
+                            { dirty: ipcBearerToken.trim().length > 0 },
+                            "add the connection",
+                          )}
+                          onChange={setIpcBearerToken}
+                        />
                       </label>
                     ) : null}
                     {probe ? (
@@ -2569,6 +2581,7 @@ export function PluginsSettings(props: {
                       </label>
                     </div>
                     <LocalCommandFields
+                      commit="add the connection"
                       desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
                       draft={localDraft}
@@ -2792,12 +2805,27 @@ export function PluginsSettings(props: {
               )}
               {!connectionEdit.local && !connectionEdit.github && isMcpIpcUrl(connectionEdit.serverUrl) ? (
                 <label>
-                  <span>New session bearer token (leave blank to keep)</span>
-                  <input className="settings-input" type="password" autoComplete="off"
-                    disabled={Boolean(connectionPending)} value={connectionEdit.ipcBearerToken ?? ""}
-                    onChange={(event) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: event.target.value || undefined })} />
-                  <button type="button" className="button button--secondary" disabled={Boolean(connectionPending)}
-                    onClick={() => setConnectionEdit({ ...connectionEdit, ipcBearerToken: "" })}>Clear saved token</button>
+                  <span>Session bearer token</span>
+                  <McpBearerTokenInput
+                    disabled={Boolean(connectionPending)}
+                    label="Session bearer token"
+                    removing={connectionEdit.ipcBearerToken === ""}
+                    value={connectionEdit.ipcBearerToken ?? ""}
+                    view={describeFormSecret(
+                      // The owner never says whether a token is stored, so
+                      // the words claim neither. A changed URL drops it.
+                      editDraftRepointsServer(connectionEdit) ? secretStoreState(false) : undefined,
+                      {
+                        dirty: Boolean(connectionEdit.ipcBearerToken?.trim()),
+                        removing: connectionEdit.ipcBearerToken === "",
+                      },
+                    )}
+                    onChange={(value) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: value || undefined })}
+                    onRemove={(remove) => setConnectionEdit({
+                      ...connectionEdit,
+                      ipcBearerToken: remove ? "" : undefined,
+                    })}
+                  />
                 </label>
               ) : null}
             </div>
@@ -4305,5 +4333,64 @@ function McpServerRow(props: {
         />
       ) : null}
     </article>
+  );
+}
+
+/**
+ * A local IPC server's session bearer token, in the add form and the edit
+ * dialog. Both write on the form's own button, so Remove only marks the
+ * token, Keep unmarks it, and the status line says when either lands.
+ */
+function McpBearerTokenInput(props: {
+  disabled: boolean;
+  /**
+   * The visible label's words. The wrapping label also holds the status line
+   * and buttons, which must not become part of the input's name.
+   */
+  label: string;
+  removing?: boolean;
+  value: string;
+  view: ReturnType<typeof describeFormSecret>;
+  onChange: (value: string) => void;
+  /** Edit only: mark the stored token for removal, or unmark it. */
+  onRemove?: (remove: boolean) => void;
+}) {
+  const statusId = useId();
+  return (
+    <div className="settings-secret settings-secret--status">
+      <input
+        aria-describedby={statusId}
+        aria-label={props.label}
+        autoComplete="off"
+        className="settings-input"
+        disabled={props.disabled || props.removing}
+        placeholder={props.view.placeholder}
+        type="password"
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      {props.onRemove && props.view.canRemove ? (
+        <button
+          aria-label="Remove saved session bearer token"
+          className="button button--ghost"
+          disabled={props.disabled}
+          type="button"
+          onClick={() => props.onRemove!(true)}
+        >
+          Remove
+        </button>
+      ) : props.onRemove && props.removing ? (
+        <button
+          aria-label="Keep saved session bearer token"
+          className="button button--ghost"
+          disabled={props.disabled}
+          type="button"
+          onClick={() => props.onRemove!(false)}
+        >
+          Keep
+        </button>
+      ) : null}
+      <SecretStatusLine id={statusId} view={props.view} />
+    </div>
   );
 }
