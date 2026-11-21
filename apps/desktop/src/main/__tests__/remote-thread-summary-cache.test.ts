@@ -1926,9 +1926,6 @@ it("scopes subagent metadata and worktree invalidations to mounted rows", async 
       } } });
     }
     await settle();
-    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
-      sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: "directory:/mounted",
-    } } });
     // A project's Forge Automation rides only on rows in that project, and
     // an owner that names no project names none on its rows either.
     cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
@@ -1944,6 +1941,12 @@ it("scopes subagent metadata and worktree invalidations to mounted rows", async 
     } } });
     await settle();
     expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    // A peer without a repository revision or group proof cannot exclude a changed origin.
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: "directory:/mounted",
+    } } });
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
   } finally { cache.dispose(); }
 });
 

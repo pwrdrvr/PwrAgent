@@ -8,7 +8,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
-import { projectNavigationQuery, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, navigationDirectoryGitRevisions, projectNavigationQuery, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
 import { navigationInvalidationForLocalEvent } from "../federation/federation-runtime";
 import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
@@ -131,7 +131,7 @@ it.each([
       scopes.remember(index(), scopes.checkpoint());
       const request: NavigationQueryRequest = { protocol: 2, inventory: "owner", consumer: "main-sidebar",
         query: { kind: "directory", directoryKey: `directory:${home}` } };
-      const window = windowFor(index, request, remote);
+      const window = windowFor(() => createNavigationQuerySnapshot(index()), request, remote);
       const finishes: Array<() => void> = [];
       try {
         await until(window.idle);
@@ -150,7 +150,9 @@ it.each([
           window.read.mockClear();
           origin = next;
           const event = { backend: "codex", notification: { method: "navigation/directoryGitStatus/updated",
-            params: { directoryKey: `directory:${paths[0]}`, gitStatus: { originRepository: origin }, fetchedAt: 1 },
+            params: { directoryKey: `directory:${paths[0]}`, gitStatus: { originRepository: origin, remoteRepositories: origin ? [origin] : [] }, fetchedAt: 1,
+              ...(olderScope ? {} : { directoryGitRevisions: navigationDirectoryGitRevisions({ originRepository: origin,
+                remoteRepositories: origin ? [origin] : [] }) }) },
           } } as AgentEvent;
           const scope = scopes.forEvent(event);
           // Any published proof must cover all changed projections, not just

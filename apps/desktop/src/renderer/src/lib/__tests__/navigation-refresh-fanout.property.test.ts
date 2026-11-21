@@ -170,6 +170,32 @@ it("retains visible viewer rows before owner proofs and refreshes every tray who
   } finally { queries.dispose(); }
 });
 
+it("evicts directory Git proofs before mount proofs when visible pages fill the window", async () => {
+  const trays = 40;
+  const bytesPerPage = Math.floor(8 * 1024 * 1024 / trays);
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    const response = { ...page(sent), viewerRowOwners: [] };
+    response.entries[0]!.row.title += "x".repeat(bytesPerPage - Buffer.byteLength(JSON.stringify(response)));
+    return { ...response, directoryGitProof: { version: 1 as const, directories: [] } };
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const demand = new Map(Array.from({ length: trays }, (_, i) => [String(i), { ...request(i), inventory: "viewer" as const }]));
+  try {
+    queries.setDemand(demand);
+    await until(() => idle(queries));
+    expect([...queries.getSnapshot().resources.values()].filter((resource) => resource.state.page)).toHaveLength(trays);
+    const notification = { method: "navigation/invalidated" as const, params: { sourceMethod: "navigation/directoryGitStatus/updated",
+      directoryKey: "/directory", directoryGitRevisions: { version: 1 as const, repository: "a".repeat(43), descriptor: "b".repeat(43) } } };
+    read.mockClear();
+    queries.invalidate(undefined, undefined, { backend: "codex", federationTarget: { scope: "remote", instanceId: "absent" }, notification });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).not.toHaveBeenCalled();
+    queries.invalidate(undefined, undefined, { backend: "codex", notification });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(trays);
+  } finally { queries.dispose(); }
+});
+
 it("admits remote rows independently of optional proof volume and still refreshes off-page counts", async () => {
   // Each tray carries a complete dependency set for the same directory-wide
   // descriptor. Those optional bytes must yield to visible rows in the view.

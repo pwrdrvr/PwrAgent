@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DirectoryOverlayState, NavigationDirectoryGitStatus, NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import { applyNavigationDirectoryOverlay, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
-import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { navigationDirectoryRepositoryRevision, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 
 const PROJECT_PROBE_BATCH_SIZE = 16;
@@ -18,7 +18,7 @@ export async function resolveNavigationWorktreeProjects(
     directoryOverlays?: Record<string, DirectoryOverlayState>;
     gitStatusByKey?: Record<string, { gitStatus?: NavigationDirectoryGitStatus } | undefined>;
   } = {},
-): Promise<Pick<NavigationQueryIndex, "directories" | "worktreeProjectAliases">> {
+): Promise<Pick<NavigationQueryIndex, "directories" | "worktreeProjectAliases" | "worktreeRepositorySources">> {
   const { signal } = options;
   const candidates = directories.filter((directory) => directory.kind === "directory"
     && !directory.localAvailability && directory.path && path.isAbsolute(directory.path));
@@ -39,6 +39,7 @@ export async function resolveNavigationWorktreeProjects(
     .map((directory) => [directory.key, directory]));
   const groupedProjectKeys = new Map<string, string>();
   const aliases = new Map<string, string[]>();
+  let repositorySources: NavigationQueryIndex["worktreeRepositorySources"];
   for (const project of projects.values()) {
     for (const checkout of project.checkoutPaths ?? []) groupedProjectKeys.set(checkout, project.key);
   }
@@ -60,7 +61,11 @@ export async function resolveNavigationWorktreeProjects(
       repositoryKey: worktree.gitStatus?.originRepository ?? worktree.repositoryKey,
       repositoryKeys: worktree.gitStatus?.remoteRepositories ?? worktree.repositoryKeys,
     };
-    if (!existing) applyNavigationDirectoryOverlay(parent, options.directoryOverlays?.[key]);
+    if (!existing) {
+      applyNavigationDirectoryOverlay(parent, options.directoryOverlays?.[key]);
+      repositorySources ??= {};
+      repositorySources[key] = { key: worktree.key, repositoryRevision: navigationDirectoryRepositoryRevision(worktree.gitStatus) };
+    }
     projects.set(key, {
       ...parent,
       threadKeys: [...new Set([...parent.threadKeys, ...worktree.threadKeys])],
@@ -71,5 +76,6 @@ export async function resolveNavigationWorktreeProjects(
   return {
     directories: [...projects.values()].sort((left, right) => left.label.localeCompare(right.label)),
     ...(aliases.size ? { worktreeProjectAliases: Object.fromEntries(aliases) } : {}),
+    ...(repositorySources ? { worktreeRepositorySources: repositorySources } : {}),
   };
 }

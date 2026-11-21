@@ -1,3 +1,4 @@
+import { readDirectoryGitRevisions } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
@@ -991,6 +992,8 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
         ...(event.notification.method === "navigation/directoryGitStatus/updated"
           || event.notification.method === "directory/forgeAutomation/updated"
           ? { directoryKey: identity(params.directoryKey) } : {}),
+        ...(event.notification.method === "navigation/directoryGitStatus/updated"
+          ? { directoryGitRevisions: readDirectoryGitRevisions(params.directoryGitRevisions) } : {}),
         automationId: identity(params.automationId),
         runId: identity(params.runId),
       },

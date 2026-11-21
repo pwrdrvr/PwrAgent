@@ -1,5 +1,6 @@
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { readDirectoryGitProof } from "@pwragent/shared/navigation-metadata-dependencies";
+import type { NavigationDirectoryGitProof, NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
@@ -15,6 +16,8 @@ import { hasFederationErrorCode, type FederationRpcRequestOptions } from "./fede
 export type PinnedNavigationReadState = Map<string, {
   queryKey: string;
   revision: string;
+  ownerEpoch: string;
+  directoryGitProof?: NavigationDirectoryGitProof;
   threads: NavigationThreadSummary[];
 }>;
 
@@ -38,6 +41,7 @@ export async function readFederationPinnedSnapshot(
         launchpadDefaults: { backend: "codex", executionMode: "auto" },
       };
       const nextState: PinnedNavigationReadState = new Map();
+      let proofBytes = 0;
       let bytes = 0;
       let pages = 0;
       // The pin cache must use the same owner projection as visible rows.
@@ -48,6 +52,8 @@ export async function readFederationPinnedSnapshot(
         const batchKey = JSON.stringify(batch);
         const baseline = state?.get(batchKey);
         const batchThreads: NavigationThreadSummary[] = [];
+        let batchProof: NavigationDirectoryGitProof | undefined;
+        let ownerEpoch: string | undefined;
         let batchRevision: string | undefined;
         let batchQueryKey: string | undefined;
         let cursor: string | undefined;
@@ -71,6 +77,7 @@ export async function readFederationPinnedSnapshot(
             throw new Error(`Pinned navigation owner coverage is ${page.coverage.state} (pending providers: ${page.coverage.pendingProviders ?? "unknown"}, failed providers: ${page.coverage.failedProviders ?? "unknown"}).`);
           }
           const pageRevision = JSON.stringify([page.ownerEpoch, page.generation, page.queryKey, page.countsRevision]);
+          ownerEpoch = page.ownerEpoch;
           if (page.unchanged) {
             if (!baseline || cursor || page.protocol !== 2 || !page.complete || page.nextCursor !== undefined
               || page.rangeUnchanged || page.entries.length || page.directories?.length || page.modelGroups?.length
@@ -79,6 +86,7 @@ export async function readFederationPinnedSnapshot(
               throw new Error("Pinned navigation returned an invalid unchanged baseline.");
             }
             batchThreads.push(...baseline.threads);
+            if (ownerEpoch === baseline.ownerEpoch) batchProof = baseline.directoryGitProof;
             batchRevision = baseline.revision;
             batchQueryKey = baseline.queryKey;
             break;
@@ -91,6 +99,7 @@ export async function readFederationPinnedSnapshot(
             throw new Error("Pinned navigation returned an oversized, incomplete or inconsistent collection.");
           }
           revision = pageRevision;
+          if (state && !batchProof) batchProof = readDirectoryGitProof(page.directoryGitProof);
           batchThreads.push(...page.entries.map(({ row }) => row));
           batchRevision = page.countsRevision;
           batchQueryKey = page.queryKey;
@@ -98,7 +107,10 @@ export async function readFederationPinnedSnapshot(
           if (cursor) cursors.add(cursor);
         } while (cursor !== undefined);
         result.threads.push(...batchThreads);
-        if (batchRevision && batchQueryKey) nextState.set(batchKey, { queryKey: batchQueryKey, revision: batchRevision, threads: batchThreads });
+        if (batchRevision && batchQueryKey && ownerEpoch) {
+          nextState.set(batchKey, { queryKey: batchQueryKey, revision: batchRevision, ownerEpoch, threads: batchThreads, directoryGitProof: batchProof });
+          if (batchProof) proofBytes += Buffer.byteLength(JSON.stringify({ directoryGitProof: batchProof })) - 1;
+        }
       }
       result.threads = [...new Map(result.threads.map((thread) => [
         thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
@@ -108,12 +120,18 @@ export async function readFederationPinnedSnapshot(
         thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
           : buildThreadIdentityKey(thread.source, thread.id));
       // Wire bytes can be tiny for unchanged replies; bound retained data too.
-      if (Buffer.byteLength(JSON.stringify(result.threads), "utf8") > 16 * 1024 * 1024) {
+      const rowBytes = Buffer.byteLength(JSON.stringify(result.threads), "utf8");
+      if (rowBytes > 16 * 1024 * 1024) {
         throw new Error("Pinned navigation exceeded its retained row budget.");
       }
       if (state) {
         state.clear();
-        for (const [key, baseline] of nextState) state.set(key, baseline);
+        const admitProofs = nextState.size === Math.ceil(roots.length / NAVIGATION_QUERY_MAX_PAGE_ROWS)
+          && rowBytes + proofBytes <= 16 * 1024 * 1024;
+        for (const [key, baseline] of nextState) {
+          if (!admitProofs) delete baseline.directoryGitProof;
+          state.set(key, baseline);
+        }
       }
       return result;
     } catch (error) {
