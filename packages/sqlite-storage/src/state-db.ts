@@ -2927,6 +2927,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingCumulativeColumns(db);
     ensureThreadUsageRequestPricingColumns(db);
     ensureThreadUsagePricingIndexes(db);
+    ensureThreadPricingSummaryReadIndexes(db);
     // Current and newer partial profiles skip the numbered migration ladder.
     // Repair the mapping after FTS convergence, in this same transaction. Older
     // profiles first finish identity migrations, then create it in v82.
@@ -3691,6 +3692,24 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
   ON thread_usage_lines(provider, backend, currency, parent_thread_id)
   WHERE status != 'superseded';
+`);
+}
+
+function ensureThreadPricingSummaryReadIndexes(db: BetterSqlite3.Database): void {
+  // Use the current schema transaction so existing profiles build the indexes
+  // once. Summary readers seek by thread and sort its few provider/currency
+  // groups. The two provenance indexes contain only priced reference lines.
+  // Keep their predicates in sync with readThreadPricingSummaries.
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_pricing_summaries_thread
+  ON thread_pricing_summaries(backend, thread_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_assumed_thread
+  ON thread_usage_lines(backend, thread_id, provider, currency)
+  WHERE status != 'superseded' AND price_status = 'priced' AND pricing_catalog_id = 'openrouter-assumed';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_assumed_parent
+  ON thread_usage_lines(backend, parent_thread_id, provider, currency)
+  WHERE status != 'superseded' AND price_status = 'priced' AND pricing_catalog_id = 'openrouter-assumed'
+    AND parent_thread_id IS NOT NULL;
 `);
 }
 
