@@ -172,6 +172,46 @@ describe("ThreadArchiveSweeper", () => {
     await sweeper.stop();
   });
 
+  it("publishes, after every inspected checkout, the counts of every checkout read so far", async () => {
+    // A long pass must never sit on "Running" while it inspects checkouts:
+    // each inspection, whatever its outcome, is followed by a status whose
+    // counts cover every checkout read up to and including it.
+    const outcome = fc.constantFrom("no-target", "kept-on-state", "kept-in-workspace", "hibernated", "kept-by-hibernate", "throws");
+    await fc.assert(fc.asyncProperty(fc.array(outcome, { maxLength: 12 }), async (outcomes) => {
+      const items = outcomes.map((_, index) => candidate(`t${index}`));
+      const of = (item: ThreadArchiveCandidate) => outcomes[Number(item.thread.id.slice(1))];
+      const { deps, hibernate } = harness(items);
+      const running: Array<NonNullable<DesktopThreadArchiveSweepStatus["hibernation"]>> = [];
+      const sweeper = new ThreadArchiveSweeper({
+        ...deps,
+        hibernation: {
+          ...deps.hibernation,
+          keepReason: (item: ThreadArchiveCandidate) => of(item) === "no-target" ? {}
+            : { target: `/worktrees/${item.thread.id}`, ...(of(item) === "kept-on-state" ? { keep: "Pinned thread" } : {}) },
+          inspectWorkspace: async (target: string) =>
+            of(items.find((item) => target.endsWith(`/${item.thread.id}`))!) === "kept-in-workspace" ? "Rebase in progress" : undefined,
+        },
+        onStatus: (status) => { if (status.running && status.hibernation) running.push(status.hibernation); },
+      });
+      hibernate.mockImplementation(async (item: ThreadArchiveCandidate) => {
+        if (of(item) === "throws") throw new Error("snapshot mismatch");
+        return of(item) === "hibernated" ? true : "Open terminal";
+      });
+      await sweeper.sweep();
+      const expected = [{ checked: 0, hibernated: 0 }];
+      let checked = 0;
+      let hibernated = 0;
+      for (const result of outcomes) {
+        if (result !== "no-target") checked += 1;
+        if (result === "hibernated") hibernated += 1;
+        if (result !== "no-target" && result !== "kept-on-state") expected.push({ checked, hibernated });
+      }
+      expect(running.map(({ checked: c, hibernated: h }) => ({ checked: c, hibernated: h }))).toEqual(expected);
+      expect(sweeper.getStatus()).toMatchObject({ running: false, hibernation: { checked, hibernated } });
+      await sweeper.stop();
+    }), { numRuns: 60 });
+  });
+
   it("reports a failed thread listing and still reports worktree and retention results", async () => {
     const { deps } = harness();
     deps.listCandidates.mockRejectedValueOnce(new Error("Codex is restarting"));
