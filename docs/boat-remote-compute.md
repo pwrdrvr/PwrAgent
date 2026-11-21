@@ -149,12 +149,25 @@ the store calls the `thread-sandbox-record-created` and
 ## The thread's sandboxes in the MCP access panel
 
 `ThreadBoatSandboxes` lists what a thread on this machine created, with state,
-size and what Boat has billed so far, and offers Stop and a two-step Delete.
+size, what Boat has billed so far and, while it runs, the time left before it
+stops by itself. It offers Stop and a two-step Delete. Under each sandbox it
+lists the tunnels open into it from this computer, as the local URL and the
+sandbox port, each with Close.
+
+The time left comes from Boat's `archiveAfter`, the deadline itself
+(null when auto-stop is off). `ttlSeconds` is only the length as last set on
+create, resume, fork or extend, so the row never derives a figure from it. Boat
+counts from create or the last resume, and moves the deadline on while an agent
+prompt runs, so a deadline already passed shows no figure. A stopped sandbox
+shows none either.
+
 The window calls `listThreadBoatSandboxes` and `changeThreadBoatSandbox` on the
-gateway service, which run `list_sandboxes`, `stop_sandbox` and
-`delete_sandbox` through `BoatTools` with the thread's own scope. The window
-therefore reaches exactly what the thread's agent reaches, and a sandbox id
-from another thread is refused before Boat is asked. A thread with no recorded
+gateway service, which run `list_sandboxes`, `stop_sandbox`, `delete_sandbox`
+and `close_port_forward` through `BoatTools` with the thread's own scope. The
+open tunnels come from `BoatConnection.portForwards` for the thread's own
+sandboxes. The window therefore reaches exactly what the thread's agent
+reaches, and a sandbox id from another thread is refused before Boat is asked
+or a tunnel is touched. A thread with no recorded
 sandboxes is answered without a request to Boat. A remote thread shows no
 section: the key and the bill belong to its owner.
 
