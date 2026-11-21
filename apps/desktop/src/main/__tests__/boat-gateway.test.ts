@@ -310,6 +310,8 @@ describe("Boat through the MCP gateway", () => {
     const status = (await service.listConnections()).find((entry) => entry.id === BOAT);
     expect(status).toMatchObject({ configured: true, state: "reauthorization_required" });
     expect(status?.detail).toContain("not allowed to create sandboxes");
+    // Sign-in is offered again, so whether it can run is reported again.
+    expect(status).toHaveProperty("boatCliAvailable");
     expect(changes.flat()).toContain(BOAT);
     // The key is kept: it can still stop what is running. A new one clears it.
     expect(stored.get(BOAT)).toEqual({ BOAT_API_KEY: KEY });

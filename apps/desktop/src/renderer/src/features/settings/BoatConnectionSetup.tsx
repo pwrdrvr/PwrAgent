@@ -350,6 +350,8 @@ export function BoatSetupDetail(props: {
       ) : null}
       {signIn?.state === "waiting" ? (
         <BoatSignInCode
+          // A new code starts over: nothing about it has been copied or opened.
+          key={signIn.userCode}
           desktopApi={props.desktopApi}
           userCode={signIn.userCode}
           onCancelled={props.onChanged}

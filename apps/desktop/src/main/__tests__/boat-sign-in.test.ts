@@ -106,6 +106,21 @@ describe("BoatSignIn", () => {
     expect(JSON.stringify([progress, h.changes])).not.toContain(KEY);
   });
 
+  it("revokes a key it created and could not store, before the session ends", async () => {
+    const h = harness({ storeKey: async () => { throw new Error("Could not reach Boat to check that key."); } });
+    await h.signIn.start("github");
+    await h.idle;
+
+    expect(h.calls.map((call) => call.args).slice(2)).toEqual([
+      [...BOAT_KEY_ARGS],
+      // Revoked while the session that may revoke it is still open.
+      ["api-key", "revoke", "key_1", "--json"],
+      ["logout"],
+    ]);
+    expect(h.signIn.progress()).toEqual({ state: "failed", error: "Could not reach Boat to check that key." });
+    expect(new Set(h.removed)).toEqual(new Set(h.homes));
+  });
+
   it("asks for Google sign-in when that is chosen", async () => {
     const h = harness();
     await h.signIn.start("google");

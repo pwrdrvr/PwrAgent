@@ -68,6 +68,8 @@ const START_TIMEOUT_MS = 30_000;
 const STEP_TIMEOUT_MS = 30_000;
 /** Boat's links last minutes; this bounds one that reports no expiry. */
 const MAX_WAIT_MS = 15 * 60_000;
+const CLI_RECHECK_MS = 30_000;
+const KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 const USER_CODE_PATTERN = /^[A-Z0-9]{2,8}(?:-[A-Z0-9]{2,8}){0,3}$/;
 
 export type BoatCliRun = (
@@ -95,6 +97,7 @@ export class BoatSignIn {
   private attempt?: Attempt;
   private current?: BoatSignInProgress;
   private cliKnown?: boolean;
+  private cliAskedAt?: number;
   private readonly run: BoatCliRun;
   private readonly findCli: () => Promise<string | undefined>;
   private readonly makeHome: () => Promise<string>;
@@ -117,9 +120,16 @@ export class BoatSignIn {
     return this.cliKnown;
   }
 
-  /** The last answer, for a read that must not wait. Asks again unseen. */
+  /**
+   * The last answer, for a read that must not wait. Asks again unseen, at
+   * most once per `CLI_RECHECK_MS`: the answer changes only on an install.
+   */
   cliAvailableCached(): boolean | undefined {
-    void this.cliAvailable();
+    const now = this.now();
+    if (this.cliAskedAt === undefined || now - this.cliAskedAt >= CLI_RECHECK_MS) {
+      this.cliAskedAt = now;
+      void this.cliAvailable();
+    }
     return this.cliKnown;
   }
 
@@ -180,14 +190,19 @@ export class BoatSignIn {
     const { cli, home, controller } = attempt;
     const signal = controller.signal;
     let signedIn = false;
+    // A key Boat created that PwrAgent did not manage to store.
+    let unstoredKeyId: string | undefined;
     try {
       const waitMs = Math.min(Math.max(expiresAt - this.now(), 10_000), MAX_WAIT_MS) + 5_000;
       await this.run(cli, ["login", "--wait", "--json"], { home, timeoutMs: waitMs, signal });
       signedIn = true;
-      const key = findKey(await this.run(cli, BOAT_KEY_ARGS, { home, timeoutMs: STEP_TIMEOUT_MS, signal }));
+      const created = await this.run(cli, BOAT_KEY_ARGS, { home, timeoutMs: STEP_TIMEOUT_MS, signal });
+      unstoredKeyId = findKeyId(created);
+      const key = findKey(created);
       if (!key) throw new Error("Boat signed in but returned no API key.");
       signal.throwIfAborted();
       await this.options.storeKey(key);
+      unstoredKeyId = undefined;
       if (this.attempt === attempt) this.current = undefined;
     } catch (error) {
       if (this.attempt === attempt && !signal.aborted) {
@@ -199,6 +214,12 @@ export class BoatSignIn {
         };
       }
     } finally {
+      if (unstoredKeyId) {
+        // Nobody holds this key's secret now. Left alone it would stay valid
+        // at Boat until it expires.
+        await this.run(cli, ["api-key", "revoke", unstoredKeyId, "--json"], { home, timeoutMs: STEP_TIMEOUT_MS })
+          .catch(() => undefined);
+      }
       if (signedIn) {
         // Revokes the session this sign-in opened. The key outlives it.
         await this.run(cli, ["logout"], { home, timeoutMs: STEP_TIMEOUT_MS }).catch(() => undefined);
@@ -273,6 +294,20 @@ function findKey(stdout: string): string | undefined {
   }
   // A prefix or masked copy beside the secret is shorter than the secret.
   return [...found].toSorted((left, right) => right.length - left.length)[0];
+}
+
+/** The new key's id, `apiKey.id` in `boat api-key create --json`. */
+function findKeyId(stdout: string): string | undefined {
+  for (const line of [stdout, ...stdout.split("\n")]) {
+    try {
+      const parsed = JSON.parse(line) as { apiKey?: { id?: unknown } } | null;
+      const id = parsed?.apiKey?.id;
+      if (typeof id === "string" && KEY_ID_PATTERN.test(id)) return id;
+    } catch {
+      // Not JSON; another line may be.
+    }
+  }
+  return undefined;
 }
 
 function describeFailure(error: unknown, fallback: string): string {

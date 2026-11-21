@@ -3191,9 +3191,10 @@ export class McpConnectionGatewayService {
       if (cachedLocalStatus && connection.enabled) void this.boat.readStatus().catch(() => undefined);
       const status = cachedLocalStatus ? this.boat.cachedStatus() : await this.boat.readStatus();
       const boatSignIn = this.boatSignIn.progress();
-      // Asked only while there is no key: that is when sign-in is offered.
-      // A defaults read takes the last answer instead of touching the disk.
-      const boatCliAvailable = status.configured
+      // Asked only while sign-in is offered: there is no key, or the stored
+      // one must be replaced. A defaults read takes the last answer instead
+      // of touching the disk.
+      const boatCliAvailable = status.configured && status.state !== "reauthorization_required"
         ? undefined
         : cachedLocalStatus ? this.boatSignIn.cliAvailableCached() : await this.boatSignIn.cliAvailable();
       return {

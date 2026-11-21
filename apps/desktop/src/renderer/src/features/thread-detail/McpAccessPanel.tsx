@@ -543,10 +543,13 @@ function ThreadMcpVerification(props: {
     };
   }, [backend, describe, federationTarget, key, threadId, token]);
 
+  // A failed read says nothing about now: an earlier answer is not shown as
+  // though it were current.
+  if (failed) return null;
   if (!report) {
-    // Asking the agent takes a moment. The section holds its place with the
+    // The check takes a moment. The section holds its place with the
     // rows it is about to fill, so the panel does not grow under the pointer.
-    if (failed || !describe || props.selected.length === 0) return null;
+    if (!describe || props.selected.length === 0) return null;
     return (
       <section className="mcp-access-panel__verify" aria-busy="true">
         <h3 className="mcp-access-panel__verify-head">In this thread</h3>
@@ -558,7 +561,7 @@ function ThreadMcpVerification(props: {
             </li>
           ))}
         </ul>
-        <p className="mcp-access-panel__detail" role="status">Asking the agent what it loaded…</p>
+        <p className="mcp-access-panel__detail" role="status">Checking what this thread loaded…</p>
       </section>
     );
   }
