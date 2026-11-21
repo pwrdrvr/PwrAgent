@@ -16,24 +16,29 @@ import { isFederationWindowWebContents } from "../window";
 
 const REMOTE_THREAD_REASON = "Worktree storage is shared on the machine that owns the thread.";
 const UNLINKED_REASON = "This directory is not linked to the thread.";
+const UNANSWERED_REASON = "The selected Git could not be run in this thread's directories.";
 
 /**
  * The directory Git runs in is the thread's own record of it, never the
  * renderer's string: sharing rewrites files, so a path must be one this
- * instance linked to the thread. A federation window shows another machine's
- * paths, which name nothing here.
+ * instance linked to a thread that is not archived. A federation window
+ * shows another machine's paths, which name nothing here.
  */
 async function resolveTarget(
   sender: Electron.WebContents | undefined,
   target: WorktreeReflinkTarget,
-): Promise<{ cwd: string } | { reason: string }> {
+): Promise<{ cwd: string; others: string[] } | { reason: string }> {
   if (isFederationWindowWebContents(sender)) return { reason: REMOTE_THREAD_REASON };
-  const context = await getDesktopBackendRegistry().resolveThreadWorktreeGitReadContext({
+  const workspace = await getDesktopBackendRegistry().resolveThreadLinkedWorkspace({
     backend: target.backend,
     threadId: target.threadId,
     worktreePath: target.worktreePath,
   });
-  return context ? { cwd: context.worktreePath } : { reason: UNLINKED_REASON };
+  if (!workspace) return { reason: UNLINKED_REASON };
+  return {
+    cwd: workspace.worktreePath,
+    others: workspace.workspacePaths.filter((entry) => entry !== workspace.worktreePath),
+  };
 }
 
 export function registerWorktreeReflinkIpc(): void {
@@ -46,7 +51,12 @@ export function registerWorktreeReflinkIpc(): void {
     ): Promise<ReadWorktreeReflinkCapabilitiesResponse> => {
       const target = await resolveTarget(event?.sender, request);
       if ("reason" in target) return { status: "unavailable", reason: target.reason };
-      return { status: "ready", ...(await getWorktreeReflinkService().readCapabilities(target.cwd)) };
+      // What Git can do is the same in any of the thread's repositories, so
+      // a target that is hibernated or gone does not hide the answer.
+      const { answered, ...runtime } = await getWorktreeReflinkService()
+        .readCapabilities([target.cwd, ...target.others]);
+      // "Cannot share" is a fact about a Git. Without an answer there is none.
+      return answered ? { status: "ready", ...runtime } : { status: "unavailable", reason: UNANSWERED_REASON };
     },
   );
   ipcMain.handle(
@@ -60,6 +70,7 @@ export function registerWorktreeReflinkIpc(): void {
         // Only the literal `true` opts in; anything else from the renderer is "no".
         verifyFilters: request.verifyFilters === true,
         runtimeKey: typeof request.runtimeKey === "string" ? request.runtimeKey : "",
+        isBusy: () => getDesktopBackendRegistry().workspaceHasActiveTurn(target.cwd),
       });
     },
   );

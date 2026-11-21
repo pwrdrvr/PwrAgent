@@ -895,7 +895,6 @@ import {
   isLikelyToolManagedWorktreePath,
   linkedDirectoryWorktreePath,
   normalizeLinkedDirectoryKind,
-  normalizeLinkedDirectoryPathForMatch,
   pendingStartedThreadMatchesFilter,
   pendingStartedThreadWorkspaceMatches,
   readCurrentGitBranch,
@@ -906,6 +905,7 @@ import {
   retainPendingStartedThreadWorkspace,
   toForwardSlashes,
 } from "./linked-directory-identity";
+import { matchThreadWorkspacePath, threadWorkspacePaths } from "./thread-workspace-paths";
 import { scheduledActionIdFromTurnQueueEntry } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import {
   QUIET_RESTART_STEER_TEXT,
@@ -6743,6 +6743,86 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * A renderer-supplied path matched against the directories the thread works
+   * in. The answer is the thread's own spelling of the path, with the rest of
+   * its workspaces. Archived threads are found only on request: reading a
+   * retained archived checkout is fine, changing one is not.
+   */
+  private async resolveThreadWorkspace(params: {
+    backend?: AppServerBackendKind;
+    includeArchived: boolean;
+    threadId: string;
+    worktreePath: string;
+  }) {
+    const threadId = params.threadId.trim();
+    if (!threadId) return undefined;
+    let thread = await this.resolveThread({
+      backend: params.backend,
+      threadId,
+    });
+    // Resolve the archive explicitly, independent of which thread list
+    // warmed the cache.
+    if (!thread && params.includeArchived) {
+      thread = (await this.listThreads({
+        backend: params.backend, archived: true, enrichDirectories: false,
+        forceRefresh: true, callerReason: "thread-id-lookup",
+      })).find((candidate) => candidate.id === threadId);
+    }
+    if (!thread || (!params.includeArchived && thread.archivedAt !== undefined)) {
+      return undefined;
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: thread.source,
+      threadId: thread.id,
+    });
+    const workspacePaths = threadWorkspacePaths(thread, overlay?.extraLinkedDirectories);
+    const worktreePath = matchThreadWorkspacePath(workspacePaths, params.worktreePath);
+    return worktreePath ? { thread, overlay, worktreePath, workspacePaths } : undefined;
+  }
+
+  /**
+   * The same check for an operation that changes files in the directory, such
+   * as sharing a worktree's storage. It reads no pull requests, and an
+   * archived thread's retained checkout does not qualify.
+   */
+  async resolveThreadLinkedWorkspace(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+    worktreePath: string;
+  }): Promise<{ worktreePath: string; workspacePaths: string[] } | undefined> {
+    const resolved = await this.resolveThreadWorkspace({ ...params, includeArchived: false });
+    return resolved && { worktreePath: resolved.worktreePath, workspacePaths: resolved.workspacePaths };
+  }
+
+  /**
+   * Whether any thread on this machine that works in `worktreePath` has a
+   * turn, a reserved turn start, or a review running, or work that outlives
+   * a turn: a Codex background terminal, live tool call or sub-agent, or a
+   * Claude background task. Threads can share a worktree, so the thread
+   * that asks is not the only possible writer.
+   */
+  async workspaceHasActiveTurn(worktreePath: string): Promise<boolean> {
+    const threads = await this.listThreads({
+      archived: false, enrichDirectories: false, callerReason: "workspace-active-turn",
+    });
+    const claudeTaskOwners = new Set(this.claudeBackend.backgroundTaskThreadIds());
+    for (const thread of threads) {
+      // Few threads run at once, so only those pay for an overlay read.
+      const working = this.threadHasActiveTurn(thread.id, thread.source)
+        || (thread.source === "codex" && this.codexRuntimeSupervisor.codexThreadBoundToAppServer(thread.id))
+        || (thread.source === "claude" && claudeTaskOwners.has(thread.id));
+      if (!working) continue;
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      const paths = threadWorkspacePaths(thread, overlay?.extraLinkedDirectories);
+      if (matchThreadWorkspacePath(paths, worktreePath)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Resolve a renderer-supplied worktree path against the owning thread before
    * a federated peer can read commit metadata from it. The peer supplies the
    * path it rendered, but this instance remains authoritative for both the
@@ -6756,51 +6836,10 @@ export class DesktopBackendRegistry {
     acceptedPushedCommitShas: string[];
     worktreePath: string;
   } | undefined> {
-    const threadId = params.threadId.trim();
-    if (!threadId) return undefined;
-    let thread = await this.resolveThread({
-      backend: params.backend,
-      threadId,
-    });
-    // Read-only Git access includes retained archived checkouts. Resolve the
-    // archive explicitly, independent of which thread list warmed the cache.
-    if (!thread) {
-      thread = (await this.listThreads({
-        backend: params.backend, archived: true, enrichDirectories: false,
-        forceRefresh: true, callerReason: "thread-id-lookup",
-      })).find((candidate) => candidate.id === threadId);
-    }
-    if (!thread) {
-      return undefined;
-    }
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: thread.source,
-      threadId: thread.id,
-    });
-    const candidatePaths = new Set<string>();
-    if (thread.projectKey?.trim()) {
-      candidatePaths.add(thread.projectKey.trim());
-    }
-    for (const directory of [
-      ...thread.linkedDirectories,
-      ...(overlay?.extraLinkedDirectories ?? []),
-    ]) {
-      const workspacePath = directory.worktreePath?.trim()
-        || (directory.kind === "local" ? directory.path.trim() : "");
-      if (workspacePath) {
-        candidatePaths.add(workspacePath);
-      }
-    }
-    const requestedPath = normalizeLinkedDirectoryPathForMatch(
-      params.worktreePath,
-    );
-    const matchedPath = [...candidatePaths].find(
-      (candidate) =>
-        normalizeLinkedDirectoryPathForMatch(candidate) === requestedPath,
-    );
-    if (!requestedPath || !matchedPath) {
-      return undefined;
-    }
+    // Read-only Git access includes retained archived checkouts.
+    const resolved = await this.resolveThreadWorkspace({ ...params, includeArchived: true });
+    if (!resolved) return undefined;
+    const { thread, overlay, worktreePath: matchedPath } = resolved;
     const storedPrs = [
       ...(overlay?.prs ?? []),
       ...(overlay?.detachedPrs ?? []),

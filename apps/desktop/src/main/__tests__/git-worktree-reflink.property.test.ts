@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  WORKTREE_BUSY_UNKNOWN_REASON,
+  WORKTREE_TURN_RUNNING_REASON,
   WorktreeReflinkOutputReader,
   WorktreeReflinkService,
   planWorktreeReflink,
@@ -17,6 +19,8 @@ import {
   type FakeGitVersion,
 } from "./worktree-reflink-fixtures";
 
+/** No turn is running in the worktree. */
+const idle = async (): Promise<boolean> => false;
 const capabilitiesArbitrary = fc.record({ reflink: fc.boolean(), verifyFilters: fc.boolean() });
 const modeArbitrary = fc.constantFrom("estimate" as const, "share" as const);
 const verifyArbitrary = fc.constantFrom(true, false, undefined);
@@ -182,6 +186,7 @@ describe("WorktreeReflinkService", () => {
           }
           const before = runs.length;
           const response = await service.run({
+            isBusy: idle,
             cwd: "/repo",
             mode: step.mode,
             verifyFilters: step.verifyFilters,
@@ -227,7 +232,7 @@ describe("WorktreeReflinkService", () => {
     expect(shown.capabilities).toEqual({ reflink: true, verifyFilters: true });
 
     state.selected = "pwrgit.1";
-    const refused = await service.run({ cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
+    const refused = await service.run({ isBusy: idle, cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
     expect(refused).toMatchObject({
       status: "runtime-changed",
       capabilities: { reflink: true, verifyFilters: false },
@@ -235,12 +240,12 @@ describe("WorktreeReflinkService", () => {
     expect(runs).toHaveLength(0);
 
     // Even when the window claims the .1 runtime, .1 is never asked to verify.
-    const forced = await service.run({ cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: "pwrgit.1" });
+    const forced = await service.run({ isBusy: idle, cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: "pwrgit.1" });
     expect(forced.status).toBe("failed");
     expect(runs).toHaveLength(0);
 
     state.selected = "pwrgit.2";
-    const ran = await service.run({ cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
+    const ran = await service.run({ isBusy: idle, cwd: "/repo", mode: "share", verifyFilters: true, runtimeKey: shown.runtimeKey });
     expect(ran).toMatchObject({ status: "completed", verifiedFilters: true });
     expect(runs).toEqual([
       { version: "pwrgit.2", args: ["worktree", "reflink", "--porcelain", "-z", "--verify-filters"] },
@@ -250,17 +255,17 @@ describe("WorktreeReflinkService", () => {
   it("keeps the summary Git printed before it exited non-zero, and reports Git's own complaint otherwise", async () => {
     const identity: Identity = { key: "k", executable: "/git", version: "pwrgit.2" };
     const failing = (stdout: string, error: object) => new WorktreeReflinkService<Identity>({
-      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"] }) },
+      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"], answered: true }) },
       run: async (_identity, _cwd, _args, onStdout) => {
         onStdout(stdout);
         throw Object.assign(new Error("Git exited with code 1."), error);
       },
     });
     await expect(failing(PWRGIT_2_DRY_RUN_PORCELAIN, { exitCode: 1, stderr: "" })
-      .run({ cwd: "/repo", mode: "share", runtimeKey: "k" }))
+      .run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" }))
       .resolves.toMatchObject({ status: "completed", summary: { scanned: 2, skipped: 2 } });
     await expect(failing("", { exitCode: 128, stderr: "fatal: reflink requires an existing non-bare worktree\n" })
-      .run({ cwd: "/repo", mode: "share", runtimeKey: "k" }))
+      .run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" }))
       .resolves.toEqual({ status: "failed", reason: "reflink requires an existing non-bare worktree" });
   });
 
@@ -268,22 +273,99 @@ describe("WorktreeReflinkService", () => {
     const identity: Identity = { key: "k", executable: "/git", version: "pwrgit.2" };
     let release: (() => void) | undefined;
     const service = new WorktreeReflinkService<Identity>({
-      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"] }) },
+      probe: { read: async () => ({ identity, capabilities: FAKE_GIT_TRUTH["pwrgit.2"], answered: true }) },
       run: async (_identity, _cwd, _args, onStdout) => {
         await new Promise<void>((resolve) => { release = resolve; });
         onStdout(PWRGIT_2_DRY_RUN_PORCELAIN);
       },
     });
-    const first = service.run({ cwd: "/repo", mode: "share", runtimeKey: "k" });
+    const first = service.run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" });
     await expect.poll(() => release).toBeDefined();
-    await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey: "k" }))
+    await expect(service.run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" }))
       .resolves.toMatchObject({ status: "failed" });
     release!();
     await expect(first).resolves.toMatchObject({ status: "completed" });
     release = undefined;
-    const again = service.run({ cwd: "/repo", mode: "share", runtimeKey: "k" });
+    const again = service.run({ isBusy: idle, cwd: "/repo", mode: "share", runtimeKey: "k" });
     await expect.poll(() => release).toBeDefined();
     release!();
     await expect(again).resolves.toMatchObject({ status: "completed" });
+  });
+
+  // A share replaces files. A turn in the worktree, in any thread, is writing
+  // them. The model: the worktree is busy or not at each request, and the
+  // oracle is that Git is launched for a share only when it was not.
+  it("never starts a share while a turn runs in the worktree, and never lets a turn stop an estimate", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({ mode: modeArbitrary, busy: fc.boolean() }), { minLength: 1, maxLength: 20 }),
+      async (requests) => {
+        const { runs, service } = harness("pwrgit.2");
+        const runtimeKey = (await service.readCapabilities("/repo")).runtimeKey;
+        for (const request of requests) {
+          const before = runs.length;
+          const response = await service.run({
+            cwd: "/repo",
+            mode: request.mode,
+            runtimeKey,
+            isBusy: async () => request.busy,
+          });
+          if (request.mode === "share" && request.busy) {
+            expect(response).toEqual({ status: "failed", reason: WORKTREE_TURN_RUNNING_REASON });
+            expect(runs).toHaveLength(before);
+          } else {
+            // A refused share leaves nothing claimed: the next request runs.
+            expect(response.status).toBe("completed");
+            expect(runs).toHaveLength(before + 1);
+            expect(runs[before].args.includes("--dry-run")).toBe(request.mode === "estimate");
+          }
+        }
+      },
+    ));
+  });
+
+  it("does not ask whether the worktree is busy for a share Git would not run", async () => {
+    const { state, service } = harness("pwrgit.2");
+    const runtimeKey = (await service.readCapabilities("/repo")).runtimeKey;
+    state.selected = "pwrgit.1";
+    let asked = 0;
+    const isBusy = async () => { asked += 1; return true; };
+    await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey, isBusy }))
+      .resolves.toMatchObject({ status: "runtime-changed" });
+    expect(asked).toBe(0);
+  });
+
+  it("does not share when it cannot learn whether the worktree is busy, and still estimates", async () => {
+    const { runs, service } = harness("pwrgit.2");
+    const runtimeKey = (await service.readCapabilities("/repo")).runtimeKey;
+    const isBusy = async (): Promise<boolean> => { throw new Error("backend unavailable"); };
+    await expect(service.run({ cwd: "/repo", mode: "share", runtimeKey, isBusy }))
+      .resolves.toEqual({ status: "failed", reason: WORKTREE_BUSY_UNKNOWN_REASON });
+    expect(runs).toHaveLength(0);
+    await expect(service.run({ cwd: "/repo", mode: "estimate", runtimeKey, isBusy }))
+      .resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("names the Git, not the worktree, when the selected Git cannot be resolved", async () => {
+    const service = new WorktreeReflinkService<Identity>({
+      probe: new WorktreeReflinkCapabilityProbe<Identity>({
+        identify: async () => ({ key: "k", version: "pwrgit.2" }),
+        readHelp: async () => { throw new Error("must not run"); },
+      }),
+      run: async () => { throw new Error("must not run"); },
+    });
+    await expect(service.run({ isBusy: idle, cwd: "/repo", mode: "estimate", runtimeKey: "k" }))
+      .resolves.toEqual({ status: "failed", reason: "The selected Git is unavailable." });
+  });
+
+  it("says Git could not be run, rather than that it cannot share, when the worktree gives no usage", async () => {
+    const service = new WorktreeReflinkService<Identity>({
+      probe: new WorktreeReflinkCapabilityProbe<Identity>({
+        identify: async () => ({ key: "k", executable: "/git", version: "pwrgit.2" }),
+        readHelp: async () => "fatal: not a git repository (or any of the parent directories): .git\n",
+      }),
+      run: async () => { throw new Error("must not run"); },
+    });
+    await expect(service.run({ isBusy: idle, cwd: "/gone", mode: "estimate", runtimeKey: "k" }))
+      .resolves.toEqual({ status: "failed", reason: "The selected Git could not be run in this worktree." });
   });
 });

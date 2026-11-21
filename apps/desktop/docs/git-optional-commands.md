@@ -23,6 +23,11 @@ selected Git's own help for it inside a repository and read the option rows.
 - **Run it inside a repository.** Outside one, Git prints
   `fatal: not a git repository` and no usage. That is not an answer about the
   Git, so it is not remembered.
+- **Any repository will do.** The answer describes the Git, so the probe
+  takes a short list of directories and asks in each until one prints a
+  usage. A thread's first worktree being hibernated or deleted must not hide
+  the command for its others. A run still happens only in its own target, and
+  fails with "could not be run" when that target gives no usage.
 
 ### Whose answer it is
 
@@ -56,7 +61,28 @@ different identity, so no caller has to remember to invalidate.
 - Asking a Git without the option to verify is refused. It is never run
   unverified instead.
 
+### Where it may run
+
+Sharing replaces files, so the main process decides where, not the renderer.
+
+- The directory is the thread's own record of it
+  (`BackendRegistry.resolveThreadLinkedWorkspace`): a path linked to a thread
+  on this machine that is not archived. An archived thread's retained
+  checkout can be read, not changed. This check reads no pull requests.
+- A share does not start while a turn, a reserved turn start, a review, or
+  work that outlives a turn (a Codex background terminal, live tool call or
+  sub-agent, or a Claude background task) is running in that worktree in
+  **any** local thread
+  (`BackendRegistry.workspaceHasActiveTurn`). Threads can share a worktree,
+  so the dialog's own thread being idle is not enough. An estimate changes
+  nothing and always runs.
+
+The Share storage dialog is audited by `e2e/a11y.spec.ts` against a stand-in
+Git selected with `PWRAGENT_GIT_PATH`
+(`e2e/fixtures/worktree-storage-seeding.ts`), so its states do not depend on
+the runner's filesystem.
+
 `planWorktreeReflink` (`src/main/git-worktree-reflink.ts`) is the one place
-these rules are applied. Its property tests, the probe's scheduler model, and
+the filter rules are applied. Its property tests, the probe's scheduler model, and
 the session reducer's model switch between `.1` and `.2` and deliver late
 answers on purpose; keep them when adding the next optional command.

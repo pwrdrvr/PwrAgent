@@ -59,6 +59,12 @@ export type GitRuntimeIdentity = {
 export type WorktreeReflinkProbeResult<Identity extends GitRuntimeIdentity = GitRuntimeIdentity> = {
   identity: Identity;
   capabilities: WorktreeReflinkCapabilities;
+  /**
+   * False when no directory gave a usage, or the selection never settled.
+   * `capabilities` is then "none", which is safe to act on but is not a fact
+   * about the Git.
+   */
+  answered: boolean;
 };
 
 export type WorktreeReflinkProbeDependencies<Identity extends GitRuntimeIdentity> = {
@@ -73,6 +79,8 @@ export type WorktreeReflinkProbeDependencies<Identity extends GitRuntimeIdentity
 
 /** Selection changes under a probe are rare; this only bounds a pathological loop. */
 const MAX_PROBE_ATTEMPTS = 4;
+/** Each unreadable directory costs one Git launch. */
+const MAX_PROBE_DIRECTORIES = 4;
 
 /**
  * Capabilities of the selected Git, probed once per Git.
@@ -96,37 +104,59 @@ export class WorktreeReflinkCapabilityProbe<Identity extends GitRuntimeIdentity 
     this.epoch += 1;
   }
 
-  async read(cwd: string): Promise<WorktreeReflinkProbeResult<Identity>> {
+  /**
+   * `directories` are tried in order until Git prints a usage in one. The
+   * answer describes the Git, not the directory, so any repository will do:
+   * a thread's first worktree may be hibernated or deleted while its others
+   * are fine.
+   */
+  async read(directories: string | readonly string[]): Promise<WorktreeReflinkProbeResult<Identity>> {
+    const cwds = (typeof directories === "string" ? [directories] : directories)
+      .slice(0, MAX_PROBE_DIRECTORIES);
     let identity = await this.dependencies.identify();
     for (let attempt = 0; attempt < MAX_PROBE_ATTEMPTS; attempt += 1) {
       // The capabilities are this Git's for good. The identity is the one just
       // read: it carries the environment to run with now, not the one the
       // probe ran with.
       if (this.cached?.identity.key === identity.key) {
-        return { identity, capabilities: this.cached.capabilities };
+        return { identity, capabilities: this.cached.capabilities, answered: true };
       }
       const epoch = this.epoch;
-      let capabilities: WorktreeReflinkCapabilities;
-      try {
-        if (!identity.executable) throw new Error("The selected Git is unavailable.");
-        const help = await this.dependencies.readHelp(identity, cwd);
-        // Outside a repository Git prints `fatal: not a git repository` and
-        // no usage at all. That says nothing about what this Git can do.
-        if (!isGitUsage(help)) throw new Error("Git printed no usage.");
-        capabilities = parseWorktreeReflinkHelp(help);
-      } catch {
-        // Nothing to offer, and nothing learned about this Git: a timeout or
-        // a directory that stopped being a repository must not be remembered.
-        return { identity, capabilities: NO_WORKTREE_REFLINK_CAPABILITIES };
-      }
+      const capabilities = await this.readFirstUsage(identity, cwds);
+      // Nothing to offer, and nothing learned about this Git: a timeout or
+      // a directory that stopped being a repository must not be remembered.
+      if (!capabilities) return unanswered(identity);
       const current = await this.dependencies.identify();
       if (current.key === identity.key && epoch === this.epoch) {
-        const result = { identity, capabilities };
-        this.cached = result;
-        return result;
+        this.cached = { identity, capabilities, answered: true };
+        return this.cached;
       }
       identity = current;
     }
-    return { identity, capabilities: NO_WORKTREE_REFLINK_CAPABILITIES };
+    return unanswered(identity);
   }
+
+  private async readFirstUsage(
+    identity: Identity,
+    cwds: readonly string[],
+  ): Promise<WorktreeReflinkCapabilities | undefined> {
+    if (!identity.executable) return undefined;
+    for (const cwd of cwds) {
+      let help: string;
+      try {
+        help = await this.dependencies.readHelp(identity, cwd);
+      } catch {
+        // Git did not run or was stopped. Another directory will not change that.
+        return undefined;
+      }
+      // Outside a repository Git prints `fatal: not a git repository` and
+      // no usage at all. That says nothing about what this Git can do.
+      if (isGitUsage(help)) return parseWorktreeReflinkHelp(help);
+    }
+    return undefined;
+  }
+}
+
+function unanswered<Identity extends GitRuntimeIdentity>(identity: Identity): WorktreeReflinkProbeResult<Identity> {
+  return { identity, capabilities: NO_WORKTREE_REFLINK_CAPABILITIES, answered: false };
 }
