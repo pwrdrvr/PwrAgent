@@ -259,7 +259,8 @@ type OwnerModel = { id?: string; updatedAt: number[]; fails: boolean };
 it("paints each /resume action once with every owner's rows, whatever order owners answer in", async () => {
   const ownerArbitrary = (id: string | undefined) => fc.record({
     id: fc.constant(id),
-    updatedAt: fc.uniqueArray(fc.integer({ min: 1, max: 1_000_000 }), { maxLength: 25 }),
+    // Large enough that four owners can exceed the pool's eight retained pages.
+    updatedAt: fc.uniqueArray(fc.integer({ min: 1, max: 1_000_000 }), { maxLength: 30, size: "max" }),
     fails: id ? fc.boolean() : fc.constant(false),
   });
   await fc.assert(fc.asyncProperty(
@@ -269,7 +270,8 @@ it("paints each /resume action once with every owner's rows, whatever order owne
     )),
     fc.infiniteStream(fc.nat()),
     fc.array(fc.nat(), { maxLength: 4 }),
-    async (models: OwnerModel[], releaseOrder, revisits) => {
+    fc.boolean(),
+    async (models: OwnerModel[], releaseOrder, revisits, projects) => {
       // Timestamps are unique across owners so the merged order is total.
       const seen = new Set<number>();
       for (const model of models) model.updatedAt = model.updatedAt.filter((value) => !seen.has(value) && seen.add(value));
@@ -290,7 +292,9 @@ it("paints each /resume action once with every owner's rows, whatever order owne
         await new Promise<void>((resolve) => gates.push(resolve));
         if (model.fails) throw new Error("Peer unreachable.");
         return stores.get(ownerId)!.readPage({ scopeKey: ownerId ?? "local", request, loadIndex: async () => ({
-          directories: [],
+          directories: model.updatedAt.length ? [{ key: `${ownerId ?? "local"}-repo`, kind: "directory" as const,
+            label: `${ownerId ?? "local"} repo`, needsAttentionCount: 0,
+            threadKeys: model.updatedAt.map((updatedAt) => `codex:${ownerId ?? "local"}-${updatedAt}`) }] : [],
           threads: model.updatedAt.map((updatedAt) => ({ id: `${ownerId ?? "local"}-${updatedAt}`, source: "codex" as const,
             title: `Thread ${updatedAt}`, titleSource: "explicit" as const, updatedAt, linkedDirectories: [], inbox: { inInbox: false } })),
         }) });
@@ -327,14 +331,29 @@ it("paints each /resume action once with every owner's rows, whatever order owne
         return pageSize;
       };
 
+      if (projects) {
+        await settle(f.owner.presentResumeBrowser({ ...command("resume"), args: ["--projects"] }));
+        expect(f.intents).toHaveLength(1);
+        const intent = f.intents[0];
+        if (intent?.kind !== "project_picker") throw new Error(`Expected a project picker, received ${intent?.kind}`);
+        expect(intent.prompt).not.toContain("Still checking");
+        const owners = intent.page.actions.filter((action) => action.id === "browse:select-project")
+          .map((action) => (action.value as { federationInstanceId?: string }).federationInstanceId);
+        expect(new Set(owners)).toEqual(new Set(models.filter((model) => !model.fails && model.updatedAt.length)
+          .map((model) => model.id).slice(0, intent.page.pageSize)));
+        return;
+      }
       await settle(f.owner.presentResumeBrowser(command("resume")));
       expect(f.intents).toHaveLength(1);
       const pageSize = expectPaint(0);
       const pages = Math.max(1, Math.ceil(expected.length / pageSize));
 
-      // Page forward through everything, then revisit loaded pages.
+      // Page forward through everything, then revisit pages the pool still
+      // retains: it keeps the eight most recently loaded pages and restarts
+      // from page one for an evicted page, by design.
+      const retained = Math.min(pages, 8);
       const visits = [...Array.from({ length: pages - 1 }, (_unused, index) => index + 1),
-        ...revisits.map((value) => value % pages)];
+        ...revisits.map((value) => pages - retained + (value % retained))];
       let loadedThrough = 0;
       for (const pageIndex of visits) {
         const paints = f.intents.length;
