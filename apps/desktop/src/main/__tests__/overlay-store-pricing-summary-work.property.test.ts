@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -164,7 +165,8 @@ it("keeps checkpoints equal to the ledger through replay, regrouping, and repric
   }), { numRuns: 25 });
 });
 
-it("upgrades existing totals lazily and keeps peer writes and rollbacks in the ledger commit", async () => {
+const pricingDeltaVersion = 85;
+it.each([82, 83, 84, pricingDeltaVersion, CURRENT_STATE_DB_USER_VERSION + 1])("upgrades pricing from a v%i profile and keeps peer writes and rollbacks in the ledger commit", async (version) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const temp = createTempStateDb("pwragent-pricing-summary-");
   let db: StateDb | undefined;
@@ -175,26 +177,75 @@ it("upgrades existing totals lazily and keeps peer writes and rollbacks in the l
       usageLine("legacy-root"),
       usageLine("legacy-child", { threadId: "legacy-child", parentThreadId: thread.threadId }),
     ] });
-    // Restore the v82 schema and emulate a ledger edit that v82's summaries
-    // did not capture. The upgrade must not treat its old total as a baseline.
+    const readUsageIndexes = (state: StateDb) => state.raw.prepare(
+      `SELECT name, sql FROM sqlite_schema
+       WHERE type = 'index' AND tbl_name IN ('thread_usage_lines', 'thread_usage_turns')
+       ORDER BY name`,
+    ).all();
+    const expectedIndexes = readUsageIndexes(db);
+    // Rewind the indexes the two upstream migrations replaced.
+    if (version < 84) {
+      db.raw.exec(`
+        DROP INDEX idx_thread_usage_lines_completion_turn;
+        DROP INDEX idx_thread_usage_turns_turn;
+        DROP INDEX idx_thread_usage_lines_read_parent;
+        CREATE INDEX idx_thread_usage_turns_turn
+          ON thread_usage_turns(provider, backend, thread_id, turn_id);
+        CREATE INDEX idx_thread_usage_lines_read_parent
+          ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+          WHERE status != 'superseded';
+      `);
+    }
+    if (version < 83) {
+      db.raw.exec(`
+        DROP INDEX idx_thread_usage_lines_gate_child_source;
+        DROP INDEX idx_thread_usage_lines_gate_usage_turn;
+        DROP INDEX idx_thread_usage_lines_source;
+        DROP INDEX idx_thread_usage_lines_turn;
+        CREATE INDEX idx_thread_usage_lines_turn
+          ON thread_usage_lines(provider, backend, thread_id, turn_id);
+        CREATE INDEX idx_thread_usage_lines_source
+          ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
+      `);
+    }
+    // Emulate a ledger edit that summaries from builds without deltas did not capture.
     db.raw.exec(`
       DROP TRIGGER thread_pricing_summary_delta_insert;
       DROP TRIGGER thread_pricing_summary_delta_update;
       DROP TRIGGER thread_pricing_summary_delta_delete;
       ALTER TABLE thread_pricing_summaries DROP COLUMN ledger_delta_ready;
       UPDATE thread_usage_lines SET input_tokens = 100 WHERE usage_line_id = 'legacy-child';
-      PRAGMA user_version = 82;
     `);
+    db.raw.pragma(`user_version = ${version}`);
+    const readLedger = (state: StateDb) => ({
+      lines: state.raw.prepare("SELECT * FROM thread_usage_lines ORDER BY usage_line_id").all(),
+      turns: state.raw.prepare("SELECT * FROM thread_usage_turns ORDER BY usage_turn_id").all(),
+    });
+    const existingLedger = readLedger(db);
     db.close();
     db = StateDb.open(temp.dbPath);
+    expect(readUsageIndexes(db)).toEqual(expectedIndexes);
+    expect(readLedger(db)).toEqual(existingLedger);
+    const migrationWal = readFileSync(`${temp.dbPath}-wal`);
+    const frameSize = migrationWal.readUInt32BE(8) + 24;
+    let migrationCommits = 0;
+    for (let offset = 32; offset < migrationWal.length; offset += frameSize) {
+      if (migrationWal.readUInt32BE(offset + 4) !== 0) migrationCommits++;
+    }
+    // Each numbered upgrade commits once. A profile stamped v85 or higher
+    // without the pricing schema also needs the pricing delta transaction.
+    const pendingMigrations = Math.max(0, CURRENT_STATE_DB_USER_VERSION - version);
+    const missingPricingMigration = version >= pricingDeltaVersion ? 1 : 0;
+    expect(migrationCommits).toBe(pendingMigrations + missingPricingMigration);
     const store = new SqliteOverlayStore(db);
-    expect(db.raw.prepare("SELECT ledger_delta_ready FROM thread_pricing_summaries").get())
-      .toEqual({ ledger_delta_ready: 0 });
     await appendAndCheck(store, db, "first-upgraded");
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, CURRENT_STATE_DB_USER_VERSION));
 
     // Alternating owners and a raw edit exercise the SQLite triggers on
     // independent connections. A trigger write counts in total_changes().
+    const versionBeforeReopen = db.raw.pragma("data_version", { simple: true });
     peer = StateDb.open(temp.dbPath);
+    expect(db.raw.pragma("data_version", { simple: true })).toBe(versionBeforeReopen);
     const peerStore = new SqliteOverlayStore(peer);
     const writers = [{ store, db }, { store: peerStore, db: peer }];
     const totalChanges = () => writers.reduce((sum, writer) =>

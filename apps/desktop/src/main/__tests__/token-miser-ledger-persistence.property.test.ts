@@ -448,12 +448,16 @@ describe("Token Miser ledger SQLite commit budgets", () => {
     try {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: 24 }, (_, index) => line(index, { model: "unknown-fixture" })) });
       db.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5'").run();
+      const totalChanges = db.raw.prepare<[], number>("SELECT total_changes()").pluck();
       for (const scenario of ["repair", "repeat"] as const) {
+        const before = totalChanges.get()!;
         const { writes } = await measureSqliteWrites(async () => {
           await store.readTokenMiserGatePricingLines({
             backend: "codex", threadId: THREAD, sourceItemIds: [], turnIds: ["turn-23"],
           });
         });
+        // The repair changes 24 ledger lines and applies 24 summary deltas.
+        expect(totalChanges.get()! - before).toBe(scenario === "repair" ? 48 : 0);
         expectSqliteWriteBudget({
           scenario: `token-miser-pricing-${scenario}`, writes,
           note: "Targeted gate pricing with 24 legacy repairable rows, or an identical repeat; setup excluded.",

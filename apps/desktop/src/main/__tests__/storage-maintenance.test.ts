@@ -213,6 +213,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The three pricing summary read indexes add three VACUUM frames.
     // The v83 gate pricing indexes add two VACUUM pages, with the same commit count.
     // v84's partial completion index adds one VACUUM page without adding a commit.
+    // The v85 pricing summary triggers add two VACUUM frames on the combined fixture.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

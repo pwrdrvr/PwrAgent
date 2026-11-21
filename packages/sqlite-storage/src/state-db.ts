@@ -2242,13 +2242,19 @@ export class StateDb {
           db.pragma("user_version = 84");
         }).immediate();
       }
-      if ((db.pragma("user_version", { simple: true }) as number) < 85) {
+      // Other builds may already have stamped v85. The column and its three
+      // triggers are installed atomically, so the column identifies this migration.
+      const pricingSummaryColumns = readTableInfo(db, "thread_pricing_summaries");
+      const pricingDeltasMissing = pricingSummaryColumns.length > 0
+        && !pricingSummaryColumns.some((column) => column.name === "ledger_delta_ready");
+      if ((db.pragma("user_version", { simple: true }) as number) < 85 || pricingDeltasMissing) {
         db.transaction(() => {
-          if ((db.pragma("user_version", { simple: true }) as number) >= 85) return;
           // Install capture only. Legacy summaries become delta-ready from
           // the existing scoped summary read, inside a normal ledger write.
           ensureThreadPricingSummaryDeltas(db);
-          db.pragma("user_version = 85");
+          if ((db.pragma("user_version", { simple: true }) as number) < 85) {
+            db.pragma("user_version = 85");
+          }
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
