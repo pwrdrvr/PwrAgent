@@ -4225,9 +4225,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
                 final_context_tokens,
                 peak_context_tokens,
                 model_context_window
-           FROM thread_usage_turns
-          WHERE usage_turn_id IN (SELECT value FROM json_each(?))
-            AND backend = ?
+           FROM json_each(?) AS requested
+          CROSS JOIN thread_usage_turns AS turn ON turn.usage_turn_id = requested.value
+          WHERE backend = ?
             AND (thread_id = ? OR parent_thread_id = ?)`,
       )
       .all(JSON.stringify([...usageTurnIds]), backend, threadId, threadId) as UsageTurnMetadataRow[];
@@ -4239,8 +4239,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * gate as their source item, and this thread's own rows for a gate's turn.
    * Those are the only rows `indexTokenMiserPricingLines` lookups return, so
    * this gives them the whole-ledger read's rows, order, turn metadata, and
-   * repricing without materializing every line of a long thread. SQLite still
-   * filters the thread's index range; only matches become records.
+   * repricing. Seek each key within the family, then deduplicate rowids before
+   * loading and sorting the matching lines.
    */
   async readTokenMiserGatePricingLines(params: {
     backend: ThreadOverlayState["backend"];
@@ -4251,44 +4251,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (params.sourceItemIds.length === 0 && params.turnIds.length === 0) {
       return [];
     }
-    const sourceItemIds = JSON.stringify(params.sourceItemIds);
-    const turnIds = JSON.stringify(params.turnIds);
+    const keys = {
+      backend: params.backend,
+      threadId: params.threadId,
+      sourceItemIds: JSON.stringify(params.sourceItemIds),
+      turnIds: JSON.stringify(params.turnIds),
+    };
     const readMatches = () => this.stateDb.raw
       .prepare(
-        `SELECT *
-         FROM (
-           SELECT *
-           FROM thread_usage_lines
-           WHERE backend = ?
-             AND status != 'superseded'
-             AND thread_id = ?
-             AND (
-               source_item_id IN (SELECT value FROM json_each(?))
-               OR turn_id IN (SELECT value FROM json_each(?))
-               OR usage_turn_id IN (SELECT value FROM json_each(?))
-             )
-           UNION ALL
-           SELECT *
-           FROM thread_usage_lines
-           WHERE backend = ?
-             AND status != 'superseded'
-             AND parent_thread_id = ?
-             AND thread_id != ?
-             AND source_item_id IN (SELECT value FROM json_each(?))
+        `WITH matches AS (
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_source
+           WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+             AND source_item_id IN (SELECT value FROM json_each(@sourceItemIds))
+           UNION
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_turn
+           WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+             AND turn_id IN (SELECT value FROM json_each(@turnIds))
+           UNION
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gate_usage_turn
+           WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+             AND usage_turn_id IN (SELECT value FROM json_each(@turnIds))
+           UNION
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gate_child_source
+           WHERE backend = @backend AND parent_thread_id = @threadId AND status != 'superseded'
+             AND thread_id != @threadId
+             AND source_item_id IN (SELECT value FROM json_each(@sourceItemIds))
          )
-         ORDER BY created_at DESC, usage_line_id DESC`,
+         SELECT line.*
+           FROM matches CROSS JOIN thread_usage_lines AS line ON line.rowid = matches.rowid
+          ORDER BY line.created_at DESC, line.usage_line_id DESC`,
       )
-      .all(
-        params.backend,
-        params.threadId,
-        sourceItemIds,
-        turnIds,
-        turnIds,
-        params.backend,
-        params.threadId,
-        params.threadId,
-        sourceItemIds,
-      ) as ThreadUsageLineRow[];
+      .all(keys) as ThreadUsageLineRow[];
     let lines = readMatches().map(threadUsageLineFromRow);
     // Preserve the whole-ledger read's retry barriers and fixed point. Just
     // repricing the matched rows would skip a newer no-progress batch and

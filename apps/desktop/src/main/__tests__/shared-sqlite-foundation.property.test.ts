@@ -12,13 +12,14 @@ import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sql
 const oraclePath = path.join(import.meta.dirname, "fixtures/shared-sqlite-schema-oracle.json");
 const hosts = [DesktopStateDb, SharedStateDb, StateDb];
 
-function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string; objects: number; userVersion: number } {
+function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersion: number } {
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
   // recovery guard, research, request-pricing, sub-agent dismissal,
-  // operator-request scope, and pricing summary index changes that followed it.
-  const compared = beforeAdditiveMigrations ? rows.filter(row =>
+  // operator-request scope, pricing summary, and gate pricing indexes that followed it.
+  // Restore the v80 SQL for the two indexes the gate pricing migration replaced.
+  const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_compaction_recovery_guards"
@@ -39,13 +40,37 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.name !== "idx_thread_pricing_summaries_thread"
     && row.name !== "idx_thread_usage_lines_assumed_thread"
     && row.name !== "idx_thread_usage_lines_assumed_parent"
-  ).map(row => row.name === "thread_usage_lines"
-    ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
-    : row) : rows;
+    && row.name !== "idx_thread_usage_lines_gate_child_source"
+    && row.name !== "idx_thread_usage_lines_gate_usage_turn"
+  ).map(row => {
+    switch (row.name) {
+      case "thread_usage_lines":
+        return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
+      case "idx_thread_usage_lines_turn":
+        return {
+          ...row,
+          sql: row.sql?.replace(
+            "ON thread_usage_lines(backend, thread_id, turn_id, provider)",
+            "ON thread_usage_lines(provider, backend, thread_id, turn_id)",
+          ),
+        };
+      case "idx_thread_usage_lines_source":
+        return {
+          ...row,
+          sql: row.sql?.replace(
+            "ON thread_usage_lines(backend, thread_id, source_item_id)\n"
+              + "  WHERE status != 'superseded' AND source_item_id IS NOT NULL",
+            "ON thread_usage_lines(provider, backend, thread_id, source, source_item_id)",
+          ),
+        };
+      default:
+        return row;
+    }
+  });
   return {
     sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
     objects: compared.length,
-    userVersion: beforeAdditiveMigrations ? 80 : db.raw.pragma("user_version", { simple: true }) as number,
+    userVersion: 80,
   };
 }
 
@@ -67,10 +92,10 @@ function schemaDefinition(db: StateDb): unknown {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("retains the exact pre-extraction SQLite schema beneath the additive migrations", () => {
+it("retains the exact pre-extraction SQLite schema beneath later migrations", () => {
   const db = openFreshStateDb(":memory:");
   try {
-    const actual = schema(db, true);
+    const actual = schemaAtV80(db);
     expect(db.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     if (process.env.UPDATE_SHARED_SQLITE_SCHEMA_ORACLE === "1") {
       writeFileSync(oraclePath, JSON.stringify(actual, null, 2) + "\n");

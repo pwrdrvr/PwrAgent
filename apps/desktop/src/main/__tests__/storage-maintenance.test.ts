@@ -211,6 +211,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The WITHOUT ROWID sub-agent dismissal table adds one VACUUM page.
     // The six operator-request scope indexes add six VACUUM frames.
     // The three pricing summary read indexes add three VACUUM frames.
+    // The v83 gate pricing indexes add two VACUUM pages, with the same commit count.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));
