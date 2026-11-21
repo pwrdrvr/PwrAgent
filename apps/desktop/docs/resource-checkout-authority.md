@@ -38,9 +38,10 @@ confirm that a recorded POSIX group is gone from the recovery dialog.
 Cleanup and administrative release recheck the proof. Administrative
 release includes the audit note in the action receipt.
 
-Roots still open independent stores. A production root outside the primary
-root needs shared-broker enrollment before it can publish or consume
-enforced physical capacity. See the recovery procedure below.
+Packaged owners admit machine jobs only through the primary root. Paths
+that resolve to the same root share its store. An alternate production
+root remains unresolved until shared-broker enrollment is available.
+Unpackaged test roots use isolated stores.
 
 ## Federation external domains
 
@@ -100,9 +101,11 @@ and the agent can end its turn. The local owner observes the persisted
 receipt after restart and submits a fresh promotion through the ordinary
 owner turn queue. Queue admission still honors thread ownership, project
 policy, thread locks, and the existing receipt for an uncertain dispatch.
-An unreachable authority does not trigger a continuation. If a checkout
-ends before admission, the continuation receives a failure notice. A queued
-wake rechecks the grant before it uses the resource. The bounded wait and
+An unreachable authority does not trigger a continuation. Automatic continuation requires a hold
+of at least five seconds. The owner reacts to checkout changes and checks
+pending receipts every 500 ms when a signal is unavailable. The turn
+queue rechecks the authority before delivering a wake. An expired or
+unverified grant yields a failure notice with the work plan removed. The bounded wait and
 status tools remain available for agents that stay in the current turn.
 
 Use `resource_checkout_handoff` to delegate execution of an idle grant to an
@@ -133,7 +136,9 @@ a current grant and a cost cap within the existing approval through
 `resource_checkout_execute`. The adapter admits no arbitrary provider
 commands. The owner acknowledges an admitted run after binding the job.
 Track the grant through the resource catalog. Release requests drain owned
-work. Recovery retries only cleanup for the exact persisted execution.
+work. Recovery acknowledges the job ID before cleanup and joins a retry
+to the same in-flight operation. The catalog reflects the final outcome
+after the controller verifies cleanup for the exact persisted execution.
 
 An approved control must fence operations at its execution boundary. It
 registers preparation and run commands before effects, enforces an

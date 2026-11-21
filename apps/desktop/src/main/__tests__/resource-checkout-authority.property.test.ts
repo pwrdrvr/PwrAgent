@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -10,6 +10,7 @@ import type { CheckoutActor, CheckoutDefinition } from "@pwragent/owner-core/res
 import type { ResourceCheckoutActionRequest } from "@pwragent/shared/contracts/resource-checkouts";
 import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
 import { createResourceCheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
+import { checkoutRootCanHostMachine } from "../resource-checkouts/checkout-runtime";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 import type { ExternalBinding } from "../resource-checkouts/checkout-configuration";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
@@ -55,6 +56,40 @@ function granted(authority: ResourceCheckoutAuthority, key: string): CheckoutTok
 }
 
 describe("the persisted resource checkout authority", () => {
+  it("keeps an unenrolled root unresolved and out of managed admission", async () => {
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "alternate", instanceLabel: "Alternate root", profile: "default", machineId: "host" },
+      bindings: [], requestPeer: async () => { throw new Error("No peers"); }, warn: () => {},
+    });
+    try {
+      const [machine] = service.read().resources;
+      expect(machine).toMatchObject({
+        condition: "ownership_unresolved", definition: { publication: "pending_registration" }, actions: {}, advertisements: [],
+      });
+      expect(() => service.admitMachineJob("setup", "Environment setup")).toThrow(/unavailable/);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("allows production roots only when they open the primary store", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-root-enrollment-"));
+    try {
+      const primary = path.join(root, "primary");
+      const alternate = path.join(root, "alternate");
+      const alias = path.join(root, "same-store");
+      mkdirSync(primary);
+      mkdirSync(alternate);
+      symlinkSync(primary, alias, process.platform === "win32" ? "junction" : "dir");
+      await expect(checkoutRootCanHostMachine(primary, primary, true)).resolves.toBe(true);
+      await expect(checkoutRootCanHostMachine(alias, primary, true)).resolves.toBe(true);
+      await expect(checkoutRootCanHostMachine(alternate, primary, true)).resolves.toBe(false);
+      await expect(checkoutRootCanHostMachine(alternate, primary, false)).resolves.toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["default", "dev"])("keeps unpublished drafts private to the %s instance", async (owner) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-draft-"));
     const services = ["default", "dev"].map((instanceId) => new DesktopResourceCheckoutService({

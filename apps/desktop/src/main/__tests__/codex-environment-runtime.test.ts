@@ -1453,19 +1453,25 @@ describe("codex environment runtime", () => {
     });
     checkoutAdmission.mockImplementation((...args: Parameters<typeof service.admitMachineJob>) => service.admitMachineJob(...args));
     const fixture = path.join(root, "setup.cjs");
+    const owner = { backend: "acp:registry.worker", threadId: "worker" } as const;
     try {
+      const [{ resourceId }] = service.read().resources;
+      const grant = await service.perform({
+        kind: "request", resourceId, idempotencyKey: "setup", purpose: "Retain this grant", expectedDurationMs: 60_000,
+      }, service.threadActor(owner.backend, owner.threadId));
+      expect(grant.outcome).toBe("granted");
       await writeFile(fixture, [
         'const { spawn } = require("node:child_process");',
         'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
         'child.once("spawn", () => { console.log("owned:" + child.pid); child.unref(); });',
       ].join("\n"));
       const result = await applyLocalCodexEnvironmentSelection({
-        cwd: root, env: { ...process.env, SHELL: resolveWindowsBashShell() },
+        cwd: root, owner,
         selection: {
           executionTarget: "local", runSetup: true,
           environment: {
-            id: "env", name: "Env", sourcePath: path.join(root, "environment.toml"), actions: [],
-            setupScript: `${JSON.stringify(process.execPath.replace(/\\/g, "/"))} ${JSON.stringify(fixture.replace(/\\/g, "/"))}`,
+            id: "env", name: "Env", shell: "powershell", sourcePath: path.join(root, "environment.toml"), actions: [],
+            setupScript: `& '${process.execPath.replace(/'/g, "''")}' '${fixture.replace(/'/g, "''")}'`,
           },
         },
       });
@@ -1473,7 +1479,7 @@ describe("codex environment runtime", () => {
       expect(child).not.toBeNull();
       expect(isProcessIdAlive(Number(child?.[1]))).toBe(false);
       expect(service.read().resources[0]).toMatchObject({
-        condition: "available", allocations: [], cleanup: { state: "verified" },
+        condition: "busy", allocations: [{ state: "granted", taskLabel: "Retain this grant" }], cleanup: { state: "verified" },
       });
     } finally {
       checkoutAdmission.mockReset();

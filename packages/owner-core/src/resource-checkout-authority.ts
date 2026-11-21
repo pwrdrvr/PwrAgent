@@ -4,6 +4,7 @@ import type {
   CheckoutStore, CheckoutWaiter,
 } from "./resource-checkout-storage";
 
+export const MIN_CHECKOUT_CONTINUATION_HOLD_MS = 5_000;
 export const MAX_CHECKOUT_RENEWALS = 1;
 const MAX_QUEUE_LENGTH = 100;
 export const MAX_CHECKOUT_HOLD_MS = 4 * 60 * 60 * 1_000;
@@ -19,9 +20,9 @@ export type CheckoutStatus = {
   receipt: ResourceCheckoutActionResult;
 } & (
   | { state?: undefined }
-  | { state: "queued"; position: number }
+  | { state: "queued"; position: number; durationMs: number }
   | { state: "ended" }
-  | { state: CheckoutGrant["state"]; allocationId: string; generation: number; authorityEpoch: number; deadlineAt: number }
+  | { state: CheckoutGrant["state"]; allocationId: string; generation: number; authorityEpoch: number; deadlineAt: number; durationMs: number }
 );
 
 function executionOwner(grant: CheckoutGrant): CheckoutActor {
@@ -205,10 +206,12 @@ export class ResourceCheckoutAuthority {
     const grant = record?.grants.find((entry) => entry.id === id && entry.actor.key === actor.key);
     if (grant && record) return {
       receipt: result, state: grant.state, allocationId: grant.id, generation: grant.generation,
-      authorityEpoch: record.definition.epoch, deadlineAt: grant.deadlineAt,
+      authorityEpoch: record.definition.epoch, deadlineAt: grant.deadlineAt, durationMs: grant.durationMs,
     };
     const position = record?.queue.findIndex((entry) => entry.id === id && entry.actor.key === actor.key) ?? -1;
-    return position < 0 ? { receipt: result, state: "ended" as const } : { receipt: result, state: "queued" as const, position: position + 1 };
+    return position < 0 ? { receipt: result, state: "ended" as const } : {
+      receipt: result, state: "queued" as const, position: position + 1, durationMs: record!.queue[position]!.durationMs,
+    };
   }
 
   perform(actor: CheckoutActor, action: ResourceCheckoutActionRequest, options?: { draft?: CheckoutDefinition; proveFenced?: FenceProof; draftOwnerInstanceId?: string; executor?: CheckoutActor }): ResourceCheckoutActionResult {

@@ -4,7 +4,7 @@ import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/sh
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { isEnvironmentGroupGone } from "../resource-checkouts/checkout-machine-evidence";
 import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
-import { readWindowsJobStartupTelemetry, wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import { windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const DEFAULT_GATE_TIMEOUT_MS = 60_000;
@@ -55,7 +55,6 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
             command: shell,
             cwd: config.cwd,
             env: childEnv,
-            terminateDescendantsOnExit: true,
             keepDrainEvidenceOnStop: !!getResourceCheckoutService(),
           })
         : undefined;
@@ -109,7 +108,10 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     let output = "";
     let outputTruncated = false;
     let settled = false;
+    let closed = false;
     let timedOut = false;
+    let groupPoll: ReturnType<typeof setInterval> | undefined;
+    let checkoutFinished = false;
     let forceSettleHandle: ReturnType<typeof setTimeout> | undefined;
     const appendOutput = (chunk: Buffer): void => {
       output += chunk.toString("utf8");
@@ -122,7 +124,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     const finish = (result: AutomationGateRunResult): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutHandle);
+      if (!groupPoll) clearTimeout(timeoutHandle);
       if (forceSettleHandle) {
         clearTimeout(forceSettleHandle);
         forceSettleHandle = undefined;
@@ -130,8 +132,17 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
       resolve(result);
     };
 
+    const finishCheckout = () => {
+      if (!checkout || checkoutFinished) return;
+      if (!windowsJobLaunch && child.pid && !isEnvironmentGroupGone(child.pid)) return;
+      checkoutFinished = true;
+      clearInterval(groupPoll);
+      if (settled) clearTimeout(timeoutHandle);
+      checkout.finish(!windowsJobLaunch || !child.pid || windowsJobCleanupVerified(windowsJobLaunch));
+    };
+
     const terminateChildTree = (force = false): void => {
-      if (!child.pid) {
+      if (!child.pid || checkoutFinished) {
         return;
       }
       try {
@@ -141,6 +152,8 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
           if (checkout && windowsJobLaunch.requestStop) windowsJobLaunch.requestStop();
           else child.kill("SIGKILL");
         } else if (process.platform !== "win32") {
+          if (closed) finishCheckout();
+          if (checkoutFinished) return;
           process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
         } else {
           // child.kill only terminates the immediate bash.exe; its children
@@ -162,7 +175,8 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
-      terminateChildTree();
+      terminateChildTree(settled);
+      if (settled) return;
       forceSettleHandle = setTimeout(() => {
         finish({
           status: "failed",
@@ -203,10 +217,12 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     });
 
     child.once("close", (code, signal) => {
-      const verified = windowsJobLaunch
-        ? !child.pid || readWindowsJobStartupTelemetry(windowsJobLaunch).phases.some(({ phase }) => phase === "job-drained")
-        : !child.pid || isEnvironmentGroupGone(child.pid);
-      checkout?.finish(verified);
+      closed = true;
+      finishCheckout();
+      if (checkout && !checkoutFinished && !windowsJobLaunch) {
+        groupPoll = setInterval(finishCheckout, 50);
+        groupPoll.unref();
+      }
       windowsJobLaunch?.cleanup();
       const durationMs = Date.now() - startedAt;
       if (checkoutStopped) {

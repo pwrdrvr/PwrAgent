@@ -14,6 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import type {
+  AppServerBackendKind,
   CodexEnvironmentActionRun,
   CodexThreadEnvironmentRuntime,
 } from "@pwragent/shared/contracts/normalized-app-server";
@@ -33,6 +34,7 @@ import {
   formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
   startWindowsJobReadyPoll,
+  windowsJobCleanupVerified,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
 import {
@@ -134,7 +136,7 @@ export type CodexEnvironmentCommandParams = {
   mode: "wait" | "detach";
   timeoutMs?: number;
   captureShellEnvironment?: boolean;
-  ownerThreadId?: string;
+  checkoutThread?: { backend: AppServerBackendKind; threadId: string };
   onProgress?: (
     event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
   ) => void;
@@ -462,7 +464,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
    * before the thread exists — the caller back-fills it with
    * `attachDetachedCommandThreadId` once the thread id is known.
    */
-  owner?: { backend: string; threadId?: string };
+  owner?: { backend: AppServerBackendKind; threadId?: string };
   hydrationStore?: CodexEnvironmentHydrationStoreLike;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
@@ -545,7 +547,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: commandEnv,
         mode: "wait",
         captureShellEnvironment: true,
-        ownerThreadId: params.owner?.threadId,
+        checkoutThread: params.owner?.threadId ? { backend: params.owner.backend, threadId: params.owner.threadId } : undefined,
         timeoutMs:
           params.setupTimeoutMs ??
           readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
@@ -648,6 +650,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: actionEnv,
         mode: "detach",
         detachedTerminationKey: runId,
+        checkoutThread: params.owner?.threadId ? { backend: params.owner.backend, threadId: params.owner.threadId } : undefined,
         // Auto-started actions are the ones most likely to be a long-running
         // dev server, so they need an owner just as much as the Run-button
         // path. Without one they are invisible to the quit blockers and get
@@ -703,7 +706,7 @@ export async function startLocalCodexEnvironmentAction(params: {
   /** Caller-generated runId so output/exit callbacks can be pre-bound to the right run. */
   runId: string;
   /** Thread identity, so the quit dialog can name and link this run. */
-  owner?: { backend: string; threadId: string };
+  owner?: { backend: AppServerBackendKind; threadId: string };
   commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
   onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
@@ -752,6 +755,7 @@ export async function startLocalCodexEnvironmentAction(params: {
       env: actionEnv,
       mode: "detach",
       detachedTerminationKey: params.runId,
+      checkoutThread: params.owner,
       detachedDescriptor: params.owner
         ? {
             backend: params.owner.backend,
@@ -844,7 +848,7 @@ function runShellCommand(
         cwd: params.cwd,
         env: commandEnv,
         keepDrainEvidenceOnStop: !!getResourceCheckoutService(),
-        terminateDescendantsOnExit: params.mode === "wait",
+        terminateDescendantsOnExit: params.mode === "wait" && params.shell === "powershell",
       })
     : undefined;
   const launch = windowsJobLaunch ?? {
@@ -854,14 +858,13 @@ function runShellCommand(
   };
 
   return new Promise((resolve, reject) => {
-    const ownerThreadId = params.ownerThreadId || params.detachedDescriptor?.threadId;
     let checkout;
     try {
       checkout = getResourceCheckoutService()?.admitMachineJob(
         params.detachedTerminationKey ?? processId,
         params.mode === "wait" ? "Environment setup" : params.detachedDescriptor?.actionName ?? "Environment action",
         {
-          ...(ownerThreadId ? { thread: { backend: "codex", threadId: ownerThreadId } } : {}),
+          thread: params.checkoutThread,
           retainExistingGrant: params.mode === "wait",
         },
       );
@@ -1000,7 +1003,7 @@ function runShellCommand(
       if (!windowsJobLaunch && process.platform !== "win32") child.once("exit", watchGroupAfterShellExit);
       child.once("close", () => {
         if (windowsJobLaunch) {
-          finishCheckout(!child.pid || readWindowsJobStartupTelemetry(windowsJobLaunch).phases.some(({ phase }) => phase === "job-drained"));
+          finishCheckout(!child.pid || windowsJobCleanupVerified(windowsJobLaunch));
         } else {
           watchGroupAfterShellExit();
         }

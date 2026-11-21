@@ -225,6 +225,7 @@ export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
   readonly worktreeRecoveryService: WorktreeRecoveryService;
   buildForkedCodexEnvironmentRuntime(params: {
     cwd?: string;
+    owner?: { backend: AppServerBackendKind; threadId: string };
     /** Run setup in a workspace that is not a new worktree. */
     forceSetup?: boolean;
     onSetupProgress?: (
@@ -1551,7 +1552,7 @@ export class ThreadArchiveCoordinator {
     await onSetupStart?.();
     let runtime: CodexThreadEnvironmentRuntime | undefined;
     try {
-      runtime = await this.host().buildForkedCodexEnvironmentRuntime({ cwd, forceSetup: true, sourceRuntime, workMode: "worktree" });
+      runtime = await this.host().buildForkedCodexEnvironmentRuntime({ cwd, forceSetup: true, owner: identity, sourceRuntime, workMode: "worktree" });
     } catch (error) {
       if (!(error instanceof CodexEnvironmentStartupError)) throw error;
       runtime = error.runtime;

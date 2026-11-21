@@ -1286,6 +1286,7 @@ export class DesktopBackendRegistry {
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   private researchHandler?: ResearchAgentHandler;
   private checkoutHandler?: CheckoutToolHandler;
+  private prepareCheckoutWakeup?: (entry: ThreadTurnQueueEntry, dependencyId: string) => Promise<AppServerTurnInputItem[]>;
   private researchEnabled: () => boolean = () => false;
   private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
   private agentThreadActions?: AgentThreadActions;
@@ -2181,6 +2182,7 @@ export class DesktopBackendRegistry {
       startThread: (...args: Parameters<typeof this.startThread>) => this.startThread(...args),
       startTurn: (...args: Parameters<typeof this.startTurn>) => this.startTurn(...args),
       startTurnNow: (...args: Parameters<typeof this.startTurnNow>) => this.startTurnNow(...args),
+      prepareQueuedTurnInput: (entry: ThreadTurnQueueEntry) => this.prepareQueuedTurnInput(entry),
       startTurnWithoutHandoff: (...args: Parameters<typeof this.startTurnWithoutHandoff>) => this.startTurnWithoutHandoff(...args),
       steerTurn: (...args: Parameters<typeof this.steerTurn>) => this.steerTurn(...args),
       get stoppingRunningTurnsForShutdown() { return current().stoppingRunningTurnsForShutdown; },
@@ -2762,7 +2764,18 @@ export class DesktopBackendRegistry {
     this.openAIDecisionsHandler = handler ?? undefined;
   }
 
-  setResourceCheckoutHandler(handler: CheckoutToolHandler): void {
+  private prepareQueuedTurnInput(entry: ThreadTurnQueueEntry): Promise<AppServerTurnInputItem[]> | undefined {
+    const id = entry.messageOrigin?.kind === "pwragent" ? entry.messageOrigin.dependencyId : undefined;
+    if (!id?.startsWith("checkout:")) return undefined;
+    return this.prepareCheckoutWakeup?.(entry, id)
+      ?? Promise.resolve([{ type: "text", text: "The resource checkout could not be verified. Do not start the dependent work." }]);
+  }
+
+  setResourceCheckoutHandler(
+    handler: CheckoutToolHandler,
+    prepare?: DesktopBackendRegistry["prepareCheckoutWakeup"],
+  ): void {
+    this.prepareCheckoutWakeup = prepare;
     this.checkoutHandler = (operation, args, context) => {
       if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Resource tools require an active thread turn.");
       return handler(operation, args, context);
@@ -19423,13 +19436,14 @@ export class DesktopBackendRegistry {
           localResolutionError = error;
         }
       }
-      if (options?.beforeDelivery && (localThread || (instanceId && this.federatedThreadMessageHandler))) {
+      if (options?.beforeDelivery && localThread) {
         await options.beforeDelivery();
       }
       const rememberedRemoteTurn =
         !localThread && includeRemote && this.federatedThreadMessageHandler
         ? await this.federatedThreadMessageHandler({
             ...remoteRequest,
+            ...(options?.beforeDelivery ? { beforeDelivery: options.beforeDelivery } : {}),
             ...(instanceId
               ? { instanceId }
               : { resolutionMode: "remembered_only" as const }),

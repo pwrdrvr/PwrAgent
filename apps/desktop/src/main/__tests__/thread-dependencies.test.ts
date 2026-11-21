@@ -1,3 +1,4 @@
+import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -854,6 +855,45 @@ describe("resource checkout continuations", () => {
       const item = store.list("codex", threadId)[0];
       if (item?.status === "waiting") store.cancel("codex", threadId, item.id, now);
     }), { numRuns: 25 });
+  });
+
+  it.each((["start", "steer"] as const).flatMap((route) =>
+    (["granted", "expired", "unreachable"] as const).map((state) => ({ route, state })),
+  ))("checks the authority again before queued $route with a $state grant", async ({ route, state }) => {
+    let occupied = true;
+    let observation: "granted" | "expired" | "unreachable" = "unreachable";
+    const provider = vi.fn(async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: "continued" }));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => occupied || route === "steer",
+      canSteerThread: () => !occupied && route === "steer",
+      steerTurn: provider,
+      prepareInput: (entry) => entry.messageOrigin?.dependencyId
+        ? owner.resourceCheckoutDeliveryText(entry, entry.messageOrigin.dependencyId).then((text) => text ? [{ type: "text", text }] : entry.input)
+        : undefined,
+      startTurn: provider,
+    });
+    const owner = coordinator(store, async () => {}, {
+      submit: (entry) => queue.submitSteer(entry),
+      observeResourceCheckout: async () => observation === "granted" ? { state: "satisfied", reason: "Promoted" }
+        : observation === "expired" ? { state: "failed", reason: "Checkout expired" } : undefined,
+    });
+    await register(owner);
+    observation = "granted";
+    await owner.checkResourceCheckouts();
+    expect(queue.getQueuedEntries(registration)).toHaveLength(1);
+    expect(provider).not.toHaveBeenCalled();
+
+    occupied = false;
+    observation = state;
+    await queue.releaseThread(registration);
+    expect(provider).toHaveBeenCalledOnce();
+    const [{ input }] = provider.mock.calls[0]!;
+    if (state === "granted") expect(input[0].text).toContain(registration.continuation);
+    else {
+      expect(input[0].text).not.toContain(registration.continuation);
+      expect(input[0].text).toContain("Do not bypass the dependency or begin dependent work");
+    }
+    queue.close();
   });
 
   it("writes only on registration, fresh promotion, admission claim, and delivery", async () => {

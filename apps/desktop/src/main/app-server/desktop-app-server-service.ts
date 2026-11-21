@@ -159,6 +159,7 @@ import {
 } from "@pwragent/shared/contracts/agent";
 import {
   type AppServerBackendKind,
+  type AppServerTurnInputItem,
   type AppServerBackendScope,
   type AppServerThreadSummary,
   type ArchiveWorktreeRequest,
@@ -1283,6 +1284,8 @@ class DesktopAppServerService {
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   /** Checks CI runs that Continue After waits on; armed only while one waits. */
   private localFilePoller: LocalFilePoller | undefined;
+  private resourceCheckoutPoller: LocalFilePoller | undefined;
+  private unsubscribeResourceCheckouts?: () => void;
   private threadDependencyCiRunPoller: ThreadDependencyCiRunPoller | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
@@ -8221,6 +8224,10 @@ class DesktopAppServerService {
     this.forgeCiClient = undefined;
     this.localFilePoller?.dispose();
     this.localFilePoller = undefined;
+    this.resourceCheckoutPoller?.dispose();
+    this.resourceCheckoutPoller = undefined;
+    this.unsubscribeResourceCheckouts?.();
+    this.unsubscribeResourceCheckouts = undefined;
     this.threadDependencyCiRunPoller?.dispose();
     this.threadDependencyCiRunPoller = undefined;
     this.prPollingScheduler?.stop();
@@ -8424,7 +8431,10 @@ class DesktopAppServerService {
           // A wait that starts, fires or ends changes which runs need checks.
           // After close() the poller is gone; a late change must not rebuild it.
           if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
-          if (dependency.conditions.some((condition) => condition.localFile || condition.resourceCheckout)) this.syncLocalFileChecks();
+          if (dependency.conditions.some((condition) => condition.localFile)) this.syncLocalFileChecks();
+          if (dependency.conditions.some((condition) => condition.resourceCheckout)) {
+            this.syncResourceCheckoutChecks(dependency.status === "waiting" ? 0 : undefined);
+          }
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
           for (const target of [dependency, ...dependency.conditions.filter(isThreadDependencyLocalThreadCondition)]) {
@@ -8440,6 +8450,15 @@ class DesktopAppServerService {
       });
     }
     return this.threadDependencyCoordinator;
+  }
+
+  async prepareResourceCheckoutWakeup(entry: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }, id: string): Promise<AppServerTurnInputItem[]> {
+    const text = await this.getThreadDependencyCoordinator().resourceCheckoutDeliveryText(entry, id);
+    return text ? [{ type: "text", text }] : entry.input;
   }
 
   async registerResourceCheckoutContinuation(
@@ -8458,13 +8477,24 @@ class DesktopAppServerService {
     if (!this.ownerNavigationActive) return;
     const coordinator = this.getThreadDependencyCoordinator();
     this.localFilePoller ??= new LocalFilePoller({
-      hasPending: () => coordinator.hasPendingLocalFiles() || coordinator.hasPendingResourceCheckouts(),
-      check: async () => {
-        await Promise.all([coordinator.checkLocalFiles(), coordinator.checkResourceCheckouts()]);
-      },
+      hasPending: () => coordinator.hasPendingLocalFiles(),
+      check: () => coordinator.checkLocalFiles(),
       onError: (error) => appServerLog.warn("Local watcher check failed", { error: String(error) }),
     });
     this.localFilePoller.sync(delay);
+  }
+
+  private syncResourceCheckoutChecks(delay?: number): void {
+    if (!this.ownerNavigationActive) return;
+    const coordinator = this.getThreadDependencyCoordinator();
+    this.resourceCheckoutPoller ??= new LocalFilePoller({
+      intervalMs: 500,
+      hasPending: () => coordinator.hasPendingResourceCheckouts(),
+      check: () => coordinator.checkResourceCheckouts(),
+      onError: (error) => appServerLog.warn("Resource checkout check failed", { error: String(error) }),
+    });
+    this.unsubscribeResourceCheckouts ??= getResourceCheckoutService()?.subscribe(() => this.syncResourceCheckoutChecks(0));
+    this.resourceCheckoutPoller.sync(delay);
   }
 
   /**
@@ -8731,6 +8761,7 @@ class DesktopAppServerService {
     await this.getThreadDependencyCoordinator().reconcile();
     this.getThreadDependencyCiRunPoller().sync();
     this.syncLocalFileChecks(0);
+    this.syncResourceCheckoutChecks(0);
   }
 
   /**

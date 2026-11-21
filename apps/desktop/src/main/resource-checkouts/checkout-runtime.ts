@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { readMachineCheckoutEvidence } from "./checkout-machine-evidence";
 import type { ResourceAdvertisement } from "@pwragent/shared/contracts/resource-checkouts";
@@ -29,7 +30,13 @@ async function openCheckoutStorage<T>(open: () => T): Promise<T> {
   return open();
 }
 
-export async function initializeResourceCheckouts(federation: DesktopFederationRuntime, approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>): Promise<DesktopResourceCheckoutService> {
+export async function checkoutRootCanHostMachine(root: string, primaryRoot: string, isPackaged: boolean): Promise<boolean> {
+  if (!isPackaged || root === primaryRoot) return true;
+  const [actual, primary] = await Promise.all([root, primaryRoot].map((directory) => realpath(directory).catch(() => undefined)));
+  return actual !== undefined && actual === primary;
+}
+
+export async function initializeResourceCheckouts(federation: DesktopFederationRuntime, approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>, isPackaged = true): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
   const [machineId, evidence] = await Promise.all([
     readOrCreateFederationMachineId({ rootDir: root }), readMachineCheckoutEvidence(),
@@ -52,9 +59,11 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   }
   if (machineId && /^mach_[0-9a-f-]{36}$/i.test(machineId)) {
     const identity = JSON.stringify([machineId, evidence.hostBinding ?? null]);
-    try { machineStore = await openCheckoutStorage(() => openMachineCheckoutStorage(root, identity)); }
-    catch (error) { warn(error); }
-    if (machineStore && evidence.hostBinding && bindings.some((binding) => binding.authorityInstanceId === instanceId && binding.authorityMachineId === machineId)) {
+    if (await checkoutRootCanHostMachine(root, resolvePwragentRoot({ env: {} }), isPackaged)) {
+      try { machineStore = await openCheckoutStorage(() => openMachineCheckoutStorage(root, identity)); }
+      catch (error) { warn(error); }
+    }
+    if (evidence.hostBinding && bindings.some((binding) => binding.authorityInstanceId === instanceId && binding.authorityMachineId === machineId)) {
       try { externalStore = await openCheckoutStorage(() => openFederationCheckoutStorage(root, identity)); }
       catch (error) { warn(error); }
     }

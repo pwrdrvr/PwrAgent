@@ -451,6 +451,21 @@ export class ThreadDependencyCoordinator {
     return this.options.store.active().some(isPendingResourceCheckout);
   }
 
+  async resourceCheckoutDeliveryText(target: Pick<ThreadDependency, "backend" | "threadId">, id: string): Promise<string | undefined> {
+    const item = this.options.store.get(target.backend, target.threadId, id);
+    const condition = item?.conditions[0];
+    if (!item || !condition?.resourceCheckout) return "The resource checkout is unavailable. Do not start the dependent work.";
+    const observation = await this.options.observeResourceCheckout?.(item);
+    if (observation?.state === "satisfied" && (item.status === "dispatching" || item.status === "delivered")) return undefined;
+    return buildDependencyPrompt({
+      ...item, outcome: "failure", continuation: undefined,
+      evidence: [{
+        condition, observedAt: this.now(), state: "failed",
+        reason: observation?.state === "failed" ? observation.reason : "The authority could not verify a current checkout grant.",
+      }],
+    });
+  }
+
   async checkResourceCheckouts(): Promise<void> {
     const observe = this.options.observeResourceCheckout;
     if (!observe) return;

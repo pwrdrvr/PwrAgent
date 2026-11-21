@@ -352,11 +352,7 @@ public static class PwrAgentWindowsJobRunner
         string stopFile)
     {
         WriteStartupPhase(startupStatusFile, startupStartedAt, "native-job-started");
-        IntPtr job = CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero)
-        {
-            ThrowLastWin32Error("CreateJobObject");
-        }
+        IntPtr job = IntPtr.Zero;
 
         PROCESS_INFORMATION processInformation = new PROCESS_INFORMATION();
         bool processCreated = false;
@@ -365,6 +361,8 @@ public static class PwrAgentWindowsJobRunner
         bool attributesInitialized = false;
         try
         {
+            job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) ThrowLastWin32Error("CreateJobObject");
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits =
                 new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -500,6 +498,14 @@ public static class PwrAgentWindowsJobRunner
             }
             return unchecked((int)exitCode);
         }
+        catch
+        {
+            if (!processCreated)
+            {
+                WriteStartupPhase(startupStatusFile, startupStartedAt, "target-not-created");
+            }
+            throw;
+        }
         finally
         {
             if (attributesInitialized)
@@ -513,16 +519,18 @@ public static class PwrAgentWindowsJobRunner
                 CloseHandle(processInformation.hThread);
                 CloseHandle(processInformation.hProcess);
             }
-            CloseHandle(job);
+            if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
 }
 '@
 
+$invokingNativeJob = $false
 try {
   Write-StartupPhase -Phase 'helper-compile-started'
   Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
   Write-StartupPhase -Phase 'helper-ready'
+  $invokingNativeJob = $true
   $exitCode = [PwrAgentWindowsJobRunner]::Run(
     $application,
     [string[]]$arguments,
@@ -542,6 +550,7 @@ try {
   }
   exit $exitCode
 } catch {
+  if (-not $invokingNativeJob) { Write-StartupPhase -Phase 'target-not-created' }
   Write-StartupPhase -Phase 'failed' -Detail $_.Exception.Message
   [Console]::Error.WriteLine('PwrAgent Windows job wrapper failed: ' + $_.Exception.Message)
   exit 127
@@ -619,6 +628,13 @@ export function readWindowsJobStartupTelemetry(
     phases.push({ detail, elapsedMs, phase });
   }
   return { phases };
+}
+
+export function windowsJobCleanupVerified(launch: Pick<WindowsJobWrappedCommand, "startupStatusFilePath">): boolean {
+  const { phases } = readWindowsJobStartupTelemetry(launch);
+  if (phases.some(({ phase }) => phase === "job-drained")) return true;
+  return phases.some(({ phase }) => phase === "target-not-created")
+    && !phases.some(({ phase }) => phase === "target-created-suspended");
 }
 
 export function formatWindowsJobStartupTelemetry(

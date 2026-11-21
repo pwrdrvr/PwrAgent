@@ -441,15 +441,18 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   }
   const federationRuntime = initializeDesktopFederationRuntime();
   const resourceCheckouts = bootMode === "active-profile"
-    ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts)
+    ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts, host.application.isPackaged)
     : undefined;
-  if (resourceCheckouts) registry.setResourceCheckoutHandler(createResourceCheckoutToolHandler(
-    resourceCheckouts,
-    (context, resourceId, key, continuation) => service.registerResourceCheckoutContinuation(context, resourceId, key, continuation),
-    (context, { instanceId, ...target }, prompt, bind) => registry.sendResourceCheckoutHandoff(context, {
-      ...target, ...(instanceId === resourceCheckouts.handoffInstanceId() ? {} : { instanceId }),
-    }, prompt, bind),
-  ));
+  if (resourceCheckouts) registry.setResourceCheckoutHandler(
+    createResourceCheckoutToolHandler(
+      resourceCheckouts,
+      (context, resourceId, key, continuation) => service.registerResourceCheckoutContinuation(context, resourceId, key, continuation),
+      (context, { instanceId, ...target }, prompt, bind) => registry.sendResourceCheckoutHandoff(context, {
+        ...target, ...(instanceId === resourceCheckouts.handoffInstanceId() ? {} : { instanceId }),
+      }, prompt, bind),
+    ),
+    (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+  );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({
       authorize: (context, phase) => registry.canManagePwrAgent(context, false, phase === "accepted"),

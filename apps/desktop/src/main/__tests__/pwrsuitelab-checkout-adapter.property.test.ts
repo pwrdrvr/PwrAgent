@@ -129,8 +129,10 @@ describe("PwrSuiteLab checkout adapter", () => {
 
   it("uses the configured controller for the approved executor and keeps other reservations advisory", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-lab-owner-"));
-    const workerKey = JSON.stringify(["owner", "codex", "worker"]);
+    const workerKey = JSON.stringify(["enrolled", "codex", "worker"]);
     const workload = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    let drainAttempts = 0;
     const effects: string[] = [];
     const config: ApprovedLabCheckout = {
       resourceId, target: "fictional-target", workload: "approved-fixture", approval: "approval",
@@ -142,7 +144,12 @@ describe("PwrSuiteLab checkout adapter", () => {
           return { execution, ready: true, independentGuardId: "guard", guardDeadlineAt: execution.deadlineAt };
         },
         async run() { effects.push("run"); await workload.promise; },
-        async drain({ execution }) { effects.push("drain"); return evidence(execution); },
+        async drain({ execution }) {
+          effects.push("drain");
+          if (++drainAttempts === 1) return undefined;
+          await cleanup.promise;
+          return evidence(execution);
+        },
       },
     };
     const binding = {
@@ -159,27 +166,40 @@ describe("PwrSuiteLab checkout adapter", () => {
       approvedLabCheckouts: new Map([[resourceId, config]]), now: () => 100,
       requestPeer: async () => { throw new Error("No outbound effects"); }, warn: () => {},
     });
-    const worker = service.threadActor("codex", "worker");
+    const peer = (operation: string, fields: Record<string, unknown>) => service.receivePeer("enrolled", {
+      operation, resourceId, epoch: 7, subject: { backend: "codex", threadId: "worker" }, ...fields,
+    });
+    const status = () => peer("status", { key: "request" });
     try {
-      const grant = await service.perform({
+      const grant = await peer("perform", { action: {
         kind: "request", resourceId, idempotencyKey: "request", purpose: "Verified fixture", expectedDurationMs: 2_000,
-      }, worker);
+      } }) as { outcome: string; allocationId: string; generation: number };
       if (grant.outcome !== "granted") throw new Error("Expected fixture grant");
       const token = { resourceId, allocationId: grant.allocationId, generation: grant.generation, epoch: 7 };
       await expect(service.executeLabCheckout(service.threadActor("codex", "intruder"), token, 1)).resolves.toBe("rejected");
-      await expect(service.executeLabCheckout(worker, token, 201)).resolves.toBe("rejected");
-      await expect(service.executeLabCheckout(worker, { ...token, resourceId: "unapproved" }, 1)).resolves.toBe("rejected");
+      await expect(peer("lab_execution", { token, cost: 201 })).resolves.toBe("rejected");
+      await expect(service.executeLabCheckout(service.threadActor("codex", "worker"), { ...token, resourceId: "unapproved" }, 1))
+        .resolves.toBe("rejected");
       expect(effects).toEqual([]);
       expect(service.read().resources.find((resource) => resource.resourceId === resourceId)).toMatchObject({
         enforcement: { coverage: "mixed" }, routes: [{ enforcement: "enforced" }],
       });
-      await expect(service.executeLabCheckout(worker, token, 100)).resolves.toMatchObject({ outcome: "started" });
-      await expect(service.executeLabCheckout(worker, token, 100)).resolves.toBe("rejected");
+      const started = await peer("lab_execution", { token, cost: 100 }) as { outcome: string; jobId: string };
+      expect(started.outcome).toBe("started");
+      await expect(peer("lab_execution", { token, cost: 100 })).resolves.toBe("rejected");
       workload.resolve();
-      await expect.poll(() => service.status(worker, resourceId, "request")).toMatchObject({ state: "ended" });
-      expect(effects).toEqual(["prepare", "run", "drain"]);
+      await expect.poll(status).toMatchObject({ state: "recovery_required" });
+      const first = peer("lab_execution", { token, cost: "recover" });
+      const retry = peer("lab_execution", { token, cost: "recover" });
+      await expect(first).resolves.toEqual({ outcome: "recovering", jobId: started.jobId });
+      await expect(retry).resolves.toEqual({ outcome: "recovering", jobId: started.jobId });
+      expect(drainAttempts).toBe(2);
+      cleanup.resolve();
+      await expect.poll(status).toMatchObject({ state: "ended" });
+      expect(effects).toEqual(["prepare", "run", "drain", "drain"]);
     } finally {
       workload.resolve();
+      cleanup.resolve();
       await service.close();
       rmSync(root, { recursive: true, force: true });
     }

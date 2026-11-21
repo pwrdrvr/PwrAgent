@@ -47,6 +47,7 @@ export class DesktopResourceCheckoutService {
   private readonly remoteViews = new Map<string, ExternalView>();
   private readonly timer: NodeJS.Timeout;
   private readonly shutdown = new AbortController();
+  private readonly providerWorkInFlight = new Map<string, string>();
   private readonly providerJobs = new Map<Promise<unknown>, () => void>();
   private readonly admittedJobs = new Map<string, {
     check(): void;
@@ -147,10 +148,12 @@ export class DesktopResourceCheckoutService {
 
   private localMachineView(actor: CheckoutActor): ExternalView[] {
     const def = this.machineDefinition;
-    const unresolved = () => this.authorityView(def, "machine_broker", "unresolved");
     try {
       if (!this.machine || this.machineConflict) {
-        return [{ authority: unresolved(), resource: projectCheckoutDomain({ definition: def, generation: 0, grants: [], queue: [] }, actor, unresolved()) }];
+        const authority = this.authorityView(def, "machine_broker", "unresolved");
+        return [{ authority, resource: projectCheckoutDomain({
+          definition: { ...def, publication: "pending_registration" }, generation: 0, grants: [], queue: [],
+        }, actor, authority) }];
       }
       const authority = this.authorityView(def, "machine_broker", "reachable");
       return this.machine.records().filter(({ definition }) => definition.publication !== "pending_registration"
@@ -371,7 +374,7 @@ export class DesktopResourceCheckoutService {
 
   async executeLabCheckout(
     actor: CheckoutActor, token: CheckoutToken, cost: number | "recover", signal = this.shutdown.signal,
-  ): Promise<"rejected" | "released" | "recovery_required" | { outcome: "started"; jobId: string }> {
+  ): Promise<"rejected" | "released" | "recovery_required" | { outcome: "started" | "recovering"; jobId: string }> {
     if (this.closing || this.closed || signal.aborted) return "rejected";
     const binding = this.options.bindings.find(({ definition }) => definition.resourceId === token.resourceId);
     if (!binding || binding.definition.epoch !== token.epoch) return "rejected";
@@ -385,19 +388,39 @@ export class DesktopResourceCheckoutService {
     if (approved?.resourceId !== token.resourceId || !this.external || !this.hosted.has(token.resourceId)) return "rejected";
     const authority = this.external;
     const adapter = createPwrSuiteLabCheckoutAdapter(approved, this.now);
-    if (cost === "recover") return await recoverResourceCheckout({ actor, authority, token, adapter });
+    const key = JSON.stringify([token.resourceId, token.allocationId, token.epoch, token.generation]);
+    if (cost === "recover") {
+      const job = authority.providerJob(actor, token);
+      if (!job?.provider || job.executor !== adapter.id || job.provider.adapterScope !== adapter.scope) return "rejected";
+      if (!this.providerWorkInFlight.has(key)) {
+        this.providerWorkInFlight.set(key, job.id);
+        const work = recoverResourceCheckout({ actor, authority, token, adapter }).catch(this.options.warn);
+        this.providerJobs.set(work, () => { authority.markJobRecovery(token, job.id); });
+        void work.then(() => {
+          this.providerJobs.delete(work);
+          this.providerWorkInFlight.delete(key);
+        });
+      }
+      return { outcome: "recovering", jobId: job.id };
+    }
     const jobId = randomUUID();
     const started = Promise.withResolvers<{ outcome: "started"; jobId: string }>();
     const work = executeResourceCheckout({
       actor, token, authority, adapter, policy: approved.policy, jobId,
       costMinorUnits: cost, signal: this.shutdown.signal,
-      onBound: () => started.resolve({ outcome: "started", jobId }),
+      onBound: () => {
+        this.providerWorkInFlight.set(key, jobId);
+        started.resolve({ outcome: "started", jobId });
+      },
     }).catch((error) => {
       this.options.warn(error);
       return "recovery_required" as const;
     });
     this.providerJobs.set(work, () => { authority.markJobRecovery(token, jobId); });
-    void work.then(() => this.providerJobs.delete(work));
+    void work.then(() => {
+      this.providerJobs.delete(work);
+      if (this.providerWorkInFlight.get(key) === jobId) this.providerWorkInFlight.delete(key);
+    });
     return await Promise.race([started.promise, work]);
   }
 

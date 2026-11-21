@@ -266,6 +266,7 @@ async function sendToRemoteThread(
   if (request.replaceQueueEntryId && !match.backend.replaceQueuedMessage) {
     throw new Error("Queued message replacement is unavailable on this instance.");
   }
+  await request.beforeDelivery?.();
   const turn = request.replaceQueueEntryId
     ? await match.backend.replaceQueuedMessage!({
         backend: request.backend,
