@@ -4150,14 +4150,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   // transcript-hydration line can supersede the live line without dropping
   // start timing or observed replay tallies. Attach it back onto displayed
   // lines at read time so the renderer can compute finished durations and keep
-  // reading observed fields off ThreadUsageLineRecord. Deliberately NOT summed
-  // into pricing summaries.
+  // reading observed fields off ThreadUsageLineRecord. Pricing summaries omit
+  // these fields. Seek the displayed keys in the turn primary key while keeping
+  // the backend and thread-family scope across providers.
   private attachUsageTurnMetadataSync(
     backend: string,
     threadId: string,
     lines: ThreadUsageLineRecord[],
   ): void {
-    if (lines.length === 0) {
+    const usageTurnIds = new Set<string>();
+    for (const line of lines) {
+      if (line.usageTurnId) {
+        usageTurnIds.add(line.usageTurnId);
+      }
+    }
+    if (usageTurnIds.size === 0) {
       return;
     }
     const turnRows = this.stateDb.raw
@@ -4173,25 +4180,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
                 peak_context_tokens,
                 model_context_window
            FROM thread_usage_turns
-          WHERE backend = ?
-            AND thread_id = ?
-          UNION ALL
-         SELECT usage_turn_id,
-                started_at,
-                completed_at,
-                observed_cold_replay_count,
-                observed_cold_replay_uncached_tokens,
-                observed_hot_replay_cached_tokens,
-                observed_hot_replay_count,
-                final_context_tokens,
-                peak_context_tokens,
-                model_context_window
-           FROM thread_usage_turns
-          WHERE backend = ?
-            AND parent_thread_id = ?
-            AND thread_id != ?`,
+          WHERE usage_turn_id IN (SELECT value FROM json_each(?))
+            AND backend = ?
+            AND (thread_id = ? OR parent_thread_id = ?)`,
       )
-      .all(backend, threadId, backend, threadId, threadId) as UsageTurnMetadataRow[];
+      .all(JSON.stringify([...usageTurnIds]), backend, threadId, threadId) as UsageTurnMetadataRow[];
     applyUsageTurnMetadata(lines, turnRows);
   }
 
@@ -4260,44 +4253,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       // row even when this reader itself made no repair.
       lines = readMatches().map(threadUsageLineFromRow);
     }
-    this.attachTokenMiserUsageTurnMetadataSync(params.backend, params.threadId, lines);
+    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
     return lines;
-  }
-
-  /** Attach only the turns the projection actually uses, including children. */
-  private attachTokenMiserUsageTurnMetadataSync(
-    backend: string,
-    threadId: string,
-    lines: ThreadUsageLineRecord[],
-  ): void {
-    const usageTurnIds = [...new Set(lines.flatMap((line) =>
-      line.usageTurnId ? [line.usageTurnId] : []))];
-    if (usageTurnIds.length > 0) {
-      const turnRows = this.stateDb.raw
-        .prepare(
-          `SELECT usage_turn_id,
-                  started_at,
-                  completed_at,
-                  observed_cold_replay_count,
-                  observed_cold_replay_uncached_tokens,
-                  observed_hot_replay_cached_tokens,
-                  observed_hot_replay_count,
-                  final_context_tokens,
-                  peak_context_tokens,
-                  model_context_window
-             FROM thread_usage_turns
-            WHERE usage_turn_id IN (SELECT value FROM json_each(?))
-              AND backend = ?
-              AND (thread_id = ? OR parent_thread_id = ?)`,
-        )
-        .all(
-          JSON.stringify(usageTurnIds),
-          backend,
-          threadId,
-          threadId,
-        ) as UsageTurnMetadataRow[];
-      applyUsageTurnMetadata(lines, turnRows);
-    }
   }
 
   /**
@@ -4338,7 +4295,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE,
         ) as ThreadUsageLineRow[];
         const lines = rows.map(threadUsageLineFromRow);
-        this.attachTokenMiserUsageTurnMetadataSync(params.backend, params.threadId, lines);
+        this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
         const before = repairs.length;
         for (let index = 0; index < rows.length; index += 1) {
           const repaired = repriceTokenUsageLine(lines[index]!);
