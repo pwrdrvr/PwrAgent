@@ -86,6 +86,38 @@ function expectedCompletions(turns: Turn[], cutoff: number) {
   });
 }
 
+function countNextStartReads(db: StateDb) {
+  let reads = 0;
+  let windowInput = 0;
+  db.raw.function("count_repair_start", (start: number) => {
+    reads += 1;
+    return start;
+  });
+  db.raw.function("count_window_start", (start: number) => {
+    windowInput += 1;
+    return start;
+  });
+  const prepare = db.raw.prepare.bind(db.raw);
+  const start = "COALESCE(next.started_at, next.observed_at)";
+  // Probe a copy of the candidate SELECT. The output oracle reads the
+  // completions written using the original statement.
+  vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (sql.includes(start)) {
+      const probe = prepare(sql
+        .replaceAll(`${start} AS started_at`, `count_window_start(${start}) AS started_at`)
+        .replaceAll(start, `count_repair_start(${start})`));
+      const all = statement.all.bind(statement);
+      vi.spyOn(statement, "all").mockImplementation((...args) => {
+        probe.all(...args);
+        return all(...args);
+      });
+    }
+    return statement;
+  });
+  return () => ({ reads, windowInput });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -106,27 +138,7 @@ it.each([false, true])("bounds next-start work at the startup batch cap (ANALYZE
     const store = new SqliteOverlayStore(db);
     const repair = vi.spyOn(store, "repairUnfinishedThreadUsageTurns");
     const cutoff = START + 60_000;
-    let startReads = 0;
-    db.raw.function("count_repair_start", (start: number) => {
-      startReads += 1;
-      return start;
-    });
-    const prepare = db.raw.prepare.bind(db.raw);
-    // Count effective-start evaluations on a copy of the candidate SELECT.
-    // The store executes the original statement for the output oracle below.
-    const start = "COALESCE(next.started_at, next.observed_at)";
-    vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      if (sql.includes(start)) {
-        const probe = prepare(sql.replaceAll(start, `count_repair_start(${start})`));
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...args) => {
-          probe.all(...args);
-          return all(...args);
-        });
-      }
-      return statement;
-    });
+    const startWork = countNextStartReads(db);
 
     await startupLedger(store, cutoff, ["local"]).repairUnfinishedThreadUsageTurnsAtStartup();
 
@@ -137,8 +149,47 @@ it.each([false, true])("bounds next-start work at the startup batch cap (ANALYZE
     expect(completions(db)).toEqual(expectedCompletions(turns, cutoff));
     // Read a candidate thread's start times in a bounded number of passes,
     // independent of the number of eligible turns selected from that thread.
-    expect(startReads).toBeGreaterThanOrEqual(turns.length);
-    expect(startReads).toBeLessThanOrEqual(4 * turns.length);
+    expect(startWork().reads).toBeGreaterThanOrEqual(turns.length);
+    expect(startWork().reads).toBeLessThanOrEqual(4 * turns.length);
+  } finally {
+    db.close();
+  }
+});
+
+it.each([false, true])("bounds window input for sparse startup repairs (ANALYZE: %s)", async (analyze) => {
+  const db = openInMemoryStateDb();
+  try {
+    const threads = 8;
+    const history = 500;
+    const turns = Array.from({ length: threads * history + 5 }, (_, index): Turn => {
+      const thread = Math.floor(index / history);
+      const position = index % history;
+      const observed = START + index * 10;
+      const unfinished = thread === threads || position === 0 || position === history - 1
+        || (thread % 2 === 1 && (position === 150 || position === 350));
+      return {
+        id: `turn-${index}`,
+        thread: `thread-${thread}`,
+        observed,
+        start: position % 2 === 0 ? null : observed - 1,
+        updated: observed + 15,
+        ...(!unfinished ? { completed: observed + 5 } : {}),
+      };
+    });
+    seed(db, turns);
+    if (analyze) db.raw.exec("ANALYZE");
+    const store = new SqliteOverlayStore(db);
+    const cutoff = START + turns.length * 10 + 20;
+    const startWork = countNextStartReads(db);
+
+    await startupLedger(store, cutoff, ["local"]).repairUnfinishedThreadUsageTurnsAtStartup();
+
+    expect(completions(db)).toEqual(expectedCompletions(turns, cutoff));
+    // Hundreds of completed turns separate the short clamp intervals. Only
+    // the five-turn backlog needs the window, and total lookups stay bounded.
+    const { reads, windowInput } = startWork();
+    expect(windowInput).toBe(5);
+    expect(reads).toBeLessThanOrEqual(6 * turns.length);
   } finally {
     db.close();
   }

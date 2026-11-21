@@ -2902,9 +2902,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     lastWriteBefore: number;
     limit: number;
   }): Promise<{ repaired: number; remaining: boolean; datedByFirstWrite: number }> {
-    // Seek each selected thread once, even when statistics favor a scan.
-    // Only starts that could clamp an end enter the window. Deduplicate ties
-    // before LEAD so the next start is always strictly later.
+    // A few distant candidates can span a long stretch of completed history.
+    // Use at most four direct lookups per sparse thread to avoid sorting it.
+    // For larger backlogs, seek the thread once and deduplicate starts before
+    // LEAD so ties never count as the next start.
     const candidates = this.stateDb.raw.prepare(
       `WITH candidates AS MATERIALIZED (
          SELECT turn.usage_turn_id, turn.provider, turn.backend, turn.thread_id, turn.observed_at,
@@ -2922,9 +2923,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
          HAVING MAX(line.updated_at) < ?
           ORDER BY turn.observed_at, turn.usage_turn_id
           LIMIT ?
-       ), candidate_threads AS (
+       ), candidate_threads AS MATERIALIZED (
          SELECT provider, backend, thread_id, MIN(started_at) AS first_start,
-                MAX(MAX(started_at, first_write_at, last_write_at)) AS last_possible_end
+                MAX(MAX(started_at, first_write_at, last_write_at)) AS last_possible_end,
+                COUNT(*) <= 4 AS sparse
            FROM candidates
           GROUP BY provider, backend, thread_id
        ), distinct_starts AS (
@@ -2934,15 +2936,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           CROSS JOIN thread_usage_turns AS next INDEXED BY idx_thread_usage_turns_thread
              ON next.provider = thread.provider AND next.backend = thread.backend
             AND next.thread_id = thread.thread_id
-          WHERE COALESCE(next.started_at, next.observed_at) BETWEEN thread.first_start AND thread.last_possible_end
+          WHERE thread.sparse = 0
+            AND COALESCE(next.started_at, next.observed_at) BETWEEN thread.first_start AND thread.last_possible_end
        ), next_starts AS (
          SELECT provider, backend, thread_id, started_at,
                 LEAD(started_at) OVER (PARTITION BY provider, backend, thread_id ORDER BY started_at) AS next_started_at
            FROM distinct_starts
        )
-       SELECT turn.usage_turn_id, turn.started_at, turn.first_write_at, turn.last_write_at, next.next_started_at
+       SELECT turn.usage_turn_id, turn.started_at, turn.first_write_at, turn.last_write_at,
+              CASE WHEN thread.sparse THEN (
+                SELECT MIN(COALESCE(next.started_at, next.observed_at))
+                  FROM thread_usage_turns AS next INDEXED BY idx_thread_usage_turns_thread
+                 WHERE next.provider = turn.provider AND next.backend = turn.backend
+                   AND next.thread_id = turn.thread_id
+                   AND COALESCE(next.started_at, next.observed_at) > turn.started_at
+                   AND COALESCE(next.started_at, next.observed_at) <= MAX(turn.first_write_at, turn.last_write_at)
+              ) ELSE next_starts.next_started_at END AS next_started_at
          FROM candidates AS turn
-         LEFT JOIN next_starts AS next USING (provider, backend, thread_id, started_at)
+         JOIN candidate_threads AS thread USING (provider, backend, thread_id)
+         LEFT JOIN next_starts USING (provider, backend, thread_id, started_at)
         ORDER BY turn.observed_at, turn.usage_turn_id`,
     ).all(params.lastWriteBefore, params.limit + 1) as Array<{
       usage_turn_id: string;
