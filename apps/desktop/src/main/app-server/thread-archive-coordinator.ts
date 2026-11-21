@@ -347,7 +347,7 @@ export class ThreadArchiveCoordinator {
 
   private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
 
-  private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+  private readonly activeObservationsByBackend = new Map<AppServerBackendKind, Map<string, number>>();
 
   private readonly observedActiveThreadWorkspaces = new Map<string, {
     projectKey: string;
@@ -2581,7 +2581,7 @@ export class ThreadArchiveCoordinator {
     archived?: boolean;
     backend: AppServerBackendKind;
     completeInventory: boolean;
-    filter?: string;
+    observationSequence: number;
     threads: AppServerThreadSummary[];
   }): void {
     void this.handleThreadListArchiveState(params).catch((error) => {
@@ -2596,58 +2596,55 @@ export class ThreadArchiveCoordinator {
     archived?: boolean;
     backend: AppServerBackendKind;
     completeInventory: boolean;
-    filter?: string;
+    observationSequence: number;
     threads: AppServerThreadSummary[];
   }): Promise<void> {
     if (params.backend === "codex" && this.context.providers.codex.isAuthenticationRequired?.()) return;
 
+    const previous = this.activeObservationsByBackend.get(params.backend);
     if (params.archived === true) {
       await Promise.all(
-        params.threads.map((thread) =>
-          this.cleanupMessagingForArchivedThread({
+        params.threads
+          .filter((thread) => (previous?.get(thread.id) ?? 0) <= params.observationSequence)
+          .map((thread) => this.cleanupMessagingForArchivedThread({
             backend: params.backend,
             threadId: thread.id,
             origin: "state-refresh",
-          }),
-        ),
+          })),
       );
       return;
     }
 
-    if (params.filter?.trim()) {
-      return;
-    }
-
-    const previousActiveThreadIds = this.activeThreadIdsByBackend.get(params.backend);
-    // A partial listing can reveal a new or restored owner. Keep every
-    // previously observed owner until a complete listing proves its absence.
-    const nextActiveThreadIds = params.completeInventory ? new Set<string>() : previousActiveThreadIds;
-    if (!nextActiveThreadIds) return;
+    // Only a complete read can forget IDs. Every returned row, including a
+    // partial first page, can protect its binding against older archive reads.
+    const active = params.completeInventory || !previous ? new Map<string, number>() : previous;
     let addedActiveThread = false;
     for (const thread of params.threads) {
-      if (previousActiveThreadIds && !previousActiveThreadIds.has(thread.id)) {
+      const lastSeen = previous?.get(thread.id);
+      if (previous && lastSeen === undefined) {
         addedActiveThread = true;
         this.recordArchiveWorkspaceChange(buildThreadIdentityKey(params.backend, thread.id), archiveWorkspacePaths(thread));
       }
-      nextActiveThreadIds.add(thread.id);
+      active.set(thread.id, Math.max(lastSeen ?? 0, params.observationSequence));
     }
     const missingThreadIds = new Set<string>();
-    if (params.completeInventory && previousActiveThreadIds) {
-      for (const id of previousActiveThreadIds) {
-        if (!nextActiveThreadIds.has(id)) missingThreadIds.add(id);
+    if (params.completeInventory && previous) {
+      for (const [id, lastSeen] of previous) {
+        if (lastSeen > params.observationSequence) active.set(id, lastSeen);
+        else if (!active.has(id)) missingThreadIds.add(id);
       }
     }
+    this.activeObservationsByBackend.set(params.backend, active);
     if (addedActiveThread || missingThreadIds.size > 0) {
       this.invalidateArchiveCleanupReads(params.backend, undefined, false);
     }
     if (!params.completeInventory) return;
-    this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
     const store = this.resolveMessagingArchiveCleanupStore();
     if (store) {
       try {
         const bindings = await store.findActiveBindingsForBackend({ backend: params.backend });
         for (const binding of bindings) {
-          if (!nextActiveThreadIds.has(binding.threadId)) missingThreadIds.add(binding.threadId);
+          if (!active.has(binding.threadId)) missingThreadIds.add(binding.threadId);
         }
       } catch (error) {
         backendRegistryLog.warn("archived binding lookup failed", {
@@ -2674,7 +2671,7 @@ export class ThreadArchiveCoordinator {
         return new Set(threads.map((thread) => thread.id));
       });
       if (this.context.lifecycle.closed || !this.archiveCleanupReads.isCurrent(params.backend, evidence)) return;
-      const activeThreadIds = this.activeThreadIdsByBackend.get(params.backend);
+      const activeThreadIds = this.activeObservationsByBackend.get(params.backend);
       await Promise.all(
         [...missingThreadIds]
           .filter((id) => evidence.threadIds.has(id) && !activeThreadIds?.has(id))
