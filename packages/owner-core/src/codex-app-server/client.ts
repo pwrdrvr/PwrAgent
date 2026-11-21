@@ -8211,10 +8211,11 @@ export class CodexAppServerClient {
       },
       onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
     });
+    const observer = createCodexObserverWithConfigReadRedaction(options.connectionObserver);
     this.rawConnection = new JsonRpcConnection(
       this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      createCodexObserverWithConfigReadRedaction(options.connectionObserver),
+      observer && (this.transport.wrapConnectionObserver?.(observer) ?? observer),
       { logContext: { backend: "codex" }, logger: host.rpcLogger },
     );
     // Every request, admitted or lifecycle, reaches Codex through this one
