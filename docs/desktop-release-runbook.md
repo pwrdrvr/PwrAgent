@@ -284,9 +284,11 @@ to compile the app icon:
 
 Before desktop dependency setup, `Check shared release source and npm
 prerequisites` verifies the protected tag/event/source SHA and operator migration.
-`Outpost release package` then runs mocked tests and the existing tarball,
-license and offline/native installation checks on Node 22 and 24. These jobs
-have no npm publish credentials/OIDC permission. Node 24's tested package is
+`Outpost release package` then runs mocked tests and the tarball, license and
+clean native installation checks on Node 24, the package's minimum. That
+installation runs lifecycle scripts, so it compiles the MCP IPC relay and
+stages pinned Git (see [the Outpost release contract](headless-npm-release.md#execution-and-security-boundaries)).
+This job has no npm publish credentials/OIDC permission. Its tested package is
 retained for the protected npm job; failure prevents desktop packaging.
 
 1. `Install macOS dependencies` populates the GitHub dependency cache only on
