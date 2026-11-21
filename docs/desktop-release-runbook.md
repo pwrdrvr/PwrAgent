@@ -523,7 +523,9 @@ body and retained npm receipt. In PwrAgent, register a
 [`ci_run` dependency](thread-dependencies.md#ci-runs-without-a-pr) on the
 workflow run URL. After reporting a gate, register another wait for the
 remaining gates, failures, and the finish. Restrict approval notifications to
-environments you have yet to report.
+the unreported environments from `apple-signing`, `windows-signing`, and
+`npm-pwragent`. If a job fails while the run is active, report it and register
+a wait for `finished` before inspecting the final failed logs.
 Every CI-published release is born as a GitHub `Pre-release`, including a
 suffix-free stable tag such as `v1.0.0`. Promotion to Latest is a separate
 operator action taken after the assets, updater metadata, and smoke checks are

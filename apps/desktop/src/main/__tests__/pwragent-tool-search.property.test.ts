@@ -66,12 +66,39 @@ describe("PwrAgent tool search relevance and delivery properties", () => {
     ));
   });
 
-  it("keeps one-time reads and attached PR watches discoverable", () => {
-    fc.assert(fc.property(fc.integer({ min: 1 }), (id) => {
-      expect(searchPwrAgentTools(catalog, `get CI run ${id} jobs`, 1)[0]?.name).toBe("get_ci_run");
-      expect(searchPwrAgentTools(catalog, "watch attached pull request checks", 1)[0]?.name)
-        .toBe("watch_thread_pull_request");
-    }));
+  it("keeps attached PR watches on the PR even when the query includes a run URL", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("attached pull request checks", "checks for the attached pull request"),
+      fc.integer({ min: 1, max: 10 ** 12 }),
+      (target, id) => {
+        const query = `watch ${target} at https://github.com/acme/ci/actions/runs/${id}`;
+        expect(searchPwrAgentTools(catalog, query, 1)[0]?.name)
+          .toBe("watch_thread_pull_request");
+      },
+    ));
+  });
+
+  it("keeps reads of approval-blocked jobs on the run inspection route", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("get", "read", "show", "inspect"),
+      fc.constantFrom("waiting for approval", "awaiting approval"),
+      fc.integer({ min: 1, max: 10 ** 12 }),
+      (action, state, id) => {
+        expect(searchPwrAgentTools(catalog, `${action} jobs ${state} in GitHub Actions run ${id}`, 1)[0]?.name)
+          .toBe("get_ci_run");
+      },
+    ));
+  });
+
+  it("honors an explicit Job Monitor named after the CI target", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("release CI run", "standalone CI run", "GitHub Actions run"),
+      fc.constantFrom("with a Job Monitor", "using a Job Monitor"),
+      (target, method) => {
+        expect(searchPwrAgentTools(catalog, `watch ${target} ${method}`, 1)[0]?.name)
+          .toBe("create_monitor_delegation");
+      },
+    ));
   });
 
   // The thread-search schema owns model filtering. Mentioning that criterion

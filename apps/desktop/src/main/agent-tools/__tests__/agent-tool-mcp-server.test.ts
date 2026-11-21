@@ -137,8 +137,8 @@ describe("AgentToolMcpServer", () => {
 
       expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(tools.map((tool) => tool.name)));
       expect(client.getInstructions()).toContain("skill://waiting-on-work/SKILL.md");
-      expect(client.getInstructions()).toContain("watch_thread_pull_request and end the turn");
-      expect(client.getInstructions()).toContain("manage_thread_dependencies (Continue After), mode all");
+      expect(client.getInstructions()).toContain("follow prAutomation.guidance and use watch_thread_pull_request");
+      expect(client.getInstructions()).toContain("ci_run for standalone CI, and local_file for watcher markers");
       // Include the prerequisite route without turning the bootstrap into a guide.
       expect(client.getInstructions()!.length).toBeLessThan(900);
       expect(PWRAGENT_TOOL_GUIDE).toContain("Use list_ci_artifacts and download_ci_artifact");

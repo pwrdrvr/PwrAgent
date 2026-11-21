@@ -107,19 +107,22 @@ function hasAnyWord(terms: ReadonlySet<string>, text: string): boolean {
 }
 
 function preferredWaitTool(query: string): string | undefined {
-  const normalized = query.toLowerCase();
-  if (/^\s*job[ -]+monitor(?:\s+for\b|\s*[.!?]?\s*$)/.test(normalized)
-    || /^\s*(?:please\s+)?(?:create|start|launch|use)\s+(?:(?:a|the)\s+)?job[ -]+monitor\b/.test(normalized)) {
+  const normalized = query.trim().toLowerCase().replace(/^please\s+/, "");
+  if (/^job[ -]+monitor(?:\s+for\b|\s*[.!?]?$)/.test(normalized)
+    || /^(?:create|start|launch|use)\s+(?:(?:a|the)\s+)?job[ -]+monitor\b/.test(normalized)) {
     return "create_monitor_delegation";
   }
-  if (/^\s*ci_run\s*$/.test(normalized)) return "manage_thread_dependencies";
-  const terms = new Set(words(normalized.replace(/\bjob[ -]+monitor\b/g, "")));
-  if (!hasAnyWord(terms, "wait waiting watch watching monitor monitoring notify notification wake poll polling")) {
-    return undefined;
+  if (normalized === "ci_run") return "manage_thread_dependencies";
+  // Match the requested action, since a status read can mention waiting jobs.
+  const waitTarget = normalized.match(/^(?:wait(?:ing)?|watch(?:ing)?|monitor(?:ing)?|notify|notification|wake|poll(?:ing)?)\s+(.+)/)?.[1];
+  if (!waitTarget) return undefined;
+  if (/\b(?:with|using)\s+(?:(?:a|the)\s+)?job[ -]+monitor\b/.test(waitTarget)) {
+    return "create_monitor_delegation";
   }
-  if (/\b(?:for|of|on)\s+(?:(?:my|the|this)\s+)?attached\s+(?:pr|mr|pull request|merge request)\b/.test(normalized)) {
-    return undefined;
+  if (/(?:^|\b(?:for|of|on)\s+)(?:(?:my|the|this|an?)\s+)?attached\s+(?:pr|mr|pull request|merge request)\b/.test(waitTarget)) {
+    return "watch_thread_pull_request";
   }
+  const terms = new Set(words(waitTarget));
   if (/\/(?:actions\/runs|-\/pipelines)\/\d+\b/.test(normalized)
     || (/\bgithub actions\b/.test(normalized) && hasAnyWord(terms, "run runs workflow workflows"))
     || (/\bgitlab\b/.test(normalized) && hasAnyWord(terms, "pipeline pipelines"))

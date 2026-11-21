@@ -49,24 +49,22 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
   const has = (name: string) => toolNames.includes(name);
   return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
     + (has("watch_thread_pull_request")
-      ? " For own PR CI/merge, follow prAutomation.guidance; use watch_thread_pull_request and end the turn."
+      ? " Own PR CI/merge: follow prAutomation.guidance and use watch_thread_pull_request."
       : "")
     + (has("manage_thread_dependencies")
-      ? " Use manage_thread_dependencies (Continue After) for other local threads/PRs, with mode all for multiple PRs. Use ci_run with the run URL for standalone GitHub Actions and GitLab CI waits, including release CI. Use local_file for an existing local watcher that publishes a result marker."
+      ? " Use manage_thread_dependencies for prerequisites, ci_run for standalone CI, and local_file for watcher markers."
       : "")
     + (has("schedule_follow_up")
-      ? " A wait that is only a time: schedule_follow_up."
+      ? " Timed waits: schedule_follow_up."
       : "")
     + (has("create_monitor_delegation")
-      ? " Use create_monitor_delegation for an explicit Job Monitor request or work without a built-in wait."
+      ? " Explicit Job Monitor or no built-in wait: create_monitor_delegation."
       : "")
     + (has("watch_thread_pull_request") || has("manage_thread_dependencies") || has("create_monitor_delegation")
-      ? " Register the wait and end the turn; do not poll PRs in monitors, shells, or sleep loops."
+      ? " Register the wait and end the turn."
       : "")
     + (has("read_tool_guide")
-      ? " Read skill://waiting-on-work/SKILL.md for waits; skill://tool-guide/SKILL.md for tools."
-        + " Find via skills/list or resources/list; skills/get: metadata, resources/read: content."
-        + " Read read_tool_guide for the short tool guide."
+      ? " Read read_tool_guide or use resources/read for skill://waiting-on-work/SKILL.md and skill://tool-guide/SKILL.md."
       : "");
 }
 

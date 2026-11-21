@@ -323,9 +323,10 @@ and end the turn. When working outside PwrAgent, use `gh run watch <run-id>`.
 If PwrAgent refuses registration, report the reason to the operator.
 
 The `Sign, notarize, publish` job pauses for `apple-signing` Environment
-approval. Treat that pause as expected. Before approving, verify the workflow
-run is for the intended tag, the tag points at the intended default-branch
-commit, and the version/changelog metadata match the tag.
+approval. The `Sign and package Windows installer` job pauses for
+`windows-signing` approval. Before either approval, verify the workflow run
+is for the intended tag, the tag points at the intended release commit, and
+the version/changelog metadata match the tag.
 
 The npm job later pauses for `npm-pwragent` review after desktop assets/notes
 are visible. Before approval, verify the tag/SHA, Node 22/24 validation and
@@ -344,12 +345,14 @@ version. GitHub and npm have no cross-service atomic transaction.
 
 A CI dependency wakes once. After reporting an approval gate, register a
 new `ci_run` wait for failures, the finish, and any remaining approval gates.
-Use `ciRun.environments` to target gates you have yet to report. After the
-last gate, set `ciRun.on` to `["job_failed", "finished"]`. The release is
-still in progress while approvals, publication, or receipt verification are
-pending.
+Filter `ciRun.environments` to the unreported entries from `apple-signing`,
+`windows-signing`, and `npm-pwragent`. After all three have been reported,
+set `ciRun.on` to `["job_failed", "finished"]`.
 
-On failure, inspect logs yourself:
+If `job_failed` wakes the thread while the run is still active, report the
+failed job and register another `ci_run` wait with `ciRun.on: ["finished"]`.
+The final conclusion settles that wait even if the run fails. Inspect the
+failed logs once the run has concluded:
 
 ```bash
 gh run view <run-id> --log-failed
