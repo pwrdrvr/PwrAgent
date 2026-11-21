@@ -5682,6 +5682,61 @@ describe("Composer", () => {
     expect(chip?.querySelector(".pr-chip__draft-bar")).not.toBeNull();
   });
 
+  it("sends the GitHub Actions failures pasted into an empty rewound code block", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "rewound-paste-thread",
+      title: "Rewound paste test",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+      backend: "codex" as const,
+      threadId: thread.id,
+      turnId: "turn-1",
+    }));
+    const original = "Did our change cause this?\n\n```\n\n```";
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        draftRestore={{
+          id: 1,
+          threadId: thread.id,
+          backend: "codex",
+          text: original,
+          kind: "rewound-prompt",
+        }}
+        draftStore={createComposerDraftStore()}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement;
+    expect(textbox.querySelector("pre code")?.textContent).toBe("");
+    const codeStart = original.indexOf("```\n") + "```\n".length;
+    act(() => textbox.setSelectionRange(codeStart, codeStart));
+    const pasted = Array.from({ length: 17 }, (_, index) => [
+      `FAIL  src/example-${index}.test.ts > retries > preserves state`,
+      "AssertionError: expected received value to deeply equal expected value",
+      "  at src/example.test.ts:120:13",
+      "",
+    ].join("\n")).join("\n");
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+        files: [],
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+    await clickButton("Send");
+    expect(startTurn.mock.calls[0]?.[0].input).toEqual([{
+      type: "text",
+      text: original.slice(0, codeStart) + pasted + original.slice(codeStart),
+    }]);
+  });
+
   it.each(["code block", "blockquote"])("preserves the draft when pasting a PR reference into a %s", async (target) => {
     const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
       backend: "codex" as const,
