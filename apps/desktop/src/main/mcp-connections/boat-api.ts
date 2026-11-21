@@ -1,5 +1,10 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { BOAT_API_URL, redactBoatApiKeys } from "@pwragent/shared/contracts/mcp-connections";
+import {
+  BOAT_API_URL,
+  boatStartBlockForCode,
+  redactBoatApiKeys,
+  type BoatStartBlock,
+} from "@pwragent/shared/contracts/mcp-connections";
 
 /**
  * The one place a Boat API key is attached to a request.
@@ -49,6 +54,36 @@ export type BoatApiRequest = {
   timeoutMs?: number;
 };
 
+/**
+ * What a request with the stored key taught PwrAgent about whether the
+ * account can start another sandbox.
+ *
+ * - `limits`: Boat answered `GET /limits`. `since` is the account generation
+ *   read when the request was sent, so an answer that a sandbox change
+ *   overtook is not taken as current.
+ * - `sandboxes_changed`: a create, resume, fork, stop or delete settled, so
+ *   the account's running count may differ from the last one read. Settled
+ *   includes a failure: a timed-out request may still have taken effect.
+ * - `start_refused`: Boat refused a create, resume or fork for the account's
+ *   limits or billing. It changed nothing at Boat.
+ */
+export type BoatAccountEvent =
+  | { kind: "limits"; limits: Record<string, unknown>; since: number }
+  | { kind: "sandboxes_changed" }
+  | { kind: "start_refused"; block: BoatStartBlock; code?: string };
+
+/** What a request does to the account's running sandboxes. */
+export function boatLifecycleRequest(request: Pick<BoatApiRequest, "method" | "path">): "start" | "end" | undefined {
+  const [root, , action, ...rest] = request.path;
+  if (root !== "sandboxes" || rest.length > 0) return undefined;
+  if (request.method === "POST" && request.path.length === 1) return "start";
+  if (request.method === "DELETE" && request.path.length === 2) return "end";
+  if (request.method !== "POST" || request.path.length !== 3) return undefined;
+  if (action === "resume" || action === "fork") return "start";
+  if (action === "stop") return "end";
+  return undefined;
+}
+
 export type BoatApiOptions = {
   /** The stored key, or undefined when none is stored. */
   readKey: () => Promise<string | undefined>;
@@ -57,6 +92,10 @@ export type BoatApiOptions = {
   onRejected?: () => void;
   /** Boat refused to create a sandbox because the stored key may not. */
   onCannotCreate?: () => void;
+  /** What a stored-key request showed about the account's capacity. */
+  onAccountEvent?: (event: BoatAccountEvent) => void;
+  /** The account generation `limits` events carry as `since`. */
+  accountGeneration?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -92,6 +131,34 @@ export class BoatApi {
     stored = false,
   ): Promise<Record<string, unknown>> {
     this.sentKeys.add(key);
+    if (!stored) return await this.attempts(key, request, false);
+    const lifecycle = boatLifecycleRequest(request);
+    const isLimits = request.method === "GET" && request.path.length === 1 && request.path[0] === "limits";
+    const since = this.options.accountGeneration?.() ?? 0;
+    let refused = false;
+    try {
+      const body = await this.attempts(key, request, true);
+      if (isLimits) this.options.onAccountEvent?.({ kind: "limits", limits: body, since });
+      return body;
+    } catch (error) {
+      const block = lifecycle === "start" && error instanceof BoatApiError && (error.status === 402 || error.status === 429)
+        ? boatStartBlockForCode(error.code)
+        : undefined;
+      if (block) {
+        refused = true;
+        this.options.onAccountEvent?.({ kind: "start_refused", block, ...(error instanceof BoatApiError && error.code ? { code: error.code } : {}) });
+      }
+      throw error;
+    } finally {
+      if (lifecycle && !refused) this.options.onAccountEvent?.({ kind: "sandboxes_changed" });
+    }
+  }
+
+  private async attempts(
+    key: string,
+    request: BoatApiRequest,
+    stored: boolean,
+  ): Promise<Record<string, unknown>> {
     for (let attempt = 0; ; attempt += 1) {
       const answer = await this.send(key, request);
       if (answer.ok) return answer.body;

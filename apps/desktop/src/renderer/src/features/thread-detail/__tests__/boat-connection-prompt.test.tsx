@@ -85,6 +85,23 @@ describe("BoatConnectionPrompt", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
+  it("names what blocks a start and keeps the switch, so running sandboxes can be stopped", async () => {
+    // Contrived counts.
+    renderTile(listing(boat({
+      boatAccount: { canStart: false, startBlock: "concurrent_limit", activeSandboxes: 2, maxActiveSandboxes: 2 },
+    })));
+    expect(await screen.findByText("2 of 2 sandboxes running · stop one to start another")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Use Boat in this thread" })).toBeInTheDocument();
+  });
+
+  it("tells a spent trial and missing billing apart from a full account", async () => {
+    const trial = renderTile(listing(boat({ boatAccount: { canStart: false, startBlock: "trial_compute_used" } })));
+    expect(await screen.findByText("Trial compute used · choose a plan in Boat")).toBeInTheDocument();
+    trial.unmount();
+    renderTile(listing(boat({ boatAccount: { canStart: false, startBlock: "billing_required" } })));
+    expect(await screen.findByText("Boat needs billing set up to start sandboxes")).toBeInTheDocument();
+  });
+
   it("shows nothing for a remote thread or a main without Boat", async () => {
     const remote = renderTile(listing(boat()), { remote: true });
     expect(remote.container).toBeEmptyDOMElement();

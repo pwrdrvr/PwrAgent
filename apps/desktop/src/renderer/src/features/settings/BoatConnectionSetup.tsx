@@ -253,14 +253,13 @@ export function BoatSetupDetail(props: {
 
   if (!needsKey) {
     const account = accountLine(props.connection);
-    const blocked = props.connection.boatAccount?.canStart === false
-      ? props.connection.boatAccount.blockedReason ?? "Boat will not start new sandboxes for this account right now."
-      : undefined;
+    // Blocked, the row's detail says why and what frees the next start
+    // (`resolveMcpConnectionSetup`), so it reads as the problem it is.
+    const blocked = props.connection.boatAccount?.canStart === false;
     return (
       <>
         {account ? <p className="settings-mcp-row__state">{account}</p> : null}
-        {blocked ? <p className="settings-mcp-row__error">{blocked}</p> : null}
-        <p className="settings-mcp-row__state">{props.detail}</p>
+        <p className={blocked ? "settings-mcp-row__error" : "settings-mcp-row__state"}>{props.detail}</p>
         {links}
       </>
     );

@@ -120,6 +120,83 @@ host tool approval, so no access mode or approval policy answers it.
 - **Cleanup is narrow.** PwrAgent's own cleanup session can stop and delete a
   thread's sandboxes and nothing else.
 
+## Whether Boat can start a sandbox
+
+A Boat account runs a limited number of sandboxes at once: 2 on the trial, 100
+on the $20 plan. Every running sandbox counts, whoever started it: another
+thread, another computer, or Boat's own site. A stopped one does not. So
+PwrAgent never works capacity out from its own `thread_sandboxes` records; the
+account-wide answer from `GET /limits` is the truth.
+
+`BoatConnection` keeps the last answer in memory, never in SQLite, and never
+polls. It changes on events and on demand:
+
+- **A sandbox change makes it stale.** When a create, resume, fork, stop or
+  delete settles, through any path (an agent, the thread panel, PR cleanup,
+  a failed adoption), `BoatApi` reports it and the connection moves its
+  account generation on. The next status read asks Boat again; a read that
+  was in flight when the change settled is handed to the caller that asked
+  but not kept. Settled includes a failure: a request that timed out may
+  still have taken effect.
+- **A refusal is learned at once.** When Boat refuses a create, resume or
+  fork with `429 limit_reached`, `429 member_limit_reached`,
+  `429 trial_compute_limit_reached`, `402 billing_required`, or
+  `429 rate_limited` past its one retry, the status says "cannot start", with
+  the reason, without asking Boat again. `limit_reached` also sets the running
+  count to at least the cap.
+- **Any `GET /limits` answer is kept**, including the one `account_status`
+  makes, unless a sandbox change overtook it.
+- **Otherwise it is kept for 60 seconds**, and Refresh status in Settings
+  reads it again. A change made outside PwrAgent shows after that, or at the
+  next refusal.
+
+The status is `ready` whether or not Boat can start: a full account still
+lets a thread list and stop its own sandboxes. `boatAccount` carries
+`canStart`, Boat's `blockedReason`, the running and maximum counts,
+`checkedAt`, and `startBlock`, which sorts the block by what frees the next
+start:
+
+| `startBlock` | From | What frees a start | Chip |
+| --- | --- | --- | --- |
+| `concurrent_limit` | `limit_reached`, `member_limit_reached`, or a full count | Stop or delete a running sandbox | At limit |
+| `trial_compute_used` | `trial_compute_limit_reached`, or trial seconds used up | A plan payment | Trial used |
+| `billing_required` | `billing_required`, or `checkoutRequired` | A plan or a wallet payment | Billing needed |
+| `start_rate_limit` | `rate_limited` | Waiting | Start limit |
+| `other` | Anything else | See the Boat dashboard | Can't start |
+
+Boat documents `startBlockedReason` only as a string, so a refusal code there
+is read as one. Otherwise `boatStartBlockFromLimits` decides from the other
+fields, putting first the blocks that stopping a sandbox cannot lift.
+
+The shared contract (`packages/shared/src/contracts/mcp-connections.ts`)
+holds the one classification and its wording, so every reader agrees:
+
+- Settings: the row's chip and detail (`resolveMcpConnectionSetup`).
+- The thread's Boat tile: one line, such as "2 of 2 sandboxes running · stop
+  one to start another".
+- `manage_mcp_connections` `list`: Boat's entry carries `sandboxStart`
+  (`boatSandboxStartAvailability`): `canStart` (`true`, `false`, or `null`
+  when PwrAgent cannot tell), `reason`, the counts, a `detail` sentence on
+  what frees a start, and `checkedAt`. It is never older than the last
+  sandbox change PwrAgent saw settle. This is the cheap check before planning
+  to use Boat: at most one `GET /limits`, and no Boat session.
+- `account_status`: reads `GET /limits` itself, and adds `startBlock`,
+  `detail` and, at the running limit, `ownRunning`.
+
+A refused start tells the agent in plain words why, and at the running limit
+gives the counts and the thread's own running sandboxes, by id, name and
+state, with the advice to stop or delete one. Another thread's sandboxes, and
+ones started outside PwrAgent, are never named: the thread cannot reach them.
+A thread with none running is told to ask the operator.
+
+`boat-start-availability.property.test.ts` states the rule as a model against
+a fake Boat with a cap: after any sequence of starts, stops, deletes,
+refusals and changes outside PwrAgent, once PwrAgent has asked Boat, what it
+reports as "can start" and the running count equal what the fake would
+answer. An `fc.scheduler` property holds reads and changes in flight
+together: a read that begins after a change settles never answers with the
+account from before it.
+
 ## Settings
 
 Scalars under `[mcp_connections]`:

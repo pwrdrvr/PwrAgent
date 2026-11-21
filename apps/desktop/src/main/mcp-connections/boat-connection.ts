@@ -7,14 +7,18 @@ import { runGitCommand } from "../app-server/git-executable";
 import {
   BOAT_LINKS,
   BOAT_MCP_CONNECTION_ID,
+  boatStartBlockForCode,
+  boatStartBlockFromLimits,
+  describeBoatStartBlock,
   normalizeBoatApiKey,
   type BoatAccountSummary,
+  type BoatStartBlock,
   type BoatLinkTarget,
   type BoatSandboxPolicy,
   type McpConnectionStatus,
   type OpenBoatLinkResponse,
 } from "@pwragent/shared/contracts/mcp-connections";
-import { BoatApi, BoatApiError } from "./boat-api";
+import { BoatApi, BoatApiError, type BoatAccountEvent } from "./boat-api";
 import {
   BOAT_SERVER_INSTRUCTIONS,
   BoatTools,
@@ -37,6 +41,13 @@ export const BOAT_API_KEY_SECRET = "BOAT_API_KEY";
 const STATUS_CACHE_MS = 60_000;
 
 type BoatStatus = Pick<McpConnectionStatus, "configured" | "state" | "detail" | "boatAccount">;
+
+/**
+ * `key`: the stored key changed or Boat stopped accepting it, which ends what
+ * every open session could do. `account`: only what the account can start
+ * changed.
+ */
+export type BoatStatusChange = "key" | "account";
 
 export type BoatSecretStore = {
   read(connectionId: string): Promise<Record<string, string>>;
@@ -66,8 +77,16 @@ export type BoatConnectionOptions = {
 
 export class BoatConnection {
   private readonly api: BoatApi;
-  private cached?: { at: number; value: BoatStatus };
-  private pending?: Promise<BoatStatus>;
+  /**
+   * The last status and the account generation it was read in. Every event
+   * that can change how many sandboxes run (a create, resume, fork, stop or
+   * delete settling, from any session or window) moves the generation on, so
+   * a status read before it is not served as current, and a read that was
+   * in flight when it happened is not stored as current either.
+   */
+  private cached?: { at: number; generation: number; value: BoatStatus };
+  private pending?: { generation: number; promise: Promise<BoatStatus> };
+  private generation = 0;
   /** Set when Boat refuses the stored key, until a new key is saved. */
   private rejected = false;
   /**
@@ -75,7 +94,7 @@ export class BoatConnection {
    * key is saved. Only a create can show it, so a refresh does not clear it.
    */
   private cannotCreate = false;
-  private readonly statusListeners = new Set<() => void>();
+  private readonly statusListeners = new Set<(change: BoatStatusChange) => void>();
   private readonly forwards: BoatPortForwards;
   private nextSession = 0;
 
@@ -88,18 +107,20 @@ export class BoatConnection {
         if (this.rejected) return;
         this.rejected = true;
         this.cached = undefined;
-        for (const listener of this.statusListeners) listener();
+        this.announce("key");
       },
       onCannotCreate: () => {
         if (this.cannotCreate) return;
         this.cannotCreate = true;
         this.cached = undefined;
-        for (const listener of this.statusListeners) listener();
+        this.announce("key");
       },
+      onAccountEvent: (event) => this.learn(event),
+      accountGeneration: () => this.generation,
     });
   }
 
-  onStatusChanged(listener: () => void): () => void {
+  onStatusChanged(listener: (change: BoatStatusChange) => void): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
   }
@@ -113,28 +134,87 @@ export class BoatConnection {
     };
   }
 
-  /** Concurrent reads share one check. `refresh` skips the cache. */
+  /**
+   * Concurrent reads share one check. `refresh` skips the cache. A read that
+   * starts after a sandbox change never gets an answer from before it.
+   */
   async readStatus(refresh = false): Promise<BoatStatus> {
-    const now = this.options.now?.() ?? Date.now();
     // An asked-for refresh checks the key again: one refused request must
     // not hold Boat off until a new key is pasted.
     if (refresh) this.rejected = false;
-    if (!refresh && this.cached && now - this.cached.at < STATUS_CACHE_MS) return this.cached.value;
-    if (this.pending) return await this.pending;
-    const pending = this.probe().then((value) => {
-      // The first answer is news only when a key is stored: until then every
-      // reader already shows Boat as not connected.
-      const changed = this.cached
-        ? JSON.stringify(this.cached.value) !== JSON.stringify(value)
-        : value.configured;
-      this.cached = { at: this.options.now?.() ?? Date.now(), value };
-      if (changed) for (const listener of this.statusListeners) listener();
+    const cached = this.cached;
+    if (
+      !refresh
+      && cached
+      && cached.generation === this.generation
+      && this.now() - cached.at < STATUS_CACHE_MS
+    ) {
+      return cached.value;
+    }
+    if (this.pending?.generation === this.generation) return await this.pending.promise;
+    const generation = this.generation;
+    const promise = this.probe().then((value) => {
+      // Overtaken by a sandbox change: the caller that asked first gets it,
+      // and the next read asks Boat again.
+      if (generation === this.generation) this.store(value);
       return value;
     }).finally(() => {
-      if (this.pending === pending) this.pending = undefined;
+      if (this.pending?.promise === promise) this.pending = undefined;
     });
-    this.pending = pending;
-    return await pending;
+    this.pending = { generation, promise };
+    return await promise;
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private announce(change: BoatStatusChange): void {
+    for (const listener of this.statusListeners) listener(change);
+  }
+
+  /** Keeps a status as current for this generation, and says if it is news. */
+  private store(value: BoatStatus): void {
+    // The first answer is news only when a key is stored: until then every
+    // reader already shows Boat as not connected.
+    const previous = this.cached?.value;
+    const changed = previous ? statusKey(previous) !== statusKey(value) : value.configured;
+    this.cached = { at: this.now(), generation: this.generation, value };
+    if (!changed) return;
+    // Reachable or not is the connection's state, and what a tool listing
+    // depends on; the account's capacity alone is not.
+    const sameConnection = previous?.configured === value.configured && previous.state === value.state;
+    this.announce(sameConnection ? "account" : "key");
+  }
+
+  /**
+   * What a request with the stored key showed. Boat's account-wide count is
+   * the truth: PwrAgent never works out capacity from its own records, which
+   * miss sandboxes other threads, computers or Boat's site started.
+   */
+  private learn(event: BoatAccountEvent): void {
+    switch (event.kind) {
+      case "limits":
+        // Read before a sandbox change settled: the next read asks again.
+        if (event.since !== this.generation || this.rejected || this.cannotCreate) return;
+        this.store(readyStatus(accountSummary(event.limits, this.now())));
+        return;
+      case "sandboxes_changed": {
+        this.generation += 1;
+        // Readers that show the last answer re-read; the next read asks Boat.
+        if (this.cached) this.announce("account");
+        return;
+      }
+      case "start_refused": {
+        // Known at once, without asking Boat again. A read already in flight
+        // may have been answered before the slot filled, so it is overtaken.
+        if (this.rejected || this.cannotCreate) return;
+        this.generation += 1;
+        const previous = this.cached?.value.boatAccount;
+        this.store(readyStatus(refusedAccount(previous, event.block, event.code, this.now())));
+        return;
+      }
+    }
   }
 
   /**
@@ -166,6 +246,7 @@ export class BoatConnection {
     this.rejected = false;
     this.cannotCreate = false;
     this.cached = undefined;
+    this.generation += 1;
     return await this.readStatus(true);
   }
 
@@ -175,7 +256,8 @@ export class BoatConnection {
     this.rejected = false;
     this.cannotCreate = false;
     this.cached = undefined;
-    for (const listener of this.statusListeners) listener();
+    this.generation += 1;
+    this.announce("key");
   }
 
   async openLink(target: BoatLinkTarget): Promise<OpenBoatLinkResponse> {
@@ -329,18 +411,7 @@ export class BoatConnection {
     if (this.cannotCreate) return CANNOT_CREATE;
     try {
       const limits = await this.api.requestWithKey(key, { method: "GET", path: ["limits"] });
-      const boatAccount = accountSummary(limits);
-      return boatAccount.canStart === false
-        ? {
-            configured: true, state: "ready", boatAccount,
-            detail: `Boat will not start a new sandbox for this account${
-              boatAccount.blockedReason ? ` (${boatAccount.blockedReason})` : ""
-            }. Running sandboxes can still be listed and stopped. Check the Boat dashboard.`,
-          }
-        : {
-            configured: true, state: "ready", boatAccount,
-            detail: "Connected with an API key stored in this profile. Sandboxes bill per second while they run.",
-          };
+      return readyStatus(accountSummary(limits, this.now()));
     } catch (error) {
       if (error instanceof BoatApiError && error.kind === "rejected") {
         this.rejected = true;
@@ -354,7 +425,12 @@ export class BoatConnection {
       }
       if (error instanceof BoatApiError && error.kind === "limited") {
         // The key works; the account is at a limit. Threads keep list and stop.
-        return { configured: true, state: "ready", detail: error.message, boatAccount: { canStart: false } };
+        return readyStatus(refusedAccount(
+          this.cached?.value.boatAccount,
+          boatStartBlockForCode(error.code) ?? "other",
+          error.code,
+          this.now(),
+        ));
       }
       return {
         configured: true, state: "temporarily_unavailable",
@@ -375,8 +451,52 @@ const CANNOT_CREATE: BoatStatus = {
   detail: "The stored Boat API key is not allowed to create sandboxes. Sign in again to replace it.",
 };
 
-function accountSummary(limits: Record<string, unknown>): BoatAccountSummary {
-  const account: BoatAccountSummary = {};
+/** A status without when it was read, to tell whether anything changed. */
+function statusKey(status: BoatStatus): string {
+  const { checkedAt: _checkedAt, ...account } = status.boatAccount ?? {};
+  return JSON.stringify({ ...status, boatAccount: account });
+}
+
+function readyStatus(boatAccount: BoatAccountSummary): BoatStatus {
+  return boatAccount.canStart === false
+    ? {
+        configured: true, state: "ready", boatAccount,
+        detail: `${describeBoatStartBlock(boatAccount)} Running sandboxes can still be listed and stopped.`,
+      }
+    : {
+        configured: true, state: "ready", boatAccount,
+        detail: "Connected with an API key stored in this profile. Sandboxes bill per second while they run.",
+      };
+}
+
+/**
+ * The account as a refused start left it: what was last read, with the
+ * refusal. `limit_reached` means every slot on the account is taken, so its
+ * running count is at least the cap. (`member_limit_reached` is a smaller cap
+ * an organization sets on one member, and says nothing about the account's.)
+ */
+function refusedAccount(
+  previous: BoatAccountSummary | undefined,
+  block: BoatStartBlock,
+  code: string | undefined,
+  checkedAt: number,
+): BoatAccountSummary {
+  const account: BoatAccountSummary = {
+    ...previous,
+    canStart: false,
+    startBlock: block,
+    checkedAt,
+  };
+  if (code) account.blockedReason = code.slice(0, 200);
+  else delete account.blockedReason;
+  if (code === "limit_reached" && account.maxActiveSandboxes !== undefined) {
+    account.activeSandboxes = Math.max(account.activeSandboxes ?? 0, account.maxActiveSandboxes);
+  }
+  return account;
+}
+
+function accountSummary(limits: Record<string, unknown>, checkedAt: number): BoatAccountSummary {
+  const account: BoatAccountSummary = { checkedAt };
   if (typeof limits.accessTier === "string" && limits.accessTier) account.plan = limits.accessTier.slice(0, 40);
   if (typeof limits.activeSandboxes === "number") account.activeSandboxes = limits.activeSandboxes;
   if (typeof limits.maxActiveSandboxes === "number") account.maxActiveSandboxes = limits.maxActiveSandboxes;
@@ -384,5 +504,7 @@ function accountSummary(limits: Record<string, unknown>): BoatAccountSummary {
   if (typeof limits.startBlockedReason === "string" && limits.startBlockedReason) {
     account.blockedReason = limits.startBlockedReason.slice(0, 200);
   }
+  const block = boatStartBlockFromLimits(limits);
+  if (block) account.startBlock = block;
   return account;
 }

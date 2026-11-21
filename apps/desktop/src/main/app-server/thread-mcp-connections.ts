@@ -14,6 +14,7 @@ import {
   mcpConnectionIdsForNewThread,
   mcpSelectionApplyTiming,
   readMcpProjectToolApprovalChoice,
+  boatSandboxStartAvailability,
   resolveMcpConnectionSetup,
   resolveMcpConnectionToolApproval,
   type DescribeThreadMcpConnectionsRequest,
@@ -1410,6 +1411,9 @@ export class ThreadMcpConnections {
                 configured: connection.configured,
                 enabled: connection.enabled,
                 threadSelectable: setup.threadSelectable,
+                ...(connection.kind === "boat"
+                  ? { sandboxStart: boatSandboxStartAvailability(connection) }
+                  : {}),
               };
             }),
           },
