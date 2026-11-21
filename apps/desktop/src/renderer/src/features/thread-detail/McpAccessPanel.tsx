@@ -6,7 +6,7 @@ import {
   type DescribeThreadMcpConnectionsResponse,
   type McpConnectionStatus,
 } from "@pwragent/shared/contracts/mcp-connections";
-import { orderManagedMcpConnections } from "@pwragent/shared/mcp-connection-order";
+import { isSuggestedMcpConnection, orderManagedMcpConnections } from "@pwragent/shared/mcp-connection-order";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -146,9 +146,18 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
     : props.selection.connectionIds.filter(
         (id) => !available?.some((connection) => connection.id === id),
       );
+  // A connection the operator set up and then turned off is worth a line: it
+  // explains a missing row. One that was never set up is only a suggestion in
+  // Settings, and its absence here needs no explaining.
   const parkedOnly = parked?.filter(
-    (connection) => !stranded.includes(connection.id),
+    (connection) => !stranded.includes(connection.id) && !isSuggestedMcpConnection(connection),
   );
+  // What the check below will report on, so its rows hold their place while
+  // the agent is asked.
+  const selected = props.selection.connectionIds.map((id) => ({
+    connectionId: id,
+    displayName: connections?.find((connection) => connection.id === id)?.displayName ?? id,
+  }));
 
   return (
     <aside className="live-work-rail mcp-access-panel" aria-label="PwrAgent MCPs">
@@ -379,6 +388,8 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
             desktopApi={props.desktopApi}
             threadId={props.threadId}
             federationTarget={props.federationTarget}
+            // Names are not known until the connections are read.
+            selected={connections === undefined ? [] : selected}
             token={props.verifyToken ?? 0}
           />
         ) : null}
@@ -494,17 +505,22 @@ function ThreadMcpVerification(props: {
   backend: AppServerBackendKind;
   desktopApi?: DesktopApi;
   federationTarget?: FederationRemoteTarget;
+  /** The thread's selected connections, shown while the agent is asked. */
+  selected: ReadonlyArray<{ connectionId: string; displayName: string }>;
   threadId: string;
   token: number;
 }) {
-  const [report, setReport] = useState<DescribeThreadMcpConnectionsResponse>();
+  const [answer, setAnswer] = useState<{ key: string; report: DescribeThreadMcpConnectionsResponse }>();
   const [failed, setFailed] = useState(false);
   const { backend, desktopApi, federationTarget, threadId, token } = props;
+  const describe = desktopApi?.describeThreadMcpConnections;
+  const key = JSON.stringify([backend, federationTarget?.instanceId, threadId]);
+  // Another thread's answer is never shown. This thread's last answer stays
+  // while it is read again after a change, so the section does not blink.
+  const report = answer?.key === key ? answer.report : undefined;
 
   useEffect(() => {
     let cancelled = false;
-    const describe = desktopApi?.describeThreadMcpConnections;
-    setReport(undefined);
     setFailed(false);
     if (!describe) return;
     void (async () => {
@@ -515,7 +531,7 @@ function ThreadMcpVerification(props: {
           ...(federationTarget ? { federationTarget } : {}),
         });
         if (!cancelled) {
-          setReport(response);
+          setAnswer({ key, report: response });
           setFailed(false);
         }
       } catch {
@@ -525,9 +541,28 @@ function ThreadMcpVerification(props: {
     return () => {
       cancelled = true;
     };
-  }, [backend, desktopApi, federationTarget, threadId, token]);
+  }, [backend, describe, federationTarget, key, threadId, token]);
 
-  if (failed || !report || report.connections.length === 0) return null;
+  if (!report) {
+    // Asking the agent takes a moment. The section holds its place with the
+    // rows it is about to fill, so the panel does not grow under the pointer.
+    if (failed || !describe || props.selected.length === 0) return null;
+    return (
+      <section className="mcp-access-panel__verify" aria-busy="true">
+        <h3 className="mcp-access-panel__verify-head">In this thread</h3>
+        <ul className="mcp-access-panel__verify-list">
+          {props.selected.map((entry) => (
+            <li key={entry.connectionId}>
+              <span className="mcp-access-panel__verify-name">{entry.displayName}</span>
+              <span className="mcp-access-panel__verify-meta">Checking…</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mcp-access-panel__detail" role="status">Asking the agent what it loaded…</p>
+      </section>
+    );
+  }
+  if (report.connections.length === 0) return null;
 
   const handedOver = report.handedOverAt
     ? new Date(report.handedOverAt).toLocaleTimeString([], {
