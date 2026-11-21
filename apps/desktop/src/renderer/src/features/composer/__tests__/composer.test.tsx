@@ -7622,6 +7622,62 @@ describe("Composer", () => {
       expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent("Existing draft");
     });
 
+    // A queued Send goes only with an inserted transcript. Dictation that an
+    // overlay cancels must not release the draft without the spoken words.
+    it("drops a queued Send when an overlay cancels dictation", async () => {
+      const { dictation, props } = fixture();
+      const finish = createDeferred<string>();
+      dictation.finish.mockReturnValue(finish.promise);
+      const view = (covered: boolean) => <Composer {...props} composerCovered={covered} />;
+      const { rerender } = render(view(false));
+      fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Existing draft" } });
+      await clickButton("Dictate with OpenAI");
+      await screen.findByRole("button", { name: "Stop dictation" });
+      await clickButton("Send");
+      await waitFor(() => expect(dictation.finish).toHaveBeenCalledOnce());
+
+      rerender(view(true));
+      rerender(view(false));
+      await act(async () => { finish.resolve("Stale final text"); });
+      expect(props.desktopApi.startTurn).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent("Existing draft");
+    });
+
+    it("runs a slash command as typed and leaves dictation running", async () => {
+      const { dictation, props } = fixture();
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      const [backend] = props.backends;
+      const backends = [{ ...backend, capabilities: { ...backend.capabilities, forkThread: true } }];
+      render(<Composer {...props} backends={backends} onForkThread={onForkThread} />);
+      await clickButton("Dictate with OpenAI");
+      await screen.findByRole("button", { name: "Stop dictation" });
+      fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/fork " } });
+      await clickButton("Fork");
+      expect(onForkThread).toHaveBeenCalledOnce();
+      expect(dictation.finish).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Stop dictation" })).toBeEnabled();
+      await act(async () => pending.resolve(false));
+    });
+
+    it("leaves Enter and Escape to an open autocomplete", async () => {
+      const { dictation, props } = fixture();
+      render(<Composer {...props} skills={autocompleteRegressionSkills} />);
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      await clickButton("Dictate with OpenAI");
+      await screen.findByRole("button", { name: "Stop dictation" });
+      fireEvent.change(reply, { target: { value: "$" } });
+      await screen.findByRole("listbox", { name: "Skills" });
+      fireEvent.keyDown(reply, { key: "Escape" });
+      expect(dictation.cancel).not.toHaveBeenCalled();
+      fireEvent.change(reply, { target: { value: "" } });
+      fireEvent.change(reply, { target: { value: "$" } });
+      await screen.findByRole("listbox", { name: "Skills" });
+      fireEvent.keyDown(reply, { key: "Enter" });
+      expect(dictation.finish).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Stop dictation" })).toBeEnabled();
+    });
+
     // Escape discards: no transcript reaches the draft, nothing is sent, and a
     // Send asked for while finalizing is dropped with it.
     it.each(["connecting", "listening", "finishing", "finishing after Send"] as const)(

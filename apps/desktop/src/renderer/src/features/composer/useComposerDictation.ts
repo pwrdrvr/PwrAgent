@@ -20,6 +20,7 @@ type Recording = {
   microphoneLive: boolean;
   // Audio captured before the provider session was ready.
   held: Uint8Array[];
+  flushingHeld: boolean;
   silence?: ReturnType<typeof setTimeout>;
   inFlight: Promise<void>;
   queued: number;
@@ -57,10 +58,7 @@ export function useComposerDictation(
       const active = recording.current;
       if (!active) return;
       recording.current = undefined;
-      clearTimeout(active.silence);
-      active.unsubscribe?.();
-      active.abort.abort();
-      void api?.cancel(active.id).catch(() => undefined);
+      stopRecording(api, active);
     };
   }, [api, scope]);
 
@@ -69,11 +67,8 @@ export function useComposerDictation(
     const previous = recording.current;
     const isCurrent = (current: Recording) => recording.current === current && latest.current.scope === scope;
     const release = (current: Recording) => {
-      clearTimeout(current.silence);
-      current.unsubscribe?.();
-      current.abort.abort();
       if (recording.current === current) recording.current = undefined;
-      void api.cancel(current.id).catch(() => undefined);
+      stopRecording(api, current);
     };
     const fail = (current: Recording, error: string) => {
       if (!isCurrent(current)) return;
@@ -115,6 +110,7 @@ export function useComposerDictation(
       apiReady: false,
       microphoneLive: false,
       held: [],
+      flushingHeld: false,
       inFlight: Promise.resolve(),
       queued: 0,
       announced: false,
@@ -155,7 +151,9 @@ export function useComposerDictation(
             if (current.held.length > MAX_HELD_BATCHES) current.held.shift();
             return;
           }
-          if (current.queued >= MAX_AUDIO_BATCHES) {
+          // Live audio queues behind the held audio while that is sent, which
+          // is not the provider falling behind.
+          if (!current.flushingHeld && current.queued >= MAX_AUDIO_BATCHES) {
             fail(current, "Live transcription could not keep up with the microphone.");
             return;
           }
@@ -188,10 +186,15 @@ export function useComposerDictation(
       current.apiReady = true;
       const held = current.held.splice(0);
       if (held.length) {
+        current.flushingHeld = true;
         send(async () => {
-          for (const pcm of held) {
-            if (!isCurrent(current)) return;
-            await api.audio(current.id, pcm);
+          try {
+            for (const pcm of held) {
+              if (!isCurrent(current)) return;
+              await api.audio(current.id, pcm);
+            }
+          } finally {
+            current.flushingHeld = false;
           }
         });
       }
@@ -207,14 +210,18 @@ export function useComposerDictation(
     const active = recording.current;
     if (!active) return;
     recording.current = undefined;
-    clearTimeout(active.silence);
-    active.unsubscribe?.();
-    active.abort.abort();
-    void api?.cancel(active.id).catch(() => undefined);
+    stopRecording(api, active);
     setView({ phase: "idle" });
   }
 
   return { ...view, toggle, cancel, onLevel };
+}
+
+function stopRecording(api: DictationApi | undefined, active: Recording): void {
+  clearTimeout(active.silence);
+  active.unsubscribe?.();
+  active.abort.abort();
+  void api?.cancel(active.id).catch(() => undefined);
 }
 
 function publishLevel(listeners: Set<DictationLevelListener>, pcm: Uint8Array): void {

@@ -6476,12 +6476,23 @@ function useComposerController(props: ComposerProps) {
   const dictationApi = props.dictationAvailable && !props.composerCovered && !isReviewComposerOpen
     ? props.desktopApi?.dictation
     : undefined;
-  const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) =>
-    activeComposerScopeKeyRef.current === composerScopeKey
+  // A send asked for while dictation is live. It runs only once the
+  // transcript is in the draft, so a message never leaves without the words
+  // being spoken; a dictation that is cancelled or fails drops it.
+  const sendAfterDictationRef = useRef<{
+    scopeKey: string;
+    mode: "default" | "steer" | "interrupt";
+    options?: { restoreComposerFocus?: boolean };
+    ready: boolean;
+  }>(undefined);
+  const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) => {
+    if (activeComposerScopeKeyRef.current !== composerScopeKey) return false;
     // The caret lands after the transcript unless the operator has since
     // started typing in another field.
-    && inputRef.current?.appendPlainText(text, { focusEnd: !isEditingOutsideComposer() }) === true,
-  );
+    const inserted = inputRef.current?.appendPlainText(text, { focusEnd: !isEditingOutsideComposer() }) === true;
+    if (inserted && sendAfterDictationRef.current) sendAfterDictationRef.current.ready = true;
+    return inserted;
+  });
   const toggleDictation = (): void => {
     // Starting moves the keyboard into the draft, where Enter stops dictation.
     if (dictation.phase === "idle") inputRef.current?.focus({ synchronous: true });
@@ -6496,13 +6507,6 @@ function useComposerController(props: ComposerProps) {
     if (dictation.phase === "listening") void dictation.toggle();
     return true;
   };
-  // A send asked for while dictation is live. It runs once the transcript is
-  // in the draft, so a message never leaves without the words being spoken.
-  const sendAfterDictationRef = useRef<{
-    scopeKey: string;
-    mode: "default" | "steer" | "interrupt";
-    options?: { restoreComposerFocus?: boolean };
-  }>(undefined);
   const cancelDictation = (): void => {
     sendAfterDictationRef.current = undefined;
     dictation.cancel();
@@ -9904,12 +9908,16 @@ function useComposerController(props: ComposerProps) {
     mode: "default" | "steer" | "interrupt" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
-    if (dictation.phase !== "idle") {
+    // A slash command is not a message: it runs as typed and leaves dictation
+    // alone, so a transcript is never appended to the command.
+    const submitsCommand = (inputRef.current?.value ?? draft).trimStart().startsWith("/");
+    if (dictation.phase !== "idle" && !submitsCommand) {
       // Send finishes dictation first. Nothing has been heard while
       // connecting, so that session is dropped and the draft goes as it is.
-      sendAfterDictationRef.current = { scopeKey: composerScopeKey, mode, options };
+      const connecting = dictation.phase === "connecting";
+      sendAfterDictationRef.current = { scopeKey: composerScopeKey, mode, options, ready: connecting };
       if (dictation.phase === "listening") void dictation.toggle();
-      else if (dictation.phase === "connecting") dictation.cancel();
+      else if (connecting) dictation.cancel();
       return;
     }
     // The status line under the tray says why: the message would reference
@@ -10273,8 +10281,9 @@ function useComposerController(props: ComposerProps) {
     if (dictation.phase !== "idle") return;
     const pending = sendAfterDictationRef.current;
     sendAfterDictationRef.current = undefined;
-    // A failed or empty dictation leaves the draft for the operator to check.
-    if (!pending || dictation.error || pending.scopeKey !== composerScopeKey) return;
+    // A failed, empty or cancelled dictation leaves the draft for the
+    // operator to check.
+    if (!pending?.ready || dictation.error || pending.scopeKey !== composerScopeKey) return;
     void submitTurnRef.current(pending.mode, pending.options);
   }, [composerScopeKey, dictation.error, dictation.phase]);
 
@@ -13220,12 +13229,15 @@ function useComposerController(props: ComposerProps) {
         return;
       }
 
-      if (event.key === "Enter" && !event.shiftKey && !event.altKey && finishDictationInsteadOfSubmitting()) {
+      // An open autocomplete keeps Enter and Escape for its own options.
+      if (
+        event.key === "Enter" && !event.shiftKey && !event.altKey && !hasAutocompleteOptions
+        && finishDictationInsteadOfSubmitting()
+      ) {
         event.preventDefault();
         return;
       }
-      // An open autocomplete keeps Escape; otherwise it discards dictation.
-      if (event.key === "Escape" && !hasAutocompleteOptions && dictation.phase !== "idle") {
+      if (event.key === "Escape" && !autocompleteKind && dictation.phase !== "idle") {
         event.preventDefault();
         cancelDictation();
         return;
