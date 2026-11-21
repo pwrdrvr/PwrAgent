@@ -5810,7 +5810,21 @@ export function useThreadNavigation(
       (creation) => creation.selectionKey === displaySelectionKey,
     )?.directoryKey;
     if (launchpadDirectoryKey) {
-      return directories.find((directory) => directory.key === launchpadDirectoryKey);
+      const indexed = directories.find((directory) => directory.key === launchpadDirectoryKey);
+      if (indexed) return indexed;
+      // A saved worktree composer keeps its exact local key in history even
+      // after its project row folds into the primary checkout.
+      const config = launchpadConfiguration.value?.launchpad;
+      if (rendererFederationTarget?.scope !== "remote" && launchpadDirectoryKey.startsWith("directory:")
+        && !removedDirectoryKeysRef.current.has(launchpadDirectoryKey) && config?.directoryKey === launchpadDirectoryKey) {
+        const draft = draftStore?.get(buildLaunchpadComposerScopeKey(launchpadDirectoryKey));
+        return {
+          key: launchpadDirectoryKey, kind: config.directoryKind, label: config.directoryLabel, path: config.directoryPath,
+          gitStatus: launchpadConfiguration.value?.directoryGitStatus,
+          launchpad: { ...config, prompt: draft?.draft ?? "", imageAttachments: draft?.imageAttachments, fileAttachments: draft?.fileAttachments },
+        };
+      }
+      return undefined;
     }
 
     if (!selectedThreadKey) {
@@ -5833,7 +5847,11 @@ export function useThreadNavigation(
     activeFederatedLaunchpad,
     directories,
     displaySelectionKey,
+    draftStore,
+    draftStore?.hydrationVersion,
+    launchpadConfiguration.value,
     pendingLaunchpadCreations,
+    rendererFederationTarget?.scope,
     selectedThreadKey,
     selectedDetail.state?.detail?.thread,
     selectedDetail.state?.detail?.workspaceDirectories,
@@ -5857,9 +5875,8 @@ export function useThreadNavigation(
       return undefined;
     }
 
-    return directories.find((directory) => directory.key === launchpadDirectoryKey)
-      ?.launchpad;
-  }, [activeFederatedLaunchpad, directories, displaySelectionKey, pendingLaunchpadCreations]);
+    return selectedDirectory?.key === launchpadDirectoryKey ? selectedDirectory.launchpad : undefined;
+  }, [activeFederatedLaunchpad, displaySelectionKey, pendingLaunchpadCreations, selectedDirectory]);
 
   // The directory label the New Thread button would resolve to with its
   // default (context-aware) behavior, or undefined when that resolves to the

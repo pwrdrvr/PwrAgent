@@ -3,7 +3,12 @@ import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normaliz
 import { resolveWorktreeRepositoryDirectory as probe } from "./private/directory-probe";
 import { GitReadCache } from "./read-cache";
 
-const cache = new GitReadCache<LinkedDirectorySummary | undefined>({ ttlMs: 5_000 });
+const cache = new GitReadCache<LinkedDirectorySummary | undefined>({
+  ttlMs: 5_000,
+  // Recheck positive project folds on each index pass so a moved primary
+  // checkout does not keep hiding its worktree behind an obsolete path.
+  ttlFor: (value, key) => value && key.startsWith("project-root:") ? 0 : 5_000,
+});
 
 export function resolveWorktreeRepositoryDirectory(cwd: string, options?: {
   fresh?: boolean;

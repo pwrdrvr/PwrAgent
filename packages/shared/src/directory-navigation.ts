@@ -409,6 +409,7 @@ function hasPersistableLaunchpadState(
   return (
     launchpad.prompt.trim().length > 0 ||
     (launchpad.imageAttachments?.length ?? 0) > 0 ||
+    (launchpad.fileAttachments?.length ?? 0) > 0 ||
     launchpad.registeredAt !== undefined ||
     launchpad.settingsTouchedAt !== undefined
   );
@@ -538,6 +539,17 @@ function sortDirectoryThreadKeysByCreation(
         (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
     ),
   }));
+}
+
+/** Apply the saved preferences of this directory's own key. */
+export function applyNavigationDirectoryOverlay(summary: NavigationDirectorySummary, overlay?: DirectoryOverlayState): void {
+  if (!overlay || (summary.kind !== "directory" && summary.kind !== "workspace")) return;
+  if (overlay.pinnedRank) summary.pinnedRank = overlay.pinnedRank;
+  if (overlay.directoryThreadsCollapsed !== undefined) summary.directoryThreadsCollapsed = overlay.directoryThreadsCollapsed;
+  if (overlay.forgeAutomation && summary.kind === "directory") {
+    const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
+    if (!isDefaultProjectForgeAutomation(automation)) summary.forgeAutomation = automation;
+  }
 }
 
 export function buildDirectorySummaries(params: {
@@ -707,30 +719,8 @@ export function buildDirectorySummaries(params: {
   // user-curated, so we skip it here even though the IPC handlers
   // also reject that key.
   for (const [directoryKey, overlay] of Object.entries(params.directoryOverlayByKey ?? {})) {
-    if (!overlay) {
-      continue;
-    }
     const summary = summaries.get(directoryKey);
-    if (
-      summary &&
-      (summary.kind === "directory" || summary.kind === "workspace")
-    ) {
-      if (overlay.pinnedRank) {
-        summary.pinnedRank = overlay.pinnedRank;
-      }
-      if (overlay.directoryThreadsCollapsed !== undefined) {
-        summary.directoryThreadsCollapsed =
-          overlay.directoryThreadsCollapsed;
-      }
-      // Forge Automation is per Directories project only. A stored value
-      // that reads back as the defaults is treated as absent.
-      if (overlay.forgeAutomation && summary.kind === "directory") {
-        const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
-        if (!isDefaultProjectForgeAutomation(automation)) {
-          summary.forgeAutomation = automation;
-        }
-      }
-    }
+    if (summary) applyNavigationDirectoryOverlay(summary, overlay);
   }
 
   for (const group of params.checkoutGroups ?? []) {

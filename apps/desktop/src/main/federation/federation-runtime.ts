@@ -396,7 +396,7 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins } from "../app-server/local-directory-pins";
-import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { linkedDirectoryForRegistration, registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
 import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
@@ -7793,7 +7793,9 @@ function localBackendOperations(): FederationBackendOperations {
       const index = store.readNavigationQueryIndex({
         backend: "all", threads, workspaceRoots: resolveScratchProjectsRoots(),
       });
-      const { directories } = await resolveNavigationWorktreeProjects(index.directories, rpcOptions?.signal);
+      const { directories } = await resolveNavigationWorktreeProjects(index.directories, {
+        signal: rpcOptions?.signal, directoryOverlays: index.directoryOverlays,
+      });
       return projectFederationProjectPage({ backend: "all", fetchedAt: Date.now(),
         directories, launchpadDefaults: await store.getLaunchpadDefaults(),
       }, request);
@@ -8641,16 +8643,8 @@ function localBackendOperations(): FederationBackendOperations {
             message: registered.message,
           };
         }
-        const directoryPath = path
-          .resolve(registered.directoryPath)
-          .replace(/\\/g, "/");
-        const directory = {
-          id: directoryPath,
-          kind: "local" as const,
-          label: registered.directoryLabel,
-          path: directoryPath,
-        };
-        await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await getDesktopOverlayStore().addLinkedDirectory({
+        const directory = linkedDirectoryForRegistration(registered);
+        await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.worktreePath ?? directory.path], async () => await getDesktopOverlayStore().addLinkedDirectory({
           backend,
           threadId: request.threadId,
           directory,

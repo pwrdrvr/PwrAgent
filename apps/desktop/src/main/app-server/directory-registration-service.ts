@@ -1,6 +1,6 @@
 import { stat as fsStat } from "node:fs/promises";
 import path from "node:path";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   EnsureDirectoryLaunchpadResponse,
   RegisterDirectoryFromDiskFailureReason,
@@ -9,6 +9,7 @@ import type {
 import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { parseWorktreeListPaths } from "@pwragent/shared/nested-worktree-pathspec";
 import { runGitCommand } from "./git-executable";
+import { buildWorktreeLinkedDirectory, toDirectoryId } from "./linked-directory-identity";
 
 /**
  * Validate `path` and seed a launchpad for the project-directory
@@ -96,6 +97,7 @@ export async function registerDirectoryFromDisk(
   // Match navigation keys on Windows, where the native picker uses backslashes.
   let directoryPath = candidate.replace(/\\/g, "/");
   let repoRoot: string | undefined;
+  let checkoutPath: string | undefined;
   try {
     const toplevel = (await runGit(candidate, [
       "rev-parse",
@@ -106,13 +108,15 @@ export async function registerDirectoryFromDisk(
       // checkout. A separately cloned repository has its own primary entry.
       const worktrees = await runGit(toplevel, ["worktree", "list", "--porcelain", "-z"]).catch(() => "");
       const [primary] = parseWorktreeListPaths(worktrees);
-      repoRoot = canonicalizeNavigationPath(primary || toplevel);
-      if (repoRoot !== canonicalizeNavigationPath(toplevel)) {
+      const selectedRoot = canonicalizeNavigationPath(toplevel);
+      repoRoot = selectedRoot;
+      if (primary && canonicalizeNavigationPath(primary) !== selectedRoot) {
         // For a bare or separate Git directory, list can report the admin
         // folder as the first entry. Register only a verified working root.
-        const root = await runGit(repoRoot, ["rev-parse", "--show-toplevel"]).catch(() => "");
-        if (canonicalizeNavigationPath(root.trim()) !== repoRoot) {
-          return failed("inaccessible", "Git could not locate the primary checkout for this worktree. Choose the repository's main checkout directly.");
+        const root = await runGit(primary, ["rev-parse", "--show-toplevel"]).catch(() => "");
+        if (root && canonicalizeNavigationPath(root.trim()) === canonicalizeNavigationPath(primary)) {
+          repoRoot = canonicalizeNavigationPath(primary);
+          checkoutPath = selectedRoot;
         }
       }
       directoryPath = repoRoot;
@@ -154,10 +158,24 @@ export async function registerDirectoryFromDisk(
   return {
     ok: true,
     directoryPath,
+    ...(checkoutPath ? { checkoutPath } : {}),
     directoryKey,
     directoryLabel,
     currentBranch,
     launchpad: ensured.launchpad,
     defaults: ensured.defaults,
   };
+}
+
+/** Thread attachments retain the selected checkout as their working copy. */
+export function linkedDirectoryForRegistration(
+  registration: Extract<RegisterDirectoryFromDiskResponse, { ok: true }>,
+): LinkedDirectorySummary {
+  if (registration.checkoutPath) {
+    const [directory] = buildWorktreeLinkedDirectory({ repositoryPath: registration.directoryPath,
+      worktreePath: registration.checkoutPath, label: registration.directoryLabel });
+    if (directory) return { ...directory, id: directory.worktreePath ?? directory.id };
+  }
+  const directoryPath = toDirectoryId(path.resolve(registration.directoryPath));
+  return { id: directoryPath, kind: "local", label: registration.directoryLabel, path: directoryPath };
 }

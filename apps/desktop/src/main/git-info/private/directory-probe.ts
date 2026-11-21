@@ -1,4 +1,4 @@
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
@@ -174,6 +174,9 @@ async function buildLinkedDirectoryFromGitMetadata(
 
   const worktreePath = path.dirname(evidence.dotGitPath!);
   const repositoryPath = evidence.inferredRepositoryPath;
+  if (rootOnly && !await hasLiveWorktreeOwner(evidence.dotGitPath!, evidence.gitdirPath!, repositoryPath)) {
+    return { evidence };
+  }
   return {
     evidence,
     directory: {
@@ -184,6 +187,24 @@ async function buildLinkedDirectoryFromGitMetadata(
       kind: "worktree",
     },
   };
+}
+
+async function hasLiveWorktreeOwner(dotGit: string, admin: string, repository: string): Promise<boolean> {
+  try {
+    const [backlink, common, primaryGit, hasHead] = await Promise.all([
+      readFile(path.join(admin, "gitdir"), "utf8"),
+      readFile(path.join(admin, "commondir"), "utf8"),
+      realpath(path.join(repository, ".git")),
+      pathExists(path.join(repository, ".git", "HEAD")),
+    ]);
+    if (!hasHead || !backlink.trim() || !common.trim()) return false;
+    const [linkedGit, namedGit, commonGit] = await Promise.all([
+      realpath(dotGit), realpath(path.resolve(admin, backlink.trim())), realpath(path.resolve(admin, common.trim())),
+    ]);
+    return linkedGit === namedGit && commonGit === primaryGit;
+  } catch {
+    return false;
+  }
 }
 
 /**

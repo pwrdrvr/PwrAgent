@@ -1086,7 +1086,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: AppServerBackendScope;
     threads: AppServerThreadSummary[];
     workspaceRoots?: string[];
-  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[] } {
+  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[]; directoryOverlays: Record<string, DirectoryOverlayState> } {
     const backendState = this.getBackend(params.backend);
     const baseline = this.readNavigationUnreadBaseline();
     const managed = this.listManagedSubAgentThreadKeys();
@@ -1150,11 +1150,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         'directoryPath', json_extract(payload, '$.directoryPath'),
         'backend', json_extract(payload, '$.backend'),
         'executionMode', json_extract(payload, '$.executionMode'),
+        'registeredAt', json_extract(payload, '$.registeredAt'),
         'createdAt', json_extract(payload, '$.createdAt'),
         'updatedAt', json_extract(payload, '$.updatedAt'), 'prompt', ''
       ) AS compact FROM directory_launchpads
       WHERE length(trim(COALESCE(json_extract(payload, '$.prompt'), ''))) > 0
         OR COALESCE(json_array_length(payload, '$.imageAttachments'), 0) > 0
+        OR COALESCE(json_array_length(payload, '$.fileAttachments'), 0) > 0
         OR json_extract(payload, '$.registeredAt') IS NOT NULL
         OR json_extract(payload, '$.settingsTouchedAt') IS NOT NULL
     `).iterate() as Iterable<{ directory_path: string; compact: string }>;
@@ -1186,10 +1188,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
           nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
       });
+    const directoryOverlays = this.readAllDirectoryOverlaysSync();
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
-      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots,
+      directoryOverlayByKey: directoryOverlays, workspaceRoots: params.workspaceRoots,
       checkoutGroups: this.readProjectCheckoutGroups() });
-    return { threads, directories };
+    return { threads, directories, directoryOverlays };
   }
 
   /** Cache only the durable compact projection, never provider rows or mutable
@@ -10165,12 +10168,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async removeDirectoryRegistration(params: { directoryKey: string; worktreeKeys?: readonly string[] }): Promise<void> {
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?");
-      for (const key of [params.directoryKey, ...params.worktreeKeys ?? []]) {
-        remove.run(key);
+      const unpin = (key: string) => {
         const current = this.getDirectoryOverlay(key);
         if (current?.pinnedRank) {
           this.putDirectoryOverlay(key, { ...current, pinnedRank: undefined });
         }
+      };
+      remove.run(params.directoryKey);
+      unpin(params.directoryKey);
+      if (!params.worktreeKeys?.length) return;
+      const read = this.stateDb.raw.prepare("SELECT payload FROM directory_launchpads WHERE directory_path = ?");
+      const hasDraft = this.stateDb.raw.prepare("SELECT 1 FROM composer_draft_latest WHERE scope_key = ? AND status = 'unsent'");
+      const unregister = this.stateDb.raw.prepare("UPDATE directory_launchpads SET payload = json_remove(payload, '$.registeredAt') WHERE directory_path = ?");
+      for (const key of params.worktreeKeys) {
+        const row = read.get(key) as { payload: string } | undefined;
+        const launchpad = row ? JSON.parse(row.payload) as DirectoryLaunchpadOverlayState : undefined;
+        if (launchpad?.registeredAt == null) continue;
+        // Check the current payload while removing the registration. The
+        // compact index has no draft text and may predate a composer save.
+        if (launchpad.prompt?.trim() || launchpad.imageAttachments?.length || launchpad.fileAttachments?.length
+          || hasDraft.get(`launchpad:${key}`)) {
+          unregister.run(key);
+        } else {
+          remove.run(key);
+        }
+        unpin(key);
       }
     })();
     this.notifyDirectoryLaunchpadsChanged();
@@ -13009,9 +13031,10 @@ function launchpadDirectoryIdentity(
   }
   const present = Boolean(launchpad.prompt?.trim())
     || (launchpad.imageAttachments?.length ?? 0) > 0
+    || (launchpad.fileAttachments?.length ?? 0) > 0
     || launchpad.registeredAt != null
     || launchpad.settingsTouchedAt != null;
   return present
-    ? JSON.stringify([launchpad.directoryKind, launchpad.directoryLabel, launchpad.directoryPath ?? null])
+    ? JSON.stringify([launchpad.directoryKind, launchpad.directoryLabel, launchpad.directoryPath ?? null, launchpad.registeredAt != null])
     : undefined;
 }

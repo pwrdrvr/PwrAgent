@@ -277,7 +277,9 @@ async function buildLocalNavigationQueryIndex(params: {
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,
     }),
   );
-  const projects = await resolveNavigationWorktreeProjects(withGitStatus, params.signal);
+  const projects = await resolveNavigationWorktreeProjects(withGitStatus, {
+    signal: params.signal, directoryOverlays: index.directoryOverlays, gitStatusByKey: directoryStatusCache,
+  });
   // Startup refresh status says only whether live listings have begun: it
   // records one attempt, and a Claude or ACP discovery failure in it says
   // nothing about rows PwrAgent stores itself. Completeness belongs to the

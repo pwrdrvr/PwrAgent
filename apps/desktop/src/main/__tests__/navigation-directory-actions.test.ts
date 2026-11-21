@@ -11,6 +11,7 @@ import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-ag
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { StateDb } from "../state/state-db";
+import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -76,7 +77,7 @@ it("removes folded worktree registrations in the same commit as their empty proj
   const alias = "directory:/elsewhere/linked-checkout";
   await mocks.store!.upsertDirectoryLaunchpad({ directoryKey: alias, directoryKind: "directory", directoryLabel: "linked-checkout",
     directoryPath: "/elsewhere/linked-checkout", backend: "codex", workMode: "local", executionMode: "default",
-    prompt: "Old worktree draft", createdAt: 1, updatedAt: 1, registeredAt: 1 });
+    prompt: "", createdAt: 1, updatedAt: 1, registeredAt: 1 });
   mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], worktreeProjectAliases: { [key]: [alias] } });
 
   const { writes } = await measureSqliteWrites(() => removeLocalNavigationDirectory({ directoryKey: key }));
@@ -85,6 +86,36 @@ it("removes folded worktree registrations in the same commit as their empty proj
   expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: alias })).toBeUndefined();
   expectSqliteWriteBudget({ scenario: "navigation-remove-project-worktree-registration", writes,
     note: "Removing an empty project also removes its legacy worktree registration in the same commit. At 100 removals/day and 8 KiB/commit, this is about 0.8 MB/day." });
+});
+
+it.each([
+  "registered legacy text", "unregistered legacy text", "legacy file attachment", "local draft store",
+])("keeps a hidden worktree draft containing %s", async (draftSource) => {
+  const alias = "directory:/elsewhere/linked-checkout";
+  const registered = draftSource !== "unregistered legacy text";
+  const prompt = draftSource.endsWith("legacy text") ? "Unsent worktree draft" : "";
+  const fileAttachments = draftSource === "legacy file attachment" ? [{ id: "file", label: "note", path: "/elsewhere/note" }] : undefined;
+  await mocks.store!.upsertDirectoryLaunchpad({ directoryKey: alias, directoryKind: "directory", directoryLabel: "linked-checkout",
+    directoryPath: "/elsewhere/linked-checkout", backend: "codex", workMode: "local", executionMode: "default",
+    prompt, fileAttachments, createdAt: 1, updatedAt: 1, ...(registered ? { registeredAt: 1 } : {}) });
+  const recovery = new ComposerDraftRecoveryStore(db);
+  if (draftSource === "local draft store") {
+    recovery.save({ draft: { scopeKey: `launchpad:${alias}`, scopeKind: "launchpad", directoryKey: alias,
+      text: "Unsent worktree draft", status: "unsent", imageAttachments: [], skillTokens: [],
+      createdAt: 1, updatedAt: 1, contentHash: "", charCount: 0 } });
+  }
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], worktreeProjectAliases: { [key]: [alias] } });
+
+  const { writes } = await measureSqliteWrites(() => removeLocalNavigationDirectory({ directoryKey: key }));
+
+  const draft = await mocks.store!.getDirectoryLaunchpad({ directoryKey: alias });
+  expect(draft?.prompt).toBe(prompt);
+  expect(draft?.fileAttachments).toEqual(fileAttachments);
+  expect(draft?.registeredAt).toBeUndefined();
+  if (draftSource === "local draft store") expect(recovery.listLatest()[0]?.text).toBe("Unsent worktree draft");
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeUndefined();
+  expectSqliteWriteBudget({ scenario: registered ? "navigation-remove-project-retain-registered-worktree-draft" : "navigation-remove-project-retain-unregistered-worktree-draft", writes,
+    note: "Removing an empty project leaves its hidden worktree draft recoverable in one commit. At 100 removals/day and 8 KiB/commit, this is about 0.8 MB/day." });
 });
 
 it("rejects a membership check invalidated during the owner read", async () => {

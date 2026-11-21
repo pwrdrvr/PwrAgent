@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
-import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import type { DirectoryOverlayState, NavigationDirectoryGitStatus, NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import { applyNavigationDirectoryOverlay, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 
@@ -13,8 +13,13 @@ const PROJECT_PROBE_BATCH_SIZE = 16;
  */
 export async function resolveNavigationWorktreeProjects(
   directories: NavigationDirectorySummary[],
-  signal?: AbortSignal,
+  options: {
+    signal?: AbortSignal;
+    directoryOverlays?: Record<string, DirectoryOverlayState>;
+    gitStatusByKey?: Record<string, { gitStatus?: NavigationDirectoryGitStatus } | undefined>;
+  } = {},
 ): Promise<Pick<NavigationQueryIndex, "directories" | "worktreeProjectAliases">> {
+  const { signal } = options;
   const candidates = directories.filter((directory) => directory.kind === "directory"
     && !directory.localAvailability && directory.path && path.isAbsolute(directory.path));
   const worktreeParents = new Map<string, string>();
@@ -41,17 +46,21 @@ export async function resolveNavigationWorktreeProjects(
     const parentPath = worktreeParents.get(worktree.key);
     if (!parentPath) continue;
     const key = groupedProjectKeys.get(parentPath) ?? `directory:${parentPath}`;
-    if (worktree.launchpad) {
-      const keys = aliases.get(key);
-      if (keys) keys.push(worktree.key);
-      else aliases.set(key, [worktree.key]);
-    }
-    const parent: NavigationDirectorySummary = projects.get(key) ?? {
+    const existing = projects.get(key);
+    // Hidden draft and settings records are still addressable by composer
+    // history, but only a registration or a thread can create a project row.
+    if (!existing && !worktree.threadKeys.length && worktree.launchpad?.registeredAt == null) continue;
+    const keys = aliases.get(key);
+    if (keys) keys.push(worktree.key);
+    else aliases.set(key, [worktree.key]);
+    const parent: NavigationDirectorySummary = existing ?? {
       key, kind: "directory", path: parentPath, label: path.posix.basename(parentPath) || parentPath,
       threadKeys: [], needsAttentionCount: 0,
+      gitStatus: options.gitStatusByKey?.[key]?.gitStatus,
       repositoryKey: worktree.gitStatus?.originRepository ?? worktree.repositoryKey,
       repositoryKeys: worktree.gitStatus?.remoteRepositories ?? worktree.repositoryKeys,
     };
+    if (!existing) applyNavigationDirectoryOverlay(parent, options.directoryOverlays?.[key]);
     projects.set(key, {
       ...parent,
       threadKeys: [...new Set([...parent.threadKeys, ...worktree.threadKeys])],
