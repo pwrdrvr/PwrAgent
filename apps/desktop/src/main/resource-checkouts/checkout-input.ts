@@ -1,3 +1,5 @@
+import type { CheckoutToken } from "@pwragent/owner-core/resource-checkout-authority";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { ResourceCheckoutActionRequest, ResourceDefinitionDraft } from "@pwragent/shared/contracts/resource-checkouts";
 
 export function object(value: unknown): Record<string, unknown> {
@@ -17,6 +19,14 @@ export function positiveInt(value: unknown, label: string, max = Number.MAX_SAFE
     throw new Error(`Invalid ${label}.`);
   }
   return value;
+}
+
+export function parseCheckoutToken(value: unknown): CheckoutToken {
+  const token = object(value);
+  return {
+    resourceId: text(token.resourceId, "resource ID"), allocationId: text(token.allocationId, "allocation ID"),
+    epoch: positiveInt(token.epoch, "authority epoch"), generation: positiveInt(token.generation, "generation"),
+  };
 }
 
 export function externalKey(value: unknown): string {
@@ -64,6 +74,17 @@ export function parseCheckoutAction(value: unknown): ResourceCheckoutActionReque
       return { ...base, kind: action.kind, queueEntryId: text(action.queueEntryId, "queue entry ID") };
     case "resolve_ownership":
       return { ...base, kind: action.kind, canonicalCandidateId: text(action.canonicalCandidateId, "candidate ID") };
+    case "delegate_execution": {
+      const executor = object(action.executor);
+      const backend = text(executor.backend, "executor backend");
+      if (!isAppServerBackendKind(backend)) throw new Error("Unknown executor backend.");
+      return {
+        ...base, kind: action.kind, allocationId: text(action.allocationId, "allocation ID"),
+        generation: positiveInt(action.generation, "generation"),
+        authorityEpoch: positiveInt(action.authorityEpoch, "authority epoch"),
+        executor: { backend, instanceId: text(executor.instanceId, "executor instance"), threadId: text(executor.threadId, "executor thread") },
+      };
+    }
     case "administrative_release":
     case "release":
     case "extend":

@@ -1,4 +1,10 @@
 {
+  "resource-checkout-provider-recovery-cleanup": {"commits": 1, "note": "Verified provider recovery writes one boundary commit for proof, release, and FIFO promotion.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "resource-checkout-provider-unchanged-recovery": {"commits": 0, "note": "Ten explicit recovery retries with unverified provider effects produce zero commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "resource-checkout-handoff": {"commits": 1, "note": "Delegation and its receipt commit once; retry costs zero. At 100 handoffs a day this is about 0.82 MB of WAL.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
+  "resource-checkout-continuation-idle": {"commits": 0, "note": "100 queued or unreachable observations and an identical registration produce zero writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "resource-checkout-continuation": {"commits": 4, "note": "One durable wait registration, promotion observation, admission claim, and delivery; 100 such waits per day produce about 4.1 MB of WAL.", "observedWalBytes": 41232, "rowsChanged": 4, "statements": 4},
+  "resource-checkout-provider-lifecycle": {"commits": 4, "note": "Approved provider job binding, activation, drain, and verified final state use four commits. 100 approved jobs a day cost about 1.65 MB of WAL.", "observedWalBytes": 16480, "rowsChanged": 4, "statements": 4},
   "resource-checkout-shutdown-unverified": {"commits": 1, "note": "One commit to retain the slot in recovery when shutdown runs out of time", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-shutdown-verified": {"commits": 1, "note": "One commit to persist late verified drain and release", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-administrative-release": {"commits": 1, "note": "One commit for validated recovery, a wake, and the operator audit note", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},

@@ -1,14 +1,16 @@
+import { executeResourceCheckout, recoverResourceCheckout } from "@pwragent/owner-core/resource-checkout-executor";
+import { createPwrSuiteLabCheckoutAdapter, type ApprovedLabCheckout } from "./pwrsuitelab-checkout-adapter";
 import { isEnvironmentGroupGone } from "./checkout-machine-evidence";
 import { createHash, randomUUID } from "node:crypto";
-import { ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus } from "@pwragent/owner-core/resource-checkout-authority";
+import { ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus, type CheckoutToken } from "@pwragent/owner-core/resource-checkout-authority";
 import type { CheckoutActor, CheckoutDefinition, CheckoutStore } from "@pwragent/owner-core/resource-checkout-storage";
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
-  type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement,
+  type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import { parseCheckoutAction, object, text } from "./checkout-input";
+import { parseCheckoutAction, parseCheckoutToken, object, text } from "./checkout-input";
 import type { ExternalBinding } from "./checkout-configuration";
 import { projectCheckoutDomain } from "./checkout-projection";
 
@@ -23,6 +25,7 @@ type Options = {
   externalStore?: Store;
   bindings: ExternalBinding[];
   allowAgentDrafts?: boolean;
+  approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
   bootId?: string;
   readMachineAdvertisements?: () => ResourceAdvertisement[];
   requestPeer: <T>(instanceId: string, request: unknown) => Promise<T>;
@@ -30,6 +33,7 @@ type Options = {
   now?: () => number;
 };
 
+type CheckoutDelegation = Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>;
 type ExternalView = { authority: ResourceAuthority; resource: ResourceDomain };
 
 export class DesktopResourceCheckoutService {
@@ -42,6 +46,8 @@ export class DesktopResourceCheckoutService {
   private readonly listeners = new Set<(revision: number) => void>();
   private readonly remoteViews = new Map<string, ExternalView>();
   private readonly timer: NodeJS.Timeout;
+  private readonly shutdown = new AbortController();
+  private readonly providerJobs = new Map<Promise<unknown>, () => void>();
   private readonly admittedJobs = new Map<string, {
     check(): void;
     stop(): void;
@@ -174,7 +180,9 @@ export class DesktopResourceCheckoutService {
       : undefined;
     const authority = this.authorityView(definition, "federation_coordinator", saved ? "reachable"
       : local || binding.authorityInstanceId === this.options.viewer.instanceId ? "unresolved" : "unreachable");
-    return { authority, resource: projectCheckoutDomain(saved ?? { definition, generation: 0, grants: [], queue: [] }, actor, authority) };
+    const approved = this.options.approvedLabCheckouts?.get(definition.resourceId);
+    const managed = !!saved && approved?.resourceId === definition.resourceId && approved.expiresAt > this.now();
+    return { authority, resource: projectCheckoutDomain(saved ?? { definition, generation: 0, grants: [], queue: [] }, actor, authority, managed) };
   }
 
   private readView(actor: CheckoutActor, remotes: ReadonlyMap<string, ExternalView>): ExternalView[] {
@@ -295,7 +303,7 @@ export class DesktopResourceCheckoutService {
     return this.machineConflict ? undefined : this.machine?.status(actor, key, resourceId);
   }
 
-  async perform(value: unknown, actor = this.operator): Promise<ResourceCheckoutActionResult> {
+  async perform(value: unknown, actor = this.operator, handoff = false): Promise<ResourceCheckoutActionResult> {
     let action;
     try {
       action = parseCheckoutAction(value);
@@ -303,6 +311,7 @@ export class DesktopResourceCheckoutService {
       return rejectCheckout("policy", error instanceof Error ? error.message : "Invalid checkout action.");
     }
     try {
+      if (action.kind === "delegate_execution" && !handoff) return rejectCheckout("not_authorized", "Use the authorized checkout handoff route.");
       if (this.closing || this.closed) return rejectCheckout("authority_unreachable", "The checkout authority is shutting down.");
       if (action.kind === "register_definition") {
         if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
@@ -324,10 +333,16 @@ export class DesktopResourceCheckoutService {
         } });
       }
       const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === action.resourceId);
+      const executor = action.kind === "delegate_execution"
+        ? this.checkoutExecutor(action.executor, binding)
+        : undefined;
+      if (action.kind === "delegate_execution" && !executor) {
+        return rejectCheckout("not_authorized", "The requested executor is outside this resource's authorized instances.");
+      }
       if (binding) {
         if (this.isLocalAuthority(binding)) {
           if (!this.hosted.has(action.resourceId)) return rejectCheckout("ownership_unresolved", "The configured authority could not confirm this definition.");
-          return this.external!.perform(actor, action);
+          return this.performWithExecutor(this.external!, actor, action, executor);
         }
         if (!binding.allowedInstances.includes(this.options.viewer.instanceId)) return rejectCheckout("not_authorized", "This instance cannot use the resource.");
         if (this.remoteViews.get(action.resourceId)?.authority.status === "unreachable") {
@@ -338,6 +353,7 @@ export class DesktopResourceCheckoutService {
         });
       }
       if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
+      if (action.kind === "delegate_execution") return this.performWithExecutor(this.machine, actor, action, executor);
       return this.machine.perform(actor, action, {
         draftOwnerInstanceId: this.options.viewer.instanceId,
         proveFenced: (job) => action.resourceId === this.machineDefinition.resourceId
@@ -353,17 +369,76 @@ export class DesktopResourceCheckoutService {
     }
   }
 
-  admitEnvironmentAction(jobId: string, purpose: string, threadId?: string) {
+  async executeLabCheckout(
+    actor: CheckoutActor, token: CheckoutToken, cost: number | "recover", signal = this.shutdown.signal,
+  ): Promise<"rejected" | "released" | "recovery_required" | { outcome: "started"; jobId: string }> {
+    if (this.closing || this.closed || signal.aborted) return "rejected";
+    const binding = this.options.bindings.find(({ definition }) => definition.resourceId === token.resourceId);
+    if (!binding || binding.definition.epoch !== token.epoch) return "rejected";
+    if (!this.isLocalAuthority(binding)) {
+      if (!binding.allowedInstances.includes(this.options.viewer.instanceId)) return "rejected";
+      return await this.options.requestPeer(binding.authorityInstanceId, {
+        operation: "lab_execution", resourceId: token.resourceId, epoch: token.epoch, token, cost, subject: this.subject(actor),
+      });
+    }
+    const approved = this.options.approvedLabCheckouts?.get(token.resourceId);
+    if (approved?.resourceId !== token.resourceId || !this.external || !this.hosted.has(token.resourceId)) return "rejected";
+    const authority = this.external;
+    const adapter = createPwrSuiteLabCheckoutAdapter(approved, this.now);
+    if (cost === "recover") return await recoverResourceCheckout({ actor, authority, token, adapter });
+    const jobId = randomUUID();
+    const started = Promise.withResolvers<{ outcome: "started"; jobId: string }>();
+    const work = executeResourceCheckout({
+      actor, token, authority, adapter, policy: approved.policy, jobId,
+      costMinorUnits: cost, signal: this.shutdown.signal,
+      onBound: () => started.resolve({ outcome: "started", jobId }),
+    }).catch((error) => {
+      this.options.warn(error);
+      return "recovery_required" as const;
+    });
+    this.providerJobs.set(work, () => { authority.markJobRecovery(token, jobId); });
+    void work.then(() => this.providerJobs.delete(work));
+    return await Promise.race([started.promise, work]);
+  }
+
+  handoffInstanceId(): string {
+    return this.options.viewer.instanceId;
+  }
+
+  private performWithExecutor(
+    authority: ResourceCheckoutAuthority, actor: CheckoutActor, action: ResourceCheckoutActionRequest, executor?: CheckoutActor,
+  ): ResourceCheckoutActionResult {
+    const result = authority.perform(actor, action, { executor });
+    if (action.kind === "delegate_execution" && result.outcome === "accepted"
+      && (!executor || !authority.delegationIsCurrent(actor, action, executor))) {
+      return rejectCheckout("stale_generation", "The recorded delegation no longer has an idle grant to route.");
+    }
+    return result;
+  }
+
+  private checkoutExecutor(
+    executor: CheckoutDelegation["executor"],
+    binding?: ExternalBinding,
+  ): CheckoutActor | undefined {
+    const { instanceId, backend, threadId } = executor;
+    if (binding ? instanceId !== binding.authorityInstanceId && !binding.allowedInstances.includes(instanceId)
+      : instanceId !== this.options.viewer.instanceId) return undefined;
+    return this.peerActor(instanceId, { backend, threadId });
+  }
+
+  admitMachineJob(jobId: string, purpose: string, options: {
+    thread?: { backend: AppServerBackendKind; threadId: string }; retainExistingGrant?: boolean;
+  } = {}) {
     if (!this.machine || this.machineConflict || this.closing || this.closed) throw new Error("The machine checkout authority is unavailable.");
     const machine = this.machine;
-    const actor: CheckoutActor = threadId ? this.threadActor("codex", threadId) : {
+    const actor: CheckoutActor = options.thread ? this.threadActor(options.thread.backend, options.thread.threadId) : {
       key: JSON.stringify([this.options.viewer.instanceId, "automation", jobId]),
-      holder: { kind: "automation", label: "Environment action" },
+      holder: { kind: "automation", label: purpose },
       manage: false,
     };
     const token = machine.admitLocalJob(this.machineDefinition.resourceId, actor, purpose, {
       id: jobId, machineBootId: this.options.bootId, executor: this.options.viewer.instanceLabel + " · " + this.options.viewer.profile,
-    });
+    }, options.retainExistingGrant);
     if (!token) throw new Error("Machine capacity is reserved. Check Resources and retry when capacity is available.");
     this.poll();
     let cancelled = false;
@@ -424,10 +499,22 @@ export class DesktopResourceCheckoutService {
     const actor = this.peerActor(sourceInstanceId, request.subject);
     if (request.operation === "read") return this.externalView(binding, actor);
     if (request.operation === "status") return this.external!.status(actor, text(request.key, "request key"), id) ?? null;
+    if (request.operation === "lab_execution") {
+      const token = parseCheckoutToken(request.token);
+      if (token.resourceId !== id || token.epoch !== binding.definition.epoch
+        || (request.cost !== "recover" && (typeof request.cost !== "number" || !Number.isSafeInteger(request.cost) || request.cost < 0))) {
+        throw new Error("Invalid provider execution request.");
+      }
+      return this.executeLabCheckout(actor, token, request.cost);
+    }
     if (request.operation !== "perform") throw new Error("Unknown checkout authority operation.");
     const action = parseCheckoutAction(request.action);
     if (action.kind === "register_definition" || action.resourceId !== id) throw new Error("The action does not match the authority binding.");
-    const result = this.external!.perform(actor, action);
+    const executor = action.kind === "delegate_execution" ? this.checkoutExecutor(action.executor, binding) : undefined;
+    if (action.kind === "delegate_execution" && !executor) {
+      return rejectCheckout("not_authorized", "The requested executor is outside this resource's authorized instances.");
+    }
+    const result = this.performWithExecutor(this.external!, actor, action, executor);
     this.poll();
     return result;
   }
@@ -454,6 +541,7 @@ export class DesktopResourceCheckoutService {
   }
 
   private async drainAndClose(graceMs: number): Promise<void> {
+    this.shutdown.abort();
     clearInterval(this.timer);
     this.listeners.clear();
     const jobs = [...this.admittedJobs.values()];
@@ -461,10 +549,10 @@ export class DesktopResourceCheckoutService {
       try { job.stop(); }
       catch (error) { this.options.warn(error); }
     }
-    if (this.admittedJobs.size && graceMs > 0) {
+    if ((this.admittedJobs.size || this.providerJobs.size) && graceMs > 0) {
       let deadline: NodeJS.Timeout | undefined;
       await Promise.race([
-        Promise.all(jobs.map((job) => job.settled)),
+        Promise.all([...jobs.map((job) => job.settled), ...this.providerJobs.keys()]),
         new Promise<void>((resolve) => { deadline = setTimeout(resolve, graceMs); }),
       ]);
       clearTimeout(deadline);
@@ -474,6 +562,11 @@ export class DesktopResourceCheckoutService {
       catch (error) { this.options.warn(error); }
     }
     this.admittedJobs.clear();
+    for (const markRecovery of this.providerJobs.values()) {
+      try { markRecovery(); }
+      catch (error) { this.options.warn(error); }
+    }
+    this.providerJobs.clear();
     this.closed = true;
     this.options.machineStore?.close();
     this.options.externalStore?.close();

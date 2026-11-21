@@ -1,7 +1,36 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
+import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
+import * as checkoutRuntime from "../resource-checkouts/checkout-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { ShellAutomationGateRunner } from "../automations/automation-gate-runner";
 
 describe("ShellAutomationGateRunner", () => {
+  it("refuses a local gate while an operator holds machine capacity", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-gate-admission-"));
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "local", instanceLabel: "Local", profile: "test", machineId: "host" },
+      machineStore: openResourceCheckoutStore(path.join(root, "checkout.db"), "host"),
+      bindings: [], requestPeer: async () => { throw new Error("No peers"); }, warn: () => {},
+    });
+    const runtime = vi.spyOn(checkoutRuntime, "getResourceCheckoutService").mockReturnValue(service);
+    try {
+      const [{ resourceId }] = service.read().resources;
+      await expect(service.perform({
+        kind: "request", resourceId, idempotencyKey: "quiet", purpose: "Quiet time", expectedDurationMs: 60_000,
+      })).resolves.toMatchObject({ outcome: "granted" });
+      await expect(new ShellAutomationGateRunner().runGate({ command: "printf forbidden" })).resolves.toMatchObject({
+        status: "failed", output: "", errorMessage: expect.stringContaining("capacity is reserved"),
+      });
+    } finally {
+      runtime.mockRestore();
+      await service.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("maps exit 0 to proceed with capped output", async () => {
     const result = await new ShellAutomationGateRunner().runGate({
       command: "printf 'ready'",

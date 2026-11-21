@@ -8,6 +8,7 @@ import type { DesktopFederationRuntime } from "../federation/federation-runtime"
 import { buildDockProfileSnapshot, findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolvePwragentRoot } from "../profile";
 import { openFederationCheckoutStorage, openMachineCheckoutStorage } from "../storage/resource-checkout-storage";
 import { readExternalCheckoutBindings, type ExternalBinding } from "./checkout-configuration";
+import type { ApprovedLabCheckout } from "./pwrsuitelab-checkout-adapter";
 import { DesktopResourceCheckoutService } from "./resource-checkout-service";
 
 let runtime: DesktopResourceCheckoutService | undefined;
@@ -28,7 +29,7 @@ async function openCheckoutStorage<T>(open: () => T): Promise<T> {
   return open();
 }
 
-export async function initializeResourceCheckouts(federation: DesktopFederationRuntime): Promise<DesktopResourceCheckoutService> {
+export async function initializeResourceCheckouts(federation: DesktopFederationRuntime, approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
   const [machineId, evidence] = await Promise.all([
     readOrCreateFederationMachineId({ rootDir: root }), readMachineCheckoutEvidence(),
@@ -60,7 +61,7 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   }
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
-    machineStore, externalStore, bindings, allowAgentDrafts, warn, bootId: evidence.hostBinding ? evidence.bootId : undefined,
+    machineStore, externalStore, bindings, allowAgentDrafts, approvedLabCheckouts, warn, bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)
       .flatMap((entry) => findLiveProfileRuntimeMarkers(entry.name).map((marker): ResourceAdvertisement => ({

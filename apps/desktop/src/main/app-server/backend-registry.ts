@@ -19205,8 +19205,24 @@ export class DesktopBackendRegistry {
     })).find((thread) => thread.id === target.threadId);
   }
 
+  async sendResourceCheckoutHandoff(
+    context: AgentToolCallContext,
+    target: { backend: AppServerBackendKind; threadId: string; instanceId?: string },
+    prompt: string,
+    bind: () => Promise<void>,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    return await this.sendMessageToThread({
+      operation: "send_message_to_thread", context,
+      args: { ...target, includeRemote: Boolean(target.instanceId), prompt, delivery: "new_turn" },
+    }, async () => {
+      if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Checkout handoff requires an active source turn.");
+      await bind();
+    });
+  }
+
   private async sendMessageToThread(
     named: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+    beforeDelivery?: () => Promise<void>,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     // Before the paused-project gate, which leaves a peer's thread to its peer.
     const request = this.ownerRelativeRequest(named);
@@ -19245,7 +19261,7 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
       }
     }
-    return await this.deliverMessageToThread(request);
+    return await this.deliverMessageToThread(request, beforeDelivery ? { beforeDelivery } : undefined);
   }
 
   /**
@@ -19268,7 +19284,7 @@ export class DesktopBackendRegistry {
   private async deliverMessageToThread(
     named: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
     /** Set only by the operator's to-do dispatch, never from tool arguments. */
-    options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean },
+    options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean; beforeDelivery?: () => Promise<void> },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const request = this.ownerRelativeRequest(named);
     const backend = request.args.backend;
@@ -19406,6 +19422,9 @@ export class DesktopBackendRegistry {
         } catch (error) {
           localResolutionError = error;
         }
+      }
+      if (options?.beforeDelivery && (localThread || (instanceId && this.federatedThreadMessageHandler))) {
+        await options.beforeDelivery();
       }
       const rememberedRemoteTurn =
         !localThread && includeRemote && this.federatedThreadMessageHandler

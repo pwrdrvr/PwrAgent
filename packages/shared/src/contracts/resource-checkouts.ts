@@ -199,6 +199,7 @@ export type ResourceAllocation = {
   taskLabel: string;
   /** Where the work actually runs, e.g. "studio-m4 · dev". */
   executorLabel: string;
+  delegatedExecutor?: Extract<ResourceHolder, { kind: "thread" }>["thread"];
   grantedAt: number;
   deadlineAt: number;
   renewalsUsed: number;
@@ -393,6 +394,15 @@ export type ResourceCheckoutActionRequest =
     resourceId: string;
     allocationId: string;
     generation: number;
+  }
+  | {
+    kind: "delegate_execution";
+    idempotencyKey: string;
+    resourceId: string;
+    allocationId: string;
+    generation: number;
+    authorityEpoch: number;
+    executor: { instanceId: string; backend: AppServerBackendKind; threadId: string };
   }
   | {
     kind: "administrative_release";

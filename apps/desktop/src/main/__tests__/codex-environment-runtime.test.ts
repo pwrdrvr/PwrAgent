@@ -8,6 +8,8 @@ import {
   applyCodexEnvironmentActionRunUpdate,
   withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared/codex-environment-action-runs";
+import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
+import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 import { type CodexThreadEnvironmentRuntime } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   applyLocalCodexEnvironmentSelection,
@@ -58,7 +60,7 @@ const windowsJobLaunchDelay = vi.hoisted(() => ({ ms: 0, wrapperPath: undefined 
 const checkoutAdmission = vi.hoisted(() => vi.fn());
 vi.mock("../resource-checkouts/checkout-runtime", () => ({
   getResourceCheckoutService: () => checkoutAdmission.getMockImplementation()
-    ? { admitEnvironmentAction: checkoutAdmission }
+    ? { admitMachineJob: checkoutAdmission }
     : undefined,
 }));
 
@@ -1441,6 +1443,44 @@ describe("codex environment runtime", () => {
       timeoutMs: undefined,
     }));
   });
+
+  it.skipIf(!isWindows)("verifies managed setup cleanup only after the native Job drains its descendants", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-checkout-drain-"));
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "native-fixture", instanceLabel: "Windows", profile: "test", machineId: "native-host" },
+      machineStore: openResourceCheckoutStore(path.join(root, "checkout.db"), "native-host"),
+      bindings: [], requestPeer: async () => { throw new Error("No peers"); }, warn: () => {},
+    });
+    checkoutAdmission.mockImplementation((...args: Parameters<typeof service.admitMachineJob>) => service.admitMachineJob(...args));
+    const fixture = path.join(root, "setup.cjs");
+    try {
+      await writeFile(fixture, [
+        'const { spawn } = require("node:child_process");',
+        'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+        'child.once("spawn", () => { console.log("owned:" + child.pid); child.unref(); });',
+      ].join("\n"));
+      const result = await applyLocalCodexEnvironmentSelection({
+        cwd: root, env: { ...process.env, SHELL: resolveWindowsBashShell() },
+        selection: {
+          executionTarget: "local", runSetup: true,
+          environment: {
+            id: "env", name: "Env", sourcePath: path.join(root, "environment.toml"), actions: [],
+            setupScript: `${JSON.stringify(process.execPath.replace(/\\/g, "/"))} ${JSON.stringify(fixture.replace(/\\/g, "/"))}`,
+          },
+        },
+      });
+      const child = /owned:(\d+)/.exec(result?.setupOutput ?? "");
+      expect(child).not.toBeNull();
+      expect(isProcessIdAlive(Number(child?.[1]))).toBe(false);
+      expect(service.read().resources[0]).toMatchObject({
+        condition: "available", allocations: [], cleanup: { state: "verified" },
+      });
+    } finally {
+      checkoutAdmission.mockReset();
+      await service.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("cancels setup and its owned descendants without imposing a setup timeout", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-cancel-"));

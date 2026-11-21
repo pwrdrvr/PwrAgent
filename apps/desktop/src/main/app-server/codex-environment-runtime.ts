@@ -134,6 +134,7 @@ export type CodexEnvironmentCommandParams = {
   mode: "wait" | "detach";
   timeoutMs?: number;
   captureShellEnvironment?: boolean;
+  ownerThreadId?: string;
   onProgress?: (
     event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
   ) => void;
@@ -544,6 +545,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: commandEnv,
         mode: "wait",
         captureShellEnvironment: true,
+        ownerThreadId: params.owner?.threadId,
         timeoutMs:
           params.setupTimeoutMs ??
           readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
@@ -825,7 +827,7 @@ function runShellCommand(
     : undefined;
   const useWindowsJob =
     process.platform === "win32"
-    && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal));
+    && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal) || !!getResourceCheckoutService());
   const shellArgs = params.shell === "powershell"
     ? [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
@@ -841,7 +843,8 @@ function runShellCommand(
         command: shell,
         cwd: params.cwd,
         env: commandEnv,
-        keepDrainEvidenceOnStop: params.mode === "detach" && !!params.detachedTerminationKey,
+        keepDrainEvidenceOnStop: !!getResourceCheckoutService(),
+        terminateDescendantsOnExit: params.mode === "wait",
       })
     : undefined;
   const launch = windowsJobLaunch ?? {
@@ -851,41 +854,53 @@ function runShellCommand(
   };
 
   return new Promise((resolve, reject) => {
-    let checkout: ReturnType<NonNullable<ReturnType<typeof getResourceCheckoutService>>["admitEnvironmentAction"]> | undefined;
+    const ownerThreadId = params.ownerThreadId || params.detachedDescriptor?.threadId;
+    let checkout;
     try {
-      if (params.mode === "detach" && params.detachedTerminationKey) {
-        checkout = getResourceCheckoutService()?.admitEnvironmentAction(
-          params.detachedTerminationKey, params.detachedDescriptor?.actionName ?? "Environment action",
-          params.detachedDescriptor?.threadId,
-        );
-      }
+      checkout = getResourceCheckoutService()?.admitMachineJob(
+        params.detachedTerminationKey ?? processId,
+        params.mode === "wait" ? "Environment setup" : params.detachedDescriptor?.actionName ?? "Environment action",
+        {
+          ...(ownerThreadId ? { thread: { backend: "codex", threadId: ownerThreadId } } : {}),
+          retainExistingGrant: params.mode === "wait",
+        },
+      );
     } catch (error) {
       windowsJobLaunch?.cleanup();
       cleanupShellEnvironmentCaptureTarget(capture);
       reject(error);
       return;
     }
-    const child = spawn(
-      launch.command,
-      launch.args,
-      {
-        cwd: params.cwd,
-        // Windows' detached-process flag breaks inherited stdio for the
-        // PowerShell-hosted Job launcher: commands can report exit 0 without
-        // ever running. The Job already owns the complete process tree, so a
-        // second detached process group is both unnecessary and harmful.
-        detached:
-          !windowsJobLaunch
-          && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal)),
-        env: launch.env,
-        // Pipe output even in detach mode so we can drain to a ring buffer,
-        // stream to the renderer's anchored output UI, and log non-zero exits.
-        // Caller still resolves on spawn for detach mode; we keep listening so
-        // long-running children (e.g., `pnpm dev`) report failures.
-        stdio: "pipe",
-        windowsHide: true,
-      },
-    );
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        launch.command,
+        launch.args,
+        {
+          cwd: params.cwd,
+          // Windows' detached-process flag breaks inherited stdio for the
+          // PowerShell-hosted Job launcher: commands can report exit 0 without
+          // ever running. The Job already owns the complete process tree, so a
+          // second detached process group is both unnecessary and harmful.
+          detached:
+            !windowsJobLaunch
+            && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal) || !!checkout),
+          env: launch.env,
+          // Pipe output even in detach mode so we can drain to a ring buffer,
+          // stream to the renderer's anchored output UI, and log non-zero exits.
+          // Caller still resolves on spawn for detach mode; we keep listening so
+          // long-running children (e.g., `pnpm dev`) report failures.
+          stdio: "pipe",
+          windowsHide: true,
+        },
+      );
+    } catch (error) {
+      checkout?.finish(true);
+      windowsJobLaunch?.cleanup();
+      cleanupShellEnvironmentCaptureTarget(capture);
+      reject(error);
+      return;
+    }
 
     let combinedOutput = "";
     let settled = false;

@@ -462,6 +462,7 @@ export function createPreviewResourceCheckoutsSource(options: {
       }];
       return { outcome: "accepted", message: "Draft saved. Not published yet." };
     }
+    if (request.kind === "delegate_execution") return { outcome: "rejected", reason: "not_authorized", message: "Use the checkout handoff tool from the owning thread." };
     const resource = resources.find((candidate) => candidate.resourceId === request.resourceId);
     if (!resource) return { outcome: "rejected", reason: "not_applicable", message: "That resource is gone." };
     const gate = gatesForRole(resource.actions, role)[request.kind];

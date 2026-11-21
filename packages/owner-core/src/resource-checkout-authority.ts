@@ -24,6 +24,10 @@ export type CheckoutStatus = {
   | { state: CheckoutGrant["state"]; allocationId: string; generation: number; authorityEpoch: number; deadlineAt: number }
 );
 
+function executionOwner(grant: CheckoutGrant): CheckoutActor {
+  return grant.executor ?? grant.actor;
+}
+
 type FenceProof = (job: NonNullable<CheckoutGrant["job"]>) => boolean;
 
 type Failure = Extract<ResourceCheckoutActionResult, { outcome: "rejected" }>;
@@ -62,7 +66,7 @@ function reconcile(record: CheckoutDomainRecord, now: number): boolean {
 
 function applyCheckout(
   record: CheckoutDomainRecord, actor: CheckoutActor,
-  action: Exclude<ResourceCheckoutActionRequest, { kind: "register_definition" }>, now: number, newId: () => string, proveFenced?: FenceProof,
+  action: Exclude<ResourceCheckoutActionRequest, { kind: "register_definition" }>, now: number, newId: () => string, proveFenced?: FenceProof, executor?: CheckoutActor,
 ): ResourceCheckoutActionResult {
   if (record.definition.publication !== "published") {
     return rejectCheckout("pending_registration", "The configured authority has not published this definition.");
@@ -120,8 +124,19 @@ function applyCheckout(
     return { outcome: "accepted" };
   }
   if (grant.actor.key !== actor.key) return rejectCheckout("not_authorized", "The caller does not own this checkout.");
+  if (action.kind === "delegate_execution") {
+    if (action.authorityEpoch !== record.definition.epoch) return rejectCheckout("stale_generation", "The authority epoch changed.");
+    if (!executor || executor.key === actor.key || actor.holder.kind !== "thread" || executor.holder.kind !== "thread") {
+      return rejectCheckout("not_authorized", "The executor must be a distinct authorized thread.");
+    }
+    if (grant.state !== "granted" || grant.job || (grant.executor && grant.executor.key !== executor.key)) {
+      return rejectCheckout("conflict", "The checkout already has an executor or an owned job.");
+    }
+    grant.executor = executor;
+    return { outcome: "accepted" };
+  }
   if (action.kind === "extend") {
-    if (grant.state !== "granted" && grant.state !== "active") {
+    if (grant.job?.provider || (grant.state !== "granted" && grant.state !== "active")) {
       return rejectCheckout("not_applicable", "This checkout cannot be renewed in its current state.");
     }
     const deadline = Math.min(grant.deadlineAt + grant.durationMs, grant.grantedAt + record.definition.maxHoldMs);
@@ -196,7 +211,7 @@ export class ResourceCheckoutAuthority {
     return position < 0 ? { receipt: result, state: "ended" as const } : { receipt: result, state: "queued" as const, position: position + 1 };
   }
 
-  perform(actor: CheckoutActor, action: ResourceCheckoutActionRequest, options?: { draft?: CheckoutDefinition; proveFenced?: FenceProof; draftOwnerInstanceId?: string }): ResourceCheckoutActionResult {
+  perform(actor: CheckoutActor, action: ResourceCheckoutActionRequest, options?: { draft?: CheckoutDefinition; proveFenced?: FenceProof; draftOwnerInstanceId?: string; executor?: CheckoutActor }): ResourceCheckoutActionResult {
     const draft = options?.draft;
     const fingerprint = JSON.stringify(action);
     return this.store.change((tx) => {
@@ -218,7 +233,7 @@ export class ResourceCheckoutAuthority {
           return rejectCheckout("not_applicable", "The authority has no record for this resource.");
         }
         const reconciled = reconcile(record, now);
-        result = applyCheckout(record, actor, action, now, this.newId, options?.proveFenced);
+        result = applyCheckout(record, actor, action, now, this.newId, options?.proveFenced, options?.executor);
         if (reconciled || result.outcome !== "rejected") tx.save(record);
       }
       tx.recordReceipt(actor.key, action.idempotencyKey, { result, fingerprint, resourceId: resourceId! });
@@ -241,13 +256,14 @@ export class ResourceCheckoutAuthority {
     });
   }
 
-  admitLocalJob(resourceId: string, actor: CheckoutActor, purpose: string, job: NonNullable<CheckoutGrant["job"]>): CheckoutToken | undefined {
+  admitLocalJob(resourceId: string, actor: CheckoutActor, purpose: string, job: NonNullable<CheckoutGrant["job"]>, retainExistingGrant = false): CheckoutToken | undefined {
     return this.store.change((tx) => {
       const record = tx.read(resourceId);
       if (!record || record.definition.publication !== "published") return undefined;
       const now = this.now();
       const changed = reconcile(record, now);
-      let grant = record.grants.find((entry) => entry.actor.key === actor.key && entry.state === "granted" && !entry.job);
+      let grant = record.grants.find((entry) => executionOwner(entry).key === actor.key && entry.state === "granted" && !entry.job);
+      const retainGrant = !!grant && retainExistingGrant;
       if (!grant && !record.grants.length && !record.queue.length) {
         record.queue.push({
           actor, id: this.newId(), requestedAt: now, purpose, units: record.definition.capacity,
@@ -261,11 +277,38 @@ export class ResourceCheckoutAuthority {
         return undefined;
       }
       grant.state = "preparing";
-      grant.job = job;
-      grant.purpose = purpose;
+      grant.job = retainGrant ? { ...job, retainGrant } : job;
+      if (!retainGrant) grant.purpose = purpose;
       tx.save(record);
       return { resourceId, allocationId: grant.id, epoch: record.definition.epoch, generation: grant.generation };
     });
+  }
+
+  delegationIsCurrent(
+    actor: CheckoutActor,
+    action: Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>,
+    executor: CheckoutActor,
+  ): boolean {
+    const record = this.store.readAll().find(({ definition }) => definition.resourceId === action.resourceId);
+    return record?.definition.epoch === action.authorityEpoch && record.grants.some((grant) =>
+      grant.id === action.allocationId && grant.generation === action.generation
+      && grant.actor.key === actor.key && grant.executor?.key === executor.key
+      && grant.state === "granted" && !grant.job && grant.deadlineAt > this.now());
+  }
+
+  executionDeadline(actor: CheckoutActor, token: CheckoutToken): number | undefined {
+    const record = this.store.readAll().find(({ definition }) => definition.resourceId === token.resourceId);
+    if (record?.definition.epoch !== token.epoch) return undefined;
+    return record.grants.find((grant) => grant.id === token.allocationId && grant.generation === token.generation
+      && grant.state === "granted" && grant.deadlineAt > this.now() && executionOwner(grant).key === actor.key)?.deadlineAt;
+  }
+
+  providerJob(actor: CheckoutActor, token: CheckoutToken): CheckoutGrant["job"] {
+    const record = this.records(token.resourceId)[0];
+    if (record?.definition.epoch !== token.epoch) return undefined;
+    return record.grants.find((grant) => grant.id === token.allocationId && grant.generation === token.generation
+      && grant.state === "recovery_required" && (executionOwner(grant).key === actor.key
+        || (actor.holder.kind === "operator" && actor.manage)))?.job;
   }
 
   jobMayRun(token: CheckoutToken, jobId: string): boolean {
@@ -278,7 +321,8 @@ export class ResourceCheckoutAuthority {
   beginJobDrain(token: CheckoutToken, jobId: string): boolean {
     return this.changeJob(token, (_record, grant) => {
       if (grant.job?.id !== jobId) return false;
-      if (grant.state !== "recovery_required") grant.state = "draining";
+      if (grant.state === "recovery_required" || grant.state === "draining") return "unchanged";
+      grant.state = "draining";
       return true;
     });
   }
@@ -295,7 +339,8 @@ export class ResourceCheckoutAuthority {
   /** Persist ownership before the adapter can launch any effect. */
   bindJob(actor: CheckoutActor, token: CheckoutToken, job: NonNullable<CheckoutGrant["job"]>): boolean {
     return this.changeJob(token, (record, grant) => {
-      if (grant.actor.key !== actor.key || grant.state !== "granted" || grant.job) return false;
+      if (executionOwner(grant).key !== actor.key || grant.state !== "granted" || grant.job
+        || (job.provider && job.provider.deadlineAt !== grant.deadlineAt)) return false;
       grant.job = job;
       grant.state = "preparing";
       return true;
@@ -312,17 +357,23 @@ export class ResourceCheckoutAuthority {
   }
 
   /** Called only by the executor after it has proved all owned effects drained. */
-  finishJob(token: CheckoutToken, jobId: string): boolean {
+  finishJob(token: CheckoutToken, jobId: string, cleanupReceipt?: string): boolean {
     return this.changeJob(token, (record, grant, now) => {
       if (grant.job?.id !== jobId) return false;
-      record.grants.splice(record.grants.indexOf(grant), 1);
+      if (grant.job.retainGrant && (grant.state === "active" || grant.state === "preparing")) {
+        grant.job = undefined;
+        grant.state = "granted";
+      } else {
+        record.grants.splice(record.grants.indexOf(grant), 1);
+        wake(record, now);
+      }
       record.cleanupVerifiedAt = now;
-      wake(record, now);
+      record.cleanupReceipt = cleanupReceipt;
       return true;
     });
   }
 
-  private changeJob(token: CheckoutToken, change: (record: CheckoutDomainRecord, grant: CheckoutGrant, now: number) => boolean): boolean {
+  private changeJob(token: CheckoutToken, change: (record: CheckoutDomainRecord, grant: CheckoutGrant, now: number) => boolean | "unchanged"): boolean {
     return this.store.change((tx) => {
       const record = tx.read(token.resourceId);
       if (!record || record.definition.epoch !== token.epoch) return false;
@@ -330,8 +381,8 @@ export class ResourceCheckoutAuthority {
       const reconciled = reconcile(record, now);
       const grant = record.grants.find((entry) => entry.id === token.allocationId && entry.generation === token.generation);
       const changed = !!grant && change(record, grant, now);
-      if (changed || reconciled) tx.save(record);
-      return changed;
+      if (changed === true || reconciled) tx.save(record);
+      return !!changed;
     });
   }
 }
