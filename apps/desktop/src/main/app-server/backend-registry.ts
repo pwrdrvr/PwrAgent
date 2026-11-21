@@ -5368,6 +5368,13 @@ export class DesktopBackendRegistry {
     filter?: string,
     archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
+    const inventory = this.acpBackend.listInventorySessions({ archived });
+    if (inventory) {
+      const threadLists = await Promise.all(inventory.map(({ backendId, sessions }) =>
+        this.enrichAcpThreadList(backendId, sessions, filter),
+      ));
+      return threadLists.flat();
+    }
     const sessions = this.acpBackend.listAllSessions();
     const backends = sessions
       ? [...new Set(sessions.map(session => session.backendId))]
@@ -5449,10 +5456,16 @@ export class DesktopBackendRegistry {
     if (!isAcpBackendId(backendId)) {
       return [];
     }
+    return this.enrichAcpThreadList(backendId, this.acpBackend.listSessions(backendId, { archived }), filter);
+  }
+
+  private async enrichAcpThreadList(
+    backendId: AcpBackendId,
+    sessions: AcpSessionMetadata[],
+    filter?: string,
+  ): Promise<AppServerThreadSummary[]> {
     const normalizedFilter = filter?.trim().toLowerCase();
-    const threads = this.acpBackend
-      .listSessions(backendId, { archived })
-      .map((session) => this.acpBackend.sessionToThreadSummary(session));
+    const threads = sessions.map((session) => this.acpBackend.sessionToThreadSummary(session));
     const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
         const overlay = await this.overlayStore.getThreadOverlayState({
