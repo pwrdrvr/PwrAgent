@@ -464,6 +464,7 @@ public static class PwrAgentWindowsJobRunner
             {
                 Thread.Sleep(10);
             }
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "job-drained");
             uint exitCode;
             if (!GetExitCodeProcess(processInformation.hProcess, out exitCode))
             {

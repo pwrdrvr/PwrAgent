@@ -103,7 +103,7 @@ export function ResourceInspector(props: {
         </div>
       </header>
 
-      <div className="resources-inspector__body">
+      <div aria-label="Checkout details" className="resources-inspector__body" role="region" tabIndex={0}>
         <StateCallout
           item={item}
           now={props.now}

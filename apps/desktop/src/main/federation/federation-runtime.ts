@@ -1,3 +1,4 @@
+import { CHECKOUT_FEDERATION_METHOD } from "../resource-checkouts/resource-checkout-service";
 import { readDirectoryGitRevisions } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
@@ -1260,6 +1261,22 @@ export class DesktopFederationRuntime {
     } catch {
       return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner did not complete an authorized transfer. Check file permissions and peer availability, then request the original again." } };
     }
+  }
+
+  private resourceCheckoutHandler?: (source: string, request: unknown) => unknown;
+
+  setResourceCheckoutHandler(handler: (source: string, request: unknown) => unknown): void {
+    this.resourceCheckoutHandler = handler;
+  }
+
+  resourceCheckoutInstanceId(): FederationInstanceId {
+    return this.ensureLocalInstanceId();
+  }
+
+  requestResourceCheckout<T>(instanceId: FederationInstanceId, request: unknown): Promise<T> {
+    return this.rpcFor({ scope: "remote", instanceId }).request({
+      method: CHECKOUT_FEDERATION_METHOD, params: request, timeoutMs: 1_500,
+    });
   }
 
   messagingSourceInstanceId(): FederationInstanceId {
@@ -4358,6 +4375,12 @@ export class DesktopFederationRuntime {
     });
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
+    router.registerHandler(CHECKOUT_FEDERATION_METHOD, (envelope) => {
+      if (!this.resourceCheckoutHandler || this.peerRole(envelope.sourceInstanceId) !== "full") {
+        throw new Error("This Federation owner does not provide checkout access to the peer.");
+      }
+      return this.resourceCheckoutHandler(envelope.sourceInstanceId, envelope.params);
+    });
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),

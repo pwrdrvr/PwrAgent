@@ -53,25 +53,14 @@ Federation viewer windows don't show the profile menu, so they never offer
 Resources. The screen always shows the local instance's view, which includes
 Federation resources this instance can see.
 
-## Wiring the system (stacked PR)
+## Owner wiring
 
-Follow the Operator Requests precedent (`operator-requests-ipc.ts`):
-
-1. Add channels to `src/shared/ipc.ts`: a read (`resource-checkouts:read`),
-   an action (`resource-checkouts:perform`) and a change event
-   (`resource-checkouts:changed`).
-2. Register handlers in `src/main/shell/ipc/` and call them from
-   `src/main/shell/index.ts` with the owner service that holds checkout
-   state. Validate every action request in main; the renderer is untrusted.
-3. Add the event channel to the main window's list in
-   `src/main/shell/main-window-channels.ts`, and broadcast with
-   `subscribersForChannel`.
-4. Expose the three methods in `src/preload/index.ts`. The profile menu entry
-   and the screen appear with no renderer change.
-5. Optional: add View → Resources. Extend `WindowOpenMainViewRequest` with
-   `"resources"`, add the menu item in `src/main/shell/menu.ts`, and call
-   `requestOpenMainView("resources")`. App already handles the view; offer the
-   item only when the service is configured.
+The owner starts the [resource checkout authority](resource-checkout-authority.md)
+for an active profile and returns it to the Electron shell. The local main
+window exposes the three preload methods through `resource-checkout-ipc.ts`.
+The authority derives the operator identity after the handler verifies the
+sender is the local main frame. Change events are scoped to that window
+through `main-window-channels.ts`.
 
 Do not import the preview fixtures or `createPreviewResourceCheckoutsSource`
 from production code. Production never shows invented availability or

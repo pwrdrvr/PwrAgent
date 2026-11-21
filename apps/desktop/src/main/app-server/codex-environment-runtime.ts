@@ -1,3 +1,5 @@
+import { isEnvironmentGroupGone } from "../resource-checkouts/checkout-machine-evidence";
+import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -848,6 +850,12 @@ function runShellCommand(
   };
 
   return new Promise((resolve, reject) => {
+    const checkout = params.mode === "detach" && params.detachedTerminationKey
+      ? getResourceCheckoutService()?.admitEnvironmentAction(
+          params.detachedTerminationKey, params.detachedDescriptor?.actionName ?? "Environment action",
+          params.detachedDescriptor?.threadId,
+        )
+      : undefined;
     const child = spawn(
       launch.command,
       launch.args,
@@ -925,6 +933,17 @@ function runShellCommand(
         });
       }
     };
+
+    if (checkout) {
+      checkout.watch(() => { if (!closed && child.exitCode === null && child.signalCode === null) terminateChild("SIGKILL"); });
+      child.once("spawn", () => checkout.active(windowsJobLaunch ? undefined : child.pid));
+      child.once("close", () => {
+        const verified = windowsJobLaunch
+          ? !child.pid || readWindowsJobStartupTelemetry(windowsJobLaunch).phases.some(({ phase }) => phase === "job-drained")
+          : !child.pid || isEnvironmentGroupGone(child.pid);
+        checkout.finish(verified);
+      });
+    }
 
     const registerDetachedProcess = () => {
       if (params.mode !== "detach" || !params.detachedTerminationKey) {

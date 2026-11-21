@@ -123,9 +123,11 @@ export function RequestCheckoutDialog(props: {
   onClose: () => void;
 }): ReactElement {
   const { resource } = props;
-  const durations = DURATION_CHOICES_MS.filter((ms) => !resource.policy.maxHoldMs || ms <= resource.policy.maxHoldMs);
+  const maximum = resource.policy.maxHoldMs ?? Infinity;
+  const durations = DURATION_CHOICES_MS.filter((ms) => ms <= maximum);
+  if (!durations.length) durations.push(maximum);
   const [purpose, setPurpose] = useState("");
-  const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)] ?? 15 * 60_000);
+  const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)]);
   const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
   const holder = resource.allocations[0];
   const waits = props.action.waits === true;

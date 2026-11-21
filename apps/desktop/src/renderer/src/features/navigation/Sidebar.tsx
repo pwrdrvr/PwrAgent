@@ -461,7 +461,7 @@ type SidebarProps = {
    * resource checkouts, so the menu never offers a screen with nothing
    * behind it.
    */
-  onOpenResources?: () => void;
+  onOpenResources?: (opener: HTMLButtonElement | null) => void;
   /**
    * `focusComposer` is set only for a plain click from a real mouse or
    * trackpad. A keyboard or assistive-technology activation leaves focus on
@@ -3691,7 +3691,7 @@ function SidebarContent(props: SidebarProps) {
                       type="button"
                       onClick={() => {
                         setProfileMenuOpen(false);
-                        props.onOpenResources?.();
+                        props.onOpenResources?.(profileMenuTriggerRef.current);
                       }}
                     >
                       <span className="sidebar__menu-item-title">Resources</span>
