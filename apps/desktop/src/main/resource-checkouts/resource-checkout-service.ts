@@ -344,7 +344,11 @@ export class DesktopResourceCheckoutService {
   admitEnvironmentAction(jobId: string, purpose: string, threadId?: string) {
     if (!this.machine || this.machineConflict || this.closed) throw new Error("The machine checkout authority is unavailable.");
     const machine = this.machine;
-    const actor = threadId ? this.threadActor("codex", threadId) : this.operator;
+    const actor: CheckoutActor = threadId ? this.threadActor("codex", threadId) : {
+      key: JSON.stringify([this.options.viewer.instanceId, "automation", jobId]),
+      holder: { kind: "automation", label: "Environment action" },
+      manage: false,
+    };
     const token = machine.admitLocalJob(this.machineDefinition.resourceId, actor, purpose, {
       id: jobId, machineBootId: this.options.bootId, executor: this.options.viewer.instanceLabel + " · " + this.options.viewer.profile,
     });

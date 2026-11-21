@@ -162,6 +162,29 @@ describe("the persisted resource checkout authority", () => {
     }
   });
 
+  it("keeps an operator's manual hold separate from actions without a thread owner", async () => {
+    const harness = createHarness();
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "default", instanceLabel: "Local", profile: "default", machineId: "host" },
+      machineStore: openResourceCheckoutStore(path.join(harness.root, "machine.db"), "host"),
+      bindings: [], now: () => 1, requestPeer: async () => { throw new Error("Offline"); }, warn: () => {},
+    });
+    try {
+      await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 20_000 }), async (expectedDurationMs) => {
+        const { resourceId } = service.read().resources[0];
+        const hold = await service.perform(request(randomUUID(), { resourceId, expectedDurationMs }));
+        if (hold.outcome !== "granted") throw new Error("Expected a manual hold.");
+        expect(() => service.admitEnvironmentAction("automatic", "Launchpad action")).toThrow(/capacity is reserved/);
+        await expect(service.perform(change("release", {
+          resourceId, allocationId: hold.allocationId, generation: hold.generation, epoch: 1,
+        }, randomUUID()))).resolves.toMatchObject({ outcome: "accepted" });
+      }), { numRuns: 10 });
+    } finally {
+      service.close();
+      harness.close();
+    }
+  });
+
   it("retains external ownership on partitions, replays a lost receipt, and blocks stale or foreign requests", async () => {
     const harness = createHarness();
     let authority: DesktopResourceCheckoutService | undefined;
