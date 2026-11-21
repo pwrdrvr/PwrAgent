@@ -36,7 +36,7 @@ function observeTurnReads(db: StateDb) {
   const prepare = db.raw.prepare.bind(db.raw);
   const spy = vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
     const statement = prepare(sql);
-    if (statement.reader && /\bFROM thread_usage_turns\b/.test(sql)) {
+    if (statement.reader && /\b(?:FROM|JOIN) thread_usage_turns\b/.test(sql)) {
       const all = statement.all.bind(statement);
       statement.all = (...bindings: unknown[]) => {
         const rows = all(...bindings);
@@ -54,8 +54,8 @@ function expectTurnReadBudget(reads: ReturnType<typeof observeTurnReads>["reads"
   expect(reads).toHaveLength(1);
   const [read] = reads;
   // SQLite may scan the explicitly bound ID list. It must seek the turn ledger by primary key.
-  expect(read!.plan.join("\n")).toMatch(/SEARCH thread_usage_turns USING INDEX .*\(usage_turn_id=\?\)/);
-  expect(read!.plan.join("\n")).not.toMatch(/SCAN thread_usage_turns\b/);
+  expect(read!.plan.join("\n")).toMatch(/SEARCH (?:thread_usage_turns|turn) USING INDEX .*\(usage_turn_id=\?\)/);
+  expect(read!.plan.join("\n")).not.toMatch(/SCAN (?:thread_usage_turns|turn)\b/);
   expect(read!.rows).toBe(rows);
 }
 
