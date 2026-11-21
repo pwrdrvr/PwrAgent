@@ -914,9 +914,10 @@ export class McpConnectionGatewayService {
       ...(options.boatTunnelRuntime ? { tunnelRuntime: options.boatTunnelRuntime } : {}),
       ...(options.boatGit ? { git: options.boatGit } : {}),
     });
-    this.boat.onStatusChanged(() => {
-      // A rejected or removed key ends what every open session could do.
-      this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
+    this.boat.onStatusChanged((change) => {
+      // A rejected or removed key ends what every open session could do. A
+      // change in what the account can start leaves every tool as it was.
+      if (change === "key") this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
       this.announceChanged([BOAT_MCP_CONNECTION_ID]);
     });
     this.boatSignIn = options.boatSignIn ?? new BoatSignIn({

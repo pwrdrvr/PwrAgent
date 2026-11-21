@@ -6,7 +6,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   BOAT_SANDBOX_TYPES,
+  boatAccountFromLimits,
   boatSandboxTypeRank,
+  boatStartBlockForCode,
+  describeBoatStartBlock,
   isBoatSandboxType,
   redactBoatApiKeys,
   type BoatSandboxPolicy,
@@ -69,6 +72,7 @@ export const BOAT_SERVER_INSTRUCTIONS = [
   "A size or auto-stop above the operator's limit asks the operator to approve that one request; say why you need it before you ask.",
   "save_snapshot saves a sandbox under a name so later sandboxes for this project start warm: pass that name as fromSnapshot to create_sandbox. It asks the operator first, because a named snapshot stays in their Boat account after the thread ends and may cost a daily fee. Use it for a set-up project, not for work in progress; a stopped sandbox already keeps its disk for resume_sandbox and fork_sandbox.",
   "Only sandboxes this thread created are reachable. Call stop_sandbox or delete_sandbox when you are done; auto-stop is a backstop, not a spending cap.",
+  "account_status says whether a start would succeed now.",
 ].join(" ");
 
 export type BoatToolRole = "thread" | "cleanup" | "none";
@@ -134,6 +138,12 @@ const snapshotNameProperty = {
   description: "Lowercase letters, digits and hyphens, at most 63 characters, such as myapp-deps.",
 } as const;
 const CLEANUP_TOOLS: ReadonlySet<string> = new Set(["stop_sandbox", "delete_sandbox"]);
+/**
+ * The states Boat counts against "at once" when `GET /limits` does not list
+ * them in `activeStates`: its documented example. A stopped sandbox does not
+ * count.
+ */
+const DEFAULT_ACTIVE_STATES: readonly string[] = ["provisioned", "cloning", "ready", "idle", "running"];
 
 const sandboxIdProperty = { type: "string", description: "A sandbox this thread created, as create_sandbox returned it." } as const;
 const typeProperty = { type: "string", enum: [...BOAT_SANDBOX_TYPES], description: "Machine size. Omit for the operator's default. A size above the operator's limit asks them to approve it." } as const;
@@ -245,7 +255,7 @@ export const BOAT_TOOLS: readonly Tool[] = [
   }, ["sandboxId", "name"]),
   tool("get_snapshot", "Read one named snapshot: saving, ready or failed, its size and when it was saved.", { name: snapshotNameProperty }, ["name"], { readOnly: true }),
   tool("list_snapshots", "List the named snapshots in the operator's Boat account, and how many their plan includes.", {}, [], { readOnly: true }),
-  tool("account_status", "Whether Boat can start a sandbox for this account now, how many are running, and how many named snapshots the plan includes.", {}, [], { readOnly: true }),
+  tool("account_status", "Whether Boat can start a sandbox for this account now, how many are running, and how many named snapshots the plan includes. When it cannot, startBlock says why and detail what frees a start; at the running limit, ownRunning lists this thread's sandboxes that could be stopped.", {}, [], { readOnly: true }),
 ];
 
 class Refusal extends Error {}
@@ -325,7 +335,7 @@ export class BoatTools {
         if (env) body.env = env;
         const setupScript = optionalString(args.setupScript, "setupScript", SETUP_SCRIPT_LIMIT);
         if (setupScript) body.setupScript = setupScript;
-        const answer = await send({
+        const answer = await this.starting(send, {
           method: "POST", path: ["sandboxes"], body,
           headers: { "idempotency-key": this.idempotencyKey() },
         });
@@ -557,7 +567,7 @@ export class BoatTools {
         const sandboxId = this.owned(args);
         // A resumed sandbox is a new machine with a new address and host key.
         await this.context.forwards?.manager.closeForSandbox(sandboxId);
-        const answer = await send({
+        const answer = await this.starting(send, {
           method: "POST", path: ["sandboxes", sandboxId, "resume"],
           body: await this.startFields(args, confirm, false),
         });
@@ -567,7 +577,7 @@ export class BoatTools {
         const sandboxId = this.owned(args);
         const fields = await this.startFields(args, confirm, false);
         const source = await this.saved(sandboxId, send, signal);
-        const answer = await send({
+        const answer = await this.starting(send, {
           method: "POST", path: ["sandboxes", sandboxId, "fork"],
           body: fields,
           headers: { "idempotency-key": this.idempotencyKey() },
@@ -639,14 +649,83 @@ export class BoatTools {
           // Extra, and needs an action an older key may lack.
           send({ method: "GET", path: ["saved-snapshots"] }).then(describeSnapshots, () => undefined),
         ]);
+        const account = boatAccountFromLimits(answer);
+        const startBlock = account.startBlock;
         return {
           ...pick(answer, ["canStart", "startBlockedReason", "activeSandboxes", "maxActiveSandboxes"]),
+          ...(startBlock ? { startBlock, detail: describeBoatStartBlock(account) } : {}),
+          ...(startBlock === "concurrent_limit" ? { ownRunning: await this.ownRunning(send, answer) } : {}),
           ...(snapshots?.allowance ? { namedSnapshots: snapshots.allowance } : {}),
         };
       }
       default:
         throw new Refusal(`Boat has no tool named ${name.slice(0, 80)}.`);
     }
+  }
+
+  /**
+   * A create, resume or fork. When Boat refuses it for the account's limits
+   * or billing, the agent is told in plain words why, what is running, and
+   * which of this thread's own sandboxes it could stop. Another thread's
+   * sandboxes are never named: they are out of this thread's reach.
+   */
+  private async starting(send: Send, request: Omit<BoatApiRequest, "signal">): Promise<Record<string, unknown>> {
+    try {
+      return await send(request);
+    } catch (error) {
+      if (!(error instanceof BoatApiError) || (error.status !== 402 && error.status !== 429)) throw error;
+      const block = boatStartBlockForCode(error.code);
+      if (!block) throw error;
+      // What is running now, account-wide: for the message, and so the
+      // connection's status carries current counts with the refusal. A key
+      // that cannot read limits still gets the refusal, without the counts.
+      const limits = await send({ method: "GET", path: ["limits"] }).catch(() => undefined);
+      const account = {
+        ...(limits ? boatAccountFromLimits(limits) : {}),
+        canStart: false, startBlock: block, blockedReason: error.code,
+      };
+      const retry = error.retryAfterSeconds ? ` Boat says to retry after ${Math.ceil(error.retryAfterSeconds)} s.` : "";
+      if (block !== "concurrent_limit") {
+        throw new Refusal(`Boat did not start a sandbox. ${describeBoatStartBlock(account)}${retry}`);
+      }
+      const own = await this.ownRunning(send, limits);
+      const cap = error.code === "member_limit_reached"
+        ? "Boat did not start a sandbox: this account's organization caps how many sandboxes you run at once, and that many are running. Stop or delete one to start another."
+        : `Boat did not start a sandbox. ${describeBoatStartBlock(account)}`;
+      const stoppable = own.length > 0
+        ? ` This thread's running sandboxes: ${own.map((sandbox) => `${String(sandbox.id)}${
+            typeof sandbox.name === "string" && sandbox.name ? ` (${sandbox.name})` : ""
+          }, ${String(sandbox.state)}`).join("; ")}. Stop one with stop_sandbox, or delete it with delete_sandbox if its disk is not needed, then try again.`
+        : " This thread has no running sandbox to stop. The others belong to other threads or were started outside PwrAgent; ask the operator to stop one.";
+      throw new Refusal(`${cap}${stoppable}${retry}`);
+    }
+  }
+
+  /** This thread's sandboxes that take a slot now. Never another thread's. */
+  private async ownRunning(
+    send: Send,
+    limits: Record<string, unknown> | undefined,
+  ): Promise<Array<Record<string, unknown>>> {
+    const listed = limits?.activeStates;
+    const active = new Set(
+      Array.isArray(listed) && listed.length > 0 && listed.every((state) => typeof state === "string")
+        ? listed as string[]
+        : DEFAULT_ACTIVE_STATES,
+    );
+    const ids = [...this.context.ownedSandboxIds()].slice(0, LIST_LIMIT);
+    const described = await Promise.all(ids.map(async (sandboxId) => {
+      try {
+        return describeSandbox((await send({ method: "GET", path: ["sandboxes", sandboxId] })).sandbox);
+      } catch (error) {
+        // Gone from Boat, as list_sandboxes treats it.
+        if (error instanceof BoatApiError && error.kind === "not_found") this.context.forgetOwned(sandboxId);
+        return undefined;
+      }
+    }));
+    return described.flatMap((sandbox) =>
+      sandbox && typeof sandbox.state === "string" && active.has(sandbox.state) && typeof sandbox.id === "string"
+        ? [pick(sandbox, ["id", "name", "state", "type"])]
+        : []);
   }
 
   /** The id argument, when this session's thread holds that sandbox. */

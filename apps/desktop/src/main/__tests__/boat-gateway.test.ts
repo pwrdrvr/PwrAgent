@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  boatSandboxStartAvailability,
+  resolveMcpConnectionSetup,
+} from "@pwragent/shared/contracts/mcp-connections";
 import { BOAT_KEY_ARGS } from "../mcp-connections/boat-sign-in";
 import { BOAT_TOOLS } from "../mcp-connections/boat-tools";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
@@ -278,18 +282,20 @@ describe("Boat through the MCP gateway", () => {
     expect(JSON.stringify(file)).toContain("[Boat key removed]");
     expect(JSON.stringify(file)).not.toContain(KEY);
 
-    // Another thread cannot reach it, and Boat is never asked.
+    // Another thread cannot reach it, and Boat is never asked about it. A new
+    // session reads the account's status once, since the create changed it.
     const before = boat.sent.length;
+    const sandboxRequests = () => boat.sent.slice(before).filter((request) => !request.url.endsWith("/limits"));
     await expect(call("thread-b", "get_sandbox", { sandboxId: "bx_0" })).resolves.toMatchObject({ isError: true });
     await expect(call("thread-b", "delete_sandbox", { sandboxId: "bx_0" })).resolves.toMatchObject({ isError: true });
     // A session with no thread, such as a Settings tool listing, creates nothing.
     await expect(call(undefined, "create_sandbox", {})).resolves.toMatchObject({ isError: true });
-    expect(boat.sent).toHaveLength(before);
+    expect(sandboxRequests()).toEqual([]);
 
     // The profile's cap is read on each call.
     registry.setBoatSandboxPolicy({ maxType: "small" });
     await expect(call("thread-a", "create_sandbox", { type: "large" })).resolves.toMatchObject({ isError: true });
-    expect(boat.sent).toHaveLength(before);
+    expect(sandboxRequests()).toEqual([]);
   });
 
   it("signs in for a key that Boat lets every tool use", async () => {
@@ -412,6 +418,68 @@ describe("Boat through the MCP gateway", () => {
     expect(rows.find((row) => row.sandboxId === "bx_0")?.status).toBe("deleted");
     // Stopping what is not there is still an error.
     await expect(service.changeThreadBoatSandbox({ ...thread, sandboxId: "bx_0", action: "stop" })).rejects.toThrow();
+  });
+
+  it("reports a full account after a start, and a free slot after the panel deletes one", async () => {
+    // One sandbox at a time, counted the way Boat counts: running ones only.
+    const real = fakeBoat();
+    const running = new Set<string>();
+    const boat = {
+      sent: real.sent,
+      fetchFn: async (input: string | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const json = (status: number, body: Record<string, unknown>) =>
+          new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+        if (url.endsWith("/limits")) {
+          real.sent.push({ method, url, authorization: null });
+          return json(200, { ok: true, canStart: running.size < 1, activeSandboxes: running.size, maxActiveSandboxes: 1 });
+        }
+        if (url.endsWith("/sandboxes") && method === "POST" && running.size >= 1) {
+          real.sent.push({ method, url, authorization: null });
+          return json(429, { ok: false, code: "limit_reached", error: "The plan's at-once limit is full." });
+        }
+        const response = await real.fetchFn(input, init);
+        const id = url.split("/sandboxes/")[1]?.split("/")[0];
+        if (url.endsWith("/sandboxes") && method === "POST") {
+          running.add(((await response.clone().json()) as { sandbox: { id: string } }).sandbox.id);
+        } else if (id && (method === "DELETE" || url.endsWith("/stop"))) {
+          running.delete(id);
+        }
+        return response;
+      },
+    };
+    const { call, registry, service } = harness(boat);
+    registry.setEnabled(BOAT, true);
+    await service.connectBoat(KEY);
+    const status = async () => {
+      const connection = (await service.listConnections()).find((entry) => entry.id === BOAT)!;
+      return {
+        account: connection.boatAccount,
+        chip: resolveMcpConnectionSetup({ connection, gatewayEnabled: true }).headline,
+        agent: boatSandboxStartAvailability(connection),
+      };
+    };
+    await expect(status()).resolves.toMatchObject({ account: { canStart: true }, chip: "Connected", agent: { canStart: true } });
+
+    await call("thread-a", "create_sandbox", {});
+    await expect(status()).resolves.toMatchObject({
+      account: { canStart: false, startBlock: "concurrent_limit", activeSandboxes: 1, maxActiveSandboxes: 1 },
+      chip: "At limit",
+      agent: { canStart: false, reason: "concurrent_limit", activeSandboxes: 1, maxActiveSandboxes: 1 },
+    });
+
+    // Another thread is refused in plain words, and not told of thread-a's sandbox.
+    const refused = await call("thread-b", "create_sandbox", {});
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0]?.text).toContain("1 of 1 Boat sandboxes are running");
+    expect(refused.content[0]?.text).toContain("no running sandbox to stop");
+    expect(refused.content[0]?.text).not.toContain("bx_0");
+
+    await service.changeThreadBoatSandbox({ backend: "codex", threadId: "thread-a", sandboxId: "bx_0", action: "delete" });
+    await expect(status()).resolves.toMatchObject({
+      account: { canStart: true, activeSandboxes: 0 }, chip: "Connected", agent: { canStart: true },
+    });
   });
 
   it("asks for a new sign-in once Boat refuses the stored key a sandbox", async () => {

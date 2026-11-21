@@ -1,5 +1,6 @@
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type {
+  BoatSandboxStartAvailability,
   DescribeThreadMcpConnectionsResponse,
   McpConnectionAuthMode,
   McpConnectionId,
@@ -81,6 +82,12 @@ export type PwrAgentMcpConnectionListEntry = {
   enabled: boolean;
   /** Whether a thread that selects this can actually reach it today. */
   threadSelectable: boolean;
+  /**
+   * Boat only: whether it can start a sandbox now, and if not, why and what
+   * frees the next start. A Boat that is selectable but full still lets a
+   * thread list and stop its own sandboxes.
+   */
+  sandboxStart?: BoatSandboxStartAvailability;
 };
 
 export type PwrAgentMcpConnectionListData = {
