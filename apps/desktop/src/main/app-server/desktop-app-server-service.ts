@@ -477,6 +477,7 @@ import {
   type PullRequestReferenceIdentity,
 } from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import {
   PrStatusWatchCoordinator,
   getPrStatusWatchOutcome,
@@ -2136,7 +2137,7 @@ class DesktopAppServerService {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);
           }
-          return getDesktopNavigationDetailService().readSelectedDetail(request);
+          return getDesktopNavigationDetailService().readSelectedDetail(request, { signal: options.signal });
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
@@ -2355,6 +2356,7 @@ class DesktopAppServerService {
       backend === "all" && !request.filter?.trim();
     await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
       replace: replaceThreadPrAttachments,
+      resolveUnattached: true,
     });
     const threadsWithPrimaryGitRepositories =
       this.applyPrimaryGitRepositories(canonicalSnapshot.threads);
@@ -2780,20 +2782,20 @@ class DesktopAppServerService {
 
   private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
-    options: { replace: boolean; isCurrent?: () => boolean },
+    options: { replace: boolean; isCurrent?: () => boolean; resolveUnattached?: boolean },
   ): Promise<void> {
     const primaryRepoResolutionByPath = new Map<
       string,
       Promise<string | undefined>
     >();
-    const primaryRepoKeys = await Promise.all(
-      threads.map(async (thread) =>
-        await resolvePrimaryThreadRepoKey(
-          thread,
-          primaryRepoResolutionByPath,
-        ),
-      ),
-    );
+    // The complete inventory still clears candidates for threads with no PRs.
+    // Only an attachment needs a primary key for polling or dispatch. Selected
+    // detail and forge rules resolve their own checkout when needed.
+    const primaryRepoKeys = await Promise.all(threads.map((thread) =>
+      thread.prs?.length || options.resolveUnattached
+        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
+        : undefined,
+    ));
     const liveThreadKeys = new Set<string>();
     const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
     for (const [index, thread] of threads.entries()) {
@@ -2849,7 +2851,7 @@ class DesktopAppServerService {
         prs: params.prs,
       },
     );
-    if (!current?.primaryRepoKey) {
+    if (params.prs.length > 0 && !current?.primaryRepoKey) {
       const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
       // Patch only the key onto whatever list is now current. A refresh may
       // have supplied a key, or dropped the thread, while this resolved.
@@ -5233,9 +5235,10 @@ class DesktopAppServerService {
    */
   async canonicalizeStoredPullRequests(
     prs: PrSummary[],
+    demand?: PrMetadataDemand,
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs));
+    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs), demand);
   }
 
   private mergePrHistory(
@@ -5441,8 +5444,9 @@ class DesktopAppServerService {
    * still carry the old name, so a stored PR no remote names asks GitHub what
    * that remote is called now before it is dropped.
    */
-  private async filterStoredDiscoveredPrs(prs: PrSummary[]): Promise<PrSummary[]> {
+  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrMetadataDemand): Promise<PrSummary[]> {
     return await filterStoredDiscoveredPullRequests(prs, {
+      demand,
       resolveRepositoryNames: async (repos) => {
         if (!getDesktopSettingsService().isForgeEnabled("github")) return;
         await this.getPrGraphqlClient().resolveRepositoryNames(repos);

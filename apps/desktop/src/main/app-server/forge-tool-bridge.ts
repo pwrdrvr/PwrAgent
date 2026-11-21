@@ -1,5 +1,6 @@
 import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "./registry-host-ports";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { randomUUID } from "node:crypto";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
@@ -1373,6 +1374,7 @@ export class ForgeToolBridge {
    */
   async canonicalizeNavigationThreadPullRequests(
     threads: NavigationSnapshot["threads"],
+    demand?: PrMetadataDemand,
   ): Promise<NavigationSnapshot["threads"]> {
     const primaryRepository = this.threadPrimaryGitRepositoryReader;
     if (primaryRepository) threads = threads.map((thread) => ({
@@ -1388,10 +1390,11 @@ export class ForgeToolBridge {
           if (!thread.prs?.length) {
             return thread;
           }
-          return { ...thread, prs: await canonicalizer(thread.prs) };
+          return { ...thread, prs: await (demand ? canonicalizer(thread.prs, demand) : canonicalizer(thread.prs)) };
         }),
       );
     } catch (error) {
+      demand?.signal?.throwIfAborted();
       // Canonicalizing reads the durable `pr_status_cache`. If that read
       // fails, serving the snapshot with the overlay's own PR rows is a
       // far better outcome than failing the snapshot: the client gets

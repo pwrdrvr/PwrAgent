@@ -3,8 +3,8 @@ import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { runGitCommand } from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -108,12 +108,11 @@ type RemoteCacheEntry = {
 };
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
-const remoteLookups = new Map<string, Promise<ParsedGitRemote[]>>();
-type SshResolver = (host: string) => Promise<string | undefined>;
+const remoteLookups = new Map<string, SharedPrMetadataRead<ParsedGitRemote[]>>();
+type SshResolver = (host: string, demand?: PrMetadataDemand) => Promise<string | undefined>;
 // Share only running OpenSSH evaluations. A completed evaluation belongs to
 // its directory's existing TTL; a new probe must evaluate Include/Match again.
-let sshLookups = new WeakMap<SshResolver, Map<string, Promise<string | undefined>>>();
-const MAX_SSH_LOOKUPS = 128;
+let sshLookups = new WeakMap<SshResolver, Map<string, SharedPrMetadataRead<string | undefined>>>();
 
 export function clearGitHubRemoteCache(): void {
   remoteCache.clear();
@@ -128,6 +127,7 @@ export type ResolveGitHubRepoOptions = {
   /** Override OpenSSH hostname expansion — tests inject SSH alias results. */
   resolveSshHostname?: (host: string) => Promise<string | undefined>;
   now?: () => number;
+  demand?: PrMetadataDemand;
 };
 
 /**
@@ -203,6 +203,7 @@ async function readParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
 ): Promise<ParsedGitRemote[]> {
+  options.demand?.signal?.throwIfAborted();
   const now = options.now ?? (() => Date.now());
   const cached = remoteCache.get(cwd);
   if (cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS) {
@@ -210,44 +211,45 @@ async function readParsedGitRemotes(
   }
 
   const existing = remoteLookups.get(cwd);
-  if (existing) {
-    return existing;
+  if (existing && !existing.signal.aborted) {
+    return existing.read(options.demand);
   }
 
-  const pending = loadParsedGitRemotes(cwd, options).then((value) => {
-    if (remoteLookups.get(cwd) === pending) {
-      remoteCache.set(cwd, { value, fetchedAt: now() });
-    }
-    return value;
-  }).finally(() => {
-    // An invalidation may have already installed a replacement lookup.
-    if (remoteLookups.get(cwd) === pending) {
-      remoteLookups.delete(cwd);
+  const pending = new SharedPrMetadataRead(async (demand) => {
+    try {
+      const value = await loadParsedGitRemotes(cwd, options, demand);
+      demand.signal?.throwIfAborted();
+      if (remoteLookups.get(cwd) === pending) remoteCache.set(cwd, { value, fetchedAt: now() });
+      return value;
+    } finally {
+      if (remoteLookups.get(cwd) === pending) remoteLookups.delete(cwd);
     }
   });
   remoteLookups.set(cwd, pending);
-  return pending;
+  return pending.read(options.demand);
 }
 
 async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
+  demand: PrMetadataDemand,
 ): Promise<ParsedGitRemote[]> {
-  const readRemotes = options.readRemotes ?? defaultReadRemotes;
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
   // Also retain resolved values within this probe, including negative answers.
   const localSshLookups = new Map<string, Promise<string | undefined>>();
   try {
+    demand.signal?.throwIfAborted();
+    const remotes = await (options.readRemotes ? options.readRemotes(cwd) : defaultReadRemotes(cwd, demand));
     return await Promise.all(
-      (await readRemotes(cwd)).map(async (remote) => {
+      remotes.map(async (remote) => {
         const repo = parseForgeRemote(remote.url);
         const sshHost = readSshHost(remote.url);
         let hostname: Promise<string | undefined> | undefined;
         if (sshHost) {
           hostname = localSshLookups.get(sshHost);
           if (!hostname) {
-            hostname = resolveSshHostInFlight(sshHost, resolveSshHostname);
+            hostname = resolveSshHostInFlight(sshHost, resolveSshHostname, demand);
             localSshLookups.set(sshHost, hostname);
           }
         }
@@ -261,41 +263,46 @@ async function loadParsedGitRemotes(
       }),
     );
   } catch {
+    demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
     return [];
   }
 }
 
-function resolveSshHostInFlight(host: string, resolve: SshResolver): Promise<string | undefined> {
+function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMetadataDemand): Promise<string | undefined> {
+  demand.signal?.throwIfAborted();
   let lookups = sshLookups.get(resolve);
   if (!lookups) {
     lookups = new Map();
     sshLookups.set(resolve, lookups);
   }
   const existing = lookups.get(host);
-  if (existing) return existing;
-  const pending = Promise.resolve().then(() => resolve(host)).finally(() => {
-    if (lookups.get(host) === pending) lookups.delete(host);
+  if (existing && !existing.signal.aborted) return existing.read(demand);
+  const pending = new SharedPrMetadataRead(async (sharedDemand) => {
+    try {
+      sharedDemand.signal?.throwIfAborted();
+      return await (resolve === defaultResolveSshHostname ? resolve(host, sharedDemand) : resolve(host));
+    } finally {
+      if (lookups.get(host) === pending) lookups.delete(host);
+    }
   });
-  // Overflow starts independently; it never waits in a process queue or
-  // evicts a running owner's entry and starts a second owner for that key.
-  if (lookups.size < MAX_SSH_LOOKUPS) lookups.set(host, pending);
-  return pending;
+  lookups.set(host, pending);
+  return pending.read(demand);
 }
 
-async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
+async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promise<GitRemote[]> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
-  const { stdout } = await runGitCommand(cwd, ["remote"], {
+  const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
     purpose: "pr-remotes",
     env: childEnv,
     maxBuffer: 64 * 1024,
     timeout: GIT_REMOTE_TIMEOUT_MS,
-  });
+  }, demand);
   const names = uniqueNonEmptyLines(stdout);
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
-        const result = await runGitCommand(
+        const result = await runPrMetadataGit(
           cwd,
           ["remote", "get-url", "--all", name],
           {
@@ -303,7 +310,7 @@ async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
             env: childEnv,
             maxBuffer: 64 * 1024,
             timeout: GIT_REMOTE_TIMEOUT_MS,
-          },
+          }, demand,
         );
         return uniqueNonEmptyLines(result.stdout).map((url) => ({ name, url }));
       } catch {
@@ -340,9 +347,11 @@ function readSshHost(remoteUrl: string): string | undefined {
   }
 }
 
-async function defaultResolveSshHostname(
-  host: string,
-): Promise<string | undefined> {
+function defaultResolveSshHostname(host: string, demand?: PrMetadataDemand): Promise<string | undefined> {
+  return runPrMetadataProcess(() => readSshHostname(host), demand);
+}
+
+async function readSshHostname(host: string): Promise<string | undefined> {
   const finish = gitSubprocessDiagnostics.start("ssh-config", "pr-remotes", { sshHost: host });
   let failed = true;
   try {

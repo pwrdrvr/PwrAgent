@@ -9801,7 +9801,7 @@ describe("useThreadNavigation", () => {
     const api: DesktopApi = { getNavigationSelectedDetail, onAgentEvent: () => () => undefined };
     const { result } = renderHook(() => useThreadNavigation(api));
     await act(async () => {
-      await expect(result.current.readThreadWorktreeAvailability(parent)).resolves.toBe(expected);
+      await expect(result.current.readThreadWorktreeAvailability(parent)).resolves.toEqual({ available: expected, thread: parent });
     });
     expect(getNavigationSelectedDetail).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: { scope: "remote", instanceId: "owner" }, includeWorkspaceConfiguration: true,

@@ -343,7 +343,7 @@ import {
   backendDrawsCommandChips,
   describeLeadingCommand,
 } from "./composer-command-chip";
-import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
+import type { ThreadWorkspaceMode, ThreadWorktreeAvailability } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
 import { ProjectPicker } from "./ProjectPicker";
@@ -595,7 +595,7 @@ export type ComposerProps = {
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
   ) => Promise<boolean>;
-  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<ThreadWorktreeAvailability>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
   /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
@@ -7808,7 +7808,7 @@ function useComposerController(props: ComposerProps) {
           ? "same-worktree"
           : "local";
       if (mode === "new-worktree"
-        && !await props.readThreadWorktreeAvailability?.(thread)) {
+        && !(await props.readThreadWorktreeAvailability?.(thread))?.available) {
         if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
           setSendError("This thread cannot create a new worktree. Use /fork --wt same.");
         }

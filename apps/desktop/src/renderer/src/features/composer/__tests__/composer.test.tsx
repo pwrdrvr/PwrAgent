@@ -18225,7 +18225,7 @@ describe("Composer", () => {
       const onForkThread = vi.fn(async () => true);
       const onCreateSubthread = vi.fn(async () => true);
       const startTurn = vi.fn();
-      const readThreadWorktreeAvailability = vi.fn(async () => true);
+      const readThreadWorktreeAvailability = vi.fn(async (thread: NavigationThreadSummary) => ({ available: true, thread }));
       const props = {
         backends: [backend],
         disabled: false,
@@ -18365,7 +18365,7 @@ describe("Composer", () => {
     });
 
     it("retains the command when a new worktree is unavailable", async () => {
-      const { onForkThread } = renderForkComposer({ readThreadWorktreeAvailability: async () => false });
+      const { onForkThread } = renderForkComposer({ readThreadWorktreeAvailability: async (thread) => ({ available: false, thread }) });
       fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork --wt new" } });
       fireEvent.click(screen.getByRole("button", { name: "Fork" }));
       expect(await screen.findByText("This thread cannot create a new worktree. Use /fork --wt same.")).toBeInTheDocument();

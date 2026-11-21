@@ -3,6 +3,7 @@ import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normaliz
 import { type NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import { parseForgeRemote, resolveGitHubRepoForDirectory } from "./git-remote";
 import { buildPrRepositoryKey } from "./pr-auto-dispatch";
+import type { PrMetadataDemand } from "./pr-metadata-process";
 
 export async function resolvePrimaryThreadRepoKey(
   thread: Pick<
@@ -10,7 +11,9 @@ export async function resolvePrimaryThreadRepoKey(
     "gitOriginUrl" | "linkedDirectories"
   >,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
+  demand?: PrMetadataDemand,
 ): Promise<string | undefined> {
+  demand?.signal?.throwIfAborted();
   // The owning checkout's current origin wins over session-start metadata:
   // a remote can change after a rename, fork, or workspace move. Resolve on
   // the owner so another machine's path never supplies repository identity.
@@ -24,7 +27,7 @@ export async function resolvePrimaryThreadRepoKey(
   if (primaryPath) {
     let resolution = resolutionByPath.get(primaryPath);
     if (!resolution) {
-      resolution = resolveGitHubRepoForDirectory(primaryPath)
+      resolution = (demand ? resolveGitHubRepoForDirectory(primaryPath, { demand }) : resolveGitHubRepoForDirectory(primaryPath))
         .then((resolved) => resolved
           ? buildPrRepositoryKey(resolved.host, resolved.owner, resolved.repo)
           : undefined);

@@ -279,7 +279,7 @@ const prAutomationSettings = vi.hoisted(() => {
 
 const resolveGitHubRepoForDirectory = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<
+    async (_cwd?: string): Promise<
       { host: string; owner: string; repo: string } | undefined
     > => undefined,
   ),
@@ -952,6 +952,9 @@ const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
 const writePrLookupCacheEntry = vi.fn(async () => undefined);
+const syncThreadPrAutoDispatchCandidatesBatch = vi.fn(async (_request: {
+  threads: { threadId: string; prKeys: string[] }[];
+}) => undefined);
 const syncThreadPrAutoDispatchCandidates = vi.fn(
   async (_params?: unknown): Promise<Array<{ backend: "codex"; threadId: string; prKey: string }> | undefined> => undefined,
 );
@@ -1184,7 +1187,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     readPrLookupCache,
     writePrLookupCacheEntry,
     syncThreadPrAutoDispatchCandidates,
-    syncThreadPrAutoDispatchCandidatesBatch: vi.fn(async () => undefined),
+    syncThreadPrAutoDispatchCandidatesBatch,
     getPrAutoDispatchCandidateWinner,
     listPrAutoDispatchCandidates: vi.fn(async () => []),
     resetThreadPrAutoDispatchForOperator,
@@ -2459,6 +2462,68 @@ describe("app server ipc", () => {
     emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
     const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
     await vi.waitFor(() => expect(owner(buildPullRequestStatusKey(pr))).toBe(true));
+  });
+
+  it.each([12, 24])("probes only PR-bearing checkouts when a thread starts in an inventory of %i worktrees", async (size) => {
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const git = await import("../app-server/git-executable");
+    const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+      await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-git-budget-"));
+    onTestFinished(async () => {
+      clearGitHubRemoteCache();
+      await rm(root, { recursive: true, force: true });
+    });
+    await git.runGitCommand(root, ["init", "-b", "main"]);
+    await git.runGitCommand(root, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]);
+    await git.runGitCommand(root, ["remote", "add", "origin", "https://github.com/fixture/project.git"]);
+    const checkouts: string[] = [];
+    for (let index = 0; index < size; index++) {
+      const checkout = path.join(root, `worktree-${index}`);
+      await git.runGitCommand(root, ["worktree", "add", "--detach", checkout]);
+      checkouts.push(checkout);
+    }
+    const pr = githubPr({ number: 94, org: "fixture", repo: "project", state: "passing",
+      title: "Owned PR", url: "https://github.com/fixture/project/pull/94" });
+    const rows: AppServerThreadSummary[] = Array.from({ length: size + 1 }, (_, index) => ({
+      id: `budget-thread-${index}`, source: "codex", title: `Thread ${index}`, titleSource: "explicit",
+      linkedDirectories: [{ id: "fixture", kind: "worktree", label: "Fixture", path: root,
+        worktreePath: checkouts[index < 2 ? index : index === 2 ? 0 : index - 1] }],
+      ...(index < 3 ? { prs: [pr] } : {}),
+    }));
+    overlayStoreFixture.stable = getDesktopOverlayStore();
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "checking" });
+    resolveGitHubRepoForDirectory.mockImplementation((cwd) => readOrigin(cwd!));
+    const runGit = vi.spyOn(git, "runGitCommand");
+    onTestFinished(() => { runGit.mockRestore(); });
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+    listThreads.mockResolvedValue(rows as never);
+    emitRegistryEvent({ backend: "codex", notification: { method: "thread/started", params: { thread: rows.at(-1) } } });
+    const handler = navigationReadHandler("backend.getNavigationQueryPage")!;
+    const pages = await Promise.all(Array.from({ length: 4 }, (_, index) => handler({ sender: { id: 90400 + index, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: rows.at(-1)!.id }] },
+    }))) as NavigationQueryPage[];
+    expect(pages.map((page) => page.entries.map(({ row }) => row.id))).toEqual(Array.from({ length: 4 }, () => [rows.at(-1)!.id]));
+    await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch).toHaveBeenCalled());
+    const candidateBatch = syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0];
+    expect(candidateBatch?.threads.map(({ threadId, prKeys }) => [threadId, prKeys])).toEqual(
+      rows.map((row, index) => [row.id, index < 3 ? [buildPullRequestStatusKey(pr)] : []]),
+    );
+    const remoteCommands = runGit.mock.calls.filter(([, , options]) => options?.purpose === "pr-remotes");
+    expect({ checkouts: resolveGitHubRepoForDirectory.mock.calls.length, gitCalls: remoteCommands.length })
+      .toEqual({ checkouts: 2, gitCalls: 4 });
+    expect(resolveGitHubRepoForDirectory.mock.calls).toEqual([
+      [checkouts[0]], [checkouts[1]],
+    ]);
+    for (const cwd of checkouts.slice(0, 2)) {
+      expect(remoteCommands.filter(([path]) => path === cwd).map(([, args]) => args))
+        .toEqual([["remote"], ["remote", "get-url", "--all", "origin"]]);
+    }
   });
 
   it("does not repopulate owner metadata when startup finishes after shutdown", async () => {
@@ -12926,8 +12991,8 @@ describe("app server ipc", () => {
     expect(scheduleWorktreeGitWorkingStateRefresh.mock.calls.at(-1)![0]).not.toHaveProperty("userAction", true);
   });
 
-  it("learns a new Claude thread's primary repository when the thread starts", async () => {
-    const newThread = {
+  it("resolves the new Claude thread's primary repository on demand before it attaches a PR", async () => {
+    const newThread: AppServerThreadSummary = {
       id: "claude-new",
       title: "Handed-off fix",
       titleSource: "explicit",
@@ -12949,18 +13014,20 @@ describe("app server ipc", () => {
     expect(appServerService.readPrimaryGitRepository("claude", "claude-new")).toBeUndefined();
 
     listThreads.mockResolvedValue([newThread] as never);
+    getCachedThreadSummary.mockReturnValue(newThread as never);
+    resolveGitHubRepoForDirectory.mockResolvedValue({ host: "github.com", owner: "fixture", repo: "new-origin" });
     try {
       emitRegistryEvent({
         backend: "claude",
         notification: { method: "thread/started", params: { threadId: "claude-new" } },
       });
 
-      await vi.waitFor(() => {
-        expect(appServerService.readPrimaryGitRepository("claude", "claude-new"))
-          .toBe("github.com/pwrdrvr/pwragent");
-      });
       // Let the event's refresh finish before later tests count reads.
       await refreshOwnerMetadata();
+      expect(resolveGitHubRepoForDirectory).not.toHaveBeenCalled();
+      await expect(appServerService.resolvePrimaryGitRepository("claude", "claude-new"))
+        .resolves.toBe("github.com/fixture/new-origin");
+      expect(resolveGitHubRepoForDirectory.mock.calls).toEqual([["/repo/PwrAgent"]]);
     } finally {
       listThreads.mockReset();
     }

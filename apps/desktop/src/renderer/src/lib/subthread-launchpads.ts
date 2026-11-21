@@ -10,6 +10,8 @@ import type { ProjectIdentity } from "./federation-project-match";
 
 export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree" | "new-workspace";
 
+export type ThreadWorktreeAvailability = { available: boolean; thread: NavigationThreadSummary };
+
 /** Where a sub-thread in a new workspace or worktree starts. */
 export type SubthreadMachine = {
   /** Peer instance to start on; undefined is this machine. */

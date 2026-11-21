@@ -34,6 +34,8 @@ import { normalizeWorktreePathForComparison } from "./linked-directory-identity"
 import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
+import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-repository";
+import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
@@ -262,7 +264,7 @@ export class NavigationDetailService {
 
   async readSelectedDetail(
     request: NavigationSelectedDetailRequest,
-    options: { includePendingWakes?: boolean } = {},
+    options: { includePendingWakes?: boolean; signal?: AbortSignal } = {},
   ): Promise<NavigationSelectedDetailResponse> {
     return await listingDiagnostics.trace("workflow", { query: "selected-detail" }, () => this.readSelectedDetailData(request, options));
   }
@@ -286,7 +288,7 @@ export class NavigationDetailService {
 
   private async readSelectedDetailData(
     request: NavigationSelectedDetailRequest,
-    options: { includePendingWakes?: boolean },
+    options: { includePendingWakes?: boolean; signal?: AbortSignal },
   ): Promise<NavigationSelectedDetailResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION) {
       throw new NavigationQueryError(
@@ -318,6 +320,7 @@ export class NavigationDetailService {
     // Codex can omit that timestamp or retain one after an unarchive. Keep the
     // history available without authorizing the archived thread's composer.
     const identity = this.registry.getThreadInfo(request.ref)?.archived === true ? "archived" : "present";
+    const prDemand: PrMetadataDemand = { foreground: () => true, signal: options.signal };
     if (request.collection) {
       const name = request.collection.name;
       if (name !== "prs" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
@@ -339,7 +342,7 @@ export class NavigationDetailService {
           // the registry just as for a compact row or exact configuration.
           const [thread] = await this.registry.canonicalizeNavigationThreadPullRequests([
             { ...summary, inbox: { inInbox: false }, prs: overlay?.prs },
-          ]);
+          ], prDemand);
           all = thread?.prs ?? [];
         } else {
           all = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
@@ -402,7 +405,7 @@ export class NavigationDetailService {
       queuedExecutionMode: this.registry.getQueuedExecutionModeForThread(request.ref),
     });
     const canonical = projected
-      ? await this.registry.canonicalizeNavigationThreadPullRequests([projected]) : [];
+      ? await this.registry.canonicalizeNavigationThreadPullRequests([projected], prDemand) : [];
     const hydrated = (await this.registry.hydrateThreadGitWorkingStates(canonical, {
       probeMissing: request.probeWorkingStates === true,
     }))[0];
@@ -429,7 +432,7 @@ export class NavigationDetailService {
     const checkoutHibernation = this.registry.readCheckoutHibernation({ backend: summary.source, threadId: summary.id });
     const worktreePath = primaryThreadWorktree(thread)?.worktreePath;
     const failedRestorePath = checkoutHibernation.restoreFailure?.worktreePath;
-    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
+    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories, primaryGitRepository] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
       detectMissingThreadWorkspace(thread, {
         readBranch: async (repositoryPath) =>
@@ -448,6 +451,7 @@ export class NavigationDetailService {
             gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined,
           }))
         : undefined,
+      thread.primaryGitRepository ?? resolvePrimaryThreadRepoKey(thread, undefined, prDemand),
     ]);
     const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
       ? { name, ...subAgentCollection }
@@ -461,6 +465,7 @@ export class NavigationDetailService {
       : checkoutHibernation.progress ?? describeHibernatedThreadWorkspace(thread, checkoutHibernation.restoring);
     const configuration = {
       ...thread,
+      ...(primaryGitRepository ? { primaryGitRepository } : {}),
       ...(workspaceMissing ? { workspaceMissing } : {}),
       ...(workspaceHibernated ? { workspaceHibernated } : {}),
     };
