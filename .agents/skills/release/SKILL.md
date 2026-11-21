@@ -329,7 +329,7 @@ is for the intended tag, the tag points at the intended release commit, and
 the version/changelog metadata match the tag.
 
 The npm job later pauses for `npm-pwragent` review after desktop assets/notes
-are visible. Before approval, verify the tag/SHA, Node 22/24 validation and
+are visible. Before approval, verify the tag/SHA, Node 24 validation and
 retained `headless-npm-package` artifact/integrity. There is no independent CLI
 release request. Do not report success until `Verify desktop and Outpost release
 completion` succeeds and `outpost-release-receipt` matches public npm version,

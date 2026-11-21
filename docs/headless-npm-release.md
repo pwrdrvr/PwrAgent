@@ -110,14 +110,23 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    commits can be retried after a branch advances. Every desktop source
    checkout uses the event SHA.
 2. **Outpost validation**, on GitHub-hosted Ubuntu with Node **24**, runs
-   the mocked CLI/release tests and existing package checks before desktop setup.
-   These bundle shared JavaScript services/notices, enforce pinned
-   `node-pty@1.2.0-beta.15` plus bundled `node-addon-api`, reject additional runtime
-   dependencies, verify licenses, and install offline with an empty npm cache
-   and scripts disabled. The installed native PTY and mocked Codex/federation
-   flows are exercised without credentials or model requests. Generated notices
-   remain in the tested tarball; desktop notices retain their own dependency
-   scope. Node 24's exact tarball and `pack.json` are retained for **90 days**.
+   the mocked CLI/release tests and package checks before desktop setup. Build
+   dependencies install from the frozen lockfile without lifecycle scripts.
+   The package requires Node **>=24.0.0**. Release checks require the exact
+   reviewed Node host runtime dependency set (`better-sqlite3`, `node-pty`,
+   `@napi-rs/canvas`, `electron-log`, `pdfjs-dist`) and MIT metadata. The packed
+   tarball ships the emitted ESM graph, workers, generated notices, the pinned
+   Git manifest/notices and the MCP IPC relay source. It has no bundled
+   dependencies and no build-host Git or relay binaries. `pack-check.mjs` then
+   performs a clean global npm installation of the tarball outside the checkout,
+   with an empty npm cache and user config and **lifecycle scripts enabled**.
+   npm resolves native SQLite, PTY and canvas packages for the target. The
+   installer builds the local relay with the C compiler and stages the
+   desktop's pinned, verified Git with curl and tar. The installed startup
+   graph, Git, relay, native PTY and mocked Codex/federation flows are exercised
+   without credentials or model requests. Desktop notices retain their own
+   dependency scope. The exact tarball and `pack.json` are retained for
+   **90 days**.
    The validation job exports the SHA-512 integrity and retains it separately
    for the same period. The staged npm manifest contains `pwragentRelease: { tag, commit }` for source verification.
 3. Existing **desktop build/test/signing and publication** jobs run with their
