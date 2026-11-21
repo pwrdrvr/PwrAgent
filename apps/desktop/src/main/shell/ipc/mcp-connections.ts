@@ -3,6 +3,10 @@ import {
   isMcpConnectionToolApproval,
   isBoatLinkTarget,
   isBoatSignInMethod,
+  isBoatThreadSandboxAction,
+  type ChangeThreadBoatSandboxRequest,
+  type ListThreadBoatSandboxesRequest,
+  type ListThreadBoatSandboxesResponse,
   type StartBoatSignInRequest,
   isSandboxerLinkTarget,
   isSandboxerTransport,
@@ -82,6 +86,8 @@ import {
   MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL,
+  MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
@@ -381,6 +387,39 @@ export function registerMcpConnectionIpcHandlers(
       requireLocalOwner(event);
       const connection = await service.openBoatSignInPage();
       return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL,
+    async (event, request: ListThreadBoatSandboxesRequest): Promise<ListThreadBoatSandboxesResponse> => {
+      // The key that reads them, and the bill, are this machine's.
+      requireLocalOwner(event);
+      if (typeof request?.threadId !== "string" || typeof request.backend !== "string") {
+        throw new Error("Name the thread whose Boat sandboxes to list.");
+      }
+      return await service.listThreadBoatSandboxes({ backend: request.backend, threadId: request.threadId });
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL,
+    async (event, request: ChangeThreadBoatSandboxRequest): Promise<ListThreadBoatSandboxesResponse> => {
+      requireLocalOwner(event);
+      if (
+        typeof request?.threadId !== "string"
+        || typeof request.backend !== "string"
+        || typeof request.sandboxId !== "string"
+        || !isBoatThreadSandboxAction(request.action)
+      ) {
+        throw new Error("Name the Boat sandbox and whether to stop or delete it.");
+      }
+      return await service.changeThreadBoatSandbox({
+        backend: request.backend,
+        threadId: request.threadId,
+        sandboxId: request.sandboxId,
+        action: request.action,
+      });
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_OPEN_CHANNEL);
@@ -813,6 +852,8 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);

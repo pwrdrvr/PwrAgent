@@ -34065,6 +34065,31 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+.mcp-access-panel__sandboxes {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 7px;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-access-panel__sandboxes li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mcp-access-panel__sandboxes .mcp-access-panel__row-body {
+  min-width: 0;
+}
+
+.mcp-access-panel__sandboxes .mcp-access-panel__verify-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mcp-access-panel__footer {
   display: flex;
   flex-wrap: wrap;

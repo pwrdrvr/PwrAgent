@@ -327,6 +327,9 @@ import type {
   OpenSandboxerLinkResponse,
   BoatLinkTarget,
   BoatSignInMethod,
+  ChangeThreadBoatSandboxRequest,
+  ListThreadBoatSandboxesRequest,
+  ListThreadBoatSandboxesResponse,
   ConnectBoatRequest,
   OpenBoatLinkResponse,
   SetBoatCleanupOnPrCloseRequest,
@@ -874,6 +877,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   cancelBoatSignIn?: () => Promise<MutateMcpConnectionResponse>;
   /** Opens Boat's page for the sign-in in flight, once the code is copied. */
   openBoatSignInPage?: () => Promise<MutateMcpConnectionResponse>;
+  /** A thread's Boat sandboxes with what each has cost. This machine only. */
+  listThreadBoatSandboxes?: (
+    request: ListThreadBoatSandboxesRequest,
+  ) => Promise<ListThreadBoatSandboxesResponse>;
+  /** Stops or deletes one of them, and answers the list as it then stands. */
+  changeThreadBoatSandbox?: (
+    request: ChangeThreadBoatSandboxRequest,
+  ) => Promise<ListThreadBoatSandboxesResponse>;
   setBoatSandboxPolicy?: (
     request: SetBoatSandboxPolicyRequest,
   ) => Promise<MutateMcpConnectionResponse>;

@@ -303,6 +303,41 @@ describe("Boat through the MCP gateway", () => {
     expect(failed).toEqual(["save_snapshot"]);
   });
 
+  it("lets a window list, stop and delete only the sandboxes its thread created", async () => {
+    const { boat, call, registry, service } = harness();
+    registry.setEnabled(BOAT, true);
+    await service.connectBoat(KEY);
+    const thread = (threadId: string) => ({ backend: "codex", threadId });
+
+    // A thread with nothing recorded is answered without asking Boat.
+    const before = boat.sent.length;
+    await expect(service.listThreadBoatSandboxes(thread("thread-a"))).resolves.toEqual({ sandboxes: [] });
+    expect(boat.sent.length).toBe(before);
+
+    await call("thread-a", "create_sandbox", {});
+    await call("thread-b", "create_sandbox", {});
+    const mine = (await service.listThreadBoatSandboxes(thread("thread-a"))).sandboxes;
+    const theirs = (await service.listThreadBoatSandboxes(thread("thread-b"))).sandboxes;
+    expect(mine.map((sandbox) => sandbox.id)).toEqual(["bx_0"]);
+    expect(theirs.map((sandbox) => sandbox.id)).toEqual(["bx_1"]);
+    expect(JSON.stringify(mine)).not.toContain(KEY);
+
+    // The window's thread decides what it reaches, exactly as for an agent.
+    for (const action of ["stop", "delete"] as const) {
+      const sent = boat.sent.length;
+      await expect(service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_1", action }))
+        .rejects.toThrow();
+      expect(boat.sent.slice(sent).filter((request) => request.method !== "GET")).toEqual([]);
+    }
+
+    await service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_0", action: "stop" });
+    expect(boat.sent.at(-2)).toMatchObject({ method: "POST", url: expect.stringContaining("/sandboxes/bx_0/stop") });
+    await service.changeThreadBoatSandbox({ ...thread("thread-a"), sandboxId: "bx_0", action: "delete" });
+    expect(boat.sent.some((request) => request.method === "DELETE" && request.url.endsWith("/sandboxes/bx_0")))
+      .toBe(true);
+    expect(boat.sent.some((request) => request.url.includes("bx_1") && request.method !== "GET")).toBe(false);
+  });
+
   it("asks for a new sign-in once Boat refuses the stored key a sandbox", async () => {
     const { call, registry, service, stored } = harness(scopedBoat(FULL_SANDBOX_PRESET));
     registry.setEnabled(BOAT, true);

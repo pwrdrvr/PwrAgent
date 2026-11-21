@@ -1,4 +1,5 @@
 import type { Transport, FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   BOAT_LINKS,
   BOAT_MCP_CONNECTION_ID,
@@ -207,6 +208,14 @@ export class BoatConnection {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     return clientTransport;
+  }
+
+  /**
+   * One tool call outside any MCP session, for a window acting on a thread's
+   * sandboxes. The scope's rules apply exactly as they do to an agent.
+   */
+  async callTool(scope: BoatSessionScope, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+    return await new BoatTools({ api: this.api, policy: this.options.policy, ...scope }).call(name, args);
   }
 
   private async readKey(): Promise<string | undefined> {

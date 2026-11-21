@@ -281,6 +281,31 @@ export type BoatSignInProgress =
   | { state: "waiting"; method: BoatSignInMethod; userCode: string; expiresAt: number }
   | { state: "failed"; error: string };
 
+/** One of a thread's Boat sandboxes, as its panel shows it. */
+export type BoatThreadSandbox = {
+  id: string;
+  name?: string;
+  state?: string;
+  type?: string;
+  /** What Boat has billed for it so far. */
+  dollars?: number;
+  ttlSeconds?: number;
+};
+
+export const BOAT_THREAD_SANDBOX_ACTIONS = ["stop", "delete"] as const;
+export type BoatThreadSandboxAction = (typeof BOAT_THREAD_SANDBOX_ACTIONS)[number];
+
+export function isBoatThreadSandboxAction(value: unknown): value is BoatThreadSandboxAction {
+  return BOAT_THREAD_SANDBOX_ACTIONS.some((action) => action === value);
+}
+
+export type ListThreadBoatSandboxesRequest = { backend: string; threadId: string };
+export type ListThreadBoatSandboxesResponse = { sandboxes: BoatThreadSandbox[] };
+export type ChangeThreadBoatSandboxRequest = ListThreadBoatSandboxesRequest & {
+  sandboxId: string;
+  action: BoatThreadSandboxAction;
+};
+
 export type ConnectBoatRequest = { apiKey: string };
 export type StartBoatSignInRequest = { method: BoatSignInMethod };
 export type SetBoatSandboxPolicyRequest = { policy: Partial<BoatSandboxPolicy> };

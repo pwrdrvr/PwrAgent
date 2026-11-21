@@ -146,7 +146,18 @@ Creating, forking, and deleting write one `thread_sandboxes` row each, through
 the store calls the `thread-sandbox-record-created` and
 `thread-sandbox-cleanup-two` write budgets already measure.
 
+## The thread's sandboxes in the MCP access panel
+
+`ThreadBoatSandboxes` lists what a thread on this machine created, with state,
+size and what Boat has billed so far, and offers Stop and a two-step Delete.
+The window calls `listThreadBoatSandboxes` and `changeThreadBoatSandbox` on the
+gateway service, which run `list_sandboxes`, `stop_sandbox` and
+`delete_sandbox` through `BoatTools` with the thread's own scope. The window
+therefore reaches exactly what the thread's agent reaches, and a sandbox id
+from another thread is refused before Boat is asked. A thread with no recorded
+sandboxes is answered without a request to Boat. A remote thread shows no
+section: the key and the bill belong to its owner.
+
 ## Not built yet
 
-`forward_port` (a localhost tunnel), workspace push and pull, and per-sandbox
-cost in the thread panel. Each has a to-do card.
+`forward_port` (a localhost tunnel) and workspace push and pull.
