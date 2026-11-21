@@ -2122,7 +2122,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * Persist the latest value for every distinct usage line under one sqlite
    * transaction. Callers may pass repeated ids; later entries win before any
-   * statement runs, and affected pricing summaries are recomputed once each.
+   * statement runs, and affected pricing summaries reflect the same transaction.
    */
   async upsertThreadUsageLines(params: {
     lines: ThreadUsageLineRecord[];
@@ -2191,6 +2191,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       );
     };
     const unchangedSummaries = new Map<string, ThreadPricingSummary>();
+    let usageLineUpsert: BetterSqlite3.Statement | undefined;
     const upsertLine = (
       inputLine: ThreadUsageLineRecord,
     ): ThreadUsageLineRecord => {
@@ -2397,8 +2398,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         )
         .run(toThreadUsageLineRowParams(line));
 
-      this.stateDb.raw
-        .prepare(
+      (usageLineUpsert ??= this.stateDb.raw.prepare(
           `INSERT INTO thread_usage_lines (
             usage_line_id,
             usage_turn_id,
@@ -2568,7 +2568,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             observed_hot_replay_cached_tokens = COALESCE(excluded.observed_hot_replay_cached_tokens, thread_usage_lines.observed_hot_replay_cached_tokens),
             observed_hot_replay_count = COALESCE(excluded.observed_hot_replay_count, thread_usage_lines.observed_hot_replay_count),
             updated_at = excluded.updated_at`,
-        )
+        ))
         .run(toThreadUsageLineRowParams(line));
 
       if (existing?.totalTokens === 0 && line.totalTokens > 0) {
@@ -2659,7 +2659,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           .filter(([key]) => !summaryTargets.has(key))
           .map(([, summary]) => summary),
         ...[...summaryTargets.values()].map((target) =>
-          this.recomputeThreadPricingSummarySync(target),
+          this.readOrInitializeThreadPricingSummarySync(target),
         ),
       ];
     });
@@ -3513,7 +3513,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         });
       }
       for (const target of summaryTargets.values()) {
-        this.recomputeThreadPricingSummarySync(target);
+        this.readOrInitializeThreadPricingSummarySync(target);
       }
     })();
   }
@@ -11380,6 +11380,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return row ? threadToolInvocationFromRow(row) : undefined;
   }
 
+  private readOrInitializeThreadPricingSummarySync(params: {
+    backend: string;
+    currency: string;
+    provider: string;
+    threadId: string;
+    updatedAt: number;
+  }): ThreadPricingSummary {
+    const current = this.stateDb.raw.prepare(
+      `SELECT * FROM thread_pricing_summaries
+       WHERE provider = @provider AND backend = @backend AND thread_id = @threadId
+         AND currency = @currency AND ledger_delta_ready = 1`,
+    ).get(params) as ThreadPricingSummaryRow | undefined;
+    // Older buckets can be stale and new buckets can already have child
+    // usage. Establish an exact baseline with the existing scoped query.
+    return current
+      ? threadPricingSummaryFromRow(current)
+      : this.recomputeThreadPricingSummarySync(params);
+  }
+
   private recomputeThreadPricingSummarySync(params: {
     backend: string;
     currency: string;
@@ -11477,7 +11496,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           reasoning_output_tokens,
           total_tokens,
           total_cost_micros,
-          updated_at
+          updated_at,
+          ledger_delta_ready
         ) VALUES (
           @provider,
           @backend,
@@ -11493,7 +11513,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           @reasoningOutputTokens,
           @totalTokens,
           @totalCostMicros,
-          @updatedAt
+          @updatedAt,
+          1
         )
         ON CONFLICT(provider, backend, thread_id, currency) DO UPDATE SET
           usage_line_count = excluded.usage_line_count,
@@ -11506,7 +11527,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           reasoning_output_tokens = excluded.reasoning_output_tokens,
           total_tokens = excluded.total_tokens,
           total_cost_micros = excluded.total_cost_micros,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at,
+          ledger_delta_ready = 1`,
       )
       .run(summary);
 

@@ -18,7 +18,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
   // recovery guard, research, request-pricing, sub-agent dismissal,
   // operator-request scope, pricing summary, gate pricing, and usage completion
-  // indexes that followed it.
+  // indexes, plus the pricing summary deltas.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
@@ -44,10 +44,15 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_gate_child_source"
     && row.name !== "idx_thread_usage_lines_gate_usage_turn"
     && row.name !== "idx_thread_usage_lines_completion_turn"
+    && row.name !== "thread_pricing_summary_delta_insert"
+    && row.name !== "thread_pricing_summary_delta_update"
+    && row.name !== "thread_pricing_summary_delta_delete"
   ).map(row => {
     switch (row.name) {
       case "thread_usage_lines":
         return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
+      case "thread_pricing_summaries":
+        return { ...row, sql: row.sql?.replace(", ledger_delta_ready INTEGER NOT NULL DEFAULT 0", "") };
       case "idx_thread_usage_lines_turn":
         return {
           ...row,

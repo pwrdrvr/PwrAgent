@@ -39,8 +39,9 @@ import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
+import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 
-export const CURRENT_STATE_DB_USER_VERSION = 84;
+export const CURRENT_STATE_DB_USER_VERSION = 85;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2239,6 +2240,15 @@ export class StateDb {
           db.exec(THREAD_USAGE_LINE_PARENT_INDEX);
           db.exec(THREAD_USAGE_LINE_COMPLETION_INDEX);
           db.pragma("user_version = 84");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 85) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 85) return;
+          // Install capture only. Legacy summaries become delta-ready from
+          // the existing scoped summary read, inside a normal ledger write.
+          ensureThreadPricingSummaryDeltas(db);
+          db.pragma("user_version = 85");
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
