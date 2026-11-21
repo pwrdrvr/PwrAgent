@@ -134,6 +134,10 @@ test("native rolling trace evicts old events and publishes only filtered timing 
             `);
             await wait(100);
             const capture = await trace.capture(owner, args.artifact, trigger);
+            const mode = untilFull ? "recordUntilFull" : "recordContinuously";
+            if (capture.status !== "written") {
+              throw new Error(`${mode} capture did not publish: ${JSON.stringify(capture)}`);
+            }
             const exported = Buffer.concat(raw).toString("utf8");
             const events: { name?: string }[] = JSON.parse(exported).traceEvents;
             return {
