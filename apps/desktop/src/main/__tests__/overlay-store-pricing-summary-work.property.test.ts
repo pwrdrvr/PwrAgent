@@ -4,6 +4,7 @@ import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -166,7 +167,8 @@ it("keeps checkpoints equal to the ledger through replay, regrouping, and repric
 });
 
 const pricingDeltaVersion = 85;
-it.each([82, 83, 84, pricingDeltaVersion, CURRENT_STATE_DB_USER_VERSION + 1])("upgrades pricing from a v%i profile and keeps peer writes and rollbacks in the ledger commit", async (version) => {
+const scheduledProjectionVersion = 86;
+it.each([82, 83, 84, pricingDeltaVersion, scheduledProjectionVersion, CURRENT_STATE_DB_USER_VERSION + 1])("upgrades pricing and scheduled projections from a v%i profile and keeps peer writes and rollbacks in the ledger commit", async (version) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const temp = createTempStateDb("pwragent-pricing-summary-");
   let db: StateDb | undefined;
@@ -177,6 +179,10 @@ it.each([82, 83, 84, pricingDeltaVersion, CURRENT_STATE_DB_USER_VERSION + 1])("u
       usageLine("legacy-root"),
       usageLine("legacy-child", { threadId: "legacy-child", parentThreadId: thread.threadId }),
     ] });
+    const scheduled = new ScheduledThreadActionStore(db);
+    scheduled.create({ ...thread, id: "legacy-scheduled", kind: "turn", origin: "desktop",
+      scheduledFor: 10, now: 1, displayText: "Persisted scheduled input" });
+    const retained = scheduled.cancel("legacy-scheduled", 2);
     const readUsageIndexes = (state: StateDb) => state.raw.prepare(
       `SELECT name, sql FROM sqlite_schema
        WHERE type = 'index' AND tbl_name IN ('thread_usage_lines', 'thread_usage_turns')
@@ -210,6 +216,12 @@ it.each([82, 83, 84, pricingDeltaVersion, CURRENT_STATE_DB_USER_VERSION + 1])("u
     }
     // Emulate a ledger edit that summaries from builds without deltas did not capture.
     db.raw.exec(`
+      DROP TRIGGER scheduled_action_projection_insert;
+      DROP TRIGGER scheduled_action_projection_update;
+      DROP TRIGGER scheduled_action_projection_delete;
+      DROP TABLE scheduled_action_projection_state;
+      DROP INDEX idx_scheduled_thread_actions_projection_order;
+      DROP INDEX idx_scheduled_thread_actions_terminal_updated;
       DROP TRIGGER thread_pricing_summary_delta_insert;
       DROP TRIGGER thread_pricing_summary_delta_update;
       DROP TRIGGER thread_pricing_summary_delta_delete;
@@ -232,11 +244,14 @@ it.each([82, 83, 84, pricingDeltaVersion, CURRENT_STATE_DB_USER_VERSION + 1])("u
     for (let offset = 32; offset < migrationWal.length; offset += frameSize) {
       if (migrationWal.readUInt32BE(offset + 4) !== 0) migrationCommits++;
     }
-    // Each numbered upgrade commits once. A profile stamped v85 or higher
-    // without the pricing schema also needs the pricing delta transaction.
+    // Each numbered upgrade commits once. Profiles stamped at or beyond a
+    // missing migration need that schema-repair transaction as well.
     const pendingMigrations = Math.max(0, CURRENT_STATE_DB_USER_VERSION - version);
     const missingPricingMigration = version >= pricingDeltaVersion ? 1 : 0;
-    expect(migrationCommits).toBe(pendingMigrations + missingPricingMigration);
+    const missingProjectionMigration = version >= scheduledProjectionVersion ? 1 : 0;
+    expect(migrationCommits).toBe(pendingMigrations + missingPricingMigration + missingProjectionMigration);
+    const page = new ScheduledThreadActionStore(db).listProjectionPage({ projectionProtocol: 2, includeTerminal: true });
+    expect(page).toMatchObject({ complete: true, actions: [retained] });
     const store = new SqliteOverlayStore(db);
     await appendAndCheck(store, db, "first-upgraded");
     expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, CURRENT_STATE_DB_USER_VERSION));

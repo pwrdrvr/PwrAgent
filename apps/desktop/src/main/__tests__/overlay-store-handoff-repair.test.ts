@@ -157,8 +157,9 @@ describe("StateDb — handoff navigation migration", () => {
     // Handoff, relationships, v65 retention, v66 backend metadata, v76
     // generation, the v79 card table, its lens index and gate totals, and
     // the v80 usage-activity table, v81 owner jobs, v82 search keys/index,
-    // v83 gate pricing indexes, v84 usage completion indexes, and v85 pricing deltas.
-    expect(reopenAndCountImmediateTransactions()).toBe(13);
+    // v83 gate pricing indexes, v84 usage completion indexes, v85 pricing deltas,
+    // and v86 scheduled action projections.
+    expect(reopenAndCountImmediateTransactions()).toBe(14);
 
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,
@@ -219,8 +220,9 @@ describe("StateDb — handoff navigation migration", () => {
     // Handoff, relationships, v65 retention, v66 backend metadata, v76
     // generation, the v79 card table, its lens index and gate totals, and
     // the v80 usage-activity table, v81 owner jobs, v82 search keys/index,
-    // v83 gate pricing indexes, v84 usage completion indexes, and v85 pricing deltas.
-    expect(reopenAndCountImmediateTransactions()).toBe(13);
+    // v83 gate pricing indexes, v84 usage completion indexes, v85 pricing deltas,
+    // and v86 scheduled action projections.
+    expect(reopenAndCountImmediateTransactions()).toBe(14);
 
     // Simulate a supported pre-v56 instance sharing the profile after the
     // migration has committed.
