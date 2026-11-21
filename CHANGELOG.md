@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.15 - 2026-11-21
+
+- Boat Sandboxes - Add Boat as a built-in compute connection alongside Sandboxer, with a Launchpad tile and Settings > Plugins setup using an API key or the Boat CLI's browser sign-in. Keep the key in PwrAgent's encrypted secret store and apply normal MCP selection and approval checks. Scope sandbox tools to the calling thread's sandboxes, request private hosted ports and credential-free environments by default, and refuse requests above configured size or auto-stop limits.
+- Composer Dictation - Let Enter stop dictation and insert its transcript before a subsequent Enter sends; Escape cancels dictation without sending. Send on a normal draft waits for an active transcript to be inserted, and a failed, empty, or cancelled dictation does not release that waiting send. Add an input-level meter and a short tone only once audio is flowing. Enable dictation on remote threads using the viewer's microphone and OpenAI API key, with the transcript staying in the local draft; API transcription is billed separately from Codex subscription access.
+- Worktree Storage Guards - Enforce Share storage eligibility in the main process, refusing archived-thread mutations and sharing while any local thread has a turn, reserved start, or review in the same checkout. Keep estimates available, avoid unrelated PR lookups during path authorization, and detect selected-Git capabilities through another linked repository when the first worktree is missing or hibernated.
+- Saved Secrets - Show Not set, Not saved yet, Saved in keychain, and environment-provided or overridden states directly below secret inputs. Make unsaved values and Save more visible, offer Replace and Remove for saved values, and stop making an empty secret look like an already stored one.
+- Navigation Responsiveness - Avoid per-checkout PR Git probes during directory indexing and group planning, validate requested rows before returning attachment details, and share matching archived-provider reads between consumers. Preserve complete attachment validation in polling and Auto-fix, while reducing duplicate provider walks and removing inactive scroll-restoration code.
+
 ## v1.4.14 - 2026-11-20
 
 - Worktree Storage Sharing - Add Share storage under Linked Projects for local worktrees when the selected Git supports its optional reflink command. Show an estimate before sharing, and offer Verify filtered files as a separate, unticked option when supported. Refuse stale requests after switching Git and disable sharing while the thread's turn is running. Actual savings depend on the filesystem and available source files; this action is not offered for remote worktrees or Git versions without the command.
