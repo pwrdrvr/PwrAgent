@@ -45,10 +45,12 @@ it.each([100, 1000, 10000].flatMap((n) => [false, true].map((analyzed) => ({ n, 
       expect(q.plans.some((p) => /SEARCH thread_search_fts_rows USING COVERING INDEX/.test(p))).toBe(true);
     }
     for (const q of queries.filter((q) => q.sql.includes("INSERT INTO thread_usage_titles"))) {
-      expect(q.plans.join("\n")).toContain("SEARCH thread_usage_lines USING COVERING INDEX idx_thread_usage_lines_identity (backend=? AND thread_id=?)");
-      expect(q.plans.join("\n")).toContain("SEARCH l USING COVERING INDEX idx_thread_usage_lines_identity (backend=? AND thread_id=?)");
-      expect(q.plans.join("\n")).toMatch(/SEARCH r USING INDEX idx_automation_runs_/);
-      expect(q.plans.join("\n")).not.toMatch(/SCAN (thread_usage_lines|l|r)\b/);
+      const plan = q.plans.join("\n");
+      // Both ledger indexes cover the existence check with the same key prefix.
+      expect(plan).toMatch(/SEARCH thread_usage_lines USING COVERING INDEX idx_thread_usage_lines_(?:identity|turn) \(backend=\? AND thread_id=\?\)/);
+      expect(plan).toMatch(/SEARCH l USING COVERING INDEX idx_thread_usage_lines_(?:identity|turn) \(backend=\? AND thread_id=\?\)/);
+      expect(plan).toMatch(/SEARCH r USING INDEX idx_automation_runs_/);
+      expect(plan).not.toMatch(/SCAN (thread_usage_lines|l|r)\b/);
     }
     expect(queries).toHaveLength(12);
     expect(prepare("SELECT identity_key FROM thread_usage_titles ORDER BY identity_key").pluck().all()).toEqual(["codex:execution-1", "codex:owner-1"]);
