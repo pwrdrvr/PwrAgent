@@ -73,7 +73,8 @@ function applyCheckout(
     }
     const { capacity, maxHoldMs } = record.definition;
     const units = action.units ?? capacity;
-    if (action.expectedDurationMs > maxHoldMs || units > capacity) {
+    if (!Number.isSafeInteger(action.expectedDurationMs) || action.expectedDurationMs < 1 || action.expectedDurationMs > maxHoldMs
+      || !Number.isSafeInteger(units) || units < 1 || units > capacity) {
       return rejectCheckout("policy", "The requested duration or units exceed the resource policy.");
     }
     if (record.queue.length >= MAX_QUEUE_LENGTH) return rejectCheckout("policy", "The checkout queue is full.");

@@ -57,7 +57,7 @@ describe("the persisted resource checkout authority", () => {
   it("agrees with a FIFO capacity model across profile writers, replays, expiry and reopen", () => {
     fc.assert(fc.property(fc.integer({ min: 1, max: 4 }), fc.array(fc.record({
       command: fc.constantFrom("request", "release", "expire", "reopen", "cancel", "replay"),
-      units: fc.integer({ min: 1, max: 4 }), writer: fc.boolean(),
+      units: fc.integer({ min: -1, max: 4 }), writer: fc.boolean(),
     }), { minLength: 3, maxLength: 45 }), (capacity, commands) => {
       const harness = createHarness(capacity);
       try {
@@ -84,7 +84,7 @@ describe("the persisted resource checkout authority", () => {
           const key = String(index);
           if (step.command === "request") {
             const result = writer.perform(who, request(key, { units: step.units }));
-            if (step.units <= capacity) {
+            if (step.units > 0 && step.units <= capacity) {
               queue.push({ purpose: key, units: step.units, actor: who });
               wake();
               expect(result.outcome).toBe(held.some((item) => item.purpose === key) ? "granted" : "queued");
@@ -259,6 +259,50 @@ describe("the persisted resource checkout authority", () => {
       expect(authority.beginJobDrain(grant, "job")).toBe(false);
       await expect(executeResourceCheckout(options)).resolves.toBe("rejected");
       expect(effects).toEqual(["prepare", "drain"]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("waits for cancelled preparation and its stop guard to drain before granting the next checkout", async () => {
+    const harness = createHarness();
+    try {
+      const { authority } = harness.open();
+      const token = granted(authority, "preparing");
+      const controller = new AbortController();
+      const finishPreparation = Promise.withResolvers<void>();
+      const finishCleanup = Promise.withResolvers<void>();
+      const cleanupStarted = Promise.withResolvers<void>();
+      let runAttempted = false;
+      const run = executeResourceCheckout({
+        authority, actor, token, jobId: "job", costMinorUnits: 0, signal: controller.signal,
+        policy: { allowedActors: [actor.key], adapterId: "fake", maxCostMinorUnits: 0, finalState: "stopped" },
+        adapter: {
+          id: "fake",
+          async prepare() { await finishPreparation.promise; },
+          async run() { runAttempted = true; },
+          async drain() {
+            cleanupStarted.resolve();
+            await finishCleanup.promise;
+            return { effectsFenced: true, finalState: "stopped" };
+          },
+        },
+      });
+      controller.abort();
+      expect(authority.perform(other, request("waiting"))).toMatchObject({ outcome: "queued" });
+      expect(authority.records()[0].grants[0].state).toBe("preparing");
+      finishPreparation.resolve();
+      await cleanupStarted.promise;
+      expect(authority.records()[0]).toMatchObject({
+        grants: [{ id: token.allocationId, state: "draining" }], queue: [{ purpose: "waiting" }],
+      });
+      finishCleanup.resolve();
+      await expect(run).resolves.toBe("released");
+      expect(runAttempted).toBe(false);
+      expect(authority.records()[0]).toMatchObject({
+        grants: [{ purpose: "waiting", generation: token.generation + 1 }], queue: [],
+      });
+      expect(authority.beginJobDrain(token, "job")).toBe(false);
     } finally {
       harness.close();
     }
