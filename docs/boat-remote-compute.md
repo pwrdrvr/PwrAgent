@@ -158,6 +158,35 @@ from another thread is refused before Boat is asked. A thread with no recorded
 sandboxes is answered without a request to Boat. A remote thread shows no
 section: the key and the bill belong to its owner.
 
+## Port forwards
+
+`forward_port` makes a port in a running sandbox answer at `127.0.0.1` on the
+operator's computer. `boat-port-forward.ts` opens it with the system `ssh`,
+not `boat forward`: the CLI would need the API key in a child process's
+environment, where any process of the same user can read it. PwrAgent makes
+an ed25519 key pair for the one tunnel with `ssh-keygen`, sends the public
+half to `POST /sandboxes/{id}/sshkey` (the `ssh` key action), and starts
+`ssh -N -L 127.0.0.1:<free port>:127.0.0.1:<port>`. The child holds only that
+private key, which opens nothing but the sandbox it was registered on. A key
+minted before this action was added is refused by Boat, and the tool says to
+sign in again.
+
+Rules, each held by `boat-port-forward.property.test.ts`:
+
+- The listener binds `127.0.0.1`. No argument changes the bind address, adds
+  a reverse or dynamic forward, or picks the local port.
+- The server must present the host key Boat returned (`StrictHostKeyChecking`
+  with a known-hosts file holding that one key). An answer without a host key
+  opens no tunnel. The user's ssh config, agent and known hosts are not read.
+- What Boat returns for host and user is checked against a pattern before it
+  reaches the command line.
+- A tunnel closes when the sandbox is stopped, resumed or deleted (by an
+  agent, the panel, or PR cleanup), when `ssh` exits, when the last MCP
+  session that asked for it ends, when the key is removed, and when the app
+  quits. Its key directory is removed with it.
+
+Nothing is written to SQLite for a tunnel: it does not survive a restart.
+
 ## Not built yet
 
-`forward_port` (a localhost tunnel) and workspace push and pull.
+Workspace push and pull.

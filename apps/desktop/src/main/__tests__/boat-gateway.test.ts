@@ -7,6 +7,7 @@ import { BOAT_TOOLS } from "../mcp-connections/boat-tools";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import type { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
+import { FAKE_HOST_KEY, fakeTunnelRuntime } from "./helpers/boat-tunnel-fake";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 
 /**
@@ -66,6 +67,9 @@ function fakeBoat(acceptedKey = KEY) {
         content: `box_shadow_blur_radius: 4px; /* ${KEY} */`,
       });
     }
+    if (segments[2] === "sshkey") {
+      return answer(200, { ok: true, machineIp: "203.0.113.10", sshUser: "user", hostKey: FAKE_HOST_KEY });
+    }
     if (segments[2] === "host") {
       return answer(200, {
         ok: true, port: 3000, access: "private", isProtected: true,
@@ -93,6 +97,7 @@ function requiredAction(method: string, segments: readonly string[]): string {
     case "commands": return "exec";
     case "files": return method === "PUT" ? "file.write" : "file.read";
     case "host": return "host";
+    case "sshkey": return "ssh";
     case "stop": return "sandbox.stop";
     case "resume": return "sandbox.resume";
     case "fork": return "sandbox.fork";
@@ -140,7 +145,9 @@ function toolArguments(name: string, sandboxId: string): Record<string, unknown>
     case "read_file": return { sandboxId, path: "/app/theme.css" };
     case "write_file": return { sandboxId, path: "/app/theme.css", content: "a" };
     case "list_files": return { sandboxId, path: "/app" };
-    case "host_port": return { sandboxId, port: 3000 };
+    case "host_port":
+    case "forward_port":
+    case "close_port_forward": return { sandboxId, port: 3000 };
     case "extend_sandbox": return { sandboxId, ttlMinutes: 30 };
     default: return { sandboxId };
   }
@@ -174,6 +181,7 @@ function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: 
       }
     },
   };
+  const tunnels = fakeTunnelRuntime();
   const service = new McpConnectionGatewayService({
     sandboxer: sandboxerStub(),
     registry,
@@ -189,6 +197,7 @@ function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: 
     },
     leaseManager: null,
     fetchFn: boat.fetchFn,
+    boatTunnelRuntime: tunnels.runtime,
     stdioSecrets,
     threadSandboxes: threadSandboxes as never,
   });
@@ -208,7 +217,7 @@ function harness(boat: { fetchFn: ReturnType<typeof fakeBoat>["fetchFn"]; sent: 
     internals.grants.set(token, grant);
     return await internals.dispatchBridgeOperation(token, grant, "tools/call", { name, arguments: args });
   };
-  return { boat, call, registry, rows, service, stored };
+  return { boat, call, registry, rows, service, stored, tunnels };
 }
 
 describe("Boat through the MCP gateway", () => {
@@ -298,9 +307,10 @@ describe("Boat through the MCP gateway", () => {
     }
 
     expect(boat.refused).toEqual([]);
-    // A save needs the operator's approval, and this harness has nobody to
-    // ask: it read the snapshot list from Boat, then stopped.
-    expect(failed).toEqual(["save_snapshot"]);
+    // Closing a tunnel is local: Boat is not asked. A save needs the
+    // operator's approval, and this harness has nobody to ask: it read the
+    // snapshot list from Boat, then stopped.
+    expect(failed).toEqual(["close_port_forward", "save_snapshot"]);
   });
 
   it("lets a window list, stop and delete only the sandboxes its thread created", async () => {

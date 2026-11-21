@@ -33,6 +33,7 @@ import { listedMcpSkills, offersMcpSkills, skillsAwareInstructions } from "./mcp
 import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import { BoatConnection, type BoatSessionScope } from "./boat-connection";
+import type { BoatTunnelRuntime } from "./boat-port-forward";
 import { BoatSignIn } from "./boat-sign-in";
 import {
   McpStdioLaunchError,
@@ -365,6 +366,7 @@ export type McpConnectionGatewayServiceOptions = {
   sandboxer?: SandboxerConnection;
   /** Test seam: Boat's browser sign-in, which runs Boat's CLI. */
   boatSignIn?: BoatSignIn;
+  boatTunnelRuntime?: BoatTunnelRuntime;
   /** Test seam: the sandbox rows PwrAgent's Boat server reads and writes. */
   threadSandboxes?: Pick<ThreadSandboxStorage, "recordCreated" | "pendingForThread" | "markOutcome">;
   /**
@@ -904,6 +906,7 @@ export class McpConnectionGatewayService {
       fetchFn: createMcpSafeFetch({ fetchFn: this.fetchFn, connectionId: BOAT_MCP_CONNECTION_ID }),
       policy: () => this.requireConnection(BOAT_MCP_CONNECTION_ID).boatPolicy!,
       openExternal: this.openExternal,
+      ...(options.boatTunnelRuntime ? { tunnelRuntime: options.boatTunnelRuntime } : {}),
     });
     this.boat.onStatusChanged(() => {
       // A rejected or removed key ends what every open session could do.
@@ -2082,6 +2085,7 @@ export class McpConnectionGatewayService {
       // Removes PwrAgent's copy of the key. It stays valid at Boat until the
       // operator revokes it there, and running sandboxes keep running.
       await this.boatSignIn.cancel();
+      await this.boat.closePortForwards();
       await this.boat.disconnect();
       this.invalidateConnectionTools(connectionId);
       return this.announced(await this.connectionStatus(connection));
@@ -2611,6 +2615,7 @@ export class McpConnectionGatewayService {
 
   async close(): Promise<void> {
     await this.boatSignIn.cancel({ wait: true });
+    await this.boat.closePortForwards();
     this.grants.clear();
     this.relayGrantEpochs.clear();
     this.threadRegistrations.clear();

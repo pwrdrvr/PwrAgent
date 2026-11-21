@@ -10,6 +10,7 @@ import {
   type BoatSandboxType,
 } from "@pwragent/shared/contracts/mcp-connections";
 import { BoatApiError, type BoatApi, type BoatApiRequest } from "./boat-api";
+import { BoatTunnelError, readBoatTunnelTarget, type BoatPortForwards } from "./boat-port-forward";
 
 /**
  * PwrAgent's tools for Boat sandboxes: what an agent may do, and nothing else.
@@ -45,6 +46,7 @@ export const BOAT_SERVER_INSTRUCTIONS = [
   "A command that may take longer than 30 seconds needs timeoutSeconds (up to 600) or detached: true with command_status to poll.",
   "Sandboxes start with none of the operator's credentials: no GitHub token, model keys or secrets. Write files in with write_file.",
   "host_port returns a private URL that works only with its token. Ports cannot be made public from here.",
+  "forward_port makes a sandbox port answer at 127.0.0.1 on the operator's computer, for tools running there such as a local browser or database client. It ends when the sandbox stops or resumes.",
   "fork_sandbox copies the source's last saved snapshot, not its live disk: to fork the current state, call stop_sandbox on the source first, then fork it.",
   "A size or auto-stop above the operator's limit asks the operator to approve that one request; say why you need it before you ask.",
   "save_snapshot saves a sandbox under a name so later sandboxes for this project start warm: pass that name as fromSnapshot to create_sandbox. It asks the operator first, because a named snapshot stays in their Boat account after the thread ends and may cost a daily fee. Use it for a set-up project, not for work in progress; a stopped sandbox already keeps its disk for resume_sandbox and fork_sandbox.",
@@ -69,6 +71,12 @@ export type BoatToolsContext = {
   recordOwned: (sandbox: BoatOwnedSandbox) => void;
   forgetOwned: (sandboxId: string) => void;
   idempotencyKey?: () => string;
+  /**
+   * The machine's tunnels, and the session these calls belong to. A tunnel
+   * closes with the last session that asked for it. Absent where no tunnel
+   * may be opened.
+   */
+  forwards?: { manager: BoatPortForwards; session: string };
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -175,6 +183,14 @@ export const BOAT_TOOLS: readonly Tool[] = [
     port: { type: "integer", minimum: 1, maximum: 65_535 },
     title: { type: "string", maxLength: NAME_LIMIT },
     localhost: { type: "boolean", description: "True when the service listens on 127.0.0.1 only." },
+  }, ["sandboxId", "port"]),
+  tool("forward_port", "Make a port in a running sandbox reachable on the operator's computer at http://127.0.0.1:<localPort>, over SSH. Only this computer can reach it; for a browser elsewhere use host_port. Returns the local URL. It closes when the sandbox stops or resumes, or when this session ends; call it again afterwards.", {
+    sandboxId: sandboxIdProperty,
+    port: { type: "integer", minimum: 1, maximum: 65_535, description: "The port inside the sandbox." },
+  }, ["sandboxId", "port"]),
+  tool("close_port_forward", "Close a tunnel forward_port opened.", {
+    sandboxId: sandboxIdProperty,
+    port: { type: "integer", minimum: 1, maximum: 65_535, description: "The port inside the sandbox." },
   }, ["sandboxId", "port"]),
   tool("extend_sandbox", "Set how many minutes from now a sandbox auto-stops.", {
     sandboxId: sandboxIdProperty,
@@ -391,6 +407,33 @@ export class BoatTools {
         }
         return { ...pick(answer, ["port", "url", "localhost"]), access: "private" };
       }
+      case "forward_port": {
+        const sandboxId = this.owned(args);
+        const port = requiredInteger(args.port, "port", 1, 65_535);
+        const forwards = this.context.forwards;
+        if (!forwards) throw new Refusal("A port forward can be opened only from a thread's session.");
+        try {
+          return {
+            forward: await forwards.manager.open({
+              session: forwards.session,
+              sandboxId,
+              port,
+              register: async (publicKey) => readBoatTunnelTarget(await send({
+                method: "POST", path: ["sandboxes", sandboxId, "sshkey"], body: { key: publicKey },
+              })),
+            }),
+            access: "this computer only",
+          };
+        } catch (error) {
+          if (error instanceof BoatTunnelError) throw new Refusal(error.message);
+          throw error;
+        }
+      }
+      case "close_port_forward": {
+        const sandboxId = this.owned(args);
+        const port = requiredInteger(args.port, "port", 1, 65_535);
+        return { sandboxId, port, closed: await this.context.forwards?.manager.close(sandboxId, port) ?? false };
+      }
       case "extend_sandbox": {
         const sandboxId = this.owned(args);
         const asked: Asked = { over: [] };
@@ -401,11 +444,14 @@ export class BoatTools {
       }
       case "stop_sandbox": {
         const sandboxId = this.owned(args);
+        await this.context.forwards?.manager.closeForSandbox(sandboxId);
         const answer = await send({ method: "POST", path: ["sandboxes", sandboxId, "stop"], body: {} });
         return { sandboxId, status: typeof answer.status === "string" ? answer.status : "stopping" };
       }
       case "resume_sandbox": {
         const sandboxId = this.owned(args);
+        // A resumed sandbox is a new machine with a new address and host key.
+        await this.context.forwards?.manager.closeForSandbox(sandboxId);
         const answer = await send({
           method: "POST", path: ["sandboxes", sandboxId, "resume"],
           body: await this.startFields(args, confirm, false),
@@ -431,6 +477,7 @@ export class BoatTools {
       }
       case "delete_sandbox": {
         const sandboxId = this.owned(args);
+        await this.context.forwards?.manager.closeForSandbox(sandboxId);
         try {
           await send({
             method: "DELETE", path: ["sandboxes", sandboxId],

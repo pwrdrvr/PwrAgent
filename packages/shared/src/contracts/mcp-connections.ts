@@ -240,8 +240,11 @@ export type BoatAccountSummary = {
 /**
  * What a Boat API key needs for PwrAgent, and all the key sign-in mints may do: one action per kind of request the Boat tools
  * make, and nothing else. Boat's `full-sandbox` preset is not enough: it
- * leaves out create, resume, fork and delete. No SSH, desktop stream, agent
+ * leaves out create, resume, fork and delete. No desktop stream, agent
  * prompt, environment or account write is granted.
+ *
+ * `ssh` is there for `forward_port` alone: PwrAgent registers a key pair it
+ * made for one tunnel, and no agent is given a shell over it.
  *
  * `sandbox.delete` rather than `sandbox.delete-own`: a key from a later
  * sign-in must still delete what an earlier key created, or cleanup after a
@@ -260,6 +263,7 @@ export const BOAT_KEY_ACTIONS = [
   "file.read",
   "file.write",
   "host",
+  "ssh",
   "snapshot.read",
   "snapshot.write",
   "account.read",

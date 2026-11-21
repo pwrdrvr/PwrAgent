@@ -1,5 +1,6 @@
 import type { Transport, FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { BoatPortForwards, type BoatPortForward, type BoatTunnelRuntime } from "./boat-port-forward";
 import {
   BOAT_LINKS,
   BOAT_MCP_CONNECTION_ID,
@@ -52,6 +53,8 @@ export type BoatConnectionOptions = {
   policy: () => BoatSandboxPolicy;
   openExternal: (url: string) => Promise<void>;
   now?: () => number;
+  /** Stands in for `ssh` and the file system under a port forward, in tests. */
+  tunnelRuntime?: BoatTunnelRuntime;
 };
 
 export class BoatConnection {
@@ -66,8 +69,11 @@ export class BoatConnection {
    */
   private cannotCreate = false;
   private readonly statusListeners = new Set<() => void>();
+  private readonly forwards: BoatPortForwards;
+  private nextSession = 0;
 
   constructor(private readonly options: BoatConnectionOptions) {
+    this.forwards = new BoatPortForwards(options.tunnelRuntime);
     this.api = new BoatApi({
       readKey: async () => await this.readKey(),
       fetchFn: options.fetchFn,
@@ -184,7 +190,13 @@ export class BoatConnection {
       mcpInMemory.load(),
       mcpTypes.load(),
     ]);
-    const tools = new BoatTools({ api: this.api, policy: this.options.policy, ...scope });
+    const session = `session-${this.nextSession++}`;
+    const tools = new BoatTools({
+      api: this.api,
+      policy: this.options.policy,
+      ...scope,
+      forwards: { manager: this.forwards, session },
+    });
     const server = new Server({ name: "pwragent-boat", version: "1" }, {
       capabilities: { tools: {} },
       instructions: BOAT_SERVER_INSTRUCTIONS,
@@ -206,6 +218,8 @@ export class BoatConnection {
         }
       }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    // The session's tunnels do not outlive it.
+    server.onclose = () => void this.forwards.closeForSession(session);
     await server.connect(serverTransport);
     return clientTransport;
   }
@@ -215,7 +229,24 @@ export class BoatConnection {
    * sandboxes. The scope's rules apply exactly as they do to an agent.
    */
   async callTool(scope: BoatSessionScope, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    return await new BoatTools({ api: this.api, policy: this.options.policy, ...scope }).call(name, args);
+    // Holds the tunnels so a stop or delete from a window closes them too.
+    // The session is never recorded: a window opens no tunnel of its own.
+    return await new BoatTools({
+      api: this.api,
+      policy: this.options.policy,
+      ...scope,
+      forwards: { manager: this.forwards, session: "window" },
+    }).call(name, args);
+  }
+
+  /** The tunnels open into these sandboxes. */
+  portForwards(sandboxIds: ReadonlySet<string>): BoatPortForward[] {
+    return this.forwards.list(sandboxIds);
+  }
+
+  /** Ends every tunnel: the app is quitting, or the key is gone. */
+  async closePortForwards(): Promise<void> {
+    await this.forwards.closeAll();
   }
 
   private async readKey(): Promise<string | undefined> {
