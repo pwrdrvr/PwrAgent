@@ -165,30 +165,34 @@ describe("SelectedThreadDock", () => {
   });
 
   // Showing the top dock moves the stuck header down, which covers more of
-  // the row; hiding it moves the header up, which uncovers more. A rule that
-  // read only one of those layouts could show, hide and show again forever.
-  it("settles for every row position: the dock and the header it moves never alternate", () => {
-    for (let rowTop = 60; rowTop <= 260; rowTop += 1) {
-      const region = mountList(rowTop);
-      const header = region.querySelector<HTMLElement>("[data-header='pwrgit']")!;
-      // The header sticks to the list's top, as far down as the reserve says.
-      vi.spyOn(header, "getBoundingClientRect").mockImplementation(() => {
-        const top = 100 + (Number.parseFloat(region.style.getPropertyValue("--selected-thread-dock-reserve")) || 0);
-        return { x: 0, y: top, top, bottom: top + 30, left: 0, right: 300, width: 300, height: 30, toJSON: () => ({}) } as DOMRect;
-      });
-      const view = renderDock(region);
-      const seen: (string | undefined)[] = [];
-      for (let pass = 0; pass < 6; pass += 1) {
-        view.rerender(dockElement(region, "open", {}));
-        seen.push(dock()?.dataset.edge);
+  // the row. The rule reads the list as it lies without the dock, so the
+  // dock shows exactly when the row is lost under the header's own place:
+  // it neither alternates with the header nor outstays the row's return.
+  it("shows exactly when the row is lost under the header's own place, from either state", () => {
+    const shown = (rowTop: number): number => Math.max(0, rowTop + 60 - Math.max(rowTop, 130));
+    for (const start of [60, 250]) {
+      for (let rowTop = 60; rowTop <= 260; rowTop += 1) {
+        const region = mountList(start);
+        const header = region.querySelector<HTMLElement>("[data-header='pwrgit']")!;
+        // The header sticks to the list's top, as far down as the reserve says.
+        vi.spyOn(header, "getBoundingClientRect").mockImplementation(() => {
+          const top = 100 + (Number.parseFloat(region.style.getPropertyValue("--selected-thread-dock-reserve")) || 0);
+          return { x: 0, y: top, top, bottom: top + 30, left: 0, right: 300, width: 300, height: 30, toJSON: () => ({}) } as DOMRect;
+        });
+        // Docked at the top (60) or not docked (250), then the row moves.
+        const view = renderDock(region);
+        place(region.querySelector("[data-row='open']")!, rowTop, 60);
+        const seen: (string | undefined)[] = [];
+        for (let pass = 0; pass < 4; pass += 1) {
+          view.rerender(dockElement(region, "open", {}));
+          seen.push(dock()?.dataset.edge);
+        }
+        const expected = shown(rowTop) >= 39 ? undefined : "top";
+        expect(seen, `from ${start}, row at ${rowTop}`).toEqual([expected, expected, expected, expected]);
+        expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe(expected ? "58px" : "");
+        view.unmount();
+        region.remove();
       }
-      expect(new Set(seen).size, `row at ${rowTop}: ${seen.join(",")}`).toBe(1);
-      // Never neither: with no dock, the row shows under the header.
-      if (!seen[0]) {
-        expect(rowTop + 60 - Math.max(rowTop, 130)).toBeGreaterThanOrEqual(39);
-      }
-      view.unmount();
-      region.remove();
     }
   });
 

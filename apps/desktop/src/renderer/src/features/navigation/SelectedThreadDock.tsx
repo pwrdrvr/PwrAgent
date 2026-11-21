@@ -128,17 +128,17 @@ function speaksForThread(holder: Element): boolean {
 }
 
 /**
- * `reserve` is how far the top dock already holds the list's sticky headers
- * down, so the rects read here are in that layout. The dock then leaves only
- * when the row shows below those shifted headers, and comes back only when
- * the row is lost under the unshifted ones: showing it never uncovers the
- * row and hiding it never covers the row, so the two cannot alternate.
+ * Reads the list as it lies with no top dock: the caller lifts the dock's
+ * reserve first, so the sticky headers are where they would be without it.
+ * One rule in one layout cannot alternate with the headers it moves, and it
+ * lets the dock go as soon as the row would show. Measured under the shifted
+ * headers, a row at the very start of the list stayed covered by them with
+ * nowhere left to scroll, and the dock never left.
  */
 function measure(
   region: HTMLElement,
   threadKey: string,
   holders: Holders,
-  reserve: number,
 ): { state: DockState; row: HTMLElement | undefined } | undefined {
   // A drag reads the list's edges for auto-scroll and drop targets.
   if (region.querySelector(".is-pointer-dragging, .is-folding-directories")) {
@@ -159,8 +159,7 @@ function measure(
   const held = rows.length === 0 ? holdersOf(region, holders) : [];
   const targets = held.length > 0 ? held : rows;
   const extents = targets.map(extentOf);
-  // Where the list starts for its rows: under the top dock when it is up.
-  const listTop = view.top + reserve;
+  const listTop = view.top;
   const nearTop = extents.some((extent) => extent.top < listTop + STICKY_REACH_PX);
   const stuckTop = nearTop
     ? stuckBandTop(
@@ -242,32 +241,31 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const dockRef = useRef<DockState | undefined>(undefined);
   const rowRef = useRef<HTMLElement | undefined>(undefined);
   const cardRef = useRef<HTMLButtonElement>(null);
-  const reserveRef = useRef(0);
+  // The region that carries the reserve, to take it back from on unmount.
+  const reservedRegionRef = useRef<HTMLElement | undefined>(undefined);
   // The thread whose hidden row the dock was asked to reveal. Focus follows
   // to that row when it arrives, as it does for a row the dock scrolls to.
   const focusOnArrivalRef = useRef<string | undefined>(undefined);
 
   const sync = useCallback((): void => {
     const region = regionRef.current;
+    // Lifted for the measure, which reads the list with its headers in
+    // their own places, and put back below before anything paints.
+    reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
+    reservedRegionRef.current = undefined;
     const measured = region && threadKey
       ? measure(region, threadKey, {
         ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
         directoryKeys: directoriesKey ? directoriesKey.split("\n") : [],
-      }, reserveRef.current)
+      })
       : undefined;
     rowRef.current = measured?.row;
-    // Set here, with the decision, not in an effect of its own: the next
-    // measure must read rects laid out for the reserve it is told about.
     const reserve = measured?.state.edge === "top"
       ? (cardRef.current?.offsetHeight || DOCK_HEIGHT_GUESS_PX) + 2 * DOCK_PLATE_PX
       : 0;
-    if (region && reserve !== reserveRef.current) {
-      reserveRef.current = reserve;
-      if (reserve > 0) {
-        region.style.setProperty(RESERVE_PROPERTY, `${reserve}px`);
-      } else {
-        region.style.removeProperty(RESERVE_PROPERTY);
-      }
+    if (region && reserve > 0) {
+      region.style.setProperty(RESERVE_PROPERTY, `${reserve}px`);
+      reservedRegionRef.current = region;
     }
     if (focusOnArrivalRef.current !== undefined) {
       const arrived = region && focusOnArrivalRef.current === threadKey && !measured
@@ -293,6 +291,13 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // Every render: the selection, the lens and the rows all reach here as a
   // render, and the first paint after one must not show a stale dock.
   useLayoutEffect(sync);
+
+  // Only on unmount. A cleanup tied to the thread or the region would take
+  // the reserve back after the layout pass above had just set it.
+  useLayoutEffect(() => () => {
+    reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
+    reservedRegionRef.current = undefined;
+  }, []);
 
   // And what moves rows without a render: a scroll, a resize, and rows that
   // mount inside a list which keeps its own state.
@@ -324,8 +329,6 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       region.removeEventListener("scroll", schedule, { capture: true });
       resize?.disconnect();
       mutation?.disconnect();
-      region.style.removeProperty(RESERVE_PROPERTY);
-      reserveRef.current = 0;
     };
   }, [regionRef, sync, threadKey]);
 
