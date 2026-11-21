@@ -9,6 +9,7 @@ import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederationRouter } from "../federation/federation-router";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { MockBackendClient } from "./helpers/backend-registry-fixture";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -162,7 +163,8 @@ it.each([[0, 3], [1, 3], [3, 3], [3, 6]])("materializes a child with %i subscrib
     await drain();
     for (const methods of received.values()) expect(methods).toEqual(["thread/started", "thread/parent/set", "thread/pin/added", "turn/started", "turn/started"]);
     await Promise.all(sidebars.map(({ window }) => window.refresh(undefined, undefined, true)));
-    expect(writes.commits).toBe(7);
+    expectSqliteWriteBudget({ scenario: "child-launch-with-automatic-pin-and-turn", writes,
+      note: "Materialize a child, set its parent, pin it in the collapsed project and start its first turn." });
     expect(ownerReads).not.toHaveBeenCalled();
     expect(returnedEvents).toEqual([]);
     expect(sidebars.reduce((total, ui) => total + ui.read.mock.calls.length, 0)).toBe(0);

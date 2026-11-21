@@ -57,6 +57,7 @@ type NavigationQueryGeneration = {
   generation: string;
   lastAccessedAt: number;
   materialization: NavigationQueryMaterialization;
+  viewerRowOwners?: readonly string[];
   retainedBytes: number;
   scopeKey: string;
   attentionViewId?: string;
@@ -102,7 +103,15 @@ function withPullRequestPositions(generation: NavigationQueryGeneration, rows: P
     observations.set(position, projection);
     retainedBytes += serializedBytes([position, projection]);
   }
-  return { ...generation, pullRequests: observations, retainedBytes };
+  let viewerRowOwners = generation.viewerRowOwners;
+  if (viewerRowOwners && retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+    // A later cursor page can discover PRs. Drop the optional field before
+    // refusing new observations. Existing cursor revisions still name the
+    // same rows and membership, as when a page omits the proof to fit the wire.
+    retainedBytes -= serializedBytes({ viewerRowOwners }) - 1;
+    viewerRowOwners = undefined;
+  }
+  return { ...generation, viewerRowOwners, pullRequests: observations, retainedBytes };
 }
 
 type NavigationQueryCursor = {
@@ -264,8 +273,8 @@ function validateRequest(request: NavigationQueryRequest): void {
 }
 
 /** Hash the canonical JSON stream without allocating a whole-collection string. */
-export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization): {
-  revision: string; retainedBytes: number;
+export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization, viewerRowOwners?: readonly string[]): {
+  revision: string; retainedBytes: number; viewerRowOwners?: readonly string[];
 } {
   const hash = createHash("sha256");
   let retainedBytes = 0;
@@ -293,8 +302,15 @@ export function fingerprintNavigationMaterialization(materialization: Navigation
       append("]");
     } else append(JSON.stringify(value));
   }
+  // Append the optional field last. Reserve the closing brace so rows at
+  // the exact limit keep their original revision in one streaming hash pass.
+  if (viewerRowOwners) {
+    const field = `,"viewerRowOwners":${JSON.stringify(viewerRowOwners)}`;
+    if (retainedBytes + Buffer.byteLength(field) + 1 <= NAVIGATION_QUERY_MAX_RETAINED_BYTES) append(field);
+    else viewerRowOwners = undefined;
+  }
   append("}");
-  return { revision: hash.digest("base64url"), retainedBytes };
+  return { revision: hash.digest("base64url"), retainedBytes, ...(viewerRowOwners ? { viewerRowOwners } : {}) };
 }
 
 function pageBase(params: {
@@ -423,10 +439,9 @@ export class NavigationQueryStore {
         attentionOrder,
         deferPullRequests: Boolean(pullRequests) && !needsPullRequestMembership,
       });
-      if (params.request.inventory === "viewer" && params.request.consumer === "main-sidebar") {
-        materialization.viewerRowOwners = navigationQuerySnapshotRowOwners(index);
-      }
-      const { revision, retainedBytes } = fingerprintNavigationMaterialization(materialization);
+      const owners = params.request.inventory === "viewer" && params.request.consumer === "main-sidebar"
+        ? navigationQuerySnapshotRowOwners(index) : undefined;
+      const { revision, retainedBytes, viewerRowOwners } = fingerprintNavigationMaterialization(materialization, owners);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
       const current = currentId ? this.generations.get(currentId) : undefined;
@@ -439,6 +454,7 @@ export class NavigationQueryStore {
           generation: randomUUID(),
           lastAccessedAt: now,
           materialization,
+          viewerRowOwners,
           retainedBytes,
           scopeKey: params.scopeKey,
           attentionViewId: params.request.attentionView?.id,
@@ -779,8 +795,8 @@ export class NavigationQueryStore {
   private finishPage(page: NavigationQueryPage, generation: NavigationQueryGeneration): void {
     // Owner exclusion proofs are optional. Fit the same rows and cursor even
     // when adding the proof would force another page or reject a large row.
-    if (generation.materialization.viewerRowOwners) {
-      page.viewerRowOwners = generation.materialization.viewerRowOwners;
+    if (generation.viewerRowOwners) {
+      page.viewerRowOwners = generation.viewerRowOwners;
       if (serializedBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return;
       delete page.viewerRowOwners;
     }

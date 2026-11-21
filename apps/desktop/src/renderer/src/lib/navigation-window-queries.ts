@@ -102,7 +102,7 @@ type Resource = {
 /** One opening restores saved depth within one Load more click's bounds. Lists
  * opened together share it; the clock starts at the first read. */
 type ResumeBudget = { reads: number; until?: number };
-type OwnerPageProof = { dependencies: NavigationMetadataDependencies; bytes: number };
+type OwnerPageProof = { dependencies?: NavigationMetadataDependencies; viewerRowOwners?: readonly string[]; bytes: number };
 type RetainableState = { state: NavigationPageState; ownerProof?: OwnerPageProof };
 
 function loadedRows(page: NavigationQueryPage | undefined): number {
@@ -292,17 +292,24 @@ export class NavigationWindowQueries {
 
   private retainableState(state: NavigationPageState): RetainableState {
     const page = state.page;
-    if (state.request.federationTarget?.scope !== "remote" || page?.metadataDependencies?.workingStatePaths === undefined) return { state };
-    const { metadataDependencies, ...rows } = page;
+    if (!page) return { state };
+    const remote = state.request.federationTarget?.scope === "remote";
+    const metadataDependencies = remote && page.metadataDependencies?.workingStatePaths ? page.metadataDependencies : undefined;
+    const viewerRowOwners = !remote && state.request.inventory === "viewer" ? page.viewerRowOwners : undefined;
+    if (!metadataDependencies && !viewerRowOwners) return { state };
+    const rows = { ...page };
+    if (metadataDependencies) delete rows.metadataDependencies;
+    if (viewerRowOwners) delete rows.viewerRowOwners;
     // Removing a JSON field saves its name, value, and one separating comma.
-    const proofBytes = new TextEncoder().encode(JSON.stringify({ metadataDependencies })).byteLength - 1;
+    const proofBytes = new TextEncoder().encode(JSON.stringify({ metadataDependencies, viewerRowOwners })).byteLength - 1;
     const rowBytes = this.pageBytes(page) - proofBytes;
     if (rows.remoteOwner?.ownerContentBytes !== undefined) {
       rows.remoteOwner = { ...rows.remoteOwner, ownerContentBytes: rowBytes };
     }
     this.pageSizes.set(rows, rowBytes);
-    const dependencies = readNavigationMetadataDependencies(metadataDependencies);
-    return { state: { ...state, page: rows }, ...(dependencies ? { ownerProof: { dependencies, bytes: proofBytes } } : {}) };
+    const dependencies = metadataDependencies && readNavigationMetadataDependencies(metadataDependencies);
+    return { state: { ...state, page: rows }, ...(dependencies || viewerRowOwners
+      ? { ownerProof: { dependencies, viewerRowOwners, bytes: proofBytes } } : {}) };
   }
 
   private deleteOwnerProof(page: NavigationQueryPage | undefined): void {
@@ -582,9 +589,10 @@ export class NavigationWindowQueries {
     // the serving viewer inventory can exclude an owner across pages. A
     // pending membership read may discover a new mount; keep its fence.
     const sourceOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
+    const viewerRowOwners = sourceOwner && page ? this.ownerPageProofs.get(page)?.viewerRowOwners : undefined;
     if (sourceOwner && request.federationTarget?.scope !== "remote" && request.inventory === "viewer"
       && !resource.membershipUncertain && page?.coverage.state === "complete"
-      && page.viewerRowOwners && !page.viewerRowOwners.includes(sourceOwner)
+      && viewerRowOwners && !viewerRowOwners.includes(sourceOwner)
       && typeof method === "string" && OWNER_ROW_CHANGES.has(method)
       && !(request.query.kind === "exact" && request.query.resolveFromOwners
         && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner))) return false;

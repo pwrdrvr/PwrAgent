@@ -60,7 +60,6 @@ export type NavigationQueryMaterialization = {
   collectionSize?: number;
   directoryMatch?: NavigationQueryPage["directoryMatch"];
   selectionDirectory?: NavigationDirectoryRow;
-  viewerRowOwners?: readonly string[];
   metadataDependencies?: NavigationMetadataDependencies;
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
