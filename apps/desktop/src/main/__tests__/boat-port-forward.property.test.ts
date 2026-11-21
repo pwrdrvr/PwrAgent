@@ -1,9 +1,10 @@
 import os from "node:os";
+import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { normalizeBoatSandboxPolicy } from "@pwragent/shared/contracts/mcp-connections";
 import { BoatApiError, type BoatApiRequest } from "../mcp-connections/boat-api";
-import { BoatPortForwards } from "../mcp-connections/boat-port-forward";
+import { BoatPortForwards, boatTunnelArgs } from "../mcp-connections/boat-port-forward";
 import { BoatTools } from "../mcp-connections/boat-tools";
 import { FAKE_HOST_KEY, FAKE_PUBLIC_KEY, fakeTunnelRuntime } from "./helpers/boat-tunnel-fake";
 
@@ -127,11 +128,11 @@ describe("Boat port forwards", () => {
           expect(forwards[0]).toMatch(new RegExp(`^127\\.0\\.0\\.1:\\d+:127\\.0\\.0\\.1:${String(args.port)}$`));
           for (const flag of ["-R", "-D", "-g", "-A", "-J", "-W"]) expect(tunnel.args).not.toContain(flag);
           expect(optionValue(tunnel.args, "StrictHostKeyChecking")).toBe("yes");
-          expect(optionValue(tunnel.args, "GlobalKnownHostsFile")).toBe(os.devNull);
           expect(optionValue(tunnel.args, "HostKeyAlias")).toBe(sandboxId);
           expect(tunnel.args[tunnel.args.indexOf("-F") + 1]).toBe(os.devNull);
-          // The pinned key is the one Boat returned, alone.
+          // The pinned key is the one Boat returned, alone, in both databases.
           const knownHosts = optionValue(tunnel.args, "UserKnownHostsFile")!.replaceAll("\"", "");
+          expect(optionValue(tunnel.args, "GlobalKnownHostsFile")).toBe(optionValue(tunnel.args, "UserKnownHostsFile"));
           expect(machine.files.get(knownHosts)).toBe(`${sandboxId} ${FAKE_HOST_KEY}\n`);
           // The destination is one argument that cannot be read as an option.
           const destination = tunnel.args.at(-1)!;
@@ -271,4 +272,62 @@ describe("Boat port forwards", () => {
     expect(machine.directories.size).toBe(0);
     expect(machine.files.size).toBe(0);
   });
+
+  it("hands Windows ssh each path in an option value as the same file", () => {
+    // A Windows path: drive, UNC or device root, then names that may hold
+    // spaces, dots, quotes-free punctuation and doubled separators.
+    const name = fc.stringMatching(/^[A-Za-z0-9 ._~$-]{1,12}$/).filter((part) => part.trim() === part && !/^\.+$/.test(part));
+    const root = fc.constantFrom("C:\\", "D:\\", "\\\\server\\share\\", "\\\\.\\", "\\\\?\\C:\\");
+    const windowsPath = fc.tuple(root, fc.array(name, { minLength: 1, maxLength: 5 }), fc.constantFrom("\\", "\\\\"))
+      .map(([start, parts, separator]) => start + parts.join(separator));
+    fc.assert(fc.property(windowsPath, (directory) => {
+      const knownHostsPath = path.win32.join(directory, "known_hosts");
+      const args = boatTunnelArgs({
+        sandboxId: "bx_1", remotePort: 3000, localPort: 40_000, platform: "win32",
+        target: { host: "203.0.113.10", port: 22, user: "user", hostKey: FAKE_HOST_KEY },
+        privateKeyPath: path.win32.join(directory, "key"), knownHostsPath,
+      });
+      for (const option of ["UserKnownHostsFile", "GlobalKnownHostsFile"]) {
+        const read = opensshOptionValue(optionValue(args, option)!);
+        expect(read).toHaveLength(1);
+        expect(path.win32.normalize(read[0]!)).toBe(path.win32.normalize(knownHostsPath));
+      }
+      // Arguments of their own are not split by ssh, and reach it as given.
+      expect(args[args.indexOf("-F") + 1]).toBe("\\\\.\\nul");
+      expect(args[args.indexOf("-i") + 1]).toBe(path.win32.join(directory, "key"));
+    }), { numRuns: 500 });
+  });
 });
+
+/**
+ * How OpenSSH reads an `-o` value: `argv_split` in its misc.c (9.x), which
+ * Win32-OpenSSH shares. Whitespace splits unless quoted; a backslash escapes
+ * a quote, a backslash, or (unquoted) a space, and stays otherwise.
+ */
+function opensshOptionValue(value: string): string[] {
+  const words: string[] = [];
+  let word: string | undefined;
+  let quote: string | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!;
+    const next = value[index + 1];
+    if (!quote && (char === " " || char === "\t")) {
+      if (word !== undefined) words.push(word);
+      word = undefined;
+      continue;
+    }
+    word ??= "";
+    if (char === "\\" && next !== undefined && (next === "'" || next === "\"" || next === "\\" || (!quote && next === " "))) {
+      word += next;
+      index += 1;
+    } else if (!quote && (char === "'" || char === "\"")) {
+      quote = char;
+    } else if (quote && char === quote) {
+      quote = undefined;
+    } else {
+      word += char;
+    }
+  }
+  if (word !== undefined) words.push(word);
+  return words;
+}

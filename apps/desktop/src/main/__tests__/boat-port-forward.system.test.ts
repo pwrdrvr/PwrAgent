@@ -72,7 +72,9 @@ describe.runIf(version !== undefined)("the system tunnel runtime", () => {
       .split(/\r?\n/)
       .find((line) => line.toLowerCase().startsWith(`${name} `))
       ?.slice(name.length + 1);
-    expect(path.normalize(setting("userknownhostsfile") ?? ""), version).toBe(path.normalize(knownHostsPath));
+    for (const option of ["userknownhostsfile", "globalknownhostsfile"]) {
+      expect(path.normalize(setting(option) ?? ""), `${option} under ${version}`).toBe(path.normalize(knownHostsPath));
+    }
     expect(setting("hostkeyalias")).toBe("bx_system");
     expect(setting("stricthostkeychecking")).toBe("true");
     expect(setting("port")).toBe(String(closedPort));
@@ -84,6 +86,8 @@ describe.runIf(version !== undefined)("the system tunnel runtime", () => {
     const child = runtime.spawn(args);
     const { stderr } = await child.exited;
     expect(stderr, version).not.toMatch(NOT_A_CONNECTION_ERROR);
-    expect(stderr, version).toMatch(new RegExp(`connect to host 127\\.0\\.0\\.1 port ${closedPort}: `, "i"));
+    // Portable OpenSSH names the port; Win32-OpenSSH 9.5 reports "banner
+    // exchange: Connection to UNKNOWN port -1: Connection refused".
+    expect(stderr, version).toMatch(new RegExp(`connect to host 127\\.0\\.0\\.1 port ${closedPort}: |^banner exchange: .*connection refused`, "im"));
   }, 40_000);
 });

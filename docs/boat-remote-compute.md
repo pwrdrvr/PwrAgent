@@ -189,14 +189,28 @@ Rules, each held by `boat-port-forward.property.test.ts`:
 - The listener binds `127.0.0.1`. No argument changes the bind address, adds
   a reverse or dynamic forward, or picks the local port.
 - The server must present the host key Boat returned (`StrictHostKeyChecking`
-  with a known-hosts file holding that one key). An answer without a host key
-  opens no tunnel. The user's ssh config, agent and known hosts are not read.
+  with a known-hosts file holding that one key, used as both the user and the
+  global database). An answer without a host key opens no tunnel. The user's
+  ssh config, agent and known hosts are not read.
 - What Boat returns for host and user is checked against a pattern before it
   reaches the command line.
 - A tunnel closes when the sandbox is stopped, resumed or deleted (by an
   agent, the panel, or PR cleanup), when `ssh` exits, when the last MCP
   session that asked for it ends, when the key is removed, and when the app
   quits. Its key directory is removed with it.
+
+On Windows the `ssh` on PATH is normally the system's Win32-OpenSSH. It was
+checked on Windows Server 2022 (`OpenSSH_for_Windows_9.5p2`) on 2026-11-21,
+and `boat-port-forward.system.test.ts` checks it in the Windows CI lane. That
+client refuses a private key
+other users can read; the key `ssh-keygen` writes into the temporary directory
+carries only the owner's, SYSTEM's and Administrators' access, which it
+accepts. ssh splits an `-o` value itself and reads `\\` as an escaped
+backslash, so a path in one is passed with forward slashes on Windows, and both
+`UserKnownHostsFile` and `GlobalKnownHostsFile` name the pinned file: ssh
+documents no way to switch the global database off, and the null device
+(`\\.\nul`) did not survive that parse. `-F` and `-i` are arguments of their
+own and are passed as given.
 
 Nothing is written to SQLite for a tunnel: it does not survive a restart.
 

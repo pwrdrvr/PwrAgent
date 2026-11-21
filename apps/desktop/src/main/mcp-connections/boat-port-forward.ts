@@ -93,6 +93,18 @@ export function readBoatTunnelTarget(answer: Record<string, unknown>): BoatTunne
   return { host, port, user, hostKey: `${hostKey[1]} ${hostKey[2]}` };
 }
 
+/**
+ * A path as the value of an `-o` option. ssh splits that value itself and
+ * reads a backslash before a quote, a space or another backslash as an
+ * escape: on Windows Server 2022 (OpenSSH_for_Windows_9.5p2) a
+ * `GlobalKnownHostsFile` of `\\.\nul` arrived as `\.\nul`. Win32-OpenSSH
+ * takes a forward slash as a separator, and no version reads one as an
+ * escape. Arguments that are not `-o` values (`-F`, `-i`) reach ssh as given.
+ */
+export function sshOptionPath(file: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? file.replaceAll("\\", "/") : file;
+}
+
 /** The whole `ssh` command line for one tunnel. */
 export function boatTunnelArgs(input: {
   sandboxId: string;
@@ -101,19 +113,26 @@ export function boatTunnelArgs(input: {
   target: BoatTunnelTarget;
   privateKeyPath: string;
   knownHostsPath: string;
+  /** Whose ssh reads it; this machine's unless a test says otherwise. */
+  platform?: NodeJS.Platform;
 }): string[] {
+  const platform = input.platform ?? process.platform;
+  // Quoted: a temporary directory may hold a space (a Windows user name).
+  const knownHosts = `"${sshOptionPath(input.knownHostsPath, platform)}"`;
   return [
     "-N", "-T",
     // Not the user's config: no host alias, proxy or extra forward of theirs.
-    "-F", os.devNull,
+    "-F", platform === "win32" ? "\\\\.\\nul" : "/dev/null",
     "-i", input.privateKeyPath,
     "-p", String(input.target.port),
     "-o", "IdentitiesOnly=yes",
     "-o", "IdentityAgent=none",
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=yes",
-    "-o", `UserKnownHostsFile="${input.knownHostsPath}"`,
-    "-o", `GlobalKnownHostsFile=${os.devNull}`,
+    // Both known-hosts databases are the pinned file: ssh documents no way to
+    // switch the global one off, and the machine's own may vouch for others.
+    "-o", `UserKnownHostsFile=${knownHosts}`,
+    "-o", `GlobalKnownHostsFile=${knownHosts}`,
     "-o", `HostKeyAlias=${input.sandboxId}`,
     "-o", "ExitOnForwardFailure=yes",
     "-o", "GatewayPorts=no",
