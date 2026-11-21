@@ -1,4 +1,4 @@
-import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import type { AcpSessionInventoryGroup, AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { type AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "./state-db.js";
@@ -22,6 +22,31 @@ export class AcpSessionStore implements AcpSessionStorage {
     return rows.flatMap(row => {
       const value = parseJson(row.payload);
       return isSessionMetadata(value) && (!value.hidden || params?.includeHidden === true) ? [stripAcpSessionHistory(value)] : [];
+    });
+  }
+
+  listInventorySessions(options?: { archived?: boolean }): AcpSessionInventoryGroup[] {
+    const rows = this.stateDb.raw
+      .prepare("SELECT backend_id, payload FROM acp_sessions ORDER BY backend_id, updated_at DESC")
+      .all() as Array<{ backend_id: string; payload: string }>;
+    const archived = options?.archived === true;
+    const represented = new Set<AcpBackendId>();
+    const byStoredBackend = new Map<string, AcpSessionMetadata[]>();
+    for (const row of rows) {
+      const value = parseJson(row.payload);
+      if (!isSessionMetadata(value) || value.hidden) continue;
+      const session = stripAcpSessionHistory(value);
+      // Visible payloads define membership and order. Per-backend reads use
+      // the SQLite key, which can disagree with the payload in a damaged row.
+      represented.add(session.backendId);
+      if (Boolean(session.archivedAt) !== archived) continue;
+      const sessions = byStoredBackend.get(row.backend_id);
+      if (sessions) sessions.push(session);
+      else byStoredBackend.set(row.backend_id, [session]);
+    }
+    return [...represented].flatMap(backendId => {
+      const sessions = byStoredBackend.get(backendId);
+      return sessions && isAcpBackendId(backendId) ? [{ backendId, sessions }] : [];
     });
   }
 
