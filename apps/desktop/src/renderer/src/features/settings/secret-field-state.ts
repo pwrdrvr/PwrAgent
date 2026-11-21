@@ -122,9 +122,10 @@ export function describeSecretField(
  */
 export function describeFormSecret(
   /**
-   * Undefined when the window is not told whether a value is stored (an MCP
-   * connection's session bearer token). The words then claim neither, and
-   * Remove stays offered because nothing says there is nothing to remove.
+   * Undefined while the window has not been told whether a value is stored
+   * (an MCP connection's session bearer token, until its owner answers). The
+   * words then claim neither, and Remove stays offered because nothing says
+   * there is nothing to remove.
    */
   state: SecretStoreState | undefined,
   row: {

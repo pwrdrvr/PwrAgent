@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopCodexModelProvider } from "@pwragent/shared/codex-model-providers";
+import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connections";
 import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
@@ -16,6 +17,7 @@ import {
 } from "../GithubConnectionForm";
 import { FormSecretInput } from "../FormSecretInput";
 import { LocalCommandFields, emptyLocalCommandDraft } from "../LocalCommandConnectionForm";
+import { PluginsSettings } from "../PluginsSettings";
 import { SecretField } from "../SecretField";
 import { describeFormSecret, secretStoreState } from "../secret-field-state";
 
@@ -173,6 +175,43 @@ describe("every secret input states its stored value the same way", () => {
         });
       }),
       { numRuns: 20 },
+    );
+  });
+
+  // The owner is asked when the dialog opens. Before it could be, the line
+  // claimed neither ("A saved value is never shown...") and Remove was always
+  // offered, so an empty box looked the same as a stored token.
+  it("a local IPC connection's session bearer token", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.boolean(), arbDraft, async (stored, draft) => {
+        cleanup();
+        const api = ipcConnectionApi(stored);
+        await act(async () => {
+          render(
+            <PluginsSettings
+              desktopApi={api}
+              snapshot={pluginsSnapshot()}
+              onMcpGatewayEnabledChange={async () => undefined}
+            />,
+          );
+        });
+        const article = (await screen.findByText("Native app", { exact: true })).closest("article")!;
+        await act(async () => {
+          fireEvent.click(within(article).getByRole("button", { name: "Edit" }));
+        });
+        const dialog = within(screen.getByRole("dialog", { name: "Edit connection" }));
+        const input = dialog.getByLabelText("Session bearer token");
+        if (draft) fireEvent.change(input, { target: { value: draft } });
+        await waitFor(() => expectSecretRow(input, {
+          stored,
+          draft: Boolean(draft),
+          removeName: "Remove saved session bearer token",
+        }));
+        // Asked once, of the owner, and only for the connection being edited.
+        expect(api.readMcpIpcBearerTokenState).toHaveBeenCalledTimes(1);
+        expect(api.readMcpIpcBearerTokenState).toHaveBeenCalledWith({ connectionId: "native-app" });
+      }),
+      { numRuns: 8 },
     );
   });
 
@@ -461,6 +500,60 @@ describe("onboarding", () => {
     expect(screen.getByLabelText("Signing secret")).toHaveAttribute("placeholder", PASTE_REPLACE);
   });
 });
+
+/** Settings → Plugins with one local IPC connection, owned by this window. */
+function ipcConnectionApi(stored: boolean): DesktopApi {
+  const connection: McpConnectionStatus = {
+    id: "native-app",
+    displayName: "Native app",
+    serverUrl: "unix:///tmp/fixture/server.sock#/mcp",
+    kind: "remote",
+    authMode: "none",
+    enabled: true,
+    configured: true,
+    state: "ready",
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  return {
+    listCodexMcpServers: vi.fn(async () => ({ codexHome: "/fixture/.codex", detail: "toolsAndAuthOnly", servers: [] })),
+    reloadCodexMcpServers: vi.fn(async () => ({ codexHome: "/fixture/.codex", queued: true })),
+    onAgentEvent: vi.fn(() => () => undefined),
+    listMcpConnections: vi.fn(async () => ({ connections: [connection] })),
+    listMcpConnectionTools: vi.fn(async () => ({ connectionId: connection.id, tools: [], fetchedAt: 1 })),
+    updateMcpConnection: vi.fn(async () => ({ connectionId: connection.id, connection })),
+    readMcpIpcBearerTokenState: vi.fn(async () => ({ connectionId: connection.id, stored })),
+  } as unknown as DesktopApi;
+}
+
+/** The parts of the snapshot Settings → Plugins reads, gateway on. */
+function pluginsSnapshot(): DesktopSettingsSnapshot {
+  return {
+    general: { mcpGatewayEnabled: { value: true, source: "default" } },
+    runtime: {
+      messaging: { disabled: false },
+      tokenMiser: { managedCodex: { state: "ready", version: "pwragent-v0.149.0" } },
+    },
+    models: {
+      codex: {
+        profiles: {
+          profileRoot: "/fixture/.codex/profiles",
+          effectiveCodexHome: "/fixture/.codex",
+          profiles: [{
+            name: "",
+            displayName: "System default",
+            codexHome: "/fixture/.codex",
+            source: "default",
+            exists: true,
+            selected: true,
+            hasAuthFile: true,
+            hasConfigFile: true,
+          }],
+        },
+      },
+    },
+  } as unknown as DesktopSettingsSnapshot;
+}
 
 function snapshotWithTelegramToken(botToken: DesktopSettingsSecretState): DesktopSettingsSnapshot {
   const unset: DesktopSettingsSecretState = { configured: false, source: "unset", writable: true };

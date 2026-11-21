@@ -316,6 +316,8 @@ import type {
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
+  ReadMcpIpcBearerTokenStateRequest,
+  ReadMcpIpcBearerTokenStateResponse,
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   ListMcpConnectionsRequest,
@@ -900,6 +902,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
   ) => Promise<ListMcpConnectionToolsResponse>;
+  /** Whether a local IPC connection has a session bearer token stored. */
+  readMcpIpcBearerTokenState?: (
+    request: ReadMcpIpcBearerTokenStateRequest,
+  ) => Promise<ReadMcpIpcBearerTokenStateResponse>;
   setThreadMcpConnections?: (
     request: SetThreadMcpConnectionsRequest,
   ) => Promise<SetThreadMcpConnectionsResponse>;

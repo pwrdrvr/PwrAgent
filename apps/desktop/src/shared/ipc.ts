@@ -420,6 +420,8 @@ export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
 export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =
   "mcp-connection:fetch-linear-pasted-images";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
+export const MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL =
+  "mcp-connection:read-ipc-bearer-token-state";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
 export const MCP_CONNECTION_READ_THREAD_CHANNEL =

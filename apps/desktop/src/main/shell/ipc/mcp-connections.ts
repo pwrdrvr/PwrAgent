@@ -30,6 +30,8 @@ import {
   type DisconnectMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
+  type ReadMcpIpcBearerTokenStateRequest,
+  type ReadMcpIpcBearerTokenStateResponse,
   type ConnectPwrGitResponse,
   type ListMcpConnectionsRequest,
   type ListMcpConnectionsResponse,
@@ -99,6 +101,7 @@ import {
   MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
   MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
+  MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
@@ -533,6 +536,17 @@ export function registerMcpConnectionIpcHandlers(
       return await service.listConnectionTools(request);
     },
   );
+  ipcMain.removeHandler(MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL,
+    async (
+      event,
+      request: ReadMcpIpcBearerTokenStateRequest,
+    ): Promise<ReadMcpIpcBearerTokenStateResponse> => {
+      requireLocalOwner(event);
+      return await service.readIpcBearerTokenState(request);
+    },
+  );
   ipcMain.removeHandler(MCP_CONNECTION_SET_THREAD_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_SET_THREAD_CHANNEL,
@@ -842,6 +856,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(PWRSUITE_INSTALLER_REVEAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL);

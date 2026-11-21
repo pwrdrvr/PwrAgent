@@ -319,6 +319,8 @@ import type {
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
+  ReadMcpIpcBearerTokenStateRequest,
+  ReadMcpIpcBearerTokenStateResponse,
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   ListMcpConnectionsRequest,
@@ -1169,6 +1171,7 @@ import {
   MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
+  MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
@@ -1638,6 +1641,10 @@ const desktopApi = Object.freeze({
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_LIST_TOOLS_CHANNEL, request),
+  readMcpIpcBearerTokenState: async (
+    request: ReadMcpIpcBearerTokenStateRequest,
+  ): Promise<ReadMcpIpcBearerTokenStateResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL, request),
   setThreadMcpConnections: async (
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> =>
