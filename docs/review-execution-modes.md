@@ -45,8 +45,9 @@ review instructions.
 - `claude-code-review` runs only on a Claude thread whose owner advertises
   `reviewClaudeCodeReview`, as its own reviewer, in its own workspace. It
   carries no reviewer override, and the start returns the turn that sent the
-  command, which is where `ReportFindings` lands, so Auto-fix arms and matches
-  as it does for a managed review. An older owner rejects the unknown mode.
+  command, which is where `ReportFindings` lands. Auto-fix is Claude Code's own
+  `--fix` on that command, which settles the findings in the same turn, so the
+  owner arms no second fix turn. An older owner rejects the unknown mode.
 - The former Experimental managed-review switch is removed. Its configuration
   field remains readable and round-trippable for older installations, but no
   longer chooses the engine. No new timer or persistence operation is added;

@@ -173,6 +173,8 @@ export class MessagingCommandHandlers {
       event,
       runMode: "claude-code-review",
       target: { type: "uncommittedChanges" },
+      // A typed `/code-review` sends just that; `--fix` is the operator's to add.
+      afterReview: "wait",
     });
     return true;
   }

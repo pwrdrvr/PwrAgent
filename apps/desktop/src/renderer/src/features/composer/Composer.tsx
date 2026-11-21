@@ -1227,6 +1227,8 @@ function claudeCodeReviewCommands(params: {
   separately: boolean;
   level: ClaudeCodeReviewLevel;
   repository?: string;
+  /** Auto-fix, which Claude Code runs as its own `--fix`. */
+  fix: boolean;
 }): { commands: string[]; problem?: string } {
   const { target } = params;
   if (!target) return { commands: [] };
@@ -1239,6 +1241,7 @@ function claudeCodeReviewCommands(params: {
         target: each,
         level: params.level,
         ...(params.repository ? { repository: params.repository } : {}),
+        fix: params.fix,
       })),
     };
   } catch (error) {
@@ -9070,6 +9073,7 @@ function useComposerController(props: ComposerProps) {
             separately: false,
             level: reviewCommand.codeReviewLevel ?? defaultCodeReviewLevel,
             repository: reviewCodeReviewRepository,
+            fix: reviewCommand.afterReview === "auto-fix",
           }).commands[0] ?? formatReviewCommand(reviewCommand.target)
         : formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
@@ -14422,6 +14426,8 @@ function useComposerController(props: ComposerProps) {
       separately: reviewPullRequestBatch && !reviewPullRequestsTogether,
       level: claudeCodeReviewLevel,
       repository: reviewCodeReviewRepository,
+      // As the submission decides: a batch never auto-fixes.
+      fix: reviewAutoFixSupported && reviewAutoFixChecked && !reviewPullRequestBatch,
     });
     return <ClaudeCodeReviewCommandPreview commands={preview.commands} problem={preview.problem} />;
   }

@@ -405,9 +405,11 @@ export class ManagedReviewService {
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = this.context.turnState.beginReviewStart(params);
     // Armed before the start, so a review that lands at once still fixes.
+    // Claude Code fixes with its own `--fix` in the review's turn, so a
+    // second fix turn would only redo that work.
     const autoFix = getReviewAutoFixArming().starting(
       { backend: params.backend, threadId: params.threadId },
-      params.messagingSource ? "wait" : params.afterReview,
+      params.messagingSource || params.runMode === "claude-code-review" ? "wait" : params.afterReview,
     );
     try {
       const response = params.runMode === "claude-code-review"
@@ -442,6 +444,7 @@ export class ManagedReviewService {
         : { ...params, reasoningEffort: defaultClaudeCodeReviewLevel(overlay?.reasoningEffort) },
       threadCwd: await this.host().resolveThreadEnvironmentCwd(params.backend, params.threadId, overlay),
       prs: overlay?.prs ?? [],
+      fix: params.afterReview === "auto-fix",
     });
     const started = await this.host().startTurn({
       backend: params.backend,

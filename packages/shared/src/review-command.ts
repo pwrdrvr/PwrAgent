@@ -452,13 +452,16 @@ function claudeCodeReviewPullRequest(url: string, repository: string | undefined
  * the effort level, then the target. Several pull requests are one
  * comma-separated argument, which Claude Code reviews as one combined report.
  * A pull request of `repository` (the checkout's `host/owner/repo`) is its
- * bare number; any other is its URL. Throws for a target `/code-review` has
- * no form for, and for an argument it would read as something else.
+ * bare number; any other is its URL. `fix` adds Claude Code's own `--fix`,
+ * which applies the findings in the same turn and reports them settled.
+ * Throws for a target `/code-review` has no form for, and for an argument it
+ * would read as something else.
  */
 export function claudeCodeReviewCommand(params: {
   target: AppServerReviewTarget;
   level?: string;
   repository?: string;
+  fix?: boolean;
 }): string {
   const { target } = params;
   if (params.level !== undefined && !isClaudeCodeReviewLevel(params.level)) {
@@ -514,5 +517,7 @@ export function claudeCodeReviewCommand(params: {
     default:
       throw new Error("Claude Code's /code-review has no form for this review target.");
   }
-  return ["/code-review", params.level, argument].filter(Boolean).join(" ");
+  return ["/code-review", params.level, params.fix ? "--fix" : undefined, argument]
+    .filter(Boolean)
+    .join(" ");
 }

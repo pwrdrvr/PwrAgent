@@ -236,6 +236,8 @@ export class MessagingReviewWorkflow {
           level: codeReviewLevel,
           // A PR is a bare number only for the checkout's one remote, as on the owner.
           repository: claudeCodeReviewRepository(directory?.gitStatus?.remoteRepositories),
+          // Auto-fix is Claude Code's own `--fix`; a combined review never fixes.
+          fix: autoFixSupported && afterReview === "auto-fix" && target.type !== "pullRequests",
         });
       } catch (error) {
         codeReviewProblem = error instanceof Error ? error.message : String(error);

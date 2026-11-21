@@ -74,6 +74,8 @@ export function validateClaudeCodeReview(params: {
 /** Resolve whether the command can refer to attached PRs by number. */
 export async function prepareClaudeCodeReview(params: Parameters<typeof validateClaudeCodeReview>[0] & {
   resolveRepositories?: (cwd: string) => Promise<GitHubRepoRef[]>;
+  /** Auto-fix, as Claude Code's own `--fix`. */
+  fix?: boolean;
 }): Promise<string> {
   const { request } = params;
   const urls = validateClaudeCodeReview(params);
@@ -84,6 +86,7 @@ export async function prepareClaudeCodeReview(params: Parameters<typeof validate
   return claudeCodeReviewCommand({
     target: request.target,
     ...(request.reasoningEffort ? { level: request.reasoningEffort } : {}),
+    ...(params.fix ? { fix: true } : {}),
     // Bare numbers only for the checkout's own repository.
     ...(repository && urls.every((url) => pullRequestRepositoryKey({ url }) === repository)
       ? { repository }

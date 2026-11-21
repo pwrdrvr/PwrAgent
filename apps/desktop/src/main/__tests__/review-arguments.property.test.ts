@@ -136,9 +136,10 @@ describe("combined review arguments", () => {
     });
     try {
       const { writes } = await measureSqliteWrites(() => codeReview([]));
+      // A typed bare /code-review sends just that: Auto-fix would add --fix.
       expect(fixture.requests).toEqual([{
         backend: "claude", threadId: fixture.thread.id, delivery: "inline",
-        runMode: "claude-code-review", afterReview: "auto-fix", reasoningEffort: "high",
+        runMode: "claude-code-review", afterReview: "wait", reasoningEffort: "high",
         messagingSource: expect.objectContaining({ requestId: expect.any(String), ownerId: expect.any(String) }),
         target: { type: "uncommittedChanges" },
       }]);

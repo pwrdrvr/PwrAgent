@@ -8955,7 +8955,7 @@ describe("Composer", () => {
       const { startTurn } = codeReviewComposer(true);
       await send(text);
       expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-      expect(screen.getByText(/^\/code-review high$/)).toBeInTheDocument();
+      expect(screen.getByText(/^\/code-review high --fix$/)).toBeInTheDocument();
       expect(startTurn).not.toHaveBeenCalled();
     });
 
@@ -8969,9 +8969,22 @@ describe("Composer", () => {
       async (threadEffort, level) => {
         codeReviewComposer(true, threadEffort);
         await send("/code-review");
-        expect(screen.getByText(`/code-review ${level}`)).toBeInTheDocument();
+        expect(screen.getByText(`/code-review ${level} --fix`)).toBeInTheDocument();
       },
     );
+
+    /**
+     * Rule: Auto-fix in Claude Code mode is Claude Code's own `--fix`, so the
+     * command shows it exactly while the switch is on.
+     */
+    it("shows --fix in the command exactly while Auto-fix is on", async () => {
+      codeReviewComposer(true);
+      await send("/code-review");
+      expect(screen.getByText("/code-review high --fix")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("switch", { name: "Auto-fix findings" }));
+      expect(screen.getByText("/code-review high")).toBeInTheDocument();
+      expect(screen.queryByText("/code-review high --fix")).not.toBeInTheDocument();
+    });
 
     /**
      * Rule: Enter on /code-review in the command menu runs it and opens the
