@@ -708,12 +708,12 @@
     "rowsChanged": 1,
     "statements": 1
   },
-  "messaging-progressive-browse": {
-    "commits": 10,
-    "note": "one explicit resume command: local publication plus one coalesced remote publication",
-    "observedWalBytes": 156560,
-    "rowsChanged": 10,
-    "statements": 10
+  "messaging-federated-resume-browse": {
+    "commits": 5,
+    "note": "one explicit resume command: one publication after the local owner and one peer answer",
+    "observedWalBytes": 70072,
+    "rowsChanged": 5,
+    "statements": 5
   },
   "messaging-project-move-picker": {
     "commits": 5,

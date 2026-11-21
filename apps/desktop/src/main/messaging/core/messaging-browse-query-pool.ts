@@ -77,7 +77,6 @@ export class MessagingBrowseQueryPool {
     pageIndex: number;
     omittedOwners?: number;
     deadlineAt?: number;
-    onProgress?: (page: MessagingBrowsePage) => Promise<void>;
   }): Promise<MessagingBrowsePage> {
     if (this.disposed) throw new Error("Messaging browser closed.");
     if (this.pendingReads >= 32) throw new Error("Messaging browser query admission is full. Try again after the current pages finish.");
@@ -111,24 +110,9 @@ export class MessagingBrowseQueryPool {
       const deadlineAt = params.deadlineAt ?? this.now() + 10_000;
       const projects = params.query.kind === "messaging-projects";
       const chosen: Array<NavigationRow | MessagingBrowseProjectRow> = [];
-      let progress = Promise.resolve();
       const selectedProject = (): MessagingBrowseSelectedProject | undefined => {
         const selected = current.owners.flatMap((owner) => owner.selectedProject ? [owner.selectedProject] : []);
         return selected.length === 1 ? selected[0] : undefined;
-      };
-      const publishProgress = async (): Promise<void> => {
-        if (!params.onProgress || requestedPage !== 0 || current.owners.length < 2) return;
-        const rows = current.owners.flatMap((owner) => owner.rows).sort((left, right) => this.compare(left, right, params.query)).slice(0, params.pageSize);
-        const pending = current.owners.filter((owner) => !owner.started && !owner.error).length;
-        if (!pending) return;
-        const page: MessagingBrowsePage = { kind: "browse-page", projects: projects ? rows as MessagingBrowseProjectRow[] : [],
-          threads: projects ? [] : rows as NavigationRow[], pageIndex: 0, pageSize: params.pageSize,
-          totalItems: current.owners.reduce((sum, owner) => sum + owner.total, 0), totalItemsComplete: false,
-          selectedProject: selectedProject(), hasNext: false,
-          notes: [...current.owners.flatMap((owner) => owner.error ? [`${owner.owner.label}: ${owner.error}`] : []),
-            ...(pending ? [`Still checking ${pending} Federation instances.`] : [])] };
-        progress = progress.then(() => params.onProgress!(page));
-        await progress;
       };
       const fill = async (owner: OwnerPage): Promise<void> => {
         if (owner.rows.length || owner.complete || owner.error) return;
@@ -171,7 +155,6 @@ export class MessagingBrowseQueryPool {
           owner.error = error instanceof Error ? error.message : String(error);
           owner.complete = true;
         }
-        await publishProgress();
       };
       while (chosen.length < params.pageSize) {
         await Promise.all(current.owners.map(fill));

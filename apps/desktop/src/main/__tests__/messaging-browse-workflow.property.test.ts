@@ -248,3 +248,122 @@ it("uses the store installed while the owner page was in flight", async () => {
   await render;
   expect(f.effects).toEqual(["wrapped-session", "pending", "deliver", "wrapped-session", "surface"]);
 });
+
+type OwnerModel = { id?: string; updatedAt: number[]; fails: boolean };
+
+/**
+ * Trip wire for the double-painted /resume card: one user action is one
+ * delivery, that delivery already merges every responding owner, and
+ * revisiting a loaded page asks no owner again.
+ */
+it("paints each /resume action once with every owner's rows, whatever order owners answer in", async () => {
+  const ownerArbitrary = (id: string | undefined) => fc.record({
+    id: fc.constant(id),
+    // Large enough that four owners can exceed the pool's eight retained pages.
+    updatedAt: fc.uniqueArray(fc.integer({ min: 1, max: 1_000_000 }), { maxLength: 30, size: "max" }),
+    fails: id ? fc.boolean() : fc.constant(false),
+  });
+  await fc.assert(fc.asyncProperty(
+    fc.integer({ min: 1, max: 3 }).chain((peers) => fc.tuple(
+      ownerArbitrary(undefined),
+      ...Array.from({ length: peers }, (_unused, index) => ownerArbitrary(`peer-${index}`)),
+    )),
+    fc.infiniteStream(fc.nat()),
+    fc.array(fc.nat(), { maxLength: 4 }),
+    fc.boolean(),
+    async (models: OwnerModel[], releaseOrder, revisits, projects) => {
+      // Timestamps are unique across owners so the merged order is total.
+      const seen = new Set<number>();
+      for (const model of models) model.updatedAt = model.updatedAt.filter((value) => !seen.has(value) && seen.add(value));
+      const f = fixture();
+      const stores = new Map(models.map((model) => [model.id, new NavigationQueryStore({ now: () => 1_000 })]));
+      const gates: Array<() => void> = [];
+      f.context.actorHasPermission = (_event, permission) => permission === "federation.remote_control";
+      f.backend.listNavigationOwners = async () => ({
+        owners: models.map((model) => model.id
+          ? { label: model.id, target: { scope: "remote" as const, instanceId: model.id } } : { label: "Local" }),
+        omitted: 0,
+      });
+      f.backend.getNavigationQueryPage = async (request) => {
+        f.requests.push(request);
+        const ownerId = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
+        const model = models.find((candidate) => candidate.id === ownerId)!;
+        // Owners answer in an arbitrary order relative to each other.
+        await new Promise<void>((resolve) => gates.push(resolve));
+        if (model.fails) throw new Error("Peer unreachable.");
+        return stores.get(ownerId)!.readPage({ scopeKey: ownerId ?? "local", request, loadIndex: async () => ({
+          directories: model.updatedAt.length ? [{ key: `${ownerId ?? "local"}-repo`, kind: "directory" as const,
+            label: `${ownerId ?? "local"} repo`, needsAttentionCount: 0,
+            threadKeys: model.updatedAt.map((updatedAt) => `codex:${ownerId ?? "local"}-${updatedAt}`) }] : [],
+          threads: model.updatedAt.map((updatedAt) => ({ id: `${ownerId ?? "local"}-${updatedAt}`, source: "codex" as const,
+            title: `Thread ${updatedAt}`, titleSource: "explicit" as const, updatedAt, linkedDirectories: [], inbox: { inInbox: false } })),
+        }) });
+      };
+      const settle = async (action: Promise<unknown>): Promise<void> => {
+        let done = false;
+        void action.finally(() => { done = true; });
+        let step = 0;
+        while (!done) {
+          await setImmediate();
+          if (gates.length) gates.splice(releaseOrder.next().value % gates.length, 1)[0]!();
+          if (++step > 10_000) throw new Error("The browse never settled.");
+        }
+        await action;
+      };
+      let session: Parameters<typeof f.owner.renderResumeBrowser>[0] | undefined;
+      const upsert = f.context.store.upsertBrowseSession;
+      f.context.store = { ...f.context.store, async upsertBrowseSession(record) { session = record; return upsert(record); } };
+
+      const expected = models.filter((model) => !model.fails)
+        .flatMap((model) => model.updatedAt.map((updatedAt) => ({ updatedAt, threadId: `${model.id ?? "local"}-${updatedAt}`, owner: model.id })))
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+      const expectPaint = (pageIndex: number) => {
+        const intent = f.intents.at(-1);
+        if (intent?.kind !== "thread_picker") throw new Error(`Expected a thread picker, received ${intent?.kind}`);
+        const pageSize = intent.page.pageSize;
+        const rows = intent.page.actions.filter((action) => action.id === "browse:select-thread").map((action) => {
+          const value = action.value as { threadId: string; federationInstanceId?: string };
+          return { threadId: value.threadId, owner: value.federationInstanceId };
+        });
+        expect(rows).toEqual(expected.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
+          .map(({ threadId, owner }) => ({ threadId, owner })));
+        expect(intent.prompt).not.toContain("Still checking");
+        return pageSize;
+      };
+
+      if (projects) {
+        await settle(f.owner.presentResumeBrowser({ ...command("resume"), args: ["--projects"] }));
+        expect(f.intents).toHaveLength(1);
+        const intent = f.intents[0];
+        if (intent?.kind !== "project_picker") throw new Error(`Expected a project picker, received ${intent?.kind}`);
+        expect(intent.prompt).not.toContain("Still checking");
+        const owners = intent.page.actions.filter((action) => action.id === "browse:select-project")
+          .map((action) => (action.value as { federationInstanceId?: string }).federationInstanceId);
+        expect(new Set(owners)).toEqual(new Set(models.filter((model) => !model.fails && model.updatedAt.length)
+          .map((model) => model.id).slice(0, intent.page.pageSize)));
+        return;
+      }
+      await settle(f.owner.presentResumeBrowser(command("resume")));
+      expect(f.intents).toHaveLength(1);
+      const pageSize = expectPaint(0);
+      const pages = Math.max(1, Math.ceil(expected.length / pageSize));
+
+      // Page forward through everything, then revisit pages the pool still
+      // retains: it keeps the eight most recently loaded pages and restarts
+      // from page one for an evicted page, by design.
+      const retained = Math.min(pages, 8);
+      const visits = [...Array.from({ length: pages - 1 }, (_unused, index) => index + 1),
+        ...revisits.map((value) => pages - retained + (value % retained))];
+      let loadedThrough = 0;
+      for (const pageIndex of visits) {
+        const paints = f.intents.length;
+        const reads = f.requests.length;
+        await settle(f.owner.renderResumeBrowser({ ...session!, pageIndex }, {} as never, command("resume")));
+        expect(f.intents).toHaveLength(paints + 1);
+        expectPaint(pageIndex);
+        if (pageIndex <= loadedThrough) expect(f.requests).toHaveLength(reads);
+        loadedThrough = Math.max(loadedThrough, pageIndex);
+      }
+    },
+  ), { numRuns: 60 });
+});
