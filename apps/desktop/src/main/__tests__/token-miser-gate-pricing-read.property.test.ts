@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { CURRENT_STATE_DB_USER_VERSION } from "../state/state-db";
 import {
   createTempStateDb,
   openFreshStateDb,
@@ -131,10 +132,18 @@ it("upgrades a v82 ledger with opaque turn keys and child source items in place"
         DROP INDEX idx_thread_usage_lines_gate_usage_turn;
         DROP INDEX idx_thread_usage_lines_source;
         DROP INDEX idx_thread_usage_lines_turn;
+        DROP INDEX idx_thread_usage_lines_completion_turn;
+        DROP INDEX idx_thread_usage_turns_turn;
+        DROP INDEX idx_thread_usage_lines_read_parent;
         CREATE INDEX idx_thread_usage_lines_turn
           ON thread_usage_lines(provider, backend, thread_id, turn_id);
         CREATE INDEX idx_thread_usage_lines_source
           ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
+        CREATE INDEX idx_thread_usage_turns_turn
+          ON thread_usage_turns(provider, backend, thread_id, turn_id);
+        CREATE INDEX idx_thread_usage_lines_read_parent
+          ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+          WHERE status != 'superseded';
         PRAGMA user_version = 82;
       `);
       const store = new SqliteOverlayStore(legacy);
@@ -153,7 +162,7 @@ it("upgrades a v82 ledger with opaque turn keys and child source items in place"
     try {
       const store = new SqliteOverlayStore(upgraded);
       expect(await store.readTokenMiserGatePricingLines(request)).toEqual(expected);
-      expect(upgraded.raw.pragma("user_version", { simple: true })).toBe(83);
+      expect(upgraded.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     } finally {
       upgraded.close();
     }
