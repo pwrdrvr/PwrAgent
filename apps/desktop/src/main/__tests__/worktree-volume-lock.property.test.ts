@@ -24,7 +24,7 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-async function fixture(): Promise<{ repo: string; worktree: string; container: string }> {
+async function fixture(addWorktree = true): Promise<{ repo: string; worktree: string; container: string }> {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-lock-")));
   cleanupPaths.push(root);
   const repo = path.join(root, "repo");
@@ -34,7 +34,7 @@ async function fixture(): Promise<{ repo: string; worktree: string; container: s
   const container = path.join(root, "drive", ".pwragent", "worktrees", "m1abc");
   await mkdir(container, { recursive: true });
   const worktree = path.join(container, "Orbit");
-  git(repo, ["worktree", "add", "-q", "--detach", worktree, "HEAD"]);
+  if (addWorktree) git(repo, ["worktree", "add", "-q", "--detach", worktree, "HEAD"]);
   return { repo, worktree, container };
 }
 
@@ -56,80 +56,75 @@ function record(repo: string, worktree: string): { locked: boolean; lockReason?:
  * lock someone else set still stops the removal.
  */
 describe("worktree volume locks", () => {
-  it("keeps cross-volume worktrees through a prune while unplugged, and never clears a foreign lock", async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.boolean(), fc.boolean(), async (separateVolume, foreignLock) => {
-        const { repo, worktree, container } = await fixture();
-        if (foreignLock) git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])("preserves worktrees through unplug and prune based on separate volume %s and foreign lock %s", async (separateVolume, foreignLock) => {
+    const { repo, worktree, container } = await fixture();
+    if (foreignLock) git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
 
-        const locked = await lockWorktreeOnSeparateVolume({
-          repoRoot: repo,
-          worktreePath: worktree,
-          git: async (args) => git(repo, args),
-          separateVolume: async () => separateVolume,
-        });
-        expect(locked).toBe(separateVolume && !foreignLock);
+    const locked = await lockWorktreeOnSeparateVolume({
+      repoRoot: repo,
+      worktreePath: worktree,
+      git: async (args) => git(repo, args),
+      separateVolume: async () => separateVolume,
+    });
+    expect(locked).toBe(separateVolume && !foreignLock);
 
-        // Unplug the drive: the whole container disappears, then prune runs.
-        const unplugged = `${container}-unplugged`;
-        await rename(container, unplugged);
-        git(repo, ["worktree", "prune"]);
-        expect(record(repo, worktree) !== undefined).toBe(separateVolume || foreignLock);
-        await rename(unplugged, container);
-        if (!record(repo, worktree)) return;
+    // Unplug the drive: the whole container disappears, then prune runs.
+    const unplugged = `${container}-unplugged`;
+    await rename(container, unplugged);
+    git(repo, ["worktree", "prune"]);
+    expect(record(repo, worktree) !== undefined).toBe(separateVolume || foreignLock);
+    await rename(unplugged, container);
+    if (!record(repo, worktree)) return;
 
-        const cleared = await unlockPwrAgentWorktreeLock({ worktreePath: worktree, git: async (args) => git(repo, args) });
-        expect(cleared).toBe(separateVolume && !foreignLock);
-        expect(record(repo, worktree)?.locked).toBe(foreignLock);
-        if (foreignLock) {
-          expect(record(repo, worktree)?.lockReason).toBe("operator hold");
-          expect(() => git(repo, ["worktree", "remove", "--force", worktree])).toThrow(/locked/);
-        } else {
-          git(repo, ["worktree", "remove", "--force", worktree]);
-          expect(existsSync(worktree)).toBe(false);
-        }
-      }),
-      { numRuns: 8 },
-    );
+    const cleared = await unlockPwrAgentWorktreeLock({ worktreePath: worktree, git: async (args) => git(repo, args) });
+    expect(cleared).toBe(separateVolume && !foreignLock);
+    expect(record(repo, worktree)?.locked).toBe(foreignLock);
+    if (foreignLock) {
+      expect(record(repo, worktree)?.lockReason).toBe("operator hold");
+      expect(() => git(repo, ["worktree", "remove", "--force", worktree])).toThrow(/locked/);
+    } else {
+      git(repo, ["worktree", "remove", "--force", worktree]);
+      expect(existsSync(worktree)).toBe(false);
+    }
   });
 
-  it("adds and removes through the helper, even when the checkout folder is gone", async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (separateVolume, foreignLock, folderGone) => {
-        const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-managed-worktree-")));
-        cleanupPaths.push(root);
-        const repo = path.join(root, "repo");
-        await mkdir(repo);
-        git(repo, ["init", "-q", "-b", "main"]);
-        git(repo, ["-c", "user.name=PwrAgent Tests", "-c", "user.email=tests@example.invalid", "commit", "-q", "--allow-empty", "-m", "seed"]);
-        const container = path.join(root, "drive", ".pwragent", "worktrees", "m1abc");
-        await mkdir(container, { recursive: true });
-        const worktree = path.join(container, "Orbit");
-        const run = async (args: string[]) => git(repo, args);
+  // Exhaust the three possible lock holders with and without the checkout.
+  // Git's worktree registry is the oracle for each independent scenario.
+  it.each([
+    ["none", false],
+    ["pwragent", false],
+    ["operator", false],
+    ["none", true],
+    ["pwragent", true],
+    ["operator", true],
+  ] as const)("removes a managed worktree with lock holder %s and folder missing %s", async (holder, folderGone) => {
+    const { repo, worktree, container } = await fixture(false);
+    const run = async (args: string[]) => git(repo, args);
+    const separateVolume = holder === "pwragent";
+    await addManagedWorktree({
+      repoRoot: repo, worktreePath: worktree, addArgs: ["--detach", worktree, "HEAD"], git: run,
+      separateVolume: async () => separateVolume,
+    });
+    expect(record(repo, worktree)).toMatchObject({ locked: separateVolume });
+    if (holder === "operator") git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
+    // With the folder gone, recovery passes Git's record for the lock.
+    if (folderGone) await rm(container, { recursive: true, force: true });
+    const removal = removeManagedWorktree({
+      worktreePath: worktree, force: !folderGone, git: run, lock: folderGone ? record(repo, worktree) : undefined,
+    });
 
-        await addManagedWorktree({
-          repoRoot: repo, worktreePath: worktree, addArgs: ["--detach", worktree, "HEAD"], git: run,
-          separateVolume: async () => separateVolume,
-        });
-        expect(record(repo, worktree)).toMatchObject({ locked: separateVolume });
-        if (foreignLock && !separateVolume) git(repo, ["worktree", "lock", "--reason", "operator hold", worktree]);
-        const held = foreignLock && !separateVolume;
-        // With the folder gone, recovery passes Git's record for the lock.
-        if (folderGone) await rm(container, { recursive: true, force: true });
-        const removal = removeManagedWorktree({
-          worktreePath: worktree, force: !folderGone, git: run, lock: folderGone ? record(repo, worktree) : undefined,
-        });
-
-        if (held) {
-          await expect(removal).rejects.toThrow(/locked/);
-          expect(record(repo, worktree)).toMatchObject({ locked: true, lockReason: "operator hold" });
-        } else {
-          await removal;
-          expect(record(repo, worktree)).toBeUndefined();
-        }
-      }),
-      { numRuns: 16 },
-    );
+    if (holder === "operator") {
+      await expect(removal).rejects.toThrow(/locked/);
+      expect(record(repo, worktree)).toMatchObject({ locked: true, lockReason: "operator hold" });
+    } else {
+      await removal;
+      expect(record(repo, worktree)).toBeUndefined();
+    }
   });
 
   it("locks exactly the worktrees a prune could lose while a drive is unplugged", () => {

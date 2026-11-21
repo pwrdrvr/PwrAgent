@@ -60,6 +60,8 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         chromiumTracePublisher: typeof chromiumTracePublisher;
       };
       const fs = require("node:fs/promises") as typeof import("node:fs/promises");
+      process.getBuiltinModule("node:v8").setFlagsFromString("--expose_gc");
+      const collectGarbage = process.getBuiltinModule("node:vm").runInNewContext("gc") as () => void;
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const target = new BrowserWindow({ width: 640, height: 480, webPreferences: { backgroundThrottling: false } });
       const warnings: string[] = [];
@@ -86,6 +88,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         async function run(untilFull: boolean) {
           await target.loadURL(args.origin);
           const raw: Buffer[] = [];
+          let publishError = "";
           const trace = new Trace(() => {
             const session = createSession();
             return {
@@ -98,10 +101,23 @@ test("native rolling trace evicts old events and publishes only filtered timing 
                 }
               },
             };
-          }, publish, (message) => warnings.push(message), { bufferSizeKb: 1024 });
+          }, async (...params) => {
+            try {
+              await publish(...params);
+            } catch (error) {
+              // This probe records only a contrived page and fixture paths.
+              publishError = String(error);
+              throw error;
+            }
+          }, (message) => warnings.push(message), { bufferSizeKb: 1024 });
           const owner = {};
           try {
             await trace.arm(owner);
+            // The capture must still export after V8 collects unreachable
+            // wrappers in the main process while the recorder is armed.
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            collectGarbage();
+            await new Promise<void>((resolve) => setImmediate(resolve));
             await target.webContents.executeJavaScript("performance.mark('early-overflow-marker')");
             for (let batch = 0; batch < 24; batch += 1) {
               await target.webContents.executeJavaScript(`
@@ -136,7 +152,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
             const capture = await trace.capture(owner, args.artifact, trigger);
             const mode = untilFull ? "recordUntilFull" : "recordContinuously";
             if (capture.status !== "written") {
-              throw new Error(`${mode} capture did not publish: ${JSON.stringify(capture)}`);
+              throw new Error(`${mode} capture did not publish: ${JSON.stringify(capture)} (${raw.length} chunks, ${publishError || warnings.join(", ")})`);
             }
             const exported = Buffer.concat(raw).toString("utf8");
             const events: { name?: string }[] = JSON.parse(exported).traceEvents;

@@ -13,8 +13,10 @@ type TargetInfo = { type?: string; targetId?: string };
 // Owning the target also owns its native DevTools stream. Detaching cancels
 // an unacknowledged start or a late export without touching another recorder.
 export function createChromiumTraceSession(): ChromiumTraceSession {
-  const { webContents } = new WebContentsView({ webPreferences: { sandbox: true } });
-  const debuggerApi = webContents.debugger;
+  // Electron destroys the contents when its WebContentsView is collected.
+  // Keep the owning view reachable until this trace session is disposed.
+  const view = new WebContentsView({ webPreferences: { sandbox: true } });
+  const debuggerApi = view.webContents.debugger;
   const targets = new Map<string, Promise<void>>();
   let closed = false;
   let started = false;
@@ -103,7 +105,8 @@ export function createChromiumTraceSession(): ChromiumTraceSession {
       complete();
       debuggerApi.off("message", message);
       debuggerApi.off("detach", detached);
-      if (!webContents.isDestroyed()) {
+      const { webContents } = view;
+      if (webContents && !webContents.isDestroyed()) {
         try {
           if (debuggerApi.isAttached()) debuggerApi.detach();
         } finally {
