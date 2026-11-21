@@ -4,12 +4,12 @@ import type {
   DesktopSettingsSecretState,
 } from "@pwragent/shared/contracts/settings";
 import { SettingsField, SettingsPendingIndicator } from "./SettingsLayout";
-import { formatSourceLabel } from "./settings-fields";
+import { describeSecretField, type SecretFieldTone } from "./secret-field-state";
 
 /**
  * A secret's row: write-only input (the stored value is never read back),
- * where it comes from, and Save / Discard / Clear. Shared by Messaging and
- * AI Providers.
+ * whether a value is stored, and Save / Discard / Remove. Shared by Messaging
+ * and AI Providers. `describeSecretField` decides what each state shows.
  */
 export function SecretField(props: {
   disabled?: boolean;
@@ -44,8 +44,7 @@ export function SecretField(props: {
   // input; state would not show the first write until the next render.
   const writingRef = useRef(false);
   const dirty = value.length > 0;
-  const status = props.state.configured ? "Set" : "Not set";
-  const source = formatSourceLabel(props.state.source, props.state.overriddenByEnv);
+  const view = describeSecretField(props.state, { dirty, saved });
 
   const save = async (): Promise<void> => {
     const nextValue = value.trim();
@@ -72,11 +71,10 @@ export function SecretField(props: {
       label={props.label}
       sub={props.sub}
       help={props.help}
-      source={`${status} · ${source}`}
       error={invalid ?? props.state.unavailableReason}
       control={
         <div
-          className="settings-secret"
+          className="settings-secret settings-secret--status"
           onBlur={(event) => {
             // A pasted value is saved on the way out. Operators pasted a
             // token, moved on, and the adapter never started, because the
@@ -94,7 +92,7 @@ export function SecretField(props: {
             aria-invalid={invalid ? true : undefined}
             className="settings-input"
             disabled={props.disabled}
-            placeholder="••••••••"
+            placeholder={view.placeholder}
             type="password"
             value={value}
             onChange={(event) => {
@@ -124,16 +122,20 @@ export function SecretField(props: {
             </button>
           ) : null}
           <button
-            className="button button--secondary"
+            className={
+              view.commitIsPrimary
+                ? "button button--primary"
+                : "button button--secondary"
+            }
             disabled={props.disabled || !value.trim()}
             type="button"
             onClick={() => {
               void save();
             }}
           >
-            Save
+            {view.commitLabel}
           </button>
-          {dirty ? (
+          {view.canDiscard ? (
             <button
               className="button button--ghost"
               disabled={props.disabled}
@@ -145,27 +147,69 @@ export function SecretField(props: {
             >
               Discard
             </button>
+          ) : view.canRemove ? (
+            <button
+              aria-label={`Remove saved ${props.label}`}
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={() => {
+                setSaved(false);
+                void props.onClearSecret(props.secret);
+              }}
+            >
+              Remove
+            </button>
           ) : null}
-          <button
-            className="button button--ghost"
-            disabled={props.disabled || props.state.source === "env"}
-            type="button"
-            onClick={() => {
-              setSaved(false);
-              void props.onClearSecret(props.secret);
-            }}
-          >
-            Clear
-          </button>
+          {/* The stored state sits under the box the value was pasted into.
+              It used to be a 10px pill under the description, a column away,
+              and an empty box drew bullets either way. */}
           {writing ? (
-            <SettingsPendingIndicator pending />
-          ) : saved && !dirty ? (
-            <span className="settings-pending" role="status">
-              Saved
+            <span className="settings-secret__status">
+              <SettingsPendingIndicator pending />
             </span>
-          ) : null}
+          ) : (
+            <span
+              className={`settings-secret__status is-${view.tone}`}
+              // Announced only as the answer to a write this row just made.
+              role={saved && !dirty ? "status" : undefined}
+            >
+              <SecretStatusMark tone={view.tone} />
+              {view.status}
+            </span>
+          )}
         </div>
       }
     />
+  );
+}
+
+function SecretStatusMark(props: { tone: SecretFieldTone }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="settings-secret__mark"
+      fill="none"
+      height="14"
+      viewBox="0 0 14 14"
+      width="14"
+    >
+      {props.tone === "set" ? (
+        <>
+          <circle cx="7" cy="7" fill="currentColor" r="6.5" />
+          <path
+            className="settings-secret__mark-tick"
+            d="M4.2 7.3l1.9 1.9 3.7-4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+          />
+        </>
+      ) : props.tone === "unset" ? (
+        <circle cx="7" cy="7" r="5.75" stroke="currentColor" strokeWidth="1.5" />
+      ) : (
+        <circle cx="7" cy="7" fill="currentColor" r="4" />
+      )}
+    </svg>
   );
 }

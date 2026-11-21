@@ -7816,7 +7816,7 @@ describe("SettingsScreen", () => {
     );
     // Saved, but the snapshot does not show the secret yet: two of three.
     await within(signing.closest(".settings-secret") as HTMLElement).findByText(
-      "Saved",
+      "Saved in keychain",
     );
     expect(testSettingsCredentials).not.toHaveBeenCalled();
 
@@ -7907,7 +7907,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(signing, { target: { value: "fixture-signing-secret" } });
     fireEvent.keyDown(signing, { key: "Enter" });
     await within(signing.closest(".settings-secret") as HTMLElement).findByText(
-      "Saved",
+      "Saved in keychain",
     );
     await waitFor(() => {
       expect(testSettingsCredentials).toHaveBeenCalled();
