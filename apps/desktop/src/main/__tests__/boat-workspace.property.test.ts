@@ -90,9 +90,9 @@ function world(roots: string[]) {
       }
       if (action === "commands") {
         // The scripts quote every path; the box's root goes in front of each.
+        // One pass: the box may itself live under /tmp.
         const command = String(request.body?.command)
-          .replaceAll("'/home/user", `'${box}/home/user`)
-          .replaceAll("'/tmp/", `'${box}/tmp/`);
+          .replaceAll(/'\/(home\/user|tmp)\//g, (_match, root: string) => `'${box}/${root}/`);
         try {
           const { stdout, stderr } = await execFile("bash", ["-c", command], { env });
           return { ok: true, exitCode: 0, stdout, stderr };
