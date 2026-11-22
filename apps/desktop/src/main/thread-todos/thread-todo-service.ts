@@ -472,7 +472,9 @@ export class ThreadTodoService {
           result: { result: params.retire!.result },
         });
       }
-      const raise = params.raise;
+      // A card whose merge is still running stays the only offer: the next
+      // event reconciles again once the run ends.
+      const raise = retiring?.status === "open" && !result.retired ? undefined : params.raise;
       const earlier = raise ? this.store.findByDependency(raise.offerId) : undefined;
       if (
         raise

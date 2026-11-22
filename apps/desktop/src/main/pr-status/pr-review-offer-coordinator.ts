@@ -4,7 +4,8 @@ import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo, ThreadTodoAction } from "@pwragent/shared/contracts/thread-todos";
 import type { PrChangeIdentitySource } from "./pr-change-identity";
 import {
-  derivePrReviewReadiness,
+  deriveReviewStanding,
+  describePrReviewReadiness,
   PR_OFFER_WITHDRAWN_RESULTS,
   desiredPrOffer,
   parsePrOfferId,
@@ -53,9 +54,13 @@ export type PrReviewOfferPorts = {
   getPr(prKey: string): PrSummary | undefined;
   /** Checkouts where Git can read this PR's commits; the first one is used. */
   directories(thread: PrReviewOfferThread, pr: PrSummary): string[];
-  /** Every review this thread recorded, any status. */
-  listReviews(thread: PrReviewOfferThread): ThreadReview[];
-  recordFixedThrough(reviewId: string, commit: string): void;
+  /**
+   * Every review, any status, recorded by a thread that shows this PR: the
+   * owner, and any sibling or sub-thread on the same PR. A review counts
+   * wherever it ran.
+   */
+  listReviews(thread: PrReviewOfferThread, pr: PrSummary): ThreadReview[];
+  recordFixedThrough(reviewId: string, commit: string, settledAt: number): void;
   cards: PrOfferCardPort;
   identity: PrChangeIdentitySource;
   log?: (message: string, fields: Record<string, unknown>) => void;
@@ -132,14 +137,16 @@ export class PrReviewOfferCoordinator {
     });
     if (prKeys.length === 0) return;
     this.track((async () => {
-      const owned: string[] = [];
+      // The PR's owner may be another thread on the same PR, such as the
+      // parent of the sub-thread the review ran in.
+      const owners: Array<{ owner: PrReviewOfferThread; prKey: string }> = [];
       for (const prKey of prKeys) {
         const owner = await this.ports.ownerThread(prKey);
-        if (owner?.backend === thread.backend && owner.threadId === thread.threadId) owned.push(prKey);
+        if (owner) owners.push({ owner, prKey });
       }
-      if (owned.length === 0) return;
+      if (owners.length === 0) return;
       await this.captureFixedThrough(review);
-      for (const prKey of owned) this.schedule(thread, prKey);
+      for (const { owner, prKey } of owners) this.schedule(owner, prKey);
     })());
   }
 
@@ -280,6 +287,26 @@ export class PrReviewOfferCoordinator {
   }
 
   /**
+   * Why this thread may not raise its own merge card for the PR, or nothing
+   * when it may: a review must cover the head and have no open findings,
+   * whatever CI says. Unknown and closed PRs are not refused.
+   */
+  async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
+    const pr = this.ports.getPr(prKey);
+    if (!pr) return undefined;
+    const assessment = await this.assessPr(thread, pr, true, false);
+    if (!assessment.headSha || assessment.readiness === "closed") return undefined;
+    if (assessment.headCovered && (assessment.openFindings ?? 0) === 0) return undefined;
+    return `${describePrReviewReadiness({
+      prNumber: pr.number,
+      readiness: assessment.readiness,
+      headSha: assessment.headSha,
+      reviewed: assessment.headCovered,
+      ...(assessment.openFindings !== undefined ? { openFindings: assessment.openFindings } : {}),
+    })} This card was not raised. If the operator asks to merge now, use the merge_pull_request tool, which asks for their approval.`;
+  }
+
+  /**
    * `forOffer` also reads the head's change identity when no review covers
    * it, because a review offer is keyed by change. A read-only assessment
    * skips that Git work.
@@ -296,13 +323,15 @@ export class PrReviewOfferCoordinator {
       return { readiness: gate, ...(head ? { headSha: head } : {}), headCovered: false };
     }
     const coverage = await this.reviewCoverage(thread, pr, forOffer && !gate);
-    const derived = derivePrReviewReadiness({ pr, reviews: coverage.reviews });
+    // The review side holds while CI runs, so the merge-card gate still sees
+    // open findings then.
+    const standing = deriveReviewStanding(coverage.reviews);
     return {
-      readiness: derived.readiness,
+      readiness: gate ?? standing.readiness,
       headSha: head!,
       headCovered: coverage.reviews.some((review) => review.coversHead),
-      ...(derived.reviewId ? { reviewId: derived.reviewId } : {}),
-      ...(derived.openFindings !== undefined ? { openFindings: derived.openFindings } : {}),
+      ...(standing.reviewId ? { reviewId: standing.reviewId } : {}),
+      ...(standing.openFindings !== undefined ? { openFindings: standing.openFindings } : {}),
       ...(coverage.headContentId ? { headContentId: coverage.headContentId } : {}),
     };
   }
@@ -318,7 +347,7 @@ export class PrReviewOfferCoordinator {
     keyUncoveredHead: boolean,
   ): Promise<{ reviews: PrReviewCoverage[]; headContentId?: string }> {
     const head = pr.headSha!.toLowerCase();
-    const reviews = this.ports.listReviews(thread)
+    const reviews = this.ports.listReviews(thread, pr)
       .filter((review) => reviewMatchesPr(review, pr) && review.context?.headCommit)
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, MAX_REVIEWS_CONSIDERED);
@@ -344,7 +373,6 @@ export class PrReviewOfferCoordinator {
         cwd,
         sha,
         targetTip: target,
-        ...(pr.baseRefName ? { targetName: pr.baseRefName } : {}),
       });
     };
     let headContentId: string | undefined;
@@ -379,6 +407,9 @@ export class PrReviewOfferCoordinator {
         coversHead,
         openFindings: openFindingCount(review),
       });
+      // Newest first: the first covering review decides, and the latest
+      // review is already in. Older reviews cannot change readiness.
+      if (coversHead) break;
     }
     // A review offer is keyed by change, so a rebase does not ask again.
     const anyCovers = coverage.some((entry) => entry.coversHead);
@@ -395,13 +426,17 @@ export class PrReviewOfferCoordinator {
   private async captureFixedThrough(review: ThreadReview): Promise<void> {
     const reviewed = review.context?.headCommit;
     const workspace = review.context?.workspacePath;
-    if (review.status === "open" || !reviewed || !workspace) return;
+    // Only a settlement counts: an edit to an already settled finding keeps
+    // the same resolution time, so it never reads a newer HEAD.
+    const settledAt = review.resolution?.at;
+    if (review.status === "open" || !reviewed || !workspace || settledAt === undefined) return;
+    if (review.fixedThroughAt !== undefined && review.fixedThroughAt >= settledAt) return;
     const head = await this.ports.identity.readReviewedBranchHead(workspace, {
       sha: reviewed,
       ...(review.context?.gitBranch ? { branch: review.context.gitBranch } : {}),
     });
-    if (!head || head === reviewed.toLowerCase() || head === review.fixedThroughCommit) return;
-    this.ports.recordFixedThrough(review.id, head);
+    if (!head) return;
+    this.ports.recordFixedThrough(review.id, head, settledAt);
   }
 }
 

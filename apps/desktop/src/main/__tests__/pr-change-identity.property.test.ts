@@ -104,7 +104,7 @@ describe("PR change identity", () => {
         const targetTip = await reader.resolveTargetTip({ cwd: repo, baseRefName: "main" });
         expect(targetTip).toBe(git(repo, "rev-parse", "main"));
         const identity = async (sha: string) =>
-          await reader.changeIdentity({ cwd: repo, sha, targetTip: targetTip!, targetName: "main" });
+          await reader.changeIdentity({ cwd: repo, sha, targetTip: targetTip! });
         const original = await identity(reviewed);
         expect(original).toMatch(/^[0-9a-f]{40}$/);
         expect(await identity(rebased)).toBe(original);
@@ -114,7 +114,9 @@ describe("PR change identity", () => {
         rmSync(repo, { recursive: true, force: true });
       }
     }), { numRuns: 4 });
-  });
+    // Each run starts about fifteen real Git processes; under a loaded full
+    // suite that outlasts Vitest's default 5 s.
+  }, 30_000);
 
   it("prefers the forge's base commit, reads a missing commit as unknown, and caches by commit", async () => {
     const repo = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-change-"));
@@ -136,6 +138,9 @@ describe("PR change identity", () => {
       const before = reader.gitProcessCount;
       expect(await reader.changeIdentity({ cwd: repo, sha: head, targetTip: base })).toBe(first);
       expect(reader.gitProcessCount).toBe(before);
+      // The target moved: the identity is read again against the new tip.
+      expect(await reader.changeIdentity({ cwd: repo, sha: head, targetTip: head })).toBe("empty");
+      expect(reader.gitProcessCount).toBeGreaterThan(before);
       expect(await reader.readReviewedBranchHead(repo, { sha: base, branch: "main" })).toBe(head);
       expect(await reader.readReviewedBranchHead(repo, { sha: base, branch: "feature" })).toBeUndefined();
       expect(await reader.readReviewedBranchHead(repo, { sha: base })).toBe(head);

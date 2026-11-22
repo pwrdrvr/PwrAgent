@@ -8430,9 +8430,20 @@ class DesktopAppServerService {
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
       directories: (thread, pr) => this.prReviewOfferDirectories(thread, pr),
-      listReviews: (thread) => reviews.list({ ...thread, status: "all" }, { includeDetached: true }),
-      recordFixedThrough: (reviewId, commit) => {
-        reviews.recordFixedThrough(reviewId, commit);
+      listReviews: (thread, pr) => {
+        // The owner and every other thread showing the PR, such as a
+        // sub-thread the review ran in. Bounded by that PR's thread index.
+        const threads = new Map([[buildThreadIdentityKey(thread.backend, thread.threadId), thread]]);
+        for (const threadKey of this.primaryPrThreadsByKey.get(getPrStatusKey(pr)) ?? []) {
+          const identity = parseThreadIdentityKey(threadKey);
+          if (identity) threads.set(threadKey, { backend: identity.backend, threadId: identity.threadId });
+        }
+        return [...threads.values()].flatMap((candidate) =>
+          reviews.list({ ...candidate, status: "all" }, { includeDetached: true })
+        );
+      },
+      recordFixedThrough: (reviewId, commit, settledAt) => {
+        reviews.recordFixedThrough(reviewId, commit, settledAt);
       },
       cards: todos,
       identity: new PrChangeIdentityReader(),
@@ -8482,16 +8493,7 @@ class DesktopAppServerService {
     const prKey = getPrStatusKey(pr);
     const owner = await this.prReviewOfferOwner(prKey);
     if (owner?.backend !== thread.backend || owner.threadId !== thread.threadId) return undefined;
-    const assessment = await coordinator.assess(thread, prKey, { coverage: true });
-    if (!assessment?.headSha || assessment.readiness === "closed") return undefined;
-    if (assessment.headCovered && (assessment.openFindings ?? 0) === 0) return undefined;
-    return `${describePrReviewReadiness({
-      prNumber: pr.number,
-      readiness: assessment.readiness,
-      headSha: assessment.headSha,
-      reviewed: assessment.headCovered,
-      ...(assessment.openFindings !== undefined ? { openFindings: assessment.openFindings } : {}),
-    })} This card was not raised. If the operator asks to merge now, use the merge_pull_request tool, which asks for their approval.`;
+    return await coordinator.mergeOfferRefusal(thread, prKey);
   }
 
   /**

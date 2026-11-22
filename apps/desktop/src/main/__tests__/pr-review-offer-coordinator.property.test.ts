@@ -63,6 +63,12 @@ class World {
   ci: Ci = "pending";
   lifecycle: "open" | "merged" = "open";
   readonly reviews: ModelReview[] = [];
+  /**
+   * The oracle's own record of each review's fixed-through head: the head
+   * when its findings last settled. Kept apart from what the coordinator
+   * records, so a coordinator that moves it at the wrong time disagrees.
+   */
+  readonly settledThrough = new Map<string, string>();
   /** Offers the operator dismissed or ran: `review:<change>` or `merge:<sha>`. */
   readonly operatorClosed = new Set<string>();
   gitProcesses = 0;
@@ -106,7 +112,7 @@ class World {
     return this.reviews
       .map((entry) => entry.review)
       .filter((review) =>
-        [review.context!.headCommit, review.fixedThroughCommit]
+        [review.context!.headCommit, this.settledThrough.get(review.id)]
           .some((sha) => sha !== undefined && this.changeOf.get(sha) === change)
       );
   }
@@ -160,9 +166,9 @@ function createHarness(db: StateDb = openInMemoryStateDb()): Harness {
     getPr: () => world.pr(),
     directories: () => ["/work/project"],
     listReviews: () => world.reviews.map((entry) => entry.review),
-    recordFixedThrough: (reviewId, commit) => {
+    recordFixedThrough: (reviewId, commit, settledAt) => {
       const entry = world.reviews.find((candidate) => candidate.review.id === reviewId);
-      if (entry) entry.review = { ...entry.review, fixedThroughCommit: commit };
+      if (entry) entry.review = { ...entry.review, fixedThroughCommit: commit, fixedThroughAt: settledAt };
     },
     cards: todos,
     identity: identity(world),
@@ -218,6 +224,8 @@ function recordReview(world: World, findings: number): ThreadReview {
       pullRequest: { provider: "github.com", org: "example", repo: "project", number: 7, url: PR_URL },
     },
     status: findings === 0 ? "handled" : "open",
+    // As the service does: a clean review is settled when it lands.
+    ...(findings === 0 ? { resolution: { note: "Review completed with no findings.", actor: "system" as const, at: world.clock } } : {}),
     items: Array.from({ length: findings }, (_, index) => ({
       id: `finding-${index}`,
       title: `Finding ${index}`,
@@ -229,6 +237,7 @@ function recordReview(world: World, findings: number): ThreadReview {
     updatedAt: world.clock,
   };
   world.reviews.push({ review });
+  if (findings === 0) world.settledThrough.set(review.id, world.head);
   return review;
 }
 
@@ -245,8 +254,11 @@ function settleLatestOpen(world: World): ThreadReview | undefined {
     ...entry.review,
     status: "handled",
     items: entry.review.items.map((item) => ({ ...item, status: "addressed" as const, updatedAt: world.clock })),
+    // As the service does when the last finding settles.
+    resolution: { note: "Every finding is settled.", actor: "system", at: world.clock },
     updatedAt: world.clock,
   };
+  world.settledThrough.set(entry.review.id, world.head);
   return entry.review;
 }
 
@@ -297,6 +309,26 @@ const commands: fc.Arbitrary<Command>[] = [
         status: "open",
         items: entry.review.items.map((item, index) => index === 0
           ? { ...item, status: "open" as const, updatedAt: h.world.clock }
+          : item),
+        resolution: undefined,
+        updatedAt: h.world.clock,
+      };
+      await reviewChanged(h, entry.review);
+    },
+  }),
+  fc.constant<Command>({
+    // Someone edits a settled finding's note. It is not a settlement, so the
+    // commits pushed since must not become review fixes.
+    name: "editSettledFinding",
+    run: async (h) => {
+      const entry = [...h.world.reviews].reverse()
+        .find((candidate) => candidate.review.status === "handled" && candidate.review.items.length > 0);
+      if (!entry) return;
+      h.world.clock += 1;
+      entry.review = {
+        ...entry.review,
+        items: entry.review.items.map((item, index) => index === 0
+          ? { ...item, resolution: { note: `Edited at ${h.world.clock}`, actor: "user" as const, at: h.world.clock }, updatedAt: h.world.clock }
           : item),
         updatedAt: h.world.clock,
       };
@@ -410,6 +442,111 @@ describe("PR review and merge offers", () => {
     }
   });
 
+  it("does not count commits pushed after a settlement as fixes when a settled finding is edited", async () => {
+    const harness = createHarness();
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      await reviewChanged(harness, recordReview(harness.world, 1));
+      const fixedHead = harness.world.head;
+      await reviewChanged(harness, settleLatestOpen(harness.world)!);
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+
+      await push(harness, harness.world.newChange());
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+
+      const entry = harness.world.reviews[0]!;
+      harness.world.clock += 1;
+      entry.review = {
+        ...entry.review,
+        items: entry.review.items.map((item) => ({
+          ...item,
+          resolution: { note: "Reworded.", actor: "user" as const, at: harness.world.clock },
+          updatedAt: harness.world.clock,
+        })),
+        updatedAt: harness.world.clock,
+      };
+      await reviewChanged(harness, entry.review);
+      expect(harness.world.reviews[0]!.review.fixedThroughCommit).toBe(fixedHead);
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("reports a covering review's open findings while CI is still running", async () => {
+    const harness = createHarness();
+    try {
+      await reviewChanged(harness, recordReview(harness.world, 2));
+      const assessment = await harness.coordinator.assess(THREAD, PR_KEY, { coverage: true });
+      expect(assessment).toMatchObject({ readiness: "ci_pending", headCovered: true, openFindings: 2 });
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("offers the merge on the PR's owner when the review ran on another thread", async () => {
+    const harness = createHarness();
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      const review = { ...recordReview(harness.world, 0), threadId: "thread-child" };
+      harness.world.reviews[0]!.review = review;
+      await reviewChanged(harness, review);
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("leaves a running merge card as the only offer until its run ends", async () => {
+    const harness = createHarness();
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      await reviewChanged(harness, recordReview(harness.world, 0));
+      const [merge] = openOfferCards(harness.todos);
+      expect(merge?.action?.type).toBe("merge_pull_request");
+      // The service marks a card running while its action runs.
+      const running = (harness.todos as unknown as { running: Set<string> }).running;
+      running.add(merge!.id);
+
+      await push(harness, harness.world.newChange());
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.id)).toEqual([merge!.id]);
+
+      running.delete(merge!.id);
+      await transition(harness, { checkState: { from: "passing", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("refuses an agent's merge card until a review covers the head and its findings settle", async () => {
+    const harness = createHarness();
+    const refusal = async () => await harness.coordinator.mergeOfferRefusal(THREAD, PR_KEY);
+    try {
+      expect(await refusal()).toContain("has no review covering its head");
+      await reviewChanged(harness, recordReview(harness.world, 1));
+      // CI still running does not hide the open finding.
+      expect(await refusal()).toContain("1 unsettled finding");
+      await reviewChanged(harness, settleLatestOpen(harness.world)!);
+      expect(await refusal()).toBeUndefined();
+      await push(harness, harness.world.newChange());
+      expect(await refusal()).toContain("has no review covering its head");
+      await push(harness, harness.world.changeOf.get(harness.world.head)!);
+      expect(await refusal()).toContain("has no review covering its head");
+      harness.world.lifecycle = "merged";
+      expect(await refusal()).toBeUndefined();
+    } finally {
+      harness.close();
+    }
+  });
+
   it("stays within its write budget", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-pr-review-offers-");
@@ -463,8 +600,8 @@ describe("PR review and merge offers", () => {
         items: [{ title: "Finding" }],
       });
       const fixed = await measureSqliteWrites(async () => {
-        reviews.recordFixedThrough(review.id, "b".repeat(40));
-        reviews.recordFixedThrough(review.id, "b".repeat(40));
+        reviews.recordFixedThrough(review.id, "b".repeat(40), 5_000);
+        reviews.recordFixedThrough(review.id, "c".repeat(40), 5_000);
       });
       expectSqliteWriteBudget({
         scenario: "pr-review-fixed-through",

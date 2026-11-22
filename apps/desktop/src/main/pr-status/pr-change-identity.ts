@@ -30,10 +30,10 @@ const defaultRunner: PrChangeGitRunner = async (cwd, args, options) =>
  * conflict differently, moves it. The cost of `-U0` is that moving an
  * identical added line elsewhere in the same file keeps the identity.
  *
- * Each head costs three Git processes once (merge-base, diff, patch-id),
- * then reads from a bounded cache keyed by target branch and commit. A head's
- * merge base with a later target tip stays the same until the head itself
- * lands, so the cache needs no target tip in its key.
+ * Each head costs three Git processes (merge-base, diff, patch-id) per
+ * target tip, then reads from a bounded cache keyed by target tip and commit.
+ * Keying by tip, not by branch name, means an identity read against a stale
+ * target ref is not reused once the ref moves.
  */
 /** What the review-offer coordinator reads from Git; tests supply their own. */
 export type PrChangeIdentitySource = Pick<
@@ -94,12 +94,10 @@ export class PrChangeIdentityReader {
     cwd: string;
     sha: string;
     targetTip: string;
-    /** Cache scope: the target branch's name. */
-    targetName?: string;
   }): Promise<string | undefined> {
     const sha = params.sha.toLowerCase();
     if (!GIT_OBJECT_ID.test(sha) || !GIT_OBJECT_ID.test(params.targetTip)) return undefined;
-    const key = `${params.targetName ?? params.targetTip}\u0000${sha}`;
+    const key = `${params.targetTip.toLowerCase()}\u0000${sha}`;
     if (this.cache.has(key)) {
       const cached = this.cache.get(key)!;
       // Refresh recency.

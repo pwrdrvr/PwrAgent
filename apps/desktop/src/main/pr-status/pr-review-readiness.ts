@@ -86,10 +86,20 @@ export function derivePrReviewReadiness(params: {
   reviews: readonly PrReviewCoverage[];
 }): PrReviewReadinessResult {
   const gate = prGateReadiness(params.pr);
-  if (gate) return { readiness: gate };
+  return gate ? { readiness: gate } : deriveReviewStanding(params.reviews);
+}
+
+/**
+ * Where the reviews leave the head, whatever CI says: the review side of
+ * readiness. The merge-card gate and the status read use it while CI is
+ * still running, when `derivePrReviewReadiness` reports only the CI state.
+ */
+export function deriveReviewStanding(
+  reviews: readonly PrReviewCoverage[],
+): { readiness: "needs_review" | "findings_open" | "ready_to_merge"; reviewId?: string; openFindings?: number } {
   let newest: PrReviewCoverage | undefined;
   let latest: PrReviewCoverage | undefined;
-  for (const review of params.reviews) {
+  for (const review of reviews) {
     if (!latest || review.createdAt > latest.createdAt) latest = review;
     if (!review.coversHead) continue;
     if (!newest || review.createdAt > newest.createdAt) newest = review;

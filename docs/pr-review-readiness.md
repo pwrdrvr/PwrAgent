@@ -23,8 +23,9 @@ covered when it carries the **same change** as either commit.
 A review counts as settled when its status is `handled` or `dismissed`. An
 open review with no structured findings counts as one unsettled finding.
 Reviews are matched to the PR by the PR they name. A review that ran before
-the PR existed is matched by its branch. Only the eight newest reviews are
-read.
+the PR existed is matched by its branch. Reviews come from every thread
+showing the PR, so a review run in a sub-thread counts for its parent. Only
+the eight newest reviews are read.
 
 ### What does not reset "reviewed"
 
@@ -38,7 +39,10 @@ read.
 - **Review fixes.** When a review's last finding settles, PwrAgent reads the
   reviewed checkout's HEAD. It does this only on the reviewed branch, or for a
   detached review, from a descendant of the reviewed commit. It records that
-  commit as `fixedThroughCommit`. Commits made while findings were open are
+  commit as `fixedThroughCommit`, once per settlement: `fixedThroughAt`
+  holds the settlement time it was read for. Editing an already settled
+  finding is not a settlement, so it never moves the commit. Reopening a
+  finding and settling it again does. Commits made while findings were open are
   review fixes. While the latest review has unsettled findings, PwrAgent
   offers nothing for an uncovered head, even if CI turns green before the
   findings settle. Commit and push a fix **before** marking its finding
@@ -79,7 +83,9 @@ example, a finding reopens and settles again at the same head. The withdrawn
 card then reopens rather than adding a new one.
 
 A merge offer is withdrawn when the head moves, a review stops covering it,
-or the PR conflicts or becomes a draft. A review offer survives CI runs and
+or the PR conflicts or becomes a draft. A merge card whose merge is running
+is left alone, and no other offer is raised beside it. The next event
+reconciles again. A review offer survives CI runs and
 failures, because the change still needs review. A covering review withdraws
 it, however that review was started.
 
@@ -88,7 +94,8 @@ it, however that review was started.
 `get_thread_status` and `check_thread_pull_request_status` return
 `prAutomation.reviewReadiness` for up to three primary PRs. They also add
 one guidance sentence for each PR. `add_todo` refuses a `merge_pull_request`
-card for a head with no covering review, or one with unsettled findings.
+card for a head with no covering review, or one with unsettled findings,
+even while CI is still running.
 The direct `merge_pull_request` tool is not gated. It asks the operator to
 approve, so an operator who says "merge it now" still can.
 
@@ -122,11 +129,13 @@ PwrAgent does no scan at startup, runs no timer, and makes no forge request.
   the first primary-attached thread. The thread must not be archived. Its
   project's forge activity must not be paused. Background polling must be on.
 - **Git.** Git runs only when CI is green, or to withdraw an open review
-  offer. It runs in the thread's own checkout, through the shared
+  offer. Reviews are read newest first, and the first one covering the head
+  ends the reads. It runs in the thread's own checkout, through the shared
   PR-metadata process pool (purpose `pr-review-coverage`).
   - A head costs three processes once: `merge-base`, `diff`, and `patch-id`.
   - Resolving the target costs one `cat-file` or `for-each-ref`.
-  - Results are cached by target branch and commit, with up to 256 entries.
+  - Results are cached by target tip commit and head commit, with up to 256
+    entries. A target branch that moves is read again.
   - A settlement costs one `rev-parse`, plus a `merge-base --is-ancestor` for
     a detached review.
 - **Concurrency.** Evaluations for the same thread and PR coalesce. A burst

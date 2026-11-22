@@ -80,6 +80,12 @@ export type ThreadReview = ThreadReviewIdentity & {
    * they do not make the pull request need another review. Owner-local.
    */
   fixedThroughCommit?: string;
+  /**
+   * The settlement `fixedThroughCommit` was read at: the review's
+   * `resolution.at` then. Only a later settlement moves it, so editing a
+   * settled finding never counts newer commits as fixes.
+   */
+  fixedThroughAt?: number;
 };
 
 export type RecordThreadReviewInput = Pick<ThreadReview, "sourceKey" | "sourceUrl" | "title" | "summary" | "context"> & {

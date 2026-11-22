@@ -359,16 +359,21 @@ export class ThreadReviewService {
   }
 
   /**
-   * Records the commit a review's findings were fixed through. One commit
-   * when it moves; no change event, since nothing a card shows changed.
+   * Records the commit a review's findings were fixed through, for the
+   * settlement at `settledAt`. One commit per settlement; an older or
+   * repeated settlement writes nothing. No change event, since nothing a
+   * card shows changed.
    */
-  recordFixedThrough(id: string, commit: string): ThreadReview | undefined {
+  recordFixedThrough(id: string, commit: string, settledAt: number): ThreadReview | undefined {
+    const stale = (review: ThreadReview): boolean =>
+      review.fixedThroughAt !== undefined && review.fixedThroughAt >= settledAt;
     const snapshot = this.get(id);
-    if (!snapshot || snapshot.fixedThroughCommit === commit) return snapshot;
+    if (!snapshot || stale(snapshot)) return snapshot;
     return this.storage.runExclusive(() => {
       const review = this.get(id);
-      if (!review || review.fixedThroughCommit === commit) return review;
+      if (!review || stale(review)) return review;
       review.fixedThroughCommit = commit;
+      review.fixedThroughAt = settledAt;
       this.storage.update(review);
       return review;
     });
