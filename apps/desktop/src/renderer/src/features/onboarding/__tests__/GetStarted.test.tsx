@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopBootInfo, DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import type { ClaudeSignInControls } from "../../notifications/useClaudeSignIn";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import { GetStarted } from "../GetStarted";
 
@@ -104,21 +105,29 @@ function renderGetStarted(params: {
   settings?: ReturnType<typeof settingsState>;
   bootInfo?: DesktopBootInfo | null;
   isReplay?: boolean;
+  claudeSignIn?: ClaudeSignInControls;
 }) {
   const settings = params.settings ?? settingsState(true);
   const onComplete = vi.fn(async () => undefined);
   const onDismiss = vi.fn();
-  render(
+  const element = (claudeSignIn?: ClaudeSignInControls) => (
     <GetStarted
       isReplay={params.isReplay ?? false}
       bootInfo={params.bootInfo === undefined ? firstRun : params.bootInfo}
       settings={settings}
       desktopApi={params.desktopApi}
+      claudeSignIn={claudeSignIn}
       onComplete={onComplete}
       onDismiss={onDismiss}
-    />,
+    />
   );
-  return { settings, onComplete, onDismiss };
+  const view = render(element(params.claudeSignIn));
+  return {
+    settings,
+    onComplete,
+    onDismiss,
+    setClaudeSignIn: (claudeSignIn?: ClaudeSignInControls) => view.rerender(element(claudeSignIn)),
+  };
 }
 
 function agentRow(name: string): HTMLElement {
@@ -171,6 +180,50 @@ describe("Get started", () => {
     const claude = agentRow("Claude Code");
     expect(within(claude).getByText("Needs sign-in")).toBeInTheDocument();
     expect(within(claude).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
+  });
+
+  it("gives the bundled CLI's own sign-in command when it can't sign in from here", async () => {
+    const loginCommand = "'/Applications/PwrAgent.app/claude' auth login";
+    const desktopApi = api({
+      backends: [{
+        kind: "claude",
+        label: "Claude Code",
+        available: false,
+        claude: { executable: "/Applications/PwrAgent.app/claude", source: "bundled", loginCommand, authStatus: "sign-in-required" },
+      } as BackendSummary],
+    });
+    renderGetStarted({ desktopApi });
+    await screen.findByRole("button", { name: "Check again" });
+    fireEvent.click(within(agentRow("Claude Code")).getByRole("button", { name: "Sign in" }));
+    expect(within(agentRow("Claude Code")).getByText(loginCommand)).toBeInTheDocument();
+    expect(within(agentRow("Claude Code")).queryByText("claude auth login")).not.toBeInTheDocument();
+  });
+
+  it("checks again when an in-app Claude Code sign-in ends", async () => {
+    const desktopApi = api({ authenticated: false });
+    const { setClaudeSignIn } = renderGetStarted({
+      desktopApi,
+      claudeSignIn: { onSignIn: () => undefined, signingIn: false },
+    });
+    await screen.findByRole("button", { name: "Check again" });
+    expect(desktopApi.listBackends).toHaveBeenCalledOnce();
+    setClaudeSignIn({ onSignIn: () => undefined, signingIn: true });
+    expect(desktopApi.listBackends).toHaveBeenCalledOnce();
+    setClaudeSignIn({ onSignIn: () => undefined, signingIn: false });
+    await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalledTimes(2));
+    await screen.findByRole("button", { name: "Check again" });
+  });
+
+  it("says why Start failed instead of silently staying put", async () => {
+    vi.stubEnv("DEV", false);
+    const desktopApi = api({
+      createPwrAgentProfile: vi.fn(async () => { throw new Error("A profile named default already exists."); }),
+    } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    await screen.findByRole("button", { name: "Check again" });
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("A profile named default already exists.");
+    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
   });
 
   it("enables Start once one agent is ready, and lists every ready agent", async () => {

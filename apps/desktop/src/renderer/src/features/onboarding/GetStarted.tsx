@@ -70,6 +70,7 @@ export function GetStarted(props: {
   // always has. A plain first run shares this computer's.
   const [separateLogin, setSeparateLogin] = useState(Boolean(requestedName));
   const [submitting, setSubmitting] = useState(false);
+  const [startError, setStartError] = useState<string>();
   const [dismissModalOpen, setDismissModalOpen] = useState(false);
 
   const handleClose = useCallback((): void => {
@@ -91,6 +92,17 @@ export function GetStarted(props: {
     desktopApi: props.desktopApi,
     separateLogin,
   });
+
+  // An in-app Claude Code sign-in ends when its CLI exits, which can come
+  // after the window regains focus. Check again then, so the row does not
+  // keep saying Needs sign-in.
+  const claudeSigningIn = props.claudeSignIn?.signingIn ?? false;
+  const wasClaudeSigningIn = useRef(claudeSigningIn);
+  const refreshAgents = agents.refresh;
+  useEffect(() => {
+    if (wasClaudeSigningIn.current && !claudeSigningIn) void refreshAgents();
+    wasClaudeSigningIn.current = claudeSigningIn;
+  }, [claudeSigningIn, refreshAgents]);
 
   const provisionAndOpen = useCallback(
     async (useSeparateLogin: boolean): Promise<void> => {
@@ -137,6 +149,7 @@ export function GetStarted(props: {
     async (options?: { withoutAgent?: boolean }): Promise<void> => {
       if (submitting) return;
       setSubmitting(true);
+      setStartError(undefined);
       try {
         if (props.isReplay || !inBootstrapMode) {
           if (options?.withoutAgent && !props.isReplay) {
@@ -149,6 +162,7 @@ export function GetStarted(props: {
         await provisionAndOpen(separateLogin);
       } catch (caught) {
         console.warn("Get started: Start failed", caught);
+        setStartError(caught instanceof Error ? caught.message : String(caught));
       } finally {
         setSubmitting(false);
         setDismissModalOpen(false);
@@ -226,6 +240,11 @@ export function GetStarted(props: {
                 desktopApi={props.desktopApi}
                 claudeSignIn={props.claudeSignIn}
               />
+              {startError ? (
+                <p className="get-started__error" role="alert">
+                  PwrAgent couldn&rsquo;t finish setting up: {startError}
+                </p>
+              ) : null}
               <p className="get-started__fine">
                 Thread layout, more profiles, and messaging are in Settings
                 whenever you want them.
@@ -528,6 +547,8 @@ type AgentsModel = {
   cancelCodexSignIn: () => void;
   /** The user opened an install or sign-in step outside this window. */
   noteSetupStep: () => void;
+  /** The command that signs in the Claude Code CLI PwrAgent found. */
+  claudeLoginCommand: string;
 };
 
 function desktopPlatform(platform?: string): DesktopPlatform {
@@ -591,8 +612,14 @@ function useGetStartedAgents(params: {
     }
   }, []);
 
+  const refreshAgainRef = useRef(false);
   const refresh = useCallback(async (): Promise<void> => {
-    if (refreshingRef.current) return;
+    if (refreshingRef.current) {
+      // A check asked for mid-flight may follow something the running one
+      // started too early to see, such as a sign-in that just finished.
+      refreshAgainRef.current = true;
+      return;
+    }
     refreshingRef.current = true;
     setRefreshing(true);
     setError(undefined);
@@ -636,9 +663,16 @@ function useGetStartedAgents(params: {
       await checkCodexSignIn();
     } finally {
       refreshingRef.current = false;
-      setRefreshing(false);
+      if (refreshAgainRef.current) {
+        refreshAgainRef.current = false;
+        void refreshRef.current();
+      } else {
+        setRefreshing(false);
+      }
     }
   }, [checkCodexSignIn]);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   const initialRefreshStarted = useRef(false);
   useEffect(() => {
@@ -736,6 +770,9 @@ function useGetStartedAgents(params: {
     startCodexSignIn,
     cancelCodexSignIn,
     noteSetupStep,
+    // The bundled CLI is not on PATH, so its command names it by path.
+    claudeLoginCommand: backends?.find((backend) => backend.kind === "claude")?.claude?.loginCommand
+      ?? CLAUDE_SIGN_IN_COMMAND,
   };
 }
 
@@ -961,9 +998,9 @@ function AgentRowView(props: {
               </p>
               <CommandLine
                 label="Claude sign-in"
-                command={CLAUDE_SIGN_IN_COMMAND}
-                copied={copied === CLAUDE_SIGN_IN_COMMAND}
-                onCopy={props.desktopApi?.copyText ? () => copy(CLAUDE_SIGN_IN_COMMAND) : undefined}
+                command={props.agents.claudeLoginCommand}
+                copied={copied === props.agents.claudeLoginCommand}
+                onCopy={props.desktopApi?.copyText ? () => copy(props.agents.claudeLoginCommand) : undefined}
               />
             </>
           ) : (
