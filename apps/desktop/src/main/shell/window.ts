@@ -1,3 +1,4 @@
+import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
 import { readRendererListingDiagnostics, setRendererListingDiagnosticsEnabled } from "../diagnostics/renderer-listing-diagnostics";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import {
@@ -474,6 +475,7 @@ export function createMainWindow(options?: {
       // same path.
       additionalArguments: [
         ...themedWindowAdditionalArguments(appearance),
+        ...(!options?.federationTarget && getResourceCheckoutService() ? ["--pwragent-resource-checkouts"] : []),
         ...navigationPreferencesAdditionalArguments(navigationPreferences),
         // The rail/sidebar must be right at first paint, like the lens above:
         // correcting them from the settings snapshot reflows the transcript by

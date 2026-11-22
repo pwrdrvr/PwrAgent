@@ -1,3 +1,6 @@
+import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
+import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
+import { disposeResourceCheckouts, initializeResourceCheckouts } from "./resource-checkouts/checkout-runtime";
 import { createDesktopBackendRegistry } from "./app-server/backend-registry-wiring";
 import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { createResearchOwnerIdentity } from "./research/research-owner-identity";
@@ -109,6 +112,7 @@ export interface OwnerStartOptions {
     closeAppServerIpc?: () => Promise<void>;
     observer?: Parameters<typeof createShutdownBarrier>[0]["observer"];
   };
+  approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
   onStateInitialized?: (state: ReturnType<typeof initializeDesktopState>) => void;
 }
 
@@ -437,6 +441,19 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     });
   }
   const federationRuntime = initializeDesktopFederationRuntime();
+  const resourceCheckouts = bootMode === "active-profile"
+    ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts, host.application.isPackaged)
+    : undefined;
+  if (resourceCheckouts) registry.setResourceCheckoutHandler(
+    createResourceCheckoutToolHandler(
+      resourceCheckouts,
+      (context, resourceId, key, continuation) => service.registerResourceCheckoutContinuation(context, resourceId, key, continuation),
+      (context, { instanceId, ...target }, prompt, bind) => registry.sendResourceCheckoutHandoff(context, {
+        ...target, ...(instanceId === resourceCheckouts.handoffInstanceId() ? {} : { instanceId }),
+      }, prompt, bind),
+    ),
+    (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+  );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({
       authorize: (context, phase) => registry.canManagePwrAgent(context, false, phase === "accepted"),
@@ -793,7 +810,7 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
-    queues,
+    queues, resourceCheckouts,
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
       if (previousProviderDefaults) {
@@ -918,6 +935,8 @@ export async function disposeOwnerServices(source: string, remainingTimeoutMs?: 
   ownerShutdownStarted = true;
   mainProcessShutdownPromise ??= (async () => {
     disposeDesktopAutomationService();
+    const checkoutShutdown = disposeResourceCheckouts(remainingTimeoutMs === undefined ? undefined : Math.min(2_000, remainingTimeoutMs))
+      .catch((error: unknown) => mainLog.warn("checkout shutdown failed", { error: String(error) }));
     if (shutdownOwner) {
       await shutdownOwner(source, remainingTimeoutMs);
     } else {
@@ -930,6 +949,7 @@ export async function disposeOwnerServices(source: string, remainingTimeoutMs?: 
     }
     // Keep the scheduler subscribed until registry shutdown drains accepted work.
     disposeScheduledThreadActionService();
+    await checkoutShutdown;
     disposeDesktopSettingsService();
     getExistingRuntimeLeaseManager()?.markExited();
     stopProfileRuntimeHeartbeatRefresh();

@@ -181,6 +181,15 @@ const AutomationRunWindow = lazy(async () => ({
 const StarMapWindow = lazy(async () => ({
   default: (await import("./features/star-map/StarMapWindow")).StarMapWindow,
 }));
+// Development builds only: the Resources screen over invented fixture data
+// and a simulated authority. `import.meta.env.DEV` is a build-time constant,
+// so production bundles drop this route and its chunk entirely.
+const ResourcesPreviewWindow = import.meta.env.DEV
+  ? lazy(async () => ({
+    default: (await import("./features/resources/preview/ResourcesPreviewWindow"))
+      .ResourcesPreviewWindow,
+  }))
+  : null;
 
 /**
  * Routes recognized by `chooseRoot` below. The Messaging Activity
@@ -248,6 +257,12 @@ const routes: Array<{
     match: (hash) => hash.startsWith("automation-run/"),
     render: () => <AutomationRunWindow />,
   },
+  ...(ResourcesPreviewWindow
+    ? [{
+      match: (hash: string) => hash === "resources-preview",
+      render: () => <ResourcesPreviewWindow />,
+    }]
+    : []),
 ];
 
 function chooseRoot(): ReactElement {

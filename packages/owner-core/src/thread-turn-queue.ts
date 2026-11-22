@@ -212,6 +212,8 @@ export type ThreadTurnQueueLifecycleEvent =
 export type ThreadTurnQueueOptions = {
   /** Refuse new work synchronously before queue mutation during shutdown. */
   isAdmissionHeld?: () => boolean;
+  /** Revalidate owner-generated inputs after claiming the delivery and before the provider call. */
+  prepareInput?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueEntry["input"]> | undefined;
   startTurn: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult>;
   canSteerThread?: (entry: ThreadTurnQueueEntry) => boolean;
   steerTurn?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult | "retry" | undefined>;
@@ -1412,7 +1414,9 @@ export class ThreadTurnQueue {
         for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
         let delivered = false;
         try {
-          const result = await this.options.steerTurn(next);
+          const refreshed = this.prepareDeliveryMembers(members);
+          const deliveryMembers = refreshed ? await refreshed : members;
+          const result = await this.options.steerTurn(refreshed ? combineQueuedDelivery(deliveryMembers) : next);
           const admission = this.admissions.get(key);
           if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
@@ -1430,7 +1434,7 @@ export class ThreadTurnQueue {
           for (const member of members) this.rememberAdmittedEntry({ entryId: member.id, turnId: result.turnId });
           delivered = true;
           accepted = true;
-          await this.emitForMembers(members, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
+          await this.emitForMembers(deliveryMembers, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
           return "started";
         } finally {
           this.applyAdmission(key, { type: "settle", attempt });
@@ -1496,6 +1500,17 @@ export class ThreadTurnQueue {
     }
   }
 
+  private prepareDeliveryMembers(members: readonly ThreadTurnQueueEntry[]): Promise<ThreadTurnQueueEntry[]> | undefined {
+    const prepare = this.options.prepareInput;
+    if (!prepare) return undefined;
+    const inputs = members.map(prepare);
+    if (!inputs.some(Boolean)) return undefined;
+    return Promise.all(members.map(async (member, index) => {
+      const input = inputs[index];
+      return input ? { ...member, input: await input } : member;
+    }));
+  }
+
   private async startEntry(
     entry: ThreadTurnQueueEntry,
     options?: {
@@ -1511,14 +1526,18 @@ export class ThreadTurnQueue {
     for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
     let accepted: ThreadTurnQueueStartResult | undefined;
     try {
-      const result = await this.options.startTurn(entry);
+      const refreshed = this.prepareDeliveryMembers(members);
+      const deliveryMembers = refreshed ? await refreshed : members;
+      const delivery = refreshed ? combineQueuedDelivery(deliveryMembers) : entry;
+      const result = await this.options.startTurn(delivery);
       accepted = result;
       const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
       if (admission.phase !== "acknowledged" || admission.attempt !== attempt) return result;
       // Completion may precede the acknowledgement. Publish start then terminal,
       // without resurrecting a running entry for the already completed turn.
       if (!admission.terminal) {
-        this.runningEntries.set(key, { entry, turnId: result.turnId, ...(members.length > 1 ? { members } : {}) });
+        this.runningEntries.set(key, { entry: delivery, turnId: result.turnId,
+          ...(members.length > 1 ? { members: deliveryMembers } : {}) });
       }
       for (const member of members) {
         this.rememberAdmittedEntry({
@@ -1527,7 +1546,7 @@ export class ThreadTurnQueue {
         });
       }
       try {
-        await this.emitForMembers(members, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
+        await this.emitForMembers(deliveryMembers, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
       } finally {
         // A terminal buffered during native submission/publication still owns
         // completion even when the started observer rejects.

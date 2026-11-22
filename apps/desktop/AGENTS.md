@@ -162,6 +162,13 @@ chips, density rules, X-ray, or density previews, read
 changing a dialog, menu, select, popup, or audited surface, or extending the
 audit, read [docs/accessibility.md](docs/accessibility.md#accessibility).
 
+## Resource Checkouts UI
+
+The Resources screen reads checkout state only through
+`ResourceCheckoutsSource` and never shows preview fixtures as live data.
+Before wiring it to main, changing its contract, or changing its rules, read
+[docs/resource-checkouts-ui.md](docs/resource-checkouts-ui.md).
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read

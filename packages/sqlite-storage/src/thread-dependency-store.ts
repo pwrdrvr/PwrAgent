@@ -210,6 +210,10 @@ export class ThreadDependencyStore {
   } {
     return this.db.transaction(() => {
       if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
+      if (candidate.conditions[0]?.resourceCheckout) {
+        const existing = this.get(candidate.backend, candidate.threadId, candidate.id);
+        if (existing) return { dependency: existing, superseded: [] };
+      }
       const file = candidate.conditions[0]?.localFile;
       if (file) {
         // A marker can remain on disk indefinitely. Re-registering the same

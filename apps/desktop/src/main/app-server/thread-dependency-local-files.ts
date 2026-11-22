@@ -87,26 +87,35 @@ export async function readLocalFile(file: ThreadDependencyLocalFile): Promise<"r
 export class LocalFilePoller {
   private timer?: NodeJS.Timeout;
   private checking = false;
+  private immediateRequested = false;
   private disposed = false;
 
   constructor(private readonly options: {
     hasPending: () => boolean;
     check: () => Promise<void>;
     onError: (error: unknown) => void;
+    intervalMs?: number;
   }) {}
 
-  sync(delay = LOCAL_FILE_CHECK_INTERVAL_MS): void {
-    if (this.disposed || this.checking) return;
+  sync(delay = this.options.intervalMs ?? LOCAL_FILE_CHECK_INTERVAL_MS): void {
+    if (this.disposed) return;
+    if (this.checking) {
+      if (delay === 0) this.immediateRequested = true;
+      return;
+    }
     if (!this.options.hasPending()) {
       this.clear();
       return;
     }
+    if (delay === 0) this.clear();
     this.timer ??= setTimeout(() => {
       this.timer = undefined;
       this.checking = true;
       void this.options.check().catch(this.options.onError).finally(() => {
         this.checking = false;
-        this.sync();
+        const next = this.immediateRequested ? 0 : undefined;
+        this.immediateRequested = false;
+        this.sync(next);
       });
     }, delay);
     this.timer.unref();

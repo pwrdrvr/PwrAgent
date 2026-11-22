@@ -91,6 +91,12 @@ import type {
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared/contracts/operator-requests";
 import type {
+  ResourceCheckoutActionRequest,
+  ResourceCheckoutActionResult,
+  ResourceCheckoutsChangedEvent,
+  ResourceCheckoutsSnapshot,
+} from "@pwragent/shared/contracts/resource-checkouts";
+import type {
   ReadUsageActivityRequest,
   ReadUsageActivityResponse,
   AnalyzeUsageActivityRequest,
@@ -1448,6 +1454,19 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onOperatorRequestsChanged?: (
     callback: (event: OperatorRequestsChangedEvent) => void,
   ) => () => void;
+  /**
+   * Resource checkouts. Not served yet: the Resources screen and its entry
+   * points stay hidden until all three exist. See
+   * apps/desktop/docs/resource-checkouts-ui.md for the contract.
+   */
+  readResourceCheckouts?: () => Promise<ResourceCheckoutsSnapshot>;
+  /** Marker event; re-read with `readResourceCheckouts`. */
+  onResourceCheckoutsChanged?: (
+    callback: (event: ResourceCheckoutsChangedEvent) => void,
+  ) => () => void;
+  performResourceCheckoutAction?: (
+    request: ResourceCheckoutActionRequest,
+  ) => Promise<ResourceCheckoutActionResult>;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
     consumerId?: string,

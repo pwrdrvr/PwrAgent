@@ -1,3 +1,4 @@
+import { buildResourceCheckoutToolDefinitions, type CheckoutToolHandler } from "./pwragent-resource-checkout-agent-tools";
 import type { ForgeReadHandler } from "./pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler } from "./pwragent-forge-pr-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
@@ -87,6 +88,7 @@ export function resolveAgentToolCatalogs(params: {
   threadTodoHandler?: PwrAgentThreadTodoHandler;
   openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   researchHandler?: ResearchAgentHandler;
+  checkoutHandler?: CheckoutToolHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -117,6 +119,7 @@ export function resolveAgentToolCatalogs(params: {
       ...buildPwrAgentThreadOrchestrationToolDefinitions(
         params.threadOrchestrationHandler,
       ),
+      ...buildResourceCheckoutToolDefinitions(options?.taskMonitorRole === "monitor" ? undefined : params.checkoutHandler),
       ...buildResearchToolDefinitions(options?.taskMonitorRole === "monitor" ? undefined : params.researchHandler),
       ...buildPwrAgentTaskMonitorToolDefinitions(
         params.taskMonitorHandler,

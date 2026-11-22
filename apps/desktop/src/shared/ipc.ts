@@ -272,6 +272,10 @@ export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
 export const THREAD_TODOS_SNAPSHOT_CHANNEL = "thread-todos:snapshot";
 /** One revision of change to the window's open cards. */
 export const THREAD_TODOS_DELTA_EVENT_CHANNEL = "thread-todos:delta";
+export const RESOURCE_CHECKOUTS_READ_CHANNEL = "resource-checkouts:read";
+export const RESOURCE_CHECKOUTS_PERFORM_CHANNEL = "resource-checkouts:perform";
+export const RESOURCE_CHECKOUTS_CHANGED_CHANNEL = "resource-checkouts:changed";
+
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
 export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
 export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";

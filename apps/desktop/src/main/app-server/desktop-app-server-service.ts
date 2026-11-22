@@ -1,3 +1,4 @@
+import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { DesktopDirectoryGitStatus } from "./desktop-directory-git-status";
 import { ThreadPullRequestLookup } from "./thread-pull-request-lookup";
@@ -158,6 +159,7 @@ import {
 } from "@pwragent/shared/contracts/agent";
 import {
   type AppServerBackendKind,
+  type AppServerTurnInputItem,
   type AppServerBackendScope,
   type AppServerThreadSummary,
   type ArchiveWorktreeRequest,
@@ -1282,6 +1284,8 @@ class DesktopAppServerService {
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   /** Checks CI runs that Continue After waits on; armed only while one waits. */
   private localFilePoller: LocalFilePoller | undefined;
+  private resourceCheckoutPoller: LocalFilePoller | undefined;
+  private unsubscribeResourceCheckouts?: () => void;
   private threadDependencyCiRunPoller: ThreadDependencyCiRunPoller | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
@@ -8220,6 +8224,10 @@ class DesktopAppServerService {
     this.forgeCiClient = undefined;
     this.localFilePoller?.dispose();
     this.localFilePoller = undefined;
+    this.resourceCheckoutPoller?.dispose();
+    this.resourceCheckoutPoller = undefined;
+    this.unsubscribeResourceCheckouts?.();
+    this.unsubscribeResourceCheckouts = undefined;
     this.threadDependencyCiRunPoller?.dispose();
     this.threadDependencyCiRunPoller = undefined;
     this.prPollingScheduler?.stop();
@@ -8376,6 +8384,19 @@ class DesktopAppServerService {
         authorizeLocalFile: async ({ backend, threadId }, file) => authorizeLocalFile(
           await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(backend, threadId), file),
         readLocalFile,
+        observeResourceCheckout: async (dependency) => {
+          const service = getResourceCheckoutService();
+          const checkout = dependency.conditions[0]?.resourceCheckout;
+          if (!service || !checkout) return undefined;
+          const actor = service.threadActor(dependency.backend, dependency.threadId);
+          const status = await service.status(actor, checkout.resourceId, checkout.requestKey).catch(() => undefined);
+          if (!status || status.receipt.outcome !== "queued" || status.state === "queued") return undefined;
+          if (status.state === "granted") return {
+            state: "satisfied",
+            reason: `Allocation ${status.allocationId}, generation ${status.generation}, authority epoch ${status.authorityEpoch}.`,
+          };
+          return { state: "failed", reason: "The promoted checkout is no longer available to this thread." };
+        },
         canClaimLocalFileWake: () => getDesktopBackendRegistry().tryAcquireThreadOwnership(),
         readCiRun: async (url) => await this.readDependencyCiRun(url),
         ciRunUrlOptions: () => this.ciRunUrlOptions(),
@@ -8403,7 +8424,7 @@ class DesktopAppServerService {
         // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
           && !getDesktopBackendRegistry().isRestartGateClosed?.()
-          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done" || condition.when === "compaction_completed" || condition.when === "local_file")
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done" || condition.when === "compaction_completed" || condition.when === "local_file" || condition.when === "resource_checkout")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
@@ -8411,6 +8432,9 @@ class DesktopAppServerService {
           // After close() the poller is gone; a late change must not rebuild it.
           if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
           if (dependency.conditions.some((condition) => condition.localFile)) this.syncLocalFileChecks();
+          if (dependency.conditions.some((condition) => condition.resourceCheckout)) {
+            this.syncResourceCheckoutChecks(dependency.status === "waiting" ? 0 : undefined);
+          }
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
           for (const target of [dependency, ...dependency.conditions.filter(isThreadDependencyLocalThreadCondition)]) {
@@ -8428,6 +8452,27 @@ class DesktopAppServerService {
     return this.threadDependencyCoordinator;
   }
 
+  async prepareResourceCheckoutWakeup(entry: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }, id: string): Promise<AppServerTurnInputItem[]> {
+    const text = await this.getThreadDependencyCoordinator().resourceCheckoutDeliveryText(entry, id);
+    return text ? [{ type: "text", text }] : entry.input;
+  }
+
+  async registerResourceCheckoutContinuation(
+    context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
+    resourceId: string,
+    requestKey: string,
+    continuation: string,
+  ): Promise<ManageThreadDependenciesResponse> {
+    return await this.getThreadDependencyCoordinator().manage({
+      action: "create", backend: context.backend, threadId: context.threadId, continuation,
+      conditions: [{ backend: context.backend, threadId: "", when: "resource_checkout", resourceCheckout: { resourceId, requestKey } }],
+    }, await getDesktopBackendRegistry().readCausalMessagingContext(context), "owner:resource-checkout");
+  }
+
   private syncLocalFileChecks(delay?: number): void {
     if (!this.ownerNavigationActive) return;
     const coordinator = this.getThreadDependencyCoordinator();
@@ -8437,6 +8482,19 @@ class DesktopAppServerService {
       onError: (error) => appServerLog.warn("Local watcher check failed", { error: String(error) }),
     });
     this.localFilePoller.sync(delay);
+  }
+
+  private syncResourceCheckoutChecks(delay?: number): void {
+    if (!this.ownerNavigationActive) return;
+    const coordinator = this.getThreadDependencyCoordinator();
+    this.resourceCheckoutPoller ??= new LocalFilePoller({
+      intervalMs: 500,
+      hasPending: () => coordinator.hasPendingResourceCheckouts(),
+      check: () => coordinator.checkResourceCheckouts(),
+      onError: (error) => appServerLog.warn("Resource checkout check failed", { error: String(error) }),
+    });
+    this.unsubscribeResourceCheckouts ??= getResourceCheckoutService()?.subscribe(() => this.syncResourceCheckoutChecks(0));
+    this.resourceCheckoutPoller.sync(delay);
   }
 
   /**
@@ -8703,6 +8761,7 @@ class DesktopAppServerService {
     await this.getThreadDependencyCoordinator().reconcile();
     this.getThreadDependencyCiRunPoller().sync();
     this.syncLocalFileChecks(0);
+    this.syncResourceCheckoutChecks(0);
   }
 
   /**

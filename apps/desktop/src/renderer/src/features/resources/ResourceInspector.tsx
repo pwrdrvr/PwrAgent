@@ -1,0 +1,449 @@
+import type { ReactElement, ReactNode } from "react";
+import type {
+  ResourceAllocation,
+  ResourceAllocationState,
+  ResourceHolder,
+  ResourceReadinessState,
+  ResourceThreadRef,
+} from "@pwragent/shared/contracts/resource-checkouts";
+import { ConditionGlyph, ResourceConditionChip, StatusDot, type StatusDotTone } from "./ResourceConditionChip";
+import { ResourceActionButton } from "./ResourceActionButton";
+import {
+  capacitySummary,
+  conditionChipLabel,
+  DEADLINE_SOON_MS,
+  formatAge,
+  formatDeadline,
+  formatDuration,
+  holderLabel,
+  presentCondition,
+  resourceActions,
+  type PresentedResource,
+  type ResourceActionDescriptor,
+} from "./resource-view-model";
+
+/** The header controls group recovery steps behind one Recover control. */
+export type ResourceInspectorIntent =
+  | { kind: "action"; action: ResourceActionDescriptor }
+  | { kind: "recover" }
+  | { kind: "resolve" };
+
+const LIFECYCLE: ReadonlyArray<ResourceAllocationState | "queued" | "released"> = [
+  "queued",
+  "granted",
+  "preparing",
+  "active",
+  "draining",
+  "released",
+];
+
+const READINESS_DOT: Record<ResourceReadinessState, StatusDotTone> = {
+  ok: "ok",
+  warning: "warn",
+  failing: "err",
+  needs_operator: "warn",
+  unknown: "off",
+};
+
+const AUTHORITY_KIND_LABEL = {
+  machine_broker: "Machine broker",
+  federation_coordinator: "Federation coordinator",
+  cloud_coordinator: "Cloud coordinator",
+} as const;
+
+export function ResourceInspector(props: {
+  item: PresentedResource | undefined;
+  now: number;
+  busyKind: string | undefined;
+  onIntent: (intent: ResourceInspectorIntent) => void;
+  onOpenThread: (thread: ResourceThreadRef) => void;
+}): ReactElement {
+  const item = props.item;
+  if (!item) {
+    return (
+      <aside aria-label="Resource detail" className="resources-inspector resources-inspector--empty">
+        <p>Select a resource to see its holder, queue and instructions.</p>
+      </aside>
+    );
+  }
+  const { resource, authority, condition } = item;
+  const actions = resourceActions(resource, authority);
+  const recoveryActions = actions.filter((action) =>
+    action.kind === "fence" || action.kind === "verify_cleanup" || action.kind === "administrative_release");
+  const headerActions = actions.filter((action) => !recoveryActions.includes(action) && action.kind !== "resolve_ownership");
+  const resolve = actions.find((action) => action.kind === "resolve_ownership");
+  const recoverGate = recoveryActions.some((action) => action.gate.allowed)
+    ? { allowed: true as const }
+    : recoveryActions[0]?.gate;
+  const counted = capacitySummary(resource);
+
+  return (
+    <aside aria-labelledby="resources-inspector-title" className="resources-inspector">
+      <header className="resources-inspector__head">
+        <div className="resources-inspector__title-row">
+          <div className="resources-inspector__title">
+            <h3 id="resources-inspector-title">{resource.displayName}</h3>
+            <span className="resources-mono resources-inspector__key">{resource.canonicalKey}</span>
+          </div>
+          <ResourceConditionChip condition={condition} label={conditionChipLabel(resource, condition)} />
+        </div>
+        <div className="resources-inspector__actions">
+          {headerActions.map((action) => (
+            <ResourceActionButton
+              key={action.kind}
+              busy={props.busyKind === action.kind}
+              emphasis={action.emphasis}
+              gate={action.gate}
+              testId={`resources-action-${action.kind}`}
+              onClick={() => props.onIntent({ kind: "action", action })}
+            >
+              {action.label}
+            </ResourceActionButton>
+          ))}
+        </div>
+      </header>
+
+      <div aria-label="Checkout details" className="resources-inspector__body" role="region" tabIndex={0}>
+        <StateCallout
+          item={item}
+          now={props.now}
+          recover={recoverGate ? (
+            <ResourceActionButton emphasis="danger" gate={recoverGate} testId="resources-action-recover" onClick={() => props.onIntent({ kind: "recover" })}>
+              Recover…
+            </ResourceActionButton>
+          ) : null}
+          resolve={resolve ? (
+            <ResourceActionButton emphasis="danger" gate={resolve.gate} testId="resources-action-resolve" onClick={() => props.onIntent({ kind: "resolve" })}>
+              Resolve ownership…
+            </ResourceActionButton>
+          ) : null}
+        />
+
+        <Section title="Holder" aside={counted ?? (resource.sharing.mode === "exclusive" ? "Exclusive" : undefined)}>
+          {resource.allocations.length === 0 ? (
+            <p className="resources-note">
+              {resource.admission?.state === "paused" ? "Granted next when conflicting jobs finish." : "Not checked out."}
+            </p>
+          ) : (
+            resource.allocations.map((allocation) => (
+              <AllocationDetail
+                key={allocation.allocationId}
+                allocation={allocation}
+                now={props.now}
+                onOpenThread={props.onOpenThread}
+              />
+            ))
+          )}
+        </Section>
+
+        <Section title="Queue" aside="First in, first out">
+          {resource.queue.length === 0 ? (
+            <p className="resources-note">Nobody is waiting.</p>
+          ) : (
+            <ol className="resources-queue">
+              {resource.queue.map((entry) => (
+                <li key={entry.queueEntryId} className={entry.viewerOwns ? "is-mine" : undefined}>
+                  <span className="resources-queue__pos resources-mono">#{entry.position}</span>
+                  <span className="resources-queue__who">
+                    <HolderName holder={entry.requester} onOpenThread={props.onOpenThread} />
+                    <span className="resources-row__meta">
+                      {entry.purpose}
+                      {entry.expectedDurationMs ? ` · ${formatDuration(entry.expectedDurationMs)}` : ""}
+                      {` · waiting ${formatAge(entry.requestedAt, props.now)}`}
+                      {entry.eligibility.eligible ? "" : ` · ${entry.eligibility.reason}`}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Section>
+
+        <Section title="Readiness">
+          <ul className="resources-facts">
+            {resource.readiness.map((check) => (
+              <li key={check.checkId}>
+                <StatusDot tone={READINESS_DOT[check.state]} />
+                <span className="resources-facts__what">
+                  <span>
+                    {check.label}
+                    {check.state === "needs_operator" ? <span className="resources-flag">Needs you</span> : null}
+                  </span>
+                  <span className="resources-row__meta">
+                    {check.detail}
+                    {check.advisory ? " · advisory" : ""}
+                  </span>
+                </span>
+                <span className="resources-facts__tag resources-mono">
+                  {check.observedAt === undefined ? "" : formatAge(check.observedAt, props.now)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+
+        <Section title="Instructions" aside={resource.instructions ? `rev ${resource.instructions.revision}` : undefined}>
+          {resource.instructions ? (
+            <>
+              <p className="resources-instructions">{resource.instructions.excerpt}</p>
+              <p className="resources-note">
+                {resource.instructions.sourceLabel}. Instructions can't change permissions, limits or ownership.
+              </p>
+            </>
+          ) : (
+            <p className="resources-note">No instructions attached.</p>
+          )}
+        </Section>
+
+        <Section title="Authority" aside={authority ? `epoch ${authority.epoch}` : undefined}>
+          {authority ? (
+            <dl className="resources-pairs">
+              <dt>Allocator</dt>
+              <dd>{authority.label}</dd>
+              <dt>Kind</dt>
+              <dd>{AUTHORITY_KIND_LABEL[authority.kind]}</dd>
+              <dt>Endpoint</dt>
+              <dd className="resources-mono">{authority.endpointLabel}</dd>
+              <dt>Status</dt>
+              <dd>
+                {authority.status === "reachable"
+                  ? "Reachable"
+                  : authority.status === "unreachable"
+                    ? `Unreachable${authority.lastSnapshotAt ? ` · last snapshot ${formatAge(authority.lastSnapshotAt, props.now)} ago` : ""}`
+                    : "Unresolved"}
+              </dd>
+              <dt>Scope</dt>
+              <dd>{scopeLabel(resource.allocationScope)} allocation · {resource.placement === "external" ? "external capacity" : "machine-bound"}</dd>
+            </dl>
+          ) : (
+            <p className="resources-note">No authority is bound while ownership is unresolved.</p>
+          )}
+        </Section>
+
+        <Section title="Cleanup and recovery">
+          <dl className="resources-pairs">
+            <dt>At release</dt>
+            <dd>{resource.policy.finalEffect}</dd>
+            <dt>Last cleanup</dt>
+            <dd>{resource.cleanup.detail}</dd>
+            {resource.recovery ? (
+              <>
+                <dt>Fencing</dt>
+                <dd>{resource.recovery.fencing === "verified" ? "Verified" : "Not verified"}</dd>
+                <dt>Evidence</dt>
+                <dd>
+                  <ul className="resources-evidence">
+                    {resource.recovery.evidence.map((line) => <li key={line}>{line}</li>)}
+                  </ul>
+                </dd>
+              </>
+            ) : null}
+          </dl>
+        </Section>
+
+        <Section title="Policy">
+          <dl className="resources-pairs">
+            <dt>Who can use</dt>
+            <dd>{resource.policy.useScope}</dd>
+            <dt>Who can manage</dt>
+            <dd>{resource.policy.manageScope}</dd>
+            <dt>Max hold</dt>
+            <dd>
+              {resource.policy.maxHoldMs ? formatDuration(resource.policy.maxHoldMs) : "No limit"}
+              {` · ${resource.policy.renewalRule}`}
+            </dd>
+            <dt>Cost ceiling</dt>
+            <dd>{resource.policy.costCeilingLabel ?? "None"}</dd>
+            <dt>Enforcement</dt>
+            <dd>{resource.enforcement.summary}</dd>
+          </dl>
+        </Section>
+
+        <Section title="Definition" aside={`rev ${resource.definition.revision}`}>
+          <dl className="resources-pairs">
+            <dt>Status</dt>
+            <dd>{publicationLabel(resource.definition.publication)}</dd>
+            <dt>Updated</dt>
+            <dd>{formatAge(resource.definition.updatedAt, props.now)} ago</dd>
+            {resource.aliases.length ? (
+              <>
+                <dt>Aliases</dt>
+                <dd>{resource.aliases.join(", ")}</dd>
+              </>
+            ) : null}
+          </dl>
+        </Section>
+      </div>
+    </aside>
+  );
+}
+
+function Section(props: { title: string; aside?: string; children: ReactNode }): ReactElement {
+  return (
+    <section className="resources-section">
+      <h4 className="resources-kicker resources-section__title">
+        <span>{props.title}</span>
+        {props.aside ? <span className="resources-section__aside">{props.aside}</span> : null}
+      </h4>
+      {props.children}
+    </section>
+  );
+}
+
+function StateCallout(props: {
+  item: PresentedResource;
+  now: number;
+  recover: ReactNode;
+  resolve: ReactNode;
+}): ReactElement | null {
+  const { resource, authority, condition } = props.item;
+  const presentation = presentCondition(condition);
+  let title: string | undefined;
+  let body: ReactNode;
+  let action: ReactNode = null;
+  let tone: "warn" | "danger" | "muted" | "plain" = "plain";
+  switch (condition) {
+    case "waiting_interactive":
+      title = "Waiting for an interactive session";
+      body = resource.conditionDetail ?? presentation.meaning;
+      tone = "warn";
+      break;
+    case "unreachable": {
+      const holder = resource.allocations[0];
+      title = authority ? `${authority.label} unreachable` : "Authority unreachable";
+      body = (
+        <>
+          {authority?.lastSnapshotAt
+            ? `Showing the snapshot from ${formatAge(authority.lastSnapshotAt, props.now)} ago. `
+            : "No snapshot is available. "}
+          It can't grant or queue work, and no other authority takes over automatically.
+          {holder ? ` The last known holder may continue until its lease ends (${formatDeadline(holder.deadlineAt, props.now)}).` : ""}
+        </>
+      );
+      tone = "muted";
+      break;
+    }
+    case "ownership_unresolved":
+      title = "Ownership unresolved";
+      body = resource.ownershipConflict?.reason ?? resource.conditionDetail ?? presentation.meaning;
+      action = props.resolve;
+      tone = "danger";
+      break;
+    case "recovery_required":
+      title = "Recovery required";
+      body = `${resource.recovery?.reason ?? presentation.meaning} The resource stays reserved and the next waiter isn't woken.`;
+      action = props.recover;
+      tone = "danger";
+      break;
+    case "draining":
+      title = "Draining";
+      body = "Owned work is stopping and cleanup is being verified. The next waiter is woken after verification.";
+      break;
+    case "pending_registration":
+      title = "Pending registration";
+      body = "Saved on this instance. Other instances can't see or request it until the registry confirms the definition.";
+      tone = "muted";
+      break;
+    default:
+      if (resource.admission?.state === "paused") {
+        title = "Admission paused";
+        body = resource.admission.detail;
+      }
+  }
+  if (!title) return null;
+  return (
+    <div className={`resources-callout resources-callout--${tone}`} role="note">
+      <ConditionGlyph tone={presentation.tone} />
+      <div>
+        <p className="resources-callout__title">{title}</p>
+        <p className="resources-callout__body">{body}</p>
+        {action ? <div className="resources-callout__actions">{action}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function AllocationDetail(props: {
+  allocation: ResourceAllocation;
+  now: number;
+  onOpenThread: (thread: ResourceThreadRef) => void;
+}): ReactElement {
+  const { allocation } = props;
+  const inRecovery = allocation.state === "recovery_required";
+  const at = LIFECYCLE.indexOf(allocation.state);
+  const soon = allocation.deadlineAt - props.now < DEADLINE_SOON_MS;
+  return (
+    <div className="resources-allocation">
+      <ol aria-label={`Checkout state: ${allocation.state.replace("_", " ")}`} className="resources-lifecycle">
+        {LIFECYCLE.map((step, index) => {
+          const state = inRecovery
+            ? index <= 3 ? "done" : "todo"
+            : index < at ? "done" : index === at ? "now" : "todo";
+          return (
+            <li key={step} aria-current={state === "now" ? "step" : undefined} className={`is-${state}`}>
+              {step}
+            </li>
+          );
+        })}
+        {inRecovery ? <li aria-current="step" className="is-alert">recovery</li> : null}
+      </ol>
+      <dl className="resources-pairs">
+        <dt>Holder</dt>
+        <dd>
+          <HolderName holder={allocation.holder} onOpenThread={props.onOpenThread} />
+          {allocation.lastKnown ? <span className="resources-note"> · last known</span> : null}
+        </dd>
+        <dt>Task</dt>
+        <dd>{allocation.taskLabel}{allocation.units ? ` · ${allocation.units} ${allocation.units === 1 ? "unit" : "units"}` : ""}</dd>
+        <dt>Runs on</dt>
+        <dd>{allocation.executorLabel}</dd>
+        <dt>Deadline</dt>
+        <dd className={`resources-mono${soon ? " resources-deadline-soon" : ""}`}>
+          {formatDeadline(allocation.deadlineAt, props.now)} · renewals {allocation.renewalsUsed}/{allocation.renewalsAllowed}
+        </dd>
+        <dt>Grant</dt>
+        <dd className="resources-mono">
+          {allocation.allocationId} · g{allocation.generation} · epoch {allocation.authorityEpoch}
+        </dd>
+      </dl>
+    </div>
+  );
+}
+
+function HolderName(props: {
+  holder: ResourceHolder;
+  onOpenThread: (thread: ResourceThreadRef) => void;
+}): ReactElement {
+  if (props.holder.kind === "thread") {
+    const thread = props.holder.thread;
+    return (
+      <button className="resources-link" type="button" onClick={() => props.onOpenThread(thread)}>
+        {thread.title}
+        {thread.instanceLabel ? <span className="resources-row__meta"> · {thread.instanceLabel}</span> : null}
+      </button>
+    );
+  }
+  return <span>{holderLabel(props.holder)}</span>;
+}
+
+function scopeLabel(scope: "instance" | "machine" | "federation"): string {
+  switch (scope) {
+    case "instance":
+      return "Instance";
+    case "machine":
+      return "Machine";
+    case "federation":
+      return "Federation";
+  }
+}
+
+function publicationLabel(publication: "published" | "pending_registration" | "quarantined"): string {
+  switch (publication) {
+    case "published":
+      return "Published";
+    case "pending_registration":
+      return "Pending registration";
+    case "quarantined":
+      return "Quarantined";
+  }
+}

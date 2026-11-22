@@ -788,6 +788,40 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     // at 11px, a dashed hint box, a mono attempt aside in the menu, and a
     // history toggle that sits 4px into the card's padding. The hover card
     // adds a muted Auto-fix value.
+    test("Resources checkout surfaces have no violations", async () => {
+      const app = await launchAuditApp(appearance);
+      try {
+        const profile = app.window.getByRole("button", { name: /^Open PwrAgent profile menu:/ });
+        await profile.click();
+        await app.window.getByRole("menuitem", { name: /^Resources/ }).click();
+        const resources = app.window.getByRole("region", { name: "Resources", exact: true });
+        const inspector = resources.getByRole("complementary", { name: "This machine" });
+        await expect(inspector).toBeVisible();
+        await expect(inspector.getByText("Available", { exact: true })).toBeVisible();
+        await runAxe(app.window, "Resources and machine checkout details");
+
+        await inspector.getByTestId("resources-action-request").click();
+        const request = app.window.getByRole("dialog", { name: "Request checkout: This machine" });
+        await expect(request).toBeVisible();
+        await request.getByLabel("Purpose").fill("Accessibility audit hold");
+        await runAxe(app.window, "Request checkout dialog");
+        await request.getByRole("button", { name: "Request checkout", exact: true }).click();
+        await expect(inspector.getByText("Accessibility audit hold", { exact: true })).toBeVisible();
+        await expect(inspector.getByText("Busy", { exact: true })).toBeVisible();
+
+        await inspector.getByTestId("resources-action-release").click();
+        const release = app.window.getByRole("dialog", { name: "Release This machine?" });
+        await expect(release).toBeVisible();
+        await runAxe(app.window, "Release checkout dialog");
+        await release.getByRole("button", { name: "Release", exact: true }).click();
+        await expect(inspector.getByText("Available", { exact: true })).toBeVisible();
+        await resources.getByRole("button", { name: "Exit Resources" }).click();
+        await expect(profile).toBeFocused();
+      } finally {
+        await app.close();
+      }
+    });
+
     test("research surfaces have no violations", async () => {
       const app = await launchAuditApp({
         ...appearance,

@@ -80,9 +80,11 @@ import {
   threadGalleryImageMatches,
 } from "../thread-detail/thread-image-gallery";
 import { TranscriptList } from "../thread-detail/TranscriptList";
+import { TranscriptError } from "../thread-detail/TranscriptError";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { ActiveDecisionBatchesStrip } from "../thread-detail/ActiveDecisionBatchesStrip";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
+import { usePendingRequestControls } from "../thread-detail/usePendingRequestControls";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -312,6 +314,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     readReason: "star-map-card",
     suspended: props.active === false,
     thread,
+  });
+  const { pendingRequestError, transcriptControls } = usePendingRequestControls({
+    desktopApi,
+    thread,
+    pendingRequest: session.pendingRequest,
+    pendingUserInput: session.pendingUserInput,
+    pendingMcpInteraction: session.pendingMcpInteraction,
+    clearPendingRequest: session.clearPendingRequest,
+    updatePendingUserInput: session.updatePendingUserInput,
+    updatePendingMcpInteraction: session.updatePendingMcpInteraction,
   });
   // The session is a fresh object literal on every render of a hook that
   // re-renders per streamed delta, so any callback that closes over it
@@ -2118,7 +2130,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             threadId={thread.id}
             threadLinkSource={threadLinkSource}
             transientMessages={session.transientMessages}
+            {...transcriptControls}
           />
+          {pendingRequestError ? (
+            <TranscriptError desktopApi={desktopApi} text={pendingRequestError} />
+          ) : null}
         </div>
 
         {/* The band above the compact composer: capped and scrolling, so no

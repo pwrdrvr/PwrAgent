@@ -36,6 +36,14 @@ describe("federation host info", () => {
     );
   });
 
+  it("publishes one complete machine identity during concurrent initial startup", async () => {
+    const rootDir = makeRoot();
+    const reads = await Promise.all(Array.from({ length: 24 }, () => readOrCreateFederationMachineId({ rootDir })));
+    expect(new Set(reads).size).toBe(1);
+    expect(reads[0]).toMatch(/^mach_/);
+    expect(readFileSync(path.join(rootDir, "machine-id"), "utf8").trim()).toBe(reads[0]);
+  });
+
   it("creates the root directory when it does not exist yet", async () => {
     const rootDir = path.join(makeRoot(), "nested", "root");
 

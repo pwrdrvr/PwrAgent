@@ -331,6 +331,7 @@ export class ThreadDirectoryService {
 
   async buildForkedCodexEnvironmentRuntime(params: {
     cwd?: string;
+    owner?: { backend: AppServerBackendKind; threadId: string };
     /** Run setup in a workspace that is not a new worktree. */
     forceSetup?: boolean;
     onSetupProgress?: (
@@ -373,6 +374,7 @@ export class ThreadDirectoryService {
       env: this.host().codexEnvironmentCommandEnv,
       hydrationStore: this.codexEnvironmentHydrationStore,
       onSetupProgress,
+      owner: params.owner,
       selection: {
         environment,
         executionTarget: "local",
@@ -1155,6 +1157,7 @@ export class ThreadDirectoryService {
           cwd,
           env: this.host().codexEnvironmentCommandEnv,
           hydrationStore: this.codexEnvironmentHydrationStore,
+          owner: { backend: request.backend, threadId: request.threadId },
           onSetupProgress: (event) => onSetupProgress?.({
             ...event,
             directoryKey: `thread:${request.backend}:${request.threadId}`,
