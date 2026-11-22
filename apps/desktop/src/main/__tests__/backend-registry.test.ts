@@ -11379,6 +11379,39 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("serves cheap listings while a directory-enriched inventory is pending", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const thread: AppServerThreadSummary = {
+      id: "history", source: "codex", title: "History", titleSource: "derived", linkedDirectories: [],
+    };
+    const codexClient = new MockBackendClient({ threads: [thread] });
+    const list = codexClient.listThreads.bind(codexClient);
+    const calls = vi.spyOn(codexClient, "listThreads").mockImplementation(async (params, diagnostics) => {
+      if (params?.enrichDirectories) {
+        started.resolve();
+        await finish.promise;
+      }
+      return list(params, diagnostics);
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const enriched = registry.listThreads({ backend: "codex", enrichDirectories: true });
+    let visible: Promise<AppServerThreadSummary[]> | undefined;
+    try {
+      await started.promise;
+      visible = registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: false });
+      await vi.waitFor(() => expect(calls).toHaveBeenCalledWith(
+        expect.objectContaining({ enrichDirectories: false }), expect.objectContaining({ callerReason: "renderer-navigation-query" }),
+        expect.any(Function),
+      ));
+      expect(await visible).toMatchObject([{ id: thread.id }]);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([enriched, visible]);
+      await registry.close();
+    }
+  });
+
   it("never downgrades a known quit title for fallback or missing list rows", async () => {
     const threadId = "thread-monotonic-quit-title";
     const codexClient = new MockBackendClient({

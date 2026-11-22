@@ -73,6 +73,24 @@ export function buildFallbackLinkedDirectory(currentPath: string): LinkedDirecto
   };
 }
 
+export function buildCheckoutLinkedDirectory(repositoryPath: string, worktreePath?: string): LinkedDirectorySummary {
+  return {
+    id: toDirectoryId(repositoryPath),
+    path: toDirectoryId(repositoryPath),
+    worktreePath: worktreePath && toDirectoryId(worktreePath),
+    label: path.basename(repositoryPath) || repositoryPath,
+    kind: worktreePath ? "worktree" : "local",
+  };
+}
+
+// These inputs can make the effective checkout differ from disk discovery.
+// Leave identity to an explicit Git read when the process sets one.
+export function hasGitDiscoveryOverrides(): boolean {
+  return Object.keys(process.env).some((key) =>
+    /^(?:GIT_DIR|GIT_COMMON_DIR|GIT_WORK_TREE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_IMPLICIT_WORK_TREE|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS)$/i.test(key),
+  );
+}
+
 export async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await access(targetPath);
@@ -179,13 +197,7 @@ async function buildLinkedDirectoryFromGitMetadata(
   }
   return {
     evidence,
-    directory: {
-      id: toDirectoryId(repositoryPath),
-      path: toDirectoryId(repositoryPath),
-      worktreePath: toDirectoryId(worktreePath),
-      label: path.basename(repositoryPath) || repositoryPath,
-      kind: "worktree",
-    },
+    directory: buildCheckoutLinkedDirectory(repositoryPath, worktreePath),
   };
 }
 
@@ -285,15 +297,7 @@ export async function loadThreadDirectoryEnrichment(
     }
 
     return {
-      linkedDirectories: [
-        {
-          id: toDirectoryId(repositoryPath),
-          path: toDirectoryId(repositoryPath),
-          worktreePath: isWorktree ? toDirectoryId(currentWorktreePath) : undefined,
-          label: path.basename(repositoryPath) || repositoryPath,
-          kind: isWorktree ? "worktree" : "local",
-        },
-      ],
+      linkedDirectories: [buildCheckoutLinkedDirectory(repositoryPath, isWorktree ? currentWorktreePath : undefined)],
       observedGitBranch: observedGitBranch?.trim() || undefined,
     };
   } catch (error) {

@@ -1,7 +1,10 @@
 import path from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { createGitDirectoryObserver, type GitDirectoryObservation } from "./private/directory-observation";
 import {
-  runGit, buildFallbackLinkedDirectory, pathExists, parseGitWorktrees,
+  runGit, buildCheckoutLinkedDirectory, buildFallbackLinkedDirectory, hasGitDiscoveryOverrides,
+  pathExists, parseGitWorktrees, resolveWorktreeRepositoryDirectory,
   loadThreadDirectoryEnrichment, type ThreadDirectoryEnrichment,
 } from "./private/directory-probe";
 import {
@@ -145,3 +148,40 @@ export function createThreadDirectoryEnricher(options: { now?: () => number } = 
 
 // All production Codex clients share the same cache and in-flight work.
 export const enrichThreadDirectory = createThreadDirectoryEnricher();
+
+const observeNavigationCheckout = createGitDirectoryObserver({ navigation: true });
+const navigationCheckouts = new GitReadCache<LinkedDirectorySummary[] | undefined>({ ttlMs: 1_000 });
+
+/**
+ * Group raw provider folders for navigation using filesystem evidence alone.
+ * Existing provider or overlay relationships and live branch facts are
+ * supplied through their own reads. Ambiguous layouts retain the provider cwd
+ * until a caller requests Git-verified enrichment.
+ */
+export function readNavigationCheckoutDirectory(cwd: string): Promise<LinkedDirectorySummary[] | undefined> {
+  if (hasGitDiscoveryOverrides()) return Promise.resolve(undefined);
+  const key = path.resolve(cwd);
+  return navigationCheckouts.read(key, async () => {
+    try {
+      if (!(await stat(key)).isDirectory()) return undefined;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT" || code === "ENOTDIR" ? [] : undefined;
+    }
+    try {
+      const observed = await observeNavigationCheckout(key);
+      if (!observed?.checkoutRoot || !observed.gitDirectory) return undefined;
+      if (!observed.dotGitDirectory) {
+        const linked = await resolveWorktreeRepositoryDirectory(observed.checkoutRoot, true);
+        return linked && [linked];
+      }
+      const expected = path.join(observed.checkoutRoot, ".git");
+      if (observed.commonDirectory === expected && await realpath(expected) === expected) {
+        return [buildCheckoutLinkedDirectory(observed.checkoutRoot)];
+      }
+    } catch {
+      // Filesystem observations can race checkout moves or permission changes.
+    }
+    return undefined;
+  });
+}

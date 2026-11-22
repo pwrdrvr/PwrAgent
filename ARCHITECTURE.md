@@ -396,6 +396,14 @@ An admitted user refresh also refreshes branch/worktree inventory beneath the
 directory status cache. Automatic forced scheduling carries no user intent and
 does not spend the user allowance.
 
+Startup and visible navigation build membership from cheap provider rows and
+saved relationships. For raw Codex folders, the directory store uses bounded
+filesystem reads to group ordinary checkouts and linked worktrees. It keeps the
+provider folder when discovery is ambiguous and leaves branch verification to
+selected-thread reads. Navigation can reuse completed Git-enriched lists.
+Directory actions that require verified checkout membership request Git
+enrichment and use a separate index read.
+
 ## Thread state and lifecycle
 
 ### Runtime and refresh

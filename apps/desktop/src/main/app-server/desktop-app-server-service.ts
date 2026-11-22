@@ -2060,6 +2060,7 @@ class DesktopAppServerService {
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
+          requireVerifiedDirectories: request.query.kind === "group-members" && request.query.membershipOnly === true,
           signal: rpcOptions?.signal,
           ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
             const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
@@ -6663,6 +6664,7 @@ class DesktopAppServerService {
     const index = await loadLocalNavigationQueryIndex({
       backend: "all",
       callerReason: "settings-bulk-pr-auto-dispatch",
+      requireVerifiedDirectories: true,
     });
     if (index.coverage && index.coverage.state !== "complete") {
       throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");

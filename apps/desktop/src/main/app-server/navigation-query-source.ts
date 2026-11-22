@@ -1,4 +1,5 @@
-import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
+import path from "node:path";
+import type { AppServerBackendScope, AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
@@ -23,6 +24,8 @@ import {
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
+import { readNavigationCheckoutDirectory } from "../git-info/directory-store";
+import { collectConcurrent } from "../../shared/concurrent-work";
 
 const indexReads = new NavigationIndexReadPool(1_000);
 
@@ -107,6 +110,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   callerReason: string;
   /** List provider threads afresh rather than from the thread-list cache. */
   refreshProviders?: boolean;
+  /** Actions that use checkout membership as authority need live Git verification. */
+  requireVerifiedDirectories?: boolean;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
   /** Viewer projection shares this pass's fences, lifetime and byte budget.
@@ -123,6 +128,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
+    ...(params.requireVerifiedDirectories ? ["verified-directories"] : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
@@ -189,6 +195,36 @@ export async function loadLocalNavigationQueryIndex(params: {
   }, params.signal, version, params.viewer ? "projection" : "source");
 }
 
+async function projectNavigationCheckoutDirectories(
+  threads: AppServerThreadSummary[],
+  signal: AbortSignal,
+  checkpoint: NavigationIndexCheckpoint,
+): Promise<AppServerThreadSummary[]> {
+  const candidates = new Map<string, AppServerThreadSummary[]>();
+  for (const thread of threads) {
+    // A cheap provider row can already carry a relationship from a prior live
+    // read. Only project rows whose directory is still the raw cwd fallback.
+    if (thread.source !== "codex" || !thread.projectKey || thread.observedGitBranch || thread.linkedDirectories.length !== 1) continue;
+    const cwd = path.resolve(thread.projectKey);
+    const [directory] = thread.linkedDirectories;
+    if (!directory || path.resolve(directory.id) !== cwd || path.resolve(directory.path) !== cwd
+      || (directory.kind !== "local" && !directory.worktreePath)
+      || (directory.worktreePath && path.resolve(directory.worktreePath) !== cwd)) continue;
+    const rows = candidates.get(cwd) ?? [];
+    rows.push(thread);
+    candidates.set(cwd, rows);
+  }
+  const projected = new Map<AppServerThreadSummary, AppServerThreadSummary>();
+  await collectConcurrent([...candidates], 16, async ([cwd, rows]) => {
+    signal.throwIfAborted();
+    checkpoint();
+    const directories = await readNavigationCheckoutDirectory(cwd);
+    if (!directories) return;
+    for (const row of rows) projected.set(row, { ...row, linkedDirectories: directories });
+  });
+  return threads.map((thread) => projected.get(thread) ?? thread);
+}
+
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
 let directorySetAnnouncer: NavigationDirectorySetAnnouncer | undefined;
 
@@ -226,6 +262,7 @@ async function buildLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
   refreshProviders?: boolean;
+  requireVerifiedDirectories?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
   checkpoint: NavigationIndexCheckpoint;
@@ -239,16 +276,20 @@ async function buildLocalNavigationQueryIndex(params: {
     registry.listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: params.callerReason,
-      enrichDirectories: true,
+      enrichDirectories: params.requireVerifiedDirectories === true,
       ...(params.refreshProviders ? { forceRefresh: true } : {}),
     }));
   params.signal?.throwIfAborted();
   // An overtaken scan whose follow-up already has readers hands them over
   // here instead of spending CPU on a projection nobody would keep.
   params.checkpoint();
+  const threadsWithDirectories = params.requireVerifiedDirectories
+    ? listedThreads
+    : await projectNavigationCheckoutDirectories(listedThreads, params.signal, params.checkpoint);
+  params.signal.throwIfAborted();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
-    threads: listedThreads,
+    threads: threadsWithDirectories,
     workspaceRoots: resolveScratchProjectsRoots(),
   });
   params.signal?.throwIfAborted();

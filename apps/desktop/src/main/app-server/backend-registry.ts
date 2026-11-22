@@ -16377,13 +16377,14 @@ export class DesktopBackendRegistry {
     }
 
     // Directory-enriched rows include the summary data requested by cheap
-    // consumers. Reuse the same pending or completed provider observation;
-    // the reverse direction cannot supply missing directory relationships.
+    // consumers. A navigation inventory can reuse a finished observation
+    // without joining a pending checkout scan started by another caller.
     const enrichedKey = this.buildThreadListCacheKey({
       ...params,
       enrichDirectories: true,
     });
-    return this.readFreshThreadListCache(enrichedKey, now, "navigation-shared");
+    const enriched = this.readFreshThreadListCache(enrichedKey, now, "navigation-shared");
+    return enriched?.pending ? undefined : enriched;
   }
 
   private readFreshThreadListCache(

@@ -45,7 +45,7 @@ export async function removeLocalNavigationDirectory(
   let members: ArchiveThreadRequest[] = [];
   let checkoutProject = false;
   try {
-    const index = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory" });
+    const index = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory", requireVerifiedDirectories: true });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
     if (changedDuringRead) throw new Error("Owner state changed during the directory check. Refresh navigation and try again.");
     if (Object.values(index.directoryCaseAliases ?? {}).some((aliases) => aliases.includes(request.directoryKey))) {
@@ -122,7 +122,7 @@ export async function markLocalNavigationDirectorySeen(
   });
   let changedCount: number;
   try {
-    const index = await loadLocalNavigationQueryIndex({ callerReason: "mark-navigation-directory-seen" });
+    const index = await loadLocalNavigationQueryIndex({ callerReason: "mark-navigation-directory-seen", requireVerifiedDirectories: true });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
     if (changedDuringRead) {
       throw new Error(`Owner state changed during the directory check (${changedDuringRead}). Refresh navigation and try again.`);
