@@ -22,6 +22,7 @@ type FixtureProps = {
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   attentionPromoteOnTurnEnd?: boolean;
+  attentionScope?: ComponentProps<typeof Sidebar>["attentionScope"];
   pinnedThreadsOnTop?: boolean;
   draftThreadKeys?: Record<string, boolean>;
 };
