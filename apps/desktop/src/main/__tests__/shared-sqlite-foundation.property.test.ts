@@ -19,7 +19,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // recovery and automatic wake guards, research, request-pricing, sub-agent dismissal,
   // operator-request scope, pricing summary, gate pricing, usage completion,
   // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
-  // action projections and targeted managed membership.
+  // action projections, targeted managed membership, and lifetime automation cost.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
@@ -49,6 +49,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_gate_usage_turn"
     && row.name !== "idx_thread_usage_lines_completion_turn"
     && row.name !== "idx_automation_runs_backend_turn"
+    && row.tbl_name !== "automation_pruned_run_costs"
     && row.name !== "idx_pr_status_watches_retry"
     && row.name !== "idx_pr_status_watches_history"
     && row.name !== "thread_pricing_summary_delta_insert"
@@ -65,6 +66,10 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
         return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
       case "thread_pricing_summaries":
         return { ...row, sql: row.sql?.replace(", ledger_delta_ready INTEGER NOT NULL DEFAULT 0", "") };
+      case "automations":
+        return { ...row, sql: row.sql?.replace(", cost_since INTEGER, total_cost_micros INTEGER", "") };
+      case "automation_runs":
+        return { ...row, sql: row.sql?.replace(", accounted_cost_micros INTEGER", "") };
       case "idx_thread_usage_lines_turn":
         return {
           ...row,
