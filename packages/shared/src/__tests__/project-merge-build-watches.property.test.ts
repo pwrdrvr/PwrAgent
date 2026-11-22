@@ -13,10 +13,11 @@ const automationArb: fc.Arbitrary<ProjectForgeAutomation | undefined> = fc.optio
   autoFixMergeConflicts: fc.boolean(),
   autoFixCiFailures: fc.boolean(),
   prWatches: fc.boolean(),
+  prOffers: fc.boolean(),
   refuseThreadMessages: fc.boolean(),
   wakeupPolicy: fc.constantFrom("hold" as const, "discard" as const),
   mergeBuildWatches: fc.constantFrom(undefined, "default" as const, "on" as const, "off" as const),
-}, { requiredKeys: ["paused", "autoFixMergeConflicts", "autoFixCiFailures", "prWatches", "refuseThreadMessages", "wakeupPolicy"] }),
+}, { requiredKeys: ["paused", "autoFixMergeConflicts", "autoFixCiFailures", "prWatches", "prOffers", "refuseThreadMessages", "wakeupPolicy"] }),
 { nil: undefined });
 
 describe("projectWatchesMergeBuilds", () => {

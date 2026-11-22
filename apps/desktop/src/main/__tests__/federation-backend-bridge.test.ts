@@ -5266,6 +5266,7 @@ describe("project Forge Automation methods", () => {
     autoFixMergeConflicts: true,
     autoFixCiFailures: true,
     prWatches: true,
+    prOffers: true,
     refuseThreadMessages: true,
     wakeupPolicy: "hold" as const,
   };

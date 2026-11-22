@@ -349,7 +349,7 @@ it("uses the complete pin and watched membership for an exact selection's projec
   await fc.assert(fc.asyncProperty(fc.constantFrom(2, 4, 8), fc.boolean(), fc.boolean(), async (n, otherPeer, otherProject) => {
     const f = await fixture(n);
     const paused: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,
-      autoFixCiFailures: true, prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
+      autoFixCiFailures: true, prWatches: true, prOffers: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
     const row = (id: string, owner: string, project: string, automation?: ProjectForgeAutomation): NavigationThreadSummary => ({
       ...thread(id, 0), linkedDirectories: [{ id: project, kind: "local", label: "repo", path: project.slice("directory:".length) }],
       homeProject: { directoryKey: project, ...(automation ? { forgeAutomation: automation } : {}) },

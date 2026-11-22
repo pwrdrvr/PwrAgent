@@ -212,6 +212,19 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
           </fieldset>
         )}
         {draft.paused ? null : (
+          <fieldset className="forge-automation-dialog__group forge-automation-dialog__fieldset">
+            <legend className="forge-automation-dialog__label">To-do cards</legend>
+            {option({
+              id: `${optionId}-offers`,
+              type: "checkbox",
+              title: "Review and merge offers",
+              description: "A Review card when CI passes on unreviewed changes, then a Merge card once the review is settled.",
+              checked: draft.prOffers,
+              onChange: () => update({ prOffers: !draft.prOffers }),
+            })}
+          </fieldset>
+        )}
+        {draft.paused ? null : (
           <div className="forge-automation-dialog__group">
             <p aria-hidden="true" className="forge-automation-dialog__label">Merge build watches</p>
             <SegmentedControl<ProjectMergeBuildWatches>

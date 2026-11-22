@@ -13,6 +13,7 @@ import {
   isProjectPausedThreadMessageRefusal,
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
+  projectAllowsPrOffers,
   projectAllowsPrWatches,
   projectRefusesThreadMessages,
   resolveProjectForgeAutomation,
@@ -46,6 +47,20 @@ describe("resolveProjectForgeAutomation", () => {
     expect(resolveProjectForgeAutomation({ paused: true, pausedAt: -1 })).not.toHaveProperty("pausedAt");
   });
 
+  it("reads PR offers as on when an older owner stored none, and keeps an explicit off", () => {
+    const olderOwner = {
+      paused: false,
+      autoFixMergeConflicts: true,
+      autoFixCiFailures: false,
+      prWatches: true,
+      refuseThreadMessages: true,
+      wakeupPolicy: "hold",
+    };
+    expect(resolveProjectForgeAutomation(olderOwner).prOffers).toBe(true);
+    expect(resolveProjectForgeAutomation({ ...olderOwner, prOffers: "no" }).prOffers).toBe(true);
+    expect(resolveProjectForgeAutomation({ ...olderOwner, prOffers: false }).prOffers).toBe(false);
+  });
+
   it("reads discard and treats every other wake-up policy as hold", () => {
     expect(resolveProjectForgeAutomation({ wakeupPolicy: "discard" }).wakeupPolicy).toBe("discard");
     expect(resolveProjectForgeAutomation({ wakeupPolicy: "later" }).wakeupPolicy).toBe("hold");
@@ -57,6 +72,7 @@ describe("isDefaultProjectForgeAutomation", () => {
     expect(isDefaultProjectForgeAutomation({ ...DEFAULT_PROJECT_FORGE_AUTOMATION })).toBe(true);
     expect(isDefaultProjectForgeAutomation(paused)).toBe(false);
     expect(isDefaultProjectForgeAutomation({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, prWatches: false })).toBe(false);
+    expect(isDefaultProjectForgeAutomation({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, prOffers: false })).toBe(false);
     expect(isDefaultProjectForgeAutomation({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, wakeupPolicy: "discard" })).toBe(false);
   });
 });
@@ -67,7 +83,18 @@ describe("gate helpers", () => {
     expect(projectAllowsAutoFixKind(undefined, "ci-failure")).toBe(true);
     expect(projectAllowsPrWatches(undefined)).toBe(true);
     expect(projectAllowsForgePolling(undefined)).toBe(true);
+    expect(projectAllowsPrOffers(undefined)).toBe(true);
     expect(projectRefusesThreadMessages(undefined)).toBe(false);
+  });
+
+  it("turn PR offers off for a paused project or one with offers off, and only those", () => {
+    expect(projectAllowsPrOffers({ ...DEFAULT_PROJECT_FORGE_AUTOMATION })).toBe(true);
+    expect(projectAllowsPrOffers(paused)).toBe(false);
+    const noOffers = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, prOffers: false };
+    expect(projectAllowsPrOffers(noOffers)).toBe(false);
+    expect(projectAllowsForgePolling(noOffers)).toBe(true);
+    expect(projectAllowsPrWatches(noOffers)).toBe(true);
+    expect(projectAllowsAutoFixKind(noOffers, "ci-failure")).toBe(true);
   });
 
   it("narrow one Auto-fix kind at a time while active", () => {

@@ -1955,7 +1955,7 @@ it("re-reads pins when the Forge Automation of a held row's project changes", as
     homeProject: { directoryKey: "directory:/peer/repo" } };
   const paused = { ...root, homeProject: { directoryKey: "directory:/peer/repo",
     forgeAutomation: { paused: true, pausedAt: 1, autoFixMergeConflicts: true, autoFixCiFailures: true,
-      prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" as const } } };
+      prWatches: true, prOffers: true, refuseThreadMessages: false, wakeupPolicy: "hold" as const } } };
   const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([root]));
   const refreshed = vi.fn();
   const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,

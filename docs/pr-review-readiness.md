@@ -144,7 +144,14 @@ PwrAgent does no scan at startup, runs no timer, and makes no forge request.
   emits none.
 - **Scope.** Each PR has one owning thread: the elected Auto-fix owner, or
   the first primary-attached thread. The thread must not be archived. Its
-  project's forge activity must not be paused. Background polling must be on.
+  project's forge activity must not be paused, and its Forge Automation
+  must keep **Review and merge offers** on (`prOffers`, on unless the
+  operator turns it off). Background polling must be on.
+  `selectPrReviewOfferOwner` decides this for every offer path: raising
+  cards, the merge-card gate, and readiness guidance. A thread outside its
+  project's offers gets none of them. Turning offers off, like pausing,
+  leaves an already-open card in place; it is not re-evaluated until offers
+  come back on.
 - **Git.** Git runs only when CI is green, or to withdraw an open offer: a
   review offer, or a merge offer for the current head. Reviews are read newest first, and the first one covering the head
   ends the reads. It runs in the thread's own checkout, through the shared
