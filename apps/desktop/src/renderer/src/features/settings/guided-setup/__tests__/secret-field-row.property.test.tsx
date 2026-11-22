@@ -183,6 +183,23 @@ describe("guided setup's secret row", () => {
     expect(statusLine(input)).toHaveTextContent(/^Not set$/);
   });
 
+  it("says so when a removal fails, and keeps claiming the stored value", async () => {
+    render(
+      <SecretFieldRow
+        field={TOKEN_FIELD}
+        snapshot={snapshotWithTelegramToken({ configured: true, source: "keychain", writable: true })}
+        replaceSecret={async () => true}
+        clearSecret={async () => false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token now" }));
+    });
+    expect(screen.getByText("Could not remove this value — try again.")).toBeInTheDocument();
+    expect(statusLine(screen.getByLabelText("Bot token"))).toHaveTextContent(/^Saved in keychain$/);
+  });
+
   it("removes a value it just wrote, before the snapshot reports it", async () => {
     const clearSecret = vi.fn(async () => true);
     const replaceSecret = vi.fn(async () => true);

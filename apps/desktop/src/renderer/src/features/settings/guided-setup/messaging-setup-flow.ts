@@ -114,7 +114,10 @@ export function reduceMessagingSetup(
         // The safety screen advances only once the record exists. The
         // caller writes it first, then sends `next` with the new snapshot.
         if (!acknowledgedOnRecord) return { ...state, step: "safety" };
-        if (state.entryProvider) {
+        // Opened on a provider, the picker is skipped, but only while that
+        // provider is still picked. Back to the picker, unpicking it, and
+        // back again must not land on a provider step with nothing to set up.
+        if (state.entryProvider && state.selected.includes(state.entryProvider)) {
           return { ...state, step: "provider-setup", index: 0 };
         }
         return { ...state, step: "providers", index: 0 };

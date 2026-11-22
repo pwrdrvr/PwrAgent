@@ -49,6 +49,14 @@ export function MessagingSetupFlow(props: {
   // The checkbox. Ticking it lifts nothing by itself: Continue writes the
   // record, and the record lifts the gate.
   const [ticked, setTicked] = useState(acknowledgedOnRecord);
+  // A record cleared mid-flow (Settings → General, another window) puts the
+  // safety screen back. It must come back unticked, so Continue cannot
+  // rewrite the record without the operator ticking the box again.
+  const [tickedForRecord, setTickedForRecord] = useState(acknowledgedOnRecord);
+  if (tickedForRecord !== acknowledgedOnRecord) {
+    setTickedForRecord(acknowledgedOnRecord);
+    if (!acknowledgedOnRecord) setTicked(false);
+  }
   const [flashNonce, setFlashNonce] = useState(0);
   const [writing, setWriting] = useState(false);
   const [writeError, setWriteError] = useState<string>();
@@ -95,9 +103,10 @@ export function MessagingSetupFlow(props: {
 
   const finish = async (): Promise<void> => {
     // Add what was set up to the record, keeping when it was acknowledged.
+    // A provider picked and then skipped has no adapter on, and isn't one.
     const patch = messagingAcknowledgmentWithProviders(
       snapshot?.general.messagingAcknowledgment.value,
-      state.selected,
+      state.selected.filter((id) => snapshot?.messaging[id].enabled.value),
     );
     if (patch) await props.settings.writeConfig(patch);
     props.onClose();

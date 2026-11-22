@@ -124,6 +124,40 @@ describe("guided messaging setup gate", () => {
     );
   });
 
+  it("never shows a provider step with no provider to set up", () => {
+    fc.assert(
+      fc.property(
+        fc.option(providerArb, { nil: undefined }),
+        fc.boolean(),
+        // Mostly with the record stored: provider steps are reachable only
+        // then, and the bug this guards needs a walk through them.
+        fc.array(
+          fc.record({
+            event: eventArb,
+            acknowledgedOnRecord: fc.oneof(
+              { weight: 9, arbitrary: fc.constant(true) },
+              { weight: 1, arbitrary: fc.constant(false) },
+            ),
+          }),
+          { maxLength: 40 },
+        ),
+        (entryProvider, startAcknowledged, steps) => {
+          let state = initialMessagingSetupState(entryProvider, startAcknowledged);
+          for (const { event, acknowledgedOnRecord } of steps) {
+            state = reduceMessagingSetup(state, event, acknowledgedOnRecord);
+            if (visibleMessagingStep(state, acknowledgedOnRecord) === "provider-setup") {
+              // The oracle: the step names one of the picked providers.
+              expect(state.selected).toContain(
+                currentMessagingProvider(state, acknowledgedOnRecord),
+              );
+            }
+          }
+        },
+      ),
+      { numRuns: 2000 },
+    );
+  });
+
   it("opens past the safety screen when the record already exists", () => {
     expect(initialMessagingSetupState("discord", true).step).toBe("provider-setup");
     expect(initialMessagingSetupState(undefined, true).step).toBe("providers");

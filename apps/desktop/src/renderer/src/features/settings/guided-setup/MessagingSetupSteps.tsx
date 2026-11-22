@@ -565,17 +565,24 @@ export function ProviderSetupStep(props: {
   const snapshot = props.settings.snapshot;
   const platformSnapshot = snapshot?.messaging?.[props.provider];
 
-  // Auto-enable the platform when the step opens so pairing / probe work.
+  // Turn the adapter on once its credentials are stored, so pairing and the
+  // identity probe work. Not when the step opens: a provider skipped, or a
+  // flow closed before a token was pasted, must not be left switched on
+  // with nothing to connect with.
+  const credentialsStored = isPlatformPrimarySecretConfigured(props.provider, snapshot);
+  const enabled = platformSnapshot?.enabled.value ?? false;
+  const autoEnabled = useRef(false);
   useEffect(() => {
-    if (!platformSnapshot) return;
-    if (platformSnapshot.enabled.value) return;
+    if (!platformSnapshot || !credentialsStored || enabled) return;
+    // Once per step: repeated writes would race with the snapshot refresh
+    // writeConfig fires, and an operator who switches it off again wins.
+    if (autoEnabled.current) return;
+    autoEnabled.current = true;
     void props.settings.writeConfig({
       messaging: { [props.provider]: { enabled: true } } as never,
     });
-    // intentionally only run when provider changes — repeated writes would
-    // race with the snapshot refresh fired by writeConfig itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.provider]);
+  }, [credentialsStored, enabled, props.provider]);
 
   useEffect(() => {
     if (props.provider !== "slack") return;
@@ -942,7 +949,8 @@ export function SecretFieldRow(props: {
     setBusy(true);
     setLiveError(undefined);
     try {
-      await props.clearSecret(props.field.name);
+      const ok = await props.clearSecret(props.field.name);
+      if (!ok) setLiveError("Could not remove this value — try again.");
     } finally {
       setBusy(false);
     }

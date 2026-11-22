@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { backendTrademarkNotice } from "./AgentSetupSteps";
 import {
@@ -250,6 +257,9 @@ export type CodexProfilesAuthSnapshot = {
   namedRows: number;
 };
 
+/** Sign-in state per normalized row name. */
+export type CodexProfileLoginStates = Record<string, RowLoginState>;
+
 /**
  * Name the new profiles and sign each one in. A row's name locks once its
  * sign-in starts, so the login and the profile it belongs to can't drift
@@ -262,12 +272,15 @@ export function NameCodexProfilesStep(props: {
   existingProfiles: readonly string[];
   desktopApi?: DesktopApi;
   onAuthStateChange: (snapshot: CodexProfilesAuthSnapshot) => void;
+  /** Owned by the flow, not this step: the step unmounts on Continue, and
+   *  Back must still find the rows it signed in. Keyed by the committed row
+   *  name, so edits before Log in don't carry orphan state. */
+  loginStates: CodexProfileLoginStates;
+  setLoginStates: Dispatch<SetStateAction<CodexProfileLoginStates>>;
 }) {
   const maxCount = props.mode === "isolated" ? 1 : 5;
   const isSingle = props.mode === "isolated";
-  // Keyed by the committed row name, so edits before Log in don't carry
-  // orphan state, and Back then forward keeps signed-in rows.
-  const [loginStates, setLoginStates] = useState<Record<string, RowLoginState>>({});
+  const { loginStates, setLoginStates } = props;
   const apiRef = useRef(props.desktopApi);
   apiRef.current = props.desktopApi;
 
@@ -335,7 +348,7 @@ export function NameCodexProfilesStep(props: {
         },
       }));
     }
-  }, []);
+  }, [setLoginStates]);
 
   /**
    * Create the Codex auth profile shell if it is missing (idempotent),
@@ -374,7 +387,7 @@ export function NameCodexProfilesStep(props: {
         }));
       }
     },
-    [refreshStatus],
+    [refreshStatus, setLoginStates],
   );
 
   const copyLoginUrl = useCallback(async (url: string | undefined): Promise<void> => {

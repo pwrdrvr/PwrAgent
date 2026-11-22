@@ -6,6 +6,7 @@ import {
   CodexProfileChoiceStep,
   CodexProfilesPreviewList,
   NameCodexProfilesStep,
+  type CodexProfileLoginStates,
   type CodexProfilesAuthSnapshot,
   type CodexProfilesMode,
 } from "./CodexProfileSteps";
@@ -46,13 +47,18 @@ export function CodexProfilesFlow(props: {
     namedRows: 0,
   });
   const [loginDeferred, setLoginDeferred] = useState(false);
+  // Held here so Back from Create finds every row it signed in.
+  const [loginStates, setLoginStates] = useState<CodexProfileLoginStates>({});
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<string[]>([]);
+  // The names the create step tried. Once the profile list refreshes they
+  // all exist, so `toCreate` can no longer say what was attempted.
+  const [attempted, setAttempted] = useState<string[]>([]);
   const [handoff, setHandoff] = useState<ProfileHandoffOutcome>();
 
   const existing = (props.profiles?.profiles ?? []).map((profile) => profile.name);
   const toCreate = newProfileNamesToCreate(names, existing);
-  const failed = toCreate?.filter((name) => !created.includes(name)) ?? [];
+  const failed = attempted.filter((name) => !created.includes(name));
 
   const changeMode = (next: CodexProfilesMode): void => {
     setMode(next);
@@ -71,6 +77,7 @@ export function CodexProfilesFlow(props: {
     setBusy(true);
     try {
       const done = await provisionPairedProfiles(props.desktopApi, toCreate);
+      setAttempted(toCreate);
       setCreated(done);
       await props.profiles?.refresh();
       setStep("created");
@@ -249,6 +256,8 @@ export function CodexProfilesFlow(props: {
           existingProfiles={existing}
           desktopApi={props.desktopApi}
           onAuthStateChange={setAuth}
+          loginStates={loginStates}
+          setLoginStates={setLoginStates}
         />
       ) : null}
       {step === "create" && toCreate ? (
@@ -282,7 +291,7 @@ export function CodexProfilesFlow(props: {
               ? `Could not create ${failed.join(", ")}. Try again from Settings → Profiles.`
               : "Open a profile now, or later from the Profiles menu."
           }
-          rows={(toCreate ?? []).map((name) => ({
+          rows={attempted.map((name) => ({
             key: name,
             label: name,
             value: created.includes(name)

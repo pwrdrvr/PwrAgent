@@ -12257,6 +12257,9 @@ describe("Settings → Messaging safety gate", () => {
     ).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Bot token")).toBeInTheDocument();
     expect(writes[0]?.general?.messagingAcknowledgment?.providers).toEqual(["telegram"]);
+    // Opening the step switches nothing on: with no token stored, skipping
+    // it or closing the flow must not leave the adapter enabled.
+    expect(writes.filter((patch) => patch.messaging?.telegram?.enabled)).toEqual([]);
   });
 
   it("puts the safety screen back over a guided provider step when the record is cleared", async () => {
@@ -12286,5 +12289,15 @@ describe("Settings → Messaging safety gate", () => {
     expect(within(reopened).queryByLabelText("Bot token")).toBeNull();
     expect(within(reopened).getByText(/I understand\./)).toBeInTheDocument();
     expect(replaceSecret).not.toHaveBeenCalled();
+    // It comes back unticked: Continue can't rewrite the record until the
+    // operator ticks the box again.
+    expect(
+      within(reopened).getByRole("checkbox", { name: /I understand\./ }),
+    ).not.toBeChecked();
+    vi.mocked(settings.writeConfig).mockClear();
+    fireEvent.click(
+      within(reopened).getByRole("button", { name: "Continue with messaging →" }),
+    );
+    expect(settings.writeConfig).not.toHaveBeenCalled();
   });
 });
