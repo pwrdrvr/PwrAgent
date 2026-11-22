@@ -37,11 +37,13 @@ the keyboard target walk only visits the targets it draws.
 The PR target reviews the provider's published head. Base branch and Current
 changes review the checkout in front of the operator. Those describe the same
 commits only when the checkout sits on the PR's head branch with a clean tree,
-nothing unpushed, and the same head commit, so that is the one case where the
-composer defaults to the pull request. A dirty tree, an unpushed commit, a
-different head commit, or a different branch keeps the local default, and
-selecting the PR then names what the review would skip. Local Git state that
-has not been probed counts as unknown, never as a match.
+nothing unpushed, and the same head commit. The composer defaults to the PR
+when it verifies that match. It also defaults to the sole open attachment when
+Git has confirmed a clean, fully pushed checkout and the head comparison is
+inconclusive. A dirty tree, an unpushed commit, a different head commit, a
+different branch, or evidence that the checkout is behind its remote keeps the
+local default. Selecting the PR then names what the review would skip. When
+the checkout's working state is unknown, the composer keeps the local default.
 
 The checkout's head commit is compared directly when the directory row reports
 the same branch; Git refuses the same branch in two worktrees, so that is what
@@ -71,6 +73,9 @@ sidebar PR popover's order (`resolvePrRollup().ordered`): open PRs first,
 newest opened first, then merged and closed PRs, newest finished first. Each
 row prints its state, head branch, and the time it is sorted by; its chip
 opens the standard PR card on hover.
+
+Switching to Attached PR with an empty selection preselects the sole open PR
+when there is one. Merged and closed PRs remain available for selection.
 
 A thread composer whose owner takes queued reviews offers checkboxes. Checking
 several PRs submits one review per PR, in list order, through the owner's

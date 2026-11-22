@@ -9370,6 +9370,95 @@ describe("Composer", () => {
     });
   };
 
+  function reviewTargetWithHistory(
+    thread: NavigationThreadSummary,
+    states: readonly ("merged" | "closed")[],
+    openIndex: number,
+  ): NavigationThreadSummary {
+    const open = thread.prs![0]!;
+    const prs = states.map((state, index): PrSummary => ({
+      ...open,
+      number: 8 + index,
+      title: `Earlier change ${index + 1}`,
+      url: `https://github.com/fixture/project/pull/${8 + index}`,
+      state,
+      lifecycleState: index % 2 === 0 ? state : undefined,
+    }));
+    prs.splice(openIndex, 0, open);
+    return { ...thread, prs };
+  }
+
+  function renderReviewTarget(
+    thread: NavigationThreadSummary,
+    gitStatus?: NavigationDirectorySummary["gitStatus"],
+  ) {
+    const backend = backendSummary(thread.source);
+    backend.capabilities = {
+      ...backend.capabilities,
+      startReview: true,
+      reviewClaudeCodeReview: thread.source === "claude",
+      reviewCodexSubAgent: thread.source === "codex",
+      reviewRunMode: true,
+      reviewRunner: true,
+    };
+    return render(<Composer
+      backends={[backend]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview: vi.fn() }}
+      disabled={false} skills={[]} thread={thread}
+      directory={gitStatus ? { key: "project", kind: "directory", label: "Project", path: "/repo/project", gitStatus } : undefined}
+    />);
+  }
+
+  it.each((["codex", "claude", "acp:kimi"] as const).flatMap((source) => [
+    { source, entry: "opening on a clean checkout", dirty: false },
+    { source, entry: "switching from local review", dirty: true },
+  ]))(
+    "selects the sole open PR for $source when $entry regardless of terminal attachments and their order",
+    async ({ source, dirty }) => {
+      await fc.assert(fc.asyncProperty(
+        fc.array(fc.constantFrom("merged" as const, "closed" as const), { minLength: 1, maxLength: 5 }),
+        fc.nat(),
+        async (states, position) => {
+          const thread = reviewTargetWithHistory({
+            ...reviewTargetThread({ dirtyFiles: dirty ? 1 : 0 }), source,
+          }, states, position % (states.length + 1));
+          const { unmount } = renderReviewTarget(thread);
+          try {
+            await openReviewComposer();
+            const attached = screen.getByRole("button", { name: /Attached PR/ });
+            expect(attached).toHaveAttribute("aria-pressed", String(!dirty));
+            if (dirty) fireEvent.click(attached);
+            expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/7"]);
+            expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled();
+          } finally {
+            unmount();
+          }
+        },
+      ), { numRuns: 12, examples: [[["merged", "closed"], 1]] });
+    },
+  );
+
+  it("defaults to the sole attached PR on a clean Claude checkout without a published head comparison", async () => {
+    renderReviewTarget({ ...reviewTargetThread({}), source: "claude" });
+    await openReviewComposer();
+    expect(screen.getByRole("button", { name: /Attached PR/ })).toHaveAttribute("aria-pressed", "true");
+    expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/7"]);
+  });
+
+  it("preselects the open PR when switching targets and keeps an explicit terminal selection", async () => {
+    const thread = reviewTargetWithHistory(reviewTargetThread({ dirtyFiles: 1 }), ["merged", "closed"], 1);
+    renderReviewTarget(thread);
+    await openReviewComposer();
+    const attached = screen.getByRole("button", { name: /Attached PR/ });
+    fireEvent.click(attached);
+    expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/7"]);
+    choosePullRequest("https://github.com/fixture/project/pull/7");
+    choosePullRequest("https://github.com/fixture/project/pull/8");
+    fireEvent.click(screen.getByRole("button", { name: /Base branch/ }));
+    fireEvent.click(attached);
+    expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/8"]);
+  });
+
   it("omits the attached PR target when the project has none", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
@@ -9403,7 +9492,7 @@ describe("Composer", () => {
     expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
   });
 
-  it("keeps local review when directory status belongs to another checkout", async () => {
+  it("does not claim the PR matches the local head when directory status belongs to another checkout", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]} thread={reviewTargetThread({})}
@@ -9413,8 +9502,46 @@ describe("Composer", () => {
     />);
     await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
-    expect(within(group).getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: /Attached PR/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
+  });
+
+  it.each(["branch", "head commit", "remote lag"] as const)(
+    "keeps local review when a clean checkout has a known %s difference",
+    async (difference) => {
+      await fc.assert(fc.asyncProperty(
+        fc.nat(),
+        fc.array(fc.constantFrom("merged" as const, "closed" as const), { maxLength: 3 }),
+        async (suffix, history) => {
+          const thread = reviewTargetWithHistory(reviewTargetThread({}), history, 0);
+          if (difference === "branch") thread.observedGitBranch = `feat/other-${suffix}`;
+          const sha = `b${suffix.toString(16).padStart(39, "0")}`;
+          const { unmount } = renderReviewTarget(thread, {
+            currentBranch: thread.observedGitBranch,
+            branches: [thread.observedGitBranch!],
+            syncState: difference === "remote lag" ? "behind" : "in-sync",
+            ...(difference === "head commit"
+              ? { recentCommits: [{ sha, shortSha: sha.slice(0, 7), subject: "Different head" }] }
+              : {}),
+            ...(difference === "remote lag" ? { behind: suffix + 1 } : {}),
+          });
+          try {
+            await openReviewComposer();
+            expect(screen.getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
+            fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+            expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/7"]);
+          } finally {
+            unmount();
+          }
+        },
+      ), { numRuns: 12, examples: [[0, []]] });
+    },
+  );
+
+  it.each(["untrackedFiles", "unpushedCommits"] as const)("keeps local review when the checkout has %s", async (kind) => {
+    renderReviewTarget(reviewTargetThread({ [kind]: 1 }));
+    await openReviewComposer();
+    expect(screen.getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("offers and submits a scoped upstream PR when origin is a fork", async () => {

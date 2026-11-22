@@ -1453,11 +1453,12 @@ function buildUnlinkedReviewWorkspaceOptions(params: {
   return options;
 }
 
-/**
- * Attached pull requests the selected workspace can review, plus the one the
- * workspace already has checked out clean. Both the default target and the
- * composer's explanation of how local differs read from this single answer.
- */
+function soleOpenReviewPullRequest(prs: readonly PrSummary[]): PrSummary | undefined {
+  const open = prs.filter((pr) => resolveLifecycleState(pr) === "open");
+  return open.length === 1 ? open[0] : undefined;
+}
+
+/** Attached pull requests the selected workspace can review and its default. */
 function reviewPullRequestsFor(params: {
   cwd?: string;
   directory?: NavigationDirectorySummary;
@@ -1465,6 +1466,7 @@ function reviewPullRequestsFor(params: {
 }): {
   candidates: PrSummary[];
   checkedOut?: PrSummary;
+  defaultPullRequest?: PrSummary;
   unavailableReason?: string;
 } {
   // A target the owner would refuse is not a choice worth drawing, so the
@@ -1482,17 +1484,28 @@ function reviewPullRequestsFor(params: {
         : undefined,
     };
   }
+  const { thread } = params;
+  if (!thread || !reviewWorkspacePathMatches(params.cwd, findPrimaryReviewWorkspaceCwd(thread))) {
+    return { candidates: attached };
+  }
+  const workingState = thread.gitWorkingState;
+  const checkout = {
+    currentBranch: thread.observedGitBranch ?? thread.gitBranch,
+    directoryGitStatus: params.directory?.gitStatus,
+    gitWorkingState: workingState,
+  };
+  const checkedOut = findCheckedOutPullRequest({ ...checkout, prs: attached });
+  // A clean checkout can default to the sole open PR when the comparison is
+  // inconclusive. A known difference keeps the checkout as the default.
+  const clean = workingState?.dirtyFiles === 0
+    && workingState.untrackedFiles === 0
+    && workingState.unpushedCommits === 0;
+  const soleOpen = !checkedOut && clean ? soleOpenReviewPullRequest(attached) : undefined;
+  const sync = soleOpen ? describeAttachedPullRequestLocalSync({ ...checkout, pr: soleOpen }) : undefined;
   return {
     candidates: attached,
-    checkedOut: params.thread && reviewWorkspacePathMatches(
-      params.cwd, findPrimaryReviewWorkspaceCwd(params.thread),
-    ) ? findCheckedOutPullRequest({
-      currentBranch:
-        params.thread?.observedGitBranch ?? params.thread?.gitBranch,
-      directoryGitStatus: params.directory?.gitStatus,
-      gitWorkingState: params.thread?.gitWorkingState,
-      prs: attached,
-    }) : undefined,
+    checkedOut,
+    defaultPullRequest: checkedOut ?? (sync?.known && !sync.matches ? undefined : soleOpen),
   };
 }
 
@@ -1533,20 +1546,15 @@ function createReviewConfig(params: {
   };
   const target = params.reviewCommand?.target;
   if (!target) {
-    // The PR target and a local review only describe the same commits while
-    // the checkout sits on the PR's head with nothing local on top. When they
-    // do, offering the PR is the more precise of two identical reviews; the
-    // moment they diverge the local checkout is what the operator is looking
-    // at, so it keeps the default and the PR stays an explicit choice.
-    const checkedOutPullRequest = reviewPullRequestsFor({
+    const defaultPullRequest = reviewPullRequestsFor({
       cwd: config.workspaceCwd,
       directory: params.directory,
       thread: params.thread,
-    }).checkedOut;
-    return checkedOutPullRequest
+    }).defaultPullRequest;
+    return defaultPullRequest
       ? {
           ...config,
-          pullRequestUrls: [checkedOutPullRequest.url],
+          pullRequestUrls: [defaultPullRequest.url],
           target: "pullRequest",
         }
       : config;
@@ -8239,7 +8247,8 @@ function useComposerController(props: ComposerProps) {
       : reviewPullRequestOptions;
     const checkedOutUrl = reviewPullRequestState.checkedOut?.url;
     const pullRequestUrl =
-      (checkedOutUrl && workspaceOptions.some((option) => option.pr.url === checkedOutUrl)
+      soleOpenReviewPullRequest(candidates.map((option) => option.pr))?.url
+      ?? (checkedOutUrl && workspaceOptions.some((option) => option.pr.url === checkedOutUrl)
         ? checkedOutUrl
         : undefined)
       ?? (candidates.length === 1 ? candidates[0]?.pr.url : undefined);
@@ -14488,18 +14497,20 @@ function useComposerController(props: ComposerProps) {
                   );
                   // The PR list follows the project, so only a PR this
                   // project can also review stays chosen. On the PR
-                  // target, a project's sole PR is the obvious choice,
+                  // target, a project's sole open PR is the obvious choice,
                   // as it is when the target is chosen.
                   const projectOptions = reviewPullRequestOptionsForWorkspace(workspaceCwd);
                   const keptUrls = (next.pullRequestUrls ?? []).filter((url) =>
                     projectOptions.some((option) => option.pr.url === url)
                   );
+                  const defaultPr = soleOpenReviewPullRequest(projectOptions.map((option) => option.pr))
+                    ?? (projectOptions.length === 1 ? projectOptions[0]?.pr : undefined);
                   return {
                     ...next,
                     pullRequestUrls: keptUrls.length > 0
                       ? keptUrls
-                      : next.target === "pullRequest" && projectOptions.length === 1
-                        ? [projectOptions[0]!.pr.url]
+                      : next.target === "pullRequest" && defaultPr
+                        ? [defaultPr.url]
                         : undefined,
                   };
                 });
