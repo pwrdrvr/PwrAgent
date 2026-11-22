@@ -133,6 +133,14 @@ with the same content.
   `project/log-viewer-review.css`: the Help → Logs workflows review. It loads
   `support.js`, `settings-command-tools.css`, and `assets/logo-pwragnt.svg`
   from this directory, so it renders here unchanged.
+- 2026-11-22, `project/Stacked PRs UX Review.dc.html`: stacked pull requests
+  that agents operate across threads, with a live prototype in turn 4. It was
+  written for the project, now on Claude Artifacts
+  (<https://claude.ai/artifact/R3JdNvJfakiuVBCYSaDtR6#page-Stacked-PRs-UX-Review>),
+  and copied here the same day. Its styles are inline and it loads only
+  `support.js`, so it renders here unchanged. The engineering plan is
+  [`../stacked-prs.md`](../stacked-prs.md). Repository names, branches, PR
+  numbers and shas are invented.
 
 ## How to update this directory
 

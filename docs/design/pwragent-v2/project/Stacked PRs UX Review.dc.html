@@ -1,0 +1,1265 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stacked PRs UX Review</title>
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --rv-bg: #050505; --rv-line: rgba(247, 243, 235, 0.1);
+            --rv-t1: #f7f3eb; --rv-t2: #b8b0a5; --rv-t3: #8c857a; --rv-tsub: rgba(247, 243, 235, 0.54);
+            --rv-acc: #ff8a1f; --rv-accb: #ffb35c; --rv-accon: #160a00;
+            --rv-bad: #b94232; --rv-ok: #5fa969;
+            /* PwrAgent's own dark tokens: apps/desktop/src/renderer/src/styles/app.css :root */
+            --font-sans: "Geist Sans", "Geist", "SF Pro Text", "Inter", system-ui, sans-serif;
+            --font-mono: "Geist Mono", "SF Mono", "JetBrains Mono", Consolas, monospace;
+            --bg-app: #000000; --bg-sidebar: #050505; --bg-panel: #0a0a0a; --bg-panel-elevated: #101010; --bg-input: #080808;
+            --bg-panel-hover: #14110d; --bg-row-active: #120800;
+            --border-subtle: rgba(247, 243, 235, 0.1); --border-default: rgba(247, 243, 235, 0.14); --border-strong: rgba(247, 243, 235, 0.2);
+            --text-primary: #f7f3eb; --text-secondary: #b8b0a5; --text-muted: #8c857a; --text-subtle: rgba(247, 243, 235, 0.42);
+            --accent: #ff8a1f; --accent-strong: #ffa33d; --accent-bright: #ffb35c; --accent-on: #160a00;
+            --accent-soft: rgba(255, 138, 31, 0.12); --accent-border: rgba(255, 138, 31, 0.42); --accent-border-soft: rgba(255, 138, 31, 0.24); --accent-bg-medium: rgba(255, 138, 31, 0.16); --accent-shadow: rgba(255, 138, 31, 0.34);
+            --status-ok: #5fa969; --status-warning: #d99a3d; --status-error: #c45a3a; --status-suspended: #6b6660;
+            --success-text: #9ce5b3; --danger-text: #ffb0a1; --danger-base: #b94232; --info: #5689c4; --info-text: #9fc8ff; --warn-text: #e8c890;
+            --brand-purple: #8a6dc4;
+            --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
+            --ease-seat: cubic-bezier(.2, .8, .2, 1);
+          }
+          *, *::before, *::after { box-sizing: border-box; }
+          html { background: var(--rv-bg); }
+          body { margin: 0; background: var(--rv-bg); font-family: var(--font-sans); color: var(--rv-t1); }
+          a { color: var(--rv-accb); text-decoration: none; } a:hover { color: var(--rv-acc); }
+          button { font-family: inherit; }
+
+          /* ---- review chrome (house convention, as on the PwrGit Stacked PRs board) ---- */
+          .dv-turn { padding: 40px 44px 36px; background: var(--rv-bg); border-bottom: 1px solid var(--rv-line); }
+          .dv-thd { display: flex; align-items: baseline; gap: 10px; margin: 0 0 6px; }
+          .dv-tid { font: 600 10px var(--font-mono); padding: 3px 7px; background: var(--rv-t1); color: var(--rv-bg); border-radius: 4px; }
+          .dv-tname { font: 600 13px/1.2 var(--font-sans); color: var(--rv-t1); }
+          .dv-sub { margin: 0 0 22px; font: 400 11.5px/1.55 var(--font-sans); color: var(--rv-t3); max-width: 940px; text-wrap: pretty; }
+          .dv-sub b { color: var(--rv-t2); font-weight: 600; }
+          .dv-sub code, .note code, .fitem code, .tr code, .dv-next code { font: 500 10px/1.4 var(--font-mono); color: var(--rv-t2); }
+          .dv-opts { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+          .dv-opt { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+          .dv-oid { font: 600 10.5px var(--font-mono); padding: 3px 7px; background: rgba(247, 243, 235, 0.08); color: var(--rv-t1); border-radius: 5px; }
+          .dv-olabel { display: flex; align-items: baseline; gap: 8px; font: 400 11px/1.35 var(--font-sans); color: var(--rv-tsub); max-width: 940px; }
+          .dv-olabel b { color: var(--rv-accb); font-weight: 600; }
+          .dv-olabel .rec { color: var(--rv-ok); font-weight: 600; }
+          .dv-olabel .rej { color: var(--rv-bad); font-weight: 600; }
+          .dv-next { margin: 26px 0 0; font: 400 11px/1.6 var(--font-sans); color: var(--rv-t3); max-width: 940px; }
+          .dv-next b { color: var(--rv-t2); }
+          .note { margin: 0; font: 400 10.5px/1.5 var(--font-sans); color: var(--rv-t3); text-wrap: pretty; max-width: 520px; }
+          .note b { color: var(--rv-t2); font-weight: 600; }
+          .pin { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 15px; height: 15px; border-radius: 999px; background: var(--rv-bad); color: #fff; font: 700 9px/1 var(--font-mono); }
+          .pin.ok { background: var(--rv-ok); color: #06130a; }
+          .pin.acc { background: var(--rv-acc); color: var(--rv-accon); }
+          .pin.info { background: var(--info); color: #041020; }
+          .find { width: 560px; max-width: 100%; display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--rv-line); border-radius: 9px; background: #0a0a0a; }
+          .find.wide { width: 860px; }
+          .fitem { display: grid; grid-template-columns: 15px minmax(0, 1fr); gap: 9px; align-items: start; }
+          .fitem h4 { margin: 0 0 3px; font: 650 11.5px/1.3 var(--font-sans); color: var(--rv-t1); }
+          .fitem p { margin: 0; font: 400 10.5px/1.55 var(--font-sans); color: var(--rv-t3); text-wrap: pretty; }
+          .fitem b { color: var(--rv-t2); font-weight: 600; }
+          .tbl { width: 100%; max-width: 1180px; border: 1px solid var(--rv-line); border-radius: 9px; background: #0a0a0a; overflow: hidden; }
+          .tr { display: grid; grid-template-columns: 190px 120px 210px minmax(0, 1fr); gap: 12px; align-items: start; padding: 8px 12px; border-bottom: 1px solid var(--rv-line); font: 500 10.5px/1.5 var(--font-sans); color: var(--rv-t2); }
+          .tr:last-child { border-bottom: 0; }
+          .tr.head { font: 600 9.5px/1.3 var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--rv-t3); background: rgba(247, 243, 235, 0.03); }
+          .tr b { color: var(--rv-t1); font-weight: 600; }
+          .tr .mn { font: 600 10.5px/1.5 var(--font-mono); color: var(--rv-t1); }
+          .verdict { display: inline-flex; justify-self: start; padding: 2px 6px; border-radius: 999px; font: 700 8.5px/1.35 var(--font-sans); letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; }
+          .verdict.keep { background: rgba(95, 169, 105, 0.16); color: #9ce5b3; }
+          .verdict.chg { background: rgba(255, 138, 31, 0.12); color: var(--rv-accb); }
+          .verdict.bug { background: rgba(185, 66, 50, 0.22); color: #ffb0a1; }
+          .verdict.info { background: rgba(86, 137, 196, 0.18); color: #9fc8ff; }
+          .stage { position: relative; padding: 18px; border-radius: 10px; background: var(--bg-app); border: 1px solid var(--rv-line); }
+          pre.code { margin: 0; width: 560px; max-width: 100%; padding: 14px 16px; border: 1px solid var(--rv-line); border-radius: 9px; background: #0a0a0a; font: 500 10.5px/1.6 var(--font-mono); color: var(--rv-t2); white-space: pre; overflow-x: auto; }
+          pre.code.wide { width: 860px; }
+          pre.code .c { color: var(--rv-t3); } pre.code .k { color: var(--rv-accb); } pre.code .s { color: #9ce5b3; } pre.code .w { color: #ffb0a1; text-decoration: line-through; text-decoration-color: rgba(255, 176, 161, 0.5); } pre.code .i { color: var(--info-text); }
+          .mono { font-family: var(--font-mono); }
+
+          /* ---- shipped primitives, copied from app.css ---- */
+          .pr-chip { position: relative; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-panel-elevated); color: var(--text-secondary); font: 500 11px/1 var(--font-mono); white-space: nowrap; }
+          .pr-chip .d { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--status-suspended); }
+          .pr-chip.passing .d { background: var(--status-ok); } .pr-chip.failing .d { background: var(--status-error); }
+          .pr-chip.pending .d { background: var(--status-warning); } .pr-chip.merged .d { background: var(--brand-purple); }
+          .pr-chip.none { border-style: dashed; color: var(--text-muted); } .pr-chip.none .d { background: transparent; border: 1px solid var(--text-muted); }
+          /* NEW: the stack position chip. Neutral per UI-THEME "one signal per row"; stale is the only colour. */
+          .pos-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--text-secondary); font: 500 11px/1 var(--font-mono); white-space: nowrap; transition: border-color 160ms ease, color 160ms ease; }
+          .pos-chip svg { width: 11px; height: 11px; }
+          .pos-chip.stale { border-color: rgba(217, 154, 61, 0.42); color: var(--warn-text); }
+          .bdg { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 5px; font: 600 9.5px/1 var(--font-mono); white-space: nowrap; border: 1px solid transparent; }
+          .bdg.warn { color: var(--status-warning); background: rgba(217, 154, 61, 0.1); border-color: rgba(217, 154, 61, 0.3); }
+          .bdg.push { color: var(--info-text); background: rgba(86, 137, 196, 0.14); border-color: rgba(86, 137, 196, 0.32); }
+          .bdg.ok { color: var(--success-text); background: rgba(74, 148, 92, 0.16); border-color: rgba(95, 169, 105, 0.32); }
+          .bdg.drift { color: var(--danger-text); background: rgba(185, 66, 50, 0.16); border-color: rgba(185, 66, 50, 0.4); }
+          .bdg.merged { color: #c9b6f0; background: rgba(138, 109, 196, 0.16); border-color: rgba(138, 109, 196, 0.4); }
+          .bdg.mute { color: var(--text-muted); border-color: var(--border-subtle); }
+          /* thinking scanner (ThinkingScanner.tsx / app.css .thinking-scanner, compact) */
+          .ts { position: relative; flex: none; width: 62px; height: 6px; border-radius: 999px; background: var(--accent-bg-medium); overflow: hidden; }
+          .ts::after { content: ""; position: absolute; left: 0; top: 0; width: 18px; height: 6px; border-radius: 999px; background: linear-gradient(90deg, transparent, var(--accent) 35%, var(--accent-bright) 50%, var(--accent) 65%, transparent); box-shadow: 0 0 10px var(--accent-shadow); opacity: .76; animation: ts-sweep 1800ms steps(27, end) infinite; }
+          @keyframes ts-sweep { 0%, 100% { transform: translateX(0); opacity: .76; } 50% { transform: translateX(44px); opacity: 1; } }
+
+          /* sidebar rows (ThreadRow.tsx geometry) */
+          .sb { position: relative; width: 340px; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-sidebar); }
+          .phead { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; font: 650 12px/1 var(--font-sans); color: var(--text-secondary); }
+          .phead .ct { margin-left: auto; font: 500 11px/1 var(--font-mono); color: var(--text-subtle); }
+          .trow { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 5px 10px; border: 1px solid transparent; border-radius: 8px; cursor: default; transition: background 120ms ease, border-color 120ms ease, opacity 300ms ease; }
+          .trow:hover { background: var(--bg-panel-hover); }
+          .trow.sel { border-color: var(--accent-border); background: var(--bg-row-active); box-shadow: inset 2px 0 0 0 var(--accent); }
+          .trow.done { opacity: .55; }
+          .trow .h { display: flex; align-items: center; gap: 7px; min-width: 0; }
+          .trow .tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13px/1.25 var(--font-sans); color: var(--text-primary); }
+          .trow .tm { flex: none; font: 500 12px/1 var(--font-sans); color: var(--text-muted); }
+          .trow .cl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 20px; }
+          .trow .ag { font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+          .cookie { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: rise 260ms ease both; }
+          .tmeta { font: 500 11px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .tmeta.held { color: var(--warn-text); }
+          .held-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 999px; border: 1px solid rgba(217, 154, 61, 0.38); color: var(--warn-text); font: 600 11px/1 var(--font-sans); }
+          /* the stack tray: .subthread-list, with its border-left promoted to a spine */
+          .tray { position: relative; display: grid; gap: 2px; margin: 1px 0 4px 18px; padding-left: 10px; }
+          .tray .sp { position: absolute; left: -1px; top: 0; bottom: 0; width: 0; }
+          .trow.sub .sp { position: absolute; left: -12px; top: -2px; bottom: -2px; border-left: 1.5px solid rgba(255, 138, 31, 0.55); transition: border-color 220ms ease; }
+          .trow.sub .sp.stale { border-left-style: dashed; border-left-color: var(--status-warning); }
+          .trow.sub .sp.gone { border-left-color: var(--brand-purple); opacity: .5; }
+          .trow.sub::before { content: ""; position: absolute; left: -16px; top: 12px; width: 9px; height: 9px; border-radius: 50%; background: var(--bg-sidebar); border: 1.5px solid rgba(255, 138, 31, 0.8); z-index: 1; }
+          .trow.sub.done::before { background: var(--brand-purple); border-color: var(--brand-purple); }
+          .tray .trunkrow { position: relative; display: flex; align-items: center; gap: 7px; height: 22px; padding: 0 10px; font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+          .tray .trunkrow::before { content: ""; position: absolute; left: -16px; top: 6px; width: 9px; height: 9px; border-radius: 2px; background: var(--text-muted); }
+
+          /* ============ live prototype ============ */
+          .live { display: grid; grid-template-columns: 330px minmax(0, 500px) 380px; gap: 16px; align-items: start; }
+          .scen { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px dashed rgba(247, 243, 235, 0.18); border-radius: 9px; }
+          .scen .lb { font: 700 9px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--rv-t3); margin-right: 4px; }
+          .scen .sep { width: 1px; height: 20px; background: var(--rv-line); margin: 0 4px; }
+          .sbtn { height: 28px; padding: 0 11px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-input); color: var(--text-secondary); font: 600 11px/1 var(--font-sans); cursor: pointer; transition: background 140ms ease, border-color 140ms ease, color 140ms ease; }
+          .sbtn:hover { background: var(--bg-panel-hover); border-color: var(--accent-border); color: var(--text-primary); }
+          .sbtn:disabled { opacity: .4; cursor: default; }
+          .sbtn:disabled:hover { background: var(--bg-input); border-color: var(--border-default); color: var(--text-secondary); }
+          .sbtn.on { border-color: var(--status-warning); color: var(--warn-text); background: rgba(217, 154, 61, 0.1); }
+          .sbtn.pri { border-color: var(--accent); background: var(--accent); color: var(--accent-on); }
+          .sbtn.pri:hover { background: var(--accent-bright); color: var(--accent-on); }
+          .sbtn.dng:hover { border-color: rgba(185, 66, 50, 0.6); color: var(--danger-text); }
+          .sbtn:focus-visible, .trow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+          .colhd { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font: 700 9px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--rv-t3); }
+          button.trow { width: 100%; text-align: left; background: transparent; font: inherit; color: inherit; }
+
+          .sv { border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); overflow: hidden; }
+          .svh { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
+          .svh .ttl { font: 650 13px/1.2 var(--font-sans); color: var(--text-primary); }
+          .svh .ttl small { margin-left: 6px; font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+          .svh .tools { margin-left: auto; display: flex; gap: 6px; }
+          .health { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; font: 600 10px/1 var(--font-mono); border: 1px solid var(--border-subtle); color: var(--text-muted); transition: color 160ms ease, border-color 160ms ease; }
+          .health.warn { color: var(--status-warning); border-color: rgba(217, 154, 61, 0.4); }
+          .health.ok { color: var(--success-text); border-color: rgba(95, 169, 105, 0.4); }
+          .health.push { color: var(--info-text); border-color: rgba(86, 137, 196, 0.4); }
+          .board { position: relative; height: 352px; margin: 14px 16px 8px 34px; }
+          .card { position: absolute; left: 0; right: 0; top: 0; height: 62px; padding: 8px 12px 0 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel-elevated);
+            transition: transform 360ms var(--ease-seat), opacity 300ms ease, border-color 160ms ease, background 160ms ease; }
+          .card.stale { border-color: rgba(217, 154, 61, 0.45); }
+          .card.run { border-color: var(--accent); background: var(--bg-row-active); }
+          .card.stop { border-color: var(--status-error); }
+          .card.merged { border-color: rgba(138, 109, 196, 0.55); }
+          .card.gone { pointer-events: none; }
+          .card.fresh { animation: settle 900ms ease-out; }
+          @keyframes settle { from { box-shadow: 0 0 0 1px var(--accent-border), 0 8px 32px var(--accent-shadow); } to { box-shadow: 0 0 0 0 rgba(255, 138, 31, 0); } }
+          .card .beam { position: absolute; left: 0; bottom: -1px; width: 30%; height: 2px; border-radius: 2px; background: var(--accent); animation: scan 820ms ease-in-out infinite alternate; }
+          @keyframes scan { from { transform: translateX(0); } to { transform: translateX(233%); } }
+          .card .wire { position: absolute; left: -24px; top: 30px; height: 74px; width: 0; border-left: 2px dashed var(--status-warning); }
+          .card .wire::after { content: ""; position: absolute; left: -2px; top: 0; bottom: 0; border-left: 2px solid rgba(255, 138, 31, 0.8); transform-origin: top; transform: scaleY(1); transition: transform 420ms var(--ease-seat); }
+          .card.stale .wire::after { transform: scaleY(0); }
+          .card.merged .wire::after { border-left-color: var(--brand-purple); }
+          .card .node { position: absolute; left: -30px; top: 24px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg-panel); border: 2px solid var(--accent); transition: border-color 160ms ease, background 160ms ease; }
+          .card.stale .node { border-color: var(--status-warning); }
+          .card.merged .node { border-color: var(--brand-purple); background: var(--brand-purple); }
+          .card.run .node { background: var(--accent); }
+          .l1 { display: flex; align-items: center; gap: 8px; min-width: 0; height: 20px; }
+          .pos { flex: none; font: 600 9.5px/1 var(--font-mono); color: var(--text-subtle); width: 24px; }
+          .bname { flex: none; font: 600 12px/1 var(--font-mono); color: var(--text-primary); }
+          .own { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .own.running { color: var(--accent-bright); } .own.held { color: var(--warn-text); } .own.done { color: #c9b6f0; }
+          .l2 { display: flex; align-items: center; gap: 6px; height: 26px; padding-left: 32px; min-width: 0; overflow: hidden; }
+          .base { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); white-space: nowrap; }
+          .base b { color: var(--text-secondary); font-weight: 500; }
+          .sha { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); transition: color 200ms ease; }
+          .card.fresh .sha { color: var(--accent-bright); }
+          .trunk { position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px dashed var(--border-default); border-radius: 8px; color: var(--text-muted); transition: transform 360ms var(--ease-seat); }
+          .trunk .node { position: absolute; left: -30px; top: 12px; width: 14px; height: 14px; border-radius: 3px; background: var(--text-muted); }
+          .trunk b { font: 600 12px/1 var(--font-mono); color: var(--text-secondary); }
+          .trunk.moved .sha { color: #c9b6f0; }
+          .svf { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; border-top: 1px solid var(--border-subtle); background: var(--bg-panel-elevated); font: 500 11px/1.4 var(--font-sans); color: var(--text-secondary); }
+          .toastin { animation: rise 260ms ease both; }
+
+          .plan { border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); overflow: hidden; }
+          .plh { padding: 12px 14px 10px; border-bottom: 1px solid var(--border-subtle); }
+          .plh .k { font: 700 9px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle); }
+          .plh .t { margin-top: 6px; font: 650 13px/1.25 var(--font-sans); color: var(--text-primary); }
+          .plh .s { margin-top: 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-muted); }
+          .plh .by { margin-top: 6px; display: inline-flex; height: 18px; align-items: center; padding: 0 6px; border-radius: 5px; border: 1px solid var(--border-subtle); font: 500 10px/1 var(--font-mono); color: var(--text-secondary); }
+          .steps { display: flex; flex-direction: column; padding: 6px 0; }
+          .step { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 5px 14px; animation: rise 260ms ease both; }
+          @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+          .step .ic { position: relative; width: 14px; height: 14px; margin-top: 1px; border-radius: 50%; border: 1.5px solid var(--border-strong); transition: background 160ms ease, border-color 160ms ease; }
+          .step.done .ic { background: var(--status-ok); border-color: var(--status-ok); }
+          .step.done .ic::after { content: ""; position: absolute; left: 3.5px; top: 1px; width: 3px; height: 6px; border: solid #06130a; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+          .step.now .ic { border-color: var(--accent); background: var(--accent-soft); }
+          .step.now .ic::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent); }
+          .step.stop .ic { border-color: var(--status-error); background: rgba(196, 90, 58, 0.24); }
+          .step .tx { font: 600 11px/1.35 var(--font-mono); color: var(--text-secondary); }
+          .step.now .tx { color: var(--accent-bright); } .step.done .tx { color: var(--text-primary); }
+          .step .sx { margin-top: 2px; font: 400 10px/1.4 var(--font-sans); color: var(--text-muted); }
+          .fc { display: inline-flex; margin-top: 4px; padding: 1px 6px; border-radius: 4px; font: 600 9.5px/1.5 var(--font-mono); }
+          .fc:empty { display: none; }
+          .fc.clean { color: var(--success-text); background: rgba(74, 148, 92, 0.14); }
+          .fc.conflict { color: var(--danger-text); background: rgba(185, 66, 50, 0.2); }
+          .fc.resolved { color: var(--info-text); background: rgba(86, 137, 196, 0.16); }
+          .idle { padding: 12px 14px 14px; font: 400 10.5px/1.5 var(--font-sans); color: var(--text-muted); }
+          .idle b { color: var(--text-secondary); font-weight: 600; }
+          .banner { margin: 2px 14px 10px; padding: 9px 11px; border: 1px solid rgba(196, 90, 58, 0.5); border-radius: 7px; background: rgba(196, 90, 58, 0.08); font: 500 10.5px/1.5 var(--font-sans); color: var(--danger-text); }
+          .banner b { color: var(--text-primary); }
+          .appr { margin: 2px 14px 12px; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--accent-border); border-radius: 8px; background: var(--bg-row-active); animation: rise 260ms ease both; }
+          .appr .hd { display: flex; align-items: center; gap: 8px; }
+          .appr .chip { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--accent); color: var(--accent-on); font: 700 10.5px/1 var(--font-sans); }
+          .appr .cap { font: 500 10px/1 var(--font-mono); color: var(--text-muted); }
+          .appr p { margin: 0; font: 500 11.5px/1.45 var(--font-sans); color: var(--text-primary); }
+          .appr p small { display: block; margin-top: 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-muted); }
+          .appr .acts { display: flex; gap: 6px; }
+          .ledger { margin: 0 14px 12px; padding: 10px 12px; border: 1px solid rgba(95, 169, 105, 0.32); border-radius: 7px; background: rgba(74, 148, 92, 0.07); display: flex; flex-direction: column; gap: 4px; }
+          .ledger > div { font: 500 10.5px/1.4 var(--font-mono); color: var(--success-text); animation: rise 260ms ease both; }
+          .ledger > div.n { color: var(--text-muted); }
+          .plf { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); background: var(--bg-panel-elevated); }
+
+          .lower { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+          .notice { border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); padding: 12px 14px 14px; min-height: 196px; }
+          .nhd { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font: 650 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .nhd .ag { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .sysmsg { border-left: 2px solid var(--border-strong); padding: 2px 0 2px 12px; display: flex; flex-direction: column; gap: 6px; animation: rise 260ms ease both; }
+          .sysmsg .ey { font: 700 9px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle); }
+          .sysmsg p { margin: 0; font: 400 11.5px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .sysmsg p:first-of-type { color: var(--text-primary); }
+          .log { border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); padding: 12px 14px; min-height: 196px; display: flex; flex-direction: column; gap: 7px; }
+          .lrow { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; animation: rise 260ms ease both; }
+          .lrow .w { font: 600 10.5px/1.45 var(--font-sans); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .lrow .c { font: 500 10.5px/1.45 var(--font-mono); color: var(--text-primary); word-break: break-word; }
+          .lrow .r { display: block; font: 400 10px/1.4 var(--font-sans); color: var(--text-muted); }
+
+          /* ---- star map (turn 3d) ---- */
+          .sm { position: relative; width: 620px; height: 380px; border-radius: 10px; border: 1px solid var(--rv-line); background: radial-gradient(circle at 30% 20%, rgba(255,255,255,.02), transparent 60%), var(--bg-app); overflow: hidden; }
+          .smc { position: absolute; width: 168px; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel-elevated); display: flex; flex-direction: column; gap: 5px; }
+          .smc .t { font: 600 11.5px/1.25 var(--font-sans); color: var(--text-primary); }
+          .smc .m { display: flex; align-items: center; gap: 5px; }
+          .smc.hl { border-color: var(--accent-border); box-shadow: 0 0 0 2px rgba(255, 138, 31, 0.45); }
+          .comet { offset-path: path("M 0 0"); }
+          .edge-flow { stroke-dasharray: 3 9; animation: flow 1400ms linear infinite; }
+          @keyframes flow { to { stroke-dashoffset: -24; } }
+
+          @media (prefers-reduced-motion: reduce) {
+            .card, .trunk, .trow, .step, .ledger > div, .appr, .sysmsg, .lrow, .cookie, .toastin, .pos-chip, .health, .card .wire::after, .card.fresh { animation: none !important; transition: none !important; }
+            .card .beam { animation: none !important; transform: translateX(116%); }
+            /* "Hold it" (desktop-style-guide.md › Reduced motion): the scanner parks mid-sweep, so running ≠ idle */
+            .ts::after { animation: none !important; opacity: 1; transform: translateX(22px); }
+            .edge-flow { animation: none !important; stroke-dasharray: none; }
+          }
+        </style>
+      </helmet>
+
+      <!-- ================================================================ TURN 0 -->
+      <section class="dv-turn" id="t0" data-screen-label="Turn 0 Brief">
+        <div class="dv-thd"><a class="dv-tid" href="#t0">0</a><span class="dv-tname">Brief: agents build stacks, so PwrAgent has to operate them across threads</span></div>
+        <p class="dv-sub">Harold asked whether PwrGit or PwrAgent ever built stacked-PR GUI and operation support. Neither did. PwrGit’s design is done (<a href="https://github.com/pwrdrvr/PwrGit/pull/646">PwrGit #646</a>): gh stack’s catalog is the state, <code>git replay</code> + <code>merge-tree</code> plan, one <code>update-ref</code> transaction applies. PwrAgent has a harder version of the problem. <b>Agents</b> create, extend, restack, reorder, submit and sync stacks. Each layer usually lives in a <b>different thread</b>, with its own worktree, and that thread’s agent may be <b>mid-turn</b> when the stack below it moves. So this board is about who runs the engine, how a stack maps onto threads, how a running agent is asked before its branch moves, and what it’s told afterwards. Everything here is a proposal. Nothing is built. Repository names, branches, PR numbers and shas are invented.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="0a" data-screen-label="0a What PwrAgent has">
+            <div class="dv-olabel"><a class="dv-oid" href="#0a">0a</a>What PwrAgent already has to build on</div>
+            <div class="find">
+              <div class="fitem"><span class="pin ok">1</span><div><h4>Stack order inference exists, for combined reviews</h4><p><code>pullRequestStackOrder()</code> (<code>packages/shared/src/pull-request-review.ts</code>) walks base→head and returns members bottom-first, or nothing for a fork, cycle or gap. It has a property test. Today only the Composer’s “review together” uses it.</p></div></div>
+              <div class="fitem"><span class="pin ok">2</span><div><h4>Thread dependencies already hold merges</h4><p><code>manage_thread_dependencies</code> has <code>pr_merged</code> and <code>merge_build</code>, and <code>holdMerge</code> makes <code>merge_pull_request</code> throw <code>merge_held</code> through <code>assertMergeNotHeld</code>, re-read just before the provider write. That is half of “merge a stack bottom-up”.</p></div></div>
+              <div class="fitem"><span class="pin ok">3</span><div><h4>Turn queues already hold for reasons</h4><p><code>ThreadTurnQueue</code> (owner-core) keeps a set of hold reasons per thread, and <code>move_thread_workspace</code> already waits for the turn to end, acts, then starts a continuation. That’s the shape of the restack handshake.</p></div></div>
+              <div class="fitem"><span class="pin ok">4</span><div><h4>Forge writes have policy, RBAC and merge-queue routing</h4><p><code>FORGE_AGENT_WRITE_TOOL_GROUPS</code> gates every write by project and agent (<code>allow · auto · ask · off</code>), messaging RBAC maps them to <code>tools.forge_write</code>, and <code>merge_pull_request</code> enqueues when a queue is required.</p></div></div>
+            </div>
+          </div>
+          <div class="dv-opt" id="0b" data-screen-label="0b What is missing">
+            <div class="dv-olabel"><a class="dv-oid" href="#0b">0b</a>What goes wrong today when an agent stacks</div>
+            <div class="find">
+              <div class="fitem"><span class="pin">1</span><div><h4>An agent can only rebase its own worktree</h4><p>When the bottom layer takes a review fix, the agent there can’t move the branches above it. They are checked out in other threads’ worktrees, and <code>git rebase --update-refs</code> silently skips refs checked out elsewhere. Every layer’s PR quietly shows the parent’s old commits.</p></div></div>
+              <div class="fitem"><span class="pin">2</span><div><h4>Merging can close the layer above</h4><p>Deleting a merged base with <code>git push :branch</code> closes every open PR based on it. GitHub retargets children only when the branch is deleted through the merged PR’s own flow, or when a GitHub stack owns the bases.</p></div></div>
+              <div class="fitem"><span class="pin">3</span><div><h4>Auto-merge on a middle layer merges into its parent</h4><p><code>merge_pull_request</code> turns on auto-merge while checks are pending under a merge queue. On a layer whose base isn’t trunk, that merges into the parent branch, not into main. gh stack disables auto-merge on stacked PRs for this reason.</p></div></div>
+              <div class="fitem"><span class="pin">4</span><div><h4>Nothing shows a stack</h4><p>No <code>n/N</code> chip exists. The PR rail sorts by number, and the Star Map draws only federation links. A four-thread stack looks like four unrelated threads.</p></div></div>
+            </div>
+          </div>
+          <div class="dv-opt" id="0c" data-screen-label="0c gh stack read">
+            <div class="dv-olabel"><a class="dv-oid" href="#0c">0c</a>Read from gh stack v0.3.0’s source (2a49e67). These answer PwrGit’s open questions 1 and 2.</div>
+            <div class="tbl" style="width: 560px">
+              <div class="tr head" style="grid-template-columns: 150px minmax(0, 1fr)"><span>Fact</span><span>Consequence for PwrAgent</span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr)"><span><b>Locks are <code>flock</code></b><br />operation lock, then catalog lock, 100&nbsp;ms retry, 5&nbsp;s timeout</span><span>The operation lock is taken only for the apply window, never while waiting for a turn to end, or every <code>gh stack</code> in another terminal fails after 5&nbsp;s.</span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr)"><span><b>Catalog writes are a SHA-256 CAS</b>, re-marshalled from Go structs</span><span>Unknown fields are silently dropped, so PwrAgent stores <b>nothing</b> extra in the catalog. Thread bindings are derived (turn 2).</span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr)"><span><b>Journals</b> <code>gh-stack-rebase-state</code>, <code>-modify-state</code>, <code>-migration</code></span><span>Any of them present refuses every stack operation: “gh stack is mid-operation in this clone”.</span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr)"><span><b>Stack API</b> <code>/repos/{o}/{r}/stacks</code>, <code>…/add</code>, <code>…/unstack</code>; merge via <code>pulls/{n}/merge-async</code></span><span>Once GitHub stacks the PRs, GitHub owns their bases. PwrAgent doesn’t PATCH them. Without the API (404), PwrAgent retargets before it deletes.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 1 -->
+      <section class="dv-turn" id="t1" data-screen-label="Turn 1 Who runs the engine">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Who runs the engine: one engine, two hosts</span></div>
+        <p class="dv-sub">The stack engine is the riskiest code in either product: squash boundaries, patch-id proofs, ref transactions, worktree follow. Two copies would drift on exactly the cases that matter. gh-stack’s own #586 took a fix to choose between two plausible base candidates. So there is one engine. The question is how PwrAgent reaches it. Today PwrAgent’s main process <b>never</b> calls a <code>pwrgit_*</code> tool. <code>PwrGitConnectionService</code> only relays PwrGit’s tools to agents, and PwrGit approves each session in its own window.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="1a" data-screen-label="1a Options">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>The options, and what each costs</div>
+            <div class="tbl" style="width: 760px">
+              <div class="tr head" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span>Option</span><span>Verdict</span><span>Why</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>A. Orchestrate PwrGit’s MCP</b><br /><code>pwrgit_stack_plan/apply</code></span><span><span class="verdict bug">Rejected</span></span><span>PwrGit is optional, desktop-only and must be running, but PwrAgent owners also run headless and as Outposts on Linux. The handshake would straddle two processes: PwrAgent pauses threads, PwrGit moves their worktrees. Consent would happen twice, once in PwrGit’s window and once in PwrAgent or Slack. And <code>.publish</code> can never be session-granted there, so every automated sync after a merge would wait on a PwrGit dialog nobody is watching.</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>B. PwrAgent ships its own engine</b></span><span><span class="verdict bug">Rejected</span></span><span>Two implementations of the squash boundary, the patch-id proof and the worktree follow, tested separately and diverging in the cases nobody tested. A stack restacked by PwrGit and then by PwrAgent could disagree about <code>base</code>.</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>C. Both, with a fallback</b></span><span><span class="verdict bug">Rejected</span></span><span>The costs of A and B together, plus behaviour that changes depending on whether PwrGit happens to be running. A conflict forecast would depend on which engine answered.</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>D. One engine as a package, two hosts</b><br /><code>@pwrdrvr/stack-engine</code></span><span><span class="verdict keep">Recommended</span></span><span>PwrGit factors its plan/apply engine out of <code>main/git</code> into a package with no Electron dependency. It talks to git through a <code>GitRunner</code> port and to the catalog through a <code>CatalogStore</code> port. PwrGit’s MCP tools and PwrAgent’s owner both link it. They interoperate through on-disk state (gh stack’s catalog and locks, the op journal, <code>refs/pwrgit/undo/*</code>), never through an IPC call. Each host keeps its own consent model.</span></div>
+            </div>
+            <p class="note"><b>The cost of D:</b> PwrGit’s P1 has to land the engine as a package, and PwrAgent’s P1 waits on it. Version skew between the two apps is safe because they agree on the files, not on code. gh stack is already a third writer to those files, and every apply is a compare-and-swap against expected tips.</p>
+          </div>
+          <div class="dv-opt" id="1b" data-screen-label="1b Topology">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Where each piece lives</div>
+            <div class="stage" style="width: 520px">
+              <svg width="484" height="330" viewBox="0 0 484 330" role="img" aria-label="Topology. PwrGit app and PwrAgent owner both link the stack engine package. The engine reads and writes shared state in the common git dir: the gh stack catalog and locks, the op journal, and undo refs. gh stack CLI also writes the catalog. PwrAgent adds the thread coordinator and the forge policy gate.">
+                <rect x="10" y="10" width="200" height="104" rx="8" fill="#101010" stroke="rgba(247,243,235,.14)" />
+                <text x="24" y="32" fill="#f7f3eb" font-family="Geist, sans-serif" font-size="12" font-weight="650">PwrGit app</text>
+                <text x="24" y="52" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">pwrgit_stack_* MCP tools</text>
+                <text x="24" y="68" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">consent sheet (its window)</text>
+                <text x="24" y="84" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">Stacks sidebar, stack view</text>
+                <rect x="274" y="10" width="200" height="104" rx="8" fill="#120800" stroke="rgba(255,138,31,.42)" />
+                <text x="288" y="32" fill="#ffb35c" font-family="Geist, sans-serif" font-size="12" font-weight="650">PwrAgent owner</text>
+                <text x="288" y="52" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">StackCoordinator (owner-core)</text>
+                <text x="288" y="68" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">turn holds · notices · deps</text>
+                <text x="288" y="84" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">forge policy · RBAC · approvals</text>
+                <text x="288" y="100" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">desktop main, headless, Outpost</text>
+                <rect x="112" y="152" width="260" height="56" rx="8" fill="#0a0a0a" stroke="#ff8a1f" stroke-width="1.5" />
+                <text x="242" y="176" text-anchor="middle" fill="#f7f3eb" font-family="Geist Mono, monospace" font-size="11.5" font-weight="600">@pwrdrvr/stack-engine</text>
+                <text x="242" y="194" text-anchor="middle" fill="#8c857a" font-family="Geist, sans-serif" font-size="10">plan · prove · apply · undo · health</text>
+                <path d="M110 114 L 200 152" stroke="#8c857a" stroke-width="1.5" fill="none" />
+                <path d="M374 114 L 284 152" stroke="#ff8a1f" stroke-width="1.5" fill="none" />
+                <text x="118" y="140" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">links</text>
+                <text x="346" y="140" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">links</text>
+                <rect x="10" y="242" width="464" height="78" rx="8" fill="none" stroke="rgba(247,243,235,.2)" stroke-dasharray="4 4" />
+                <text x="24" y="262" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5" font-weight="700" letter-spacing=".8">$GIT_COMMON_DIR · SHARED BY EVERY THREAD WORKTREE</text>
+                <text x="24" y="282" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">gh-stack  gh-stack.lock  gh-stack-operation.lock</text>
+                <text x="24" y="298" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">pwrgit-stack-op.json  refs/pwrgit/undo/&lt;op&gt;/*</text>
+                <text x="24" y="314" fill="#8c857a" font-family="Geist Mono, monospace" font-size="10">gh stack CLI writes here too (third writer)</text>
+                <path d="M242 208 L 242 242" stroke="#ff8a1f" stroke-width="1.5" fill="none" />
+              </svg>
+            </div>
+            <p class="note"><b>Layering.</b> The engine is a runtime dependency of <code>packages/owner-core</code>, which already holds host-independent owner services. A <code>runGitCommand</code>-backed <code>GitRunner</code> adapter lives in <code>apps/desktop</code> main, next to the bundled Git (2.56.1, so <code>git replay</code> is there everywhere). The renderer imports only <code>@pwragent/shared</code>: health and inference are pure functions there, and everything else reaches the renderer over IPC.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 2 -->
+      <section class="dv-turn" id="t2" data-screen-label="Turn 2 Threads and stacks">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Threads and stacks: a layer is a thread, the catalog is the truth, the tray is a projection</span></div>
+        <p class="dv-sub">There are two ways to map threads onto stacks. In the first, one thread owns the whole stack and checks layers out in turn. In the second, each layer is a thread with its own worktree, branch and PR. PwrAgent’s per-thread PR automation, watches, review and Continue After all key on the thread that holds a PR, and agents work layers in parallel. So <b>the unit is the layer thread</b>. One thread may still hold several layers that aren’t checked out anywhere, while it writes them in order.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="2a" data-screen-label="2a Roles">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span class="rec">Recommended.</span> Roles. Every one is derived, and none is stored.</div>
+            <div class="tbl" style="width: 760px">
+              <div class="tr head" style="grid-template-columns: 150px minmax(0, 1fr) 200px"><span>Role</span><span>Rule</span><span>Derived from</span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr) 200px"><span><b>Layer thread</b></span><span>The thread whose registered worktree has the layer’s branch checked out. Only it may have its worktree moved, and only through the handshake (turn 5).</span><span>linked directory / <code>worktreeRegistrations</code> + <code>git worktree list</code></span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr) 200px"><span><b>Holder</b> (no worktree)</span><span>A branch checked out nowhere. It belongs to the thread whose attached PR heads it, or else to the lead. It moves freely, with no handshake.</span><span>thread <code>prs</code> → <code>headRefName</code></span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr) 200px"><span><b>Stack lead</b></span><span>The thread that created or adopted the stack. It receives operation summaries and conflict escalations. Lead-ness moves with an explicit <code>set_lead</code>, or falls to the bottom layer’s thread when the lead is archived.</span><span>PwrAgent overlay field <code>stackLead</code>, the one stored fact (in PwrAgent’s DB, never the catalog)</span></div>
+              <div class="tr" style="grid-template-columns: 150px minmax(0, 1fr) 200px"><span><b>Ambiguous</b></span><span>A branch checked out in two worktrees, or attached to PRs in two threads, is shown as <span class="bdg drift">2 threads claim windows/api</span>. Every ref-moving plan touching it is refused until one claim is released.</span><span>the same, disagreeing</span></div>
+            </div>
+            <p class="note"><b>Why derive:</b> gh stack re-marshals the catalog and drops unknown fields (0c), and a fourth store would drift the first time someone runs <code>git switch</code> in a terminal. Derivation is a pure function of (catalog, worktree list, thread overlays). It’s re-derived from git, so CLAUDE.md requires a model test for it (turn 9).</p>
+          </div>
+          <div class="dv-opt" id="2b" data-screen-label="2b Subthreads">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>Sub-threads: the tray mirrors the stack, but a drag only stages a plan</div>
+            <div class="find" style="width: 520px">
+              <div class="fitem"><span class="pin acc">1</span><div><h4>New layers are born as sub-threads of the lead</h4><p><code>add_branch</code> with <code>newThread: true</code> creates the layer thread with <code>parentThreadId</code> = lead. PwrAgent writes <code>subthreadOrder</code> top-first, so the tray reads like GitHub’s stack, trunk last.</p></div></div>
+              <div class="fitem"><span class="pin acc">2</span><div><h4>Adopt doesn’t reparent</h4><p>Adopting four existing threads leaves the sidebar alone. Parentage is the operator’s grouping (“UI-only”, per <code>navigation.ts</code>). The stack shows up through chips and the spine wherever the rows already are. <b>Group as stack</b> is an explicit, separate action.</p></div></div>
+              <div class="fitem"><span class="pin acc">3</span><div><h4>Dragging a layer row inside a stack tray plans a reorder</h4><p>The held card says <b>Plan reorder</b> instead of moving the row. On drop, PwrAgent stages the reorder plan with its live forecast, and the rows snap back to catalog order until the plan is applied. Escape cancels as usual. Dropping a row outside the tray detaches the sub-thread and leaves the stack untouched.</p></div></div>
+              <div class="fitem"><span class="pin acc">4</span><div><h4>A stack belongs to one clone</h4><p>Its owner is the instance whose <code>$GIT_COMMON_DIR</code> holds the catalog. A layer thread handed off to another machine keeps its PR, but leaves that clone’s worktree. It shows as <span class="bdg mute">remote · read-only</span>, and plans that would move its branch are refused until it comes home or pushes.</p></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 3 -->
+      <section class="dv-turn" id="t3" data-screen-label="Turn 3 Where stacks show">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Where a stack shows: thread rows, the PR rail, Waiting for, and the Star Map</span></div>
+        <p class="dv-sub">A stack spans threads, so it can’t live in one thread’s view. It shows in four places. Each one uses the shipped primitive, at the shipped size, with one new mark: the <b>position chip</b> (<code>2/4</code>). It’s neutral by UI-THEME’s “one signal per row” rule. Only its stale state takes colour, and the row’s selection keeps the accent.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="3a" data-screen-label="3a Thread rows">
+            <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span class="rec">Recommended.</span> Thread rows: the stack tray’s left rule becomes the spine</div>
+            <div class="stage" style="width: 380px">
+              <div class="sb">
+                <div class="phead">orbit-deploy<span class="ct">5 threads</span></div>
+                <div class="trow">
+                  <div class="h"><span class="tt">Ship deploy windows</span><span class="tm">4m</span></div>
+                  <div class="cl"><span class="pos-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" /></svg>stack · 4</span><span class="ag">Claude</span></div>
+                </div>
+                <div class="tray">
+                  <div class="trow sub"><span class="sp stale"></span>
+                    <div class="h"><span class="tt">Next-window banner</span><span class="ts"></span></div>
+                    <div class="cl"><span class="pos-chip stale">4/4</span><span class="pr-chip none"><span class="d"></span>draft</span><span class="tmeta">working</span></div>
+                  </div>
+                  <div class="trow sub sel"><span class="sp stale"></span>
+                    <div class="h"><span class="tt">Tenant API windows</span><span class="cookie"></span><span class="tm">2m</span></div>
+                    <div class="cl"><span class="pos-chip stale">3/4</span><span class="pr-chip passing"><span class="d"></span>#653</span><span class="held-chip">held · restack</span></div>
+                  </div>
+                  <div class="trow sub"><span class="sp stale"></span>
+                    <div class="h"><span class="tt">Scheduler waits for windows</span><span class="ts"></span></div>
+                    <div class="cl"><span class="pos-chip stale">2/4</span><span class="pr-chip pending"><span class="d"></span>#652</span><span class="tmeta held">turn running · restack waits</span></div>
+                  </div>
+                  <div class="trow sub"><span class="sp"></span>
+                    <div class="h"><span class="tt">DeployWindow model</span><span class="tm">6m</span></div>
+                    <div class="cl"><span class="pos-chip">1/4</span><span class="pr-chip passing"><span class="d"></span>#651</span><span class="tmeta">needs push</span></div>
+                  </div>
+                  <div class="trunkrow">main</div>
+                </div>
+              </div>
+            </div>
+            <p class="note">The tray’s <code>border-left</code> (<code>.subthread-list</code>, 1px <code>--border-subtle</code>) becomes a 1.5px spine at the Star Map link’s 55% accent. Where a layer isn’t on its parent’s tip, the segment is <b>dashed</b> <code>--status-warning</code>, so the gap is real commits. The chip sits before the PR chip in <code>.thread-row__chips</code>, at 20px like every row chip. Under Minimal density it’s <code>--essential</code>, so <code>2/4</code> survives. Click it to open the stack in the PR rail. A layer adopted outside a tray shows the chip and no spine.</p>
+          </div>
+          <div class="dv-opt" id="3b" data-screen-label="3b PR rail">
+            <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a>The Pull requests rail gains a Stack card above the PR cards</div>
+            <div class="stage" style="width: 400px">
+              <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 8px; background: rgba(247,243,235,.02)">
+                <div style="display: flex; align-items: center; gap: 8px"><span style="font: 650 13px/1.2 var(--font-sans); color: var(--text-primary)">Stack windows</span><span class="health warn">3 need restack</span><span style="margin-left: auto; font: 500 11px/1 var(--font-mono); color: var(--text-muted)">#12 on GitHub</span></div>
+                <div style="display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; font: 500 11px/1.3 var(--font-mono); color: var(--text-secondary)">
+                  <span style="color: var(--warn-text)">4/4</span><span>windows/ui · Next-window banner</span><span class="pr-chip none"><span class="d"></span>draft</span>
+                  <span style="color: var(--warn-text)">3/4</span><span>windows/api · Tenant API windows</span><span class="pr-chip passing"><span class="d"></span>#653</span>
+                  <span style="color: var(--warn-text)">2/4</span><span>windows/scheduler · Scheduler…</span><span class="pr-chip pending"><span class="d"></span>#652</span>
+                  <span>1/4</span><span>windows/model · DeployWindow model</span><span class="pr-chip passing"><span class="d"></span>#651</span>
+                  <span style="color: var(--text-muted)">·</span><span style="color: var(--text-muted)">main · 8c1d2e0</span><span></span>
+                </div>
+                <div style="display: flex; gap: 6px; padding-top: 2px"><button class="sbtn pri" type="button">Restack</button><button class="sbtn" type="button">Sync</button><button class="sbtn" type="button">Submit</button><span style="flex: 1"></span><button class="sbtn" type="button">Open plan</button></div>
+              </div>
+            </div>
+            <p class="note">It’s a <code>.rail-card</code> at the shipped 10px padding and 8px radius, shown in every layer thread’s rail. The same card renders the plan, the approval and the proof ledger while an operation runs. The PR cards under it switch from number order to stack order through <code>orderPullRequestSet()</code>, because their bases already chain.</p>
+          </div>
+          <div class="dv-opt" id="3c" data-screen-label="3c Waiting for">
+            <div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a>Waiting for: the layer’s automatic dependency, and a held restack</div>
+            <div class="stage" style="width: 400px">
+              <div style="display: flex; flex-direction: column; gap: 10px">
+                <div style="display: flex; align-items: center; gap: 8px; font: 650 12px/1 var(--font-sans); color: var(--text-primary)">Waiting for <span class="health">2</span></div>
+                <div style="padding: 8px 10px; border: 1px solid var(--accent-border); border-radius: 6px; background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated)); font: 500 11px/1.45 var(--font-sans); color: var(--text-secondary)"><b style="color: var(--text-primary)">Held for restack op-0412.</b> This thread’s next turn waits until <span class="mono">windows/api</span> has moved. Queued sends stay queued.<div style="margin-top: 6px; display: flex; gap: 6px"><button class="sbtn" type="button">Open plan</button><button class="sbtn" type="button">Release this thread</button></div></div>
+                <div style="font: 600 10px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle)">Other threads</div>
+                <div style="display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-panel-elevated)">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#8c857a" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M6 8.5V14a4 4 0 0 0 4 4h5.5" /></svg>
+                  <div><div style="font: 500 12px/16px var(--font-sans); color: var(--text-primary)">Continue after Scheduler waits for windows is merged</div><div style="font: 400 11px/1.4 var(--font-sans); color: var(--text-muted)">automatic · stack windows 2/4 → 3/4 · holds this PR’s merge · then PwrAgent syncs this layer</div></div>
+                </div>
+              </div>
+            </div>
+            <p class="note">The hold reuses the shipped hold box (<code>.waiting-for</code> hold notice, 7% accent mix). The dependency is an ordinary <code>pr_merged</code> registration with <code>holdMerge: true</code> and <code>automatic: true</code>. Its continuation is the sync step (turn 7), so Waiting for needs no stack-specific code, only the stack phrase in its sub line.</p>
+          </div>
+          <div class="dv-opt" id="3d" data-screen-label="3d Star Map">
+            <div class="dv-olabel"><a class="dv-oid" href="#3d">3d</a>Star Map: stack edges between thread cards, a new edge class beside federation links</div>
+            <div class="sm">
+              <svg width="620" height="380" viewBox="0 0 620 380" style="position: absolute; inset: 0" role="img" aria-label="Star map. Four thread cards rise diagonally from main. Solid amber stack edges link main to DeployWindow model; dashed warning edges link the three layers above it, which need restack. A flowing dash marks the edge being replayed. A faint federation spiral arm passes behind.">
+                <path d="M -20 360 C 140 300, 260 330, 380 250 S 600 90, 660 60" stroke="#ff8a1f" stroke-opacity=".16" stroke-width="14" fill="none" />
+                <path d="M 96 352 C 96 338, 120 340, 120 328" stroke="#ff8a1f" stroke-opacity=".55" stroke-width="1.75" fill="none" />
+                <path d="M 120 270 C 120 240, 280 280, 280 258" stroke="#ff8a1f" stroke-opacity=".55" stroke-width="1.75" fill="none" />
+                <path d="M 280 200 C 280 170, 440 210, 440 188" stroke="#d99a3d" stroke-width="1.75" stroke-dasharray="5 4" fill="none" />
+                <path d="M 280 200 C 280 170, 440 210, 440 188" stroke="#ffb35c" stroke-width="2" fill="none" class="edge-flow" />
+                <path d="M 440 130 C 440 100, 516 116, 516 88" stroke="#d99a3d" stroke-width="1.75" stroke-dasharray="5 4" fill="none" />
+                <path d="M 120 270 C 60 230, 60 120, 104 92" stroke="#ff8a1f" stroke-opacity=".45" stroke-width="1" stroke-dasharray="4 4" fill="none" />
+              </svg>
+              <div class="smc" style="left: 30px; top: 34px; width: 150px"><span class="t">Ship deploy windows</span><span class="m"><span class="pos-chip">stack · 4</span></span></div>
+              <div class="smc" style="left: 36px; top: 270px"><span class="t">DeployWindow model</span><span class="m"><span class="pos-chip">1/4</span><span class="pr-chip passing"><span class="d"></span>#651</span></span></div>
+              <div class="smc" style="left: 196px; top: 200px"><span class="t">Scheduler waits for windows</span><span class="m"><span class="pos-chip stale">2/4</span><span class="pr-chip pending"><span class="d"></span>#652</span><span class="ts" style="width: 30px"></span></span></div>
+              <div class="smc hl" style="left: 356px; top: 130px"><span class="t">Tenant API windows</span><span class="m"><span class="pos-chip stale">3/4</span><span class="pr-chip passing"><span class="d"></span>#653</span></span></div>
+              <div class="smc" style="left: 432px; top: 30px"><span class="t">Next-window banner</span><span class="m"><span class="pos-chip stale">4/4</span><span class="pr-chip none"><span class="d"></span>draft</span></span></div>
+              <div style="position: absolute; left: 74px; top: 342px; display: flex; align-items: center; gap: 6px; font: 600 11px/1 var(--font-mono); color: var(--text-secondary)"><span style="width: 12px; height: 12px; border-radius: 3px; background: var(--text-muted)"></span>main</div>
+            </div>
+            <p class="note">The new <code>svg.star-map__stacks</code> layer sits under the cards and above <code>.star-map__arms</code>. Edges run from parent card to child card: solid at the healthy link’s 55% accent, dashed <code>--status-warning</code> where the child needs a restack, and <code>--brand-purple</code> fading out as a merged layer leaves. During an operation, the edge being replayed carries a flowing dash. That’s the only motion on the map, and under reduced motion it stops and shows solid. <code>highlight_star_map_threads</code> takes a stack too, so an agent can say “look at this stack” in one call (the dashed tether is the lead).</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 4: LIVE -->
+      <section class="dv-turn" id="t4" data-screen-label="Turn 4 Live agents operate a stack">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">Live: agents operate one stack across four threads</span></div>
+        <p class="dv-sub">Four threads, one per layer, and a lead thread that coordinates. Two layer agents are mid-turn. Push a review fix to the bottom, and the lead restacks: PwrAgent plans, holds each affected thread at its next safe point, re-plans, moves every ref in one transaction, and tells each moved thread what changed under it. Then Submit, which needs your approval because it publishes. Then merge #651 on GitHub and watch the automatic sync. Click a thread row to read the notice it received. <b>Race</b> makes the Scheduler agent commit before its turn ends, so the compare-and-swap refuses the stale plan. <b>Conflict</b> routes the fix to the thread that owns the conflicting layer. <b>Motion:</b> cards re-seat in 360ms on ease-out. The amber line marks the branch being replayed. A restacked wire draws solid. Running threads carry the thinking scanner. Under reduced motion all of it stops, except the scanner, which parks mid-sweep, as <code>desktop-style-guide.md</code> requires.</p>
+        <div class="live">
+          <div class="scen">
+            <span class="lb">Agents &amp; GitHub</span>
+            <button class="sbtn" type="button" onClick="{{act.amend}}" disabled="{{dis.amend}}">Review fix lands on #651</button>
+            <button class="sbtn" type="button" onClick="{{act.merge}}" disabled="{{dis.merge}}">Merge #651 on GitHub</button>
+            <span class="sep"></span>
+            <span class="lb">Make it hard</span>
+            <button class="{{raceCls}}" type="button" onClick="{{act.race}}" aria-pressed="{{racePressed}}">Race: Scheduler commits mid-wait</button>
+            <button class="{{conflictCls}}" type="button" onClick="{{act.conflict}}" aria-pressed="{{conflictPressed}}">Conflict in windows/api</button>
+            <span style="flex: 1"></span>
+            <button class="sbtn" type="button" onClick="{{act.reset}}">Reset</button>
+          </div>
+
+          <div>
+            <div class="colhd">Threads · orbit-deploy</div>
+            <div class="sb" style="width: 100%">
+              <div class="trow">
+                <div class="h"><span class="tt">Ship deploy windows</span><span class="tm">lead</span></div>
+                <div class="cl"><span class="pos-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" /></svg>stack windows</span><span class="ag">Claude</span></div>
+              </div>
+              <div class="tray">
+                <sc-for list="{{rows}}" as="r" hint-placeholder-count="4">
+                  <button class="{{r.cls}}" type="button" onClick="{{r.pick}}"><span class="{{r.spine}}"></span>
+                    <span class="h"><span class="tt">{{r.title}}</span><sc-if value="{{r.notice}}" hint-placeholder-val="{{false}}"><span class="cookie"></span></sc-if><sc-if value="{{r.running}}" hint-placeholder-val="{{false}}"><span class="ts"></span></sc-if></span>
+                    <span class="cl"><sc-if value="{{r.hasPos}}" hint-placeholder-val="{{true}}"><span class="{{r.posCls}}">{{r.pos}}</span></sc-if><span class="{{r.prCls}}"><span class="d"></span>{{r.prLabel}}</span><span class="{{r.metaCls}}">{{r.meta}}</span></span>
+                  </button>
+                </sc-for>
+                <div class="trunkrow">main</div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="colhd">Stack view · in each layer’s rail</div>
+            <div class="sv">
+              <div class="svh">
+                <span class="ttl">windows<small>{{countLabel}}</small></span>
+                <span class="{{healthCls}}">{{healthLabel}}</span>
+                <span class="tools">
+                  <button class="sbtn" type="button" onClick="{{act.restack}}" disabled="{{dis.restack}}">Restack</button>
+                  <button class="sbtn" type="button" onClick="{{act.submit}}" disabled="{{dis.submit}}">Submit</button>
+                </span>
+              </div>
+              <div class="board">
+                <sc-for list="{{cards}}" as="c" hint-placeholder-count="4">
+                  <div class="{{c.cls}}" style="transform: translateY({{c.y}}px); opacity: {{c.op}};">
+                    <span class="wire"></span><span class="node"></span>
+                    <div class="l1">
+                      <span class="pos">{{c.pos}}</span>
+                      <span class="bname">{{c.name}}</span>
+                      <span class="{{c.prCls}}"><span class="d"></span>{{c.prLabel}}</span>
+                      <span class="{{c.ownerCls}}">{{c.thread}} · {{c.owner}}</span>
+                    </div>
+                    <div class="l2">
+                      <span class="base">on <b>{{c.parent}}</b></span>
+                      <span class="sha">{{c.sha}}</span>
+                      <sc-for list="{{c.badges}}" as="b" hint-placeholder-count="1"><span class="{{b.cls}}">{{b.t}}</span></sc-for>
+                    </div>
+                    <sc-if value="{{c.running}}" hint-placeholder-val="{{false}}"><span class="beam"></span></sc-if>
+                  </div>
+                </sc-for>
+                <div class="{{trunk.cls}}" style="transform: translateY({{trunk.y}}px);">
+                  <span class="node"></span><b>main</b><span class="sha">{{trunk.sha}}</span><span style="flex: 1"></span><span class="base">origin/main · trunk</span>
+                </div>
+              </div>
+              <div class="svf">
+                <sc-if value="{{hasToast}}" hint-placeholder-val="{{true}}"><span class="toastin">{{toast}}</span></sc-if>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="colhd">Operation</div>
+            <div class="plan">
+              <div class="plh">
+                <div class="k">{{plan.kicker}}</div>
+                <div class="t">{{plan.title}}</div>
+                <div class="s">{{plan.sub}}</div>
+                <sc-if value="{{plan.hasBy}}" hint-placeholder-val="{{false}}"><span class="by">{{plan.by}}</span></sc-if>
+              </div>
+              <sc-if value="{{plan.empty}}" hint-placeholder-val="{{true}}">
+                <div class="idle">A plan appears here before anything moves: every replay with its forecast, the threads it must hold, and what goes to GitHub. An agent’s <b>plan_stack_operation</b> and stack automation both land here.</div>
+              </sc-if>
+              <sc-if value="{{needsApproval}}" hint-placeholder-val="{{false}}">
+                <div class="appr">
+                  <div class="hd"><span class="chip">Approval needed</span><span class="cap">stack_publish · ask</span></div>
+                  <p>{{approval.who}} wants to {{approval.what}}.<small>Approve covers this plan only. Local only applies the ref moves and returns the publish steps as not done. A standing grant is a project rule the operator writes, never this button.</small></p>
+                  <div class="acts"><button class="sbtn dng" type="button" onClick="{{act.deny}}">Deny</button><button class="sbtn" type="button" onClick="{{act.local}}" disabled="{{dis.local}}">Local only</button><span style="flex: 1"></span><button class="sbtn pri" type="button" onClick="{{act.approve}}">Approve</button></div>
+                </div>
+              </sc-if>
+              <div class="steps">
+                <sc-for list="{{steps}}" as="st" hint-placeholder-count="0">
+                  <div class="{{st.cls}}" style="animation-delay: {{st.delay}}ms;">
+                    <span class="ic"></span>
+                    <div><div class="tx">{{st.t}}</div><div class="sx">{{st.sub}}</div><span class="{{st.fcCls}}">{{st.fc}}</span></div>
+                  </div>
+                </sc-for>
+              </div>
+              <sc-if value="{{paused}}" hint-placeholder-val="{{false}}">
+                <div class="banner"><b>Stopped before windows/api.</b> <span class="mono">src/api/tenants.ts</span> conflicts on replay. <b>Nothing has moved.</b> That layer belongs to Tenant API windows, so it should resolve it there. Or apply only the clean layer below, or abort.</div>
+              </sc-if>
+              <sc-if value="{{hasLedger}}" hint-placeholder-val="{{false}}">
+                <div class="ledger"><sc-for list="{{ledger}}" as="l" hint-placeholder-count="3"><div class="{{l.cls}}" style="animation-delay: {{l.delay}}ms;">{{l.t}}</div></sc-for></div>
+              </sc-if>
+              <sc-if value="{{showFooter}}" hint-placeholder-val="{{false}}">
+                <div class="plf">
+                  <sc-if value="{{btn.interrupt}}" hint-placeholder-val="{{false}}"><button class="sbtn" type="button" onClick="{{act.interrupt}}">Interrupt running turns</button></sc-if>
+                  <sc-if value="{{btn.run}}" hint-placeholder-val="{{false}}"><button class="sbtn" type="button" onClick="{{act.run}}">Run</button></sc-if>
+                  <sc-if value="{{btn.resolve}}" hint-placeholder-val="{{false}}"><button class="sbtn pri" type="button" onClick="{{act.resolve}}">Ask Tenant API windows to resolve</button></sc-if>
+                  <sc-if value="{{btn.partial}}" hint-placeholder-val="{{false}}"><button class="sbtn" type="button" onClick="{{act.partial}}">Apply windows/scheduler only</button></sc-if>
+                  <sc-if value="{{btn.abort}}" hint-placeholder-val="{{false}}"><button class="sbtn" type="button" onClick="{{act.abort}}">Abort</button></sc-if>
+                  <sc-if value="{{btn.close}}" hint-placeholder-val="{{false}}"><button class="sbtn" type="button" onClick="{{act.close}}">Close</button></sc-if>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+
+          <div class="lower">
+            <div class="notice">
+              <div class="nhd">{{selTitle}}<span class="ag">{{selAgent}} · transcript</span></div>
+              <sc-if value="{{hasNotice}}" hint-placeholder-val="{{false}}">
+                <div class="sysmsg"><span class="ey">Stack notice · from PwrAgent</span><sc-for list="{{noticeLines}}" as="ln" hint-placeholder-count="3"><p>{{ln.t}}</p></sc-for></div>
+              </sc-if>
+              <sc-if value="{{noNotice}}" hint-placeholder-val="{{true}}">
+                <p class="note" style="max-width: none">No stack notice in this thread yet. A thread gets one when its branch moves, with the old and new tip, what changed below it, which files it may have read stale, and how to undo. It’s delivered as a system message on the thread’s next turn boundary, never mid-turn.</p>
+              </sc-if>
+            </div>
+            <div class="log">
+              <div class="colhd" style="margin: 0 0 2px">Tool calls and events, newest first</div>
+              <sc-if value="{{noLog}}" hint-placeholder-val="{{true}}"><p class="note" style="max-width: none">Agents’ <span class="mono">pwragent.*</span> stack calls and PwrAgent’s own steps appear here.</p></sc-if>
+              <sc-for list="{{log}}" as="lg" hint-placeholder-count="0"><div class="lrow"><span class="w">{{lg.who}}</span><span class="c">{{lg.call}}<span class="r">{{lg.res}}</span></span></div></sc-for>
+            </div>
+          </div>
+        </div>
+        <p class="dv-next"><b>Read the plan, not the animation.</b> The replay rows tick through while every card holds still. Then the operation <b>waits</b>: no thread is interrupted unless you choose to. After the last hold lands, it re-plans, and every card re-seats together on the transaction row, because <code>git update-ref --stdin</code> moves all of them or none. That ordering is the property to keep: plan, hold, re-plan, compare-and-swap, move, notify, release.</p>
+      </section>
+
+      <!-- ================================================================ TURN 5 -->
+      <section class="dv-turn" id="t5" data-screen-label="Turn 5 The handshake">
+        <div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">The handshake: never move a worktree under a running turn</span></div>
+        <p class="dv-sub">An agent mid-turn holds a model of its worktree: files it read, a test it’s about to run, a commit it’s composing. Moving <code>HEAD</code> under it would invalidate that model with no warning. So the apply runs in a fixed order: <b>plan → hold → re-plan → compare-and-swap → move → notify → release</b>. A thread counts as running when <code>isThreadActive</code> is true: an active turn, an active sub-agent, a background task, or a pending approval or input request. Background tasks count because they write to the worktree too.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="5a" data-screen-label="5a States">
+            <div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a>What happens to each affected layer thread</div>
+            <div class="tbl" style="width: 860px">
+              <div class="tr head" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span>Thread at apply</span><span>Coordinator does</span><span>Thread hears</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>Idle</b>, no dirty overlap</span><span>Adds the hold reason <code>stack-op:&lt;id&gt;</code> to its <code>ThreadTurnQueue</code>, so queued sends wait. Moves it, then releases.</span><span>A stack notice as a system item, with the unread cookie. No turn is started for it.</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>Running</b> (turn, sub-agent, background task, pending request)</span><span><b>Waits for the turn to end.</b> No timeout by default: the bound is the operator’s to set. The hold lands at the boundary, before any queued send starts. Waiting for shows it, with Release this thread and Interrupt.</span><span>The notice is prepended to its next turn’s input, so it reads it before acting.</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>The caller</b>, its own layer</span><span>Moves under its own turn: it asked. Preflight still applies.</span><span>The tool result is the notice: <code>moved: [{ branch, from, to }]</code>.</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>Dirty overlap</b></span><span>Blocks the plan before anything moves and names the files. With <code>askToSettle: true</code>, PwrAgent sends the thread one message asking it to commit or stash, then re-plans after its turn.</span><span>“Restack of stack windows is waiting on your uncommitted src/api/tenants.ts.”</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>Locked</b> (<code>thread.lock</code>)</span><span>Refused for that layer and every layer above it. The lock is someone’s explicit claim, and only they can release it.</span><span>Nothing. The caller gets <code>thread_locked</code> with the lock note.</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>Remote, offline or archived</b></span><span>Read-only layer, refused (turn 2b). An archived thread’s clean worktree is treated as a holder: it moves with no handshake.</span><span>Nothing.</span></div>
+              <div class="tr" style="grid-template-columns: 170px minmax(0, 1fr) 210px"><span><b>Operator: Interrupt</b></span><span>Stops the open turns (the same path as <code>stop_thread</code>), places the holds, and records <code>interruptedBy</code>.</span><span>The notice opens with “Your turn was interrupted by the operator to restack…”, and PwrAgent continues the thread afterwards, as <code>move_thread_workspace</code> does.</span></div>
+            </div>
+          </div>
+          <div class="dv-opt" id="5b" data-screen-label="5b Notice">
+            <div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a>The stack notice: a contract, not prose</div>
+            <pre class="code" style="width: 520px"><span class="c">// packages/shared · StackNotice, rendered by THREAD_STACK_NOTICE_INTRO</span>
+{
+  <span class="k">"opId"</span>: <span class="s">"op-0412"</span>, <span class="k">"kind"</span>: <span class="s">"restack"</span>, <span class="k">"stack"</span>: <span class="s">"windows"</span>,
+  <span class="k">"by"</span>: { <span class="k">"thread"</span>: <span class="s">"Ship deploy windows"</span>, <span class="k">"actor"</span>: <span class="s">"agent"</span> },
+  <span class="k">"branch"</span>: <span class="s">"windows/api"</span>, <span class="k">"from"</span>: <span class="s">"51ad0e7"</span>, <span class="k">"to"</span>: <span class="s">"92b6d1c"</span>,
+  <span class="k">"position"</span>: [3, 4], <span class="k">"parent"</span>: <span class="s">"windows/scheduler"</span>,
+  <span class="k">"below"</span>: [{ <span class="k">"branch"</span>: <span class="s">"windows/model"</span>, <span class="k">"added"</span>: 1,
+             <span class="k">"files"</span>: [<span class="s">"src/model/window.ts"</span>] }],
+  <span class="k">"staleReads"</span>: [<span class="s">"src/model/window.ts"</span>],   <span class="c">// ∩ files this thread read</span>
+  <span class="k">"proof"</span>: { <span class="k">"patchIdsMatch"</span>: true, <span class="k">"dropped"</span>: [] },
+  <span class="k">"worktree"</span>: { <span class="k">"followed"</span>: <span class="s">"reset --keep"</span>, <span class="k">"keptDirty"</span>: [] },
+  <span class="k">"interruptedBy"</span>: null,
+  <span class="k">"undo"</span>: <span class="s">"refs/pwrgit/undo/op-0412"</span>
+}</pre>
+            <p class="note"><b><code>staleReads</code></b> intersects the files the parent change touched with the files this thread’s transcript read or edited since its last notice. That’s the line an agent actually needs: “reread this before you rely on it”. The notice also tells the agent to call <code>plan_stack_operation</code> instead of rebasing by hand, and the guidance repeats it (turn 7c).</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 6 -->
+      <section class="dv-turn" id="t6" data-screen-label="Turn 6 Agent tools">
+        <div class="dv-thd"><a class="dv-tid" href="#t6">6</a><span class="dv-tname">Agent tools: four new tools in <code>pwragent</code>, stack-aware PR tools, and one new forge group</span></div>
+        <p class="dv-sub">Following <code>agent-tools/AGENTS.md</code> and <code>agent-tool-contracts.md</code>, the new tools go in the unified <code>pwragent</code> namespace, through the <code>forge</code> catalog, with <code>additionalProperties: false</code> schemas. Caller identity comes from <code>AgentToolCallContext</code>, never from arguments. Results use <code>agentToolSuccess</code> / <code>agentToolFailure({ code })</code>. No existing field changes meaning. Every stack verb is an <code>operation</code> of one plan/apply pair, mirroring PwrGit’s <code>pwrgit_stack_plan/apply</code>, so agents learn one contract.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="6a" data-screen-label="6a Tools">
+            <div class="dv-olabel"><a class="dv-oid" href="#6a">6a</a>The tools</div>
+            <div class="tbl" style="width: 860px">
+              <div class="tr head" style="grid-template-columns: 200px 150px 170px minmax(0, 1fr)"><span>Tool</span><span>Annotations</span><span>Forge group</span><span>Does</span></div>
+              <div class="tr" style="grid-template-columns: 200px 150px 170px minmax(0, 1fr)"><span class="mn">list_stacks</span><span>readOnly, openWorld</span><span><code>read</code> · allow</span><span>The stacks in the caller’s repositories. Each layer comes with its health, bound thread and PR, plus inferred stacks marked <code>inferred: true</code> with an Adopt hint.</span></div>
+              <div class="tr" style="grid-template-columns: 200px 150px 170px minmax(0, 1fr)"><span class="mn">plan_stack_operation</span><span>readOnly (writes objects only)</span><span><code>read</code> · allow</span><span>Returns <code>planId</code>, steps, forecast per layer, affected threads with their state, <code>expectedTips</code>, push list, forge changes, and the approval this plan will need. Allowed in plan mode.</span></div>
+              <div class="tr" style="grid-template-columns: 200px 150px 170px minmax(0, 1fr)"><span class="mn">apply_stack_operation</span><span>destructive, openWorld</span><span>by plan content: <code>stacks</code> · auto, <code>stack_publish</code> · ask, <code>approve_merge</code> · ask</span><span>Takes a <code>planId</code>, or an inline <code>operation</code> to plan and apply when the forecast is clean. Returns <code>{ opId, status: waiting | running | paused | done | needs_approval }</code>. It doesn’t block on other threads’ turns: <code>waiting</code> lists them.</span></div>
+              <div class="tr" style="grid-template-columns: 200px 150px 170px minmax(0, 1fr)"><span class="mn">manage_stack_operation</span><span>destructive</span><span><code>stacks</code> · auto</span><span><code>action: status | continue | abort | undo | release_thread</code>. <code>continue</code> is how a layer thread hands back a resolved conflict.</span></div>
+            </div>
+            <pre class="code wide"><span class="c">// plan_stack_operation input (sketch; every field but operation optional)</span>
+{ <span class="k">"stack"</span>: <span class="s">"windows"</span> | <span class="k">"branch"</span>: <span class="s">"windows/api"</span>,           <span class="c">// stack by name or any member branch</span>
+  <span class="k">"operation"</span>: <span class="s">"create"</span> | <span class="s">"add_branch"</span> | <span class="s">"adopt"</span> | <span class="s">"restack"</span> | <span class="s">"unstack"</span> | <span class="s">"remove"</span>
+             | <span class="s">"reorder"</span> | <span class="s">"move_onto"</span> | <span class="s">"fold"</span> | <span class="s">"submit"</span> | <span class="s">"sync"</span> | <span class="s">"merge"</span>,
+  <span class="k">"from"</span>: <span class="s">"windows/scheduler"</span>,          <span class="c">// restack: this layer and above (default: all stale)</span>
+  <span class="k">"order"</span>: [<span class="s">"windows/model"</span>, …],        <span class="c">// reorder: bottom first</span>
+  <span class="k">"onto"</span>: <span class="s">"main"</span>,                      <span class="c">// move_onto</span>
+  <span class="k">"name"</span>: <span class="s">"windows/ui"</span>, <span class="k">"newThread"</span>: true, <span class="k">"carryChanges"</span>: true,   <span class="c">// add_branch</span>
+  <span class="k">"branches"</span>: [<span class="s">"windows/model"</span>, …],     <span class="c">// create / adopt: bottom first; adopt may omit (inferred)</span>
+  <span class="k">"mode"</span>: <span class="s">"detach"</span> | <span class="s">"forget"</span>,           <span class="c">// remove: drop commits from children, or catalog only</span>
+  <span class="k">"upTo"</span>: <span class="s">"windows/api"</span>,                <span class="c">// merge: everything up to this layer</span>
+  <span class="k">"draft"</span>: true,                        <span class="c">// submit: new PRs (default true)</span>
+  <span class="k">"waitForTurns"</span>: <span class="s">"wait"</span> | <span class="s">"ask"</span>,         <span class="c">// ask = steer running layer threads to end their turn</span>
+  <span class="k">"askToSettle"</span>: false }                <span class="c">// message threads whose dirty files block the plan</span>
+
+<span class="c">// failure codes (agentToolFailure.code)</span>
+<span class="i">stale_plan</span> · <span class="i">forecast_conflict</span> · <span class="i">dirty_overlap</span> · <span class="i">thread_locked</span> · <span class="i">gh_stack_busy</span> · <span class="i">remote_diverged</span>
+<span class="i">ambiguous_layer</span> · <span class="i">layer_remote</span> · <span class="i">catalog_schema_unknown</span> · <span class="i">publish_denied</span> · <span class="i">plan_mode</span> · <span class="i">tools_disabled</span></pre>
+          </div>
+          <div class="dv-opt" id="6b" data-screen-label="6b PR tools">
+            <div class="dv-olabel"><a class="dv-oid" href="#6b">6b</a>The existing PR tools learn about stacks additively</div>
+            <div class="find" style="width: 520px">
+              <div class="fitem"><span class="pin info">1</span><div><h4><code>create_pull_request</code> keeps its contract</h4><p><code>base</code> still defaults to the default branch. Changing that default would change a field’s meaning. When <code>head</code> is a stack layer, the result gains <code>stack: { name, position, expectedBase, drift }</code>, and the catalog records the PR under the lock. Its description points agents at <code>submit</code> for a whole stack.</p></div></div>
+              <div class="fitem"><span class="pin info">2</span><div><h4><code>update_pull_request</code> base changes are shown as drift</h4><p>A <code>base</code> that disagrees with the catalog still goes through. The result gains <code>stack.drift: true</code>, and every layer view shows <span class="bdg drift">GitHub base ≠ stack</span>. When a GitHub stack owns the bases, PwrAgent refuses with <code>stack_owns_base</code>, because GitHub would revert it.</p></div></div>
+              <div class="fitem"><span class="pin info">3</span><div><h4><code>merge_pull_request</code> gets a stack guard beside <code>merge_held</code></h4><p><code>assertCanMerge</code> adds <code>stack_parent_open</code>. A layer merges only when every layer below it has merged and its GitHub base is trunk. That also covers the queue path: auto-merge is never turned on for a PR whose base isn’t trunk. These guards fix today’s footguns, so they ship in P0, before any engine.</p></div></div>
+              <div class="fitem"><span class="pin info">4</span><div><h4>Policy and RBAC reuse the forge gate</h4><p><code>FORGE_AGENT_WRITE_TOOL_GROUPS</code> gains <code>stacks</code> (default auto) and <code>stack_publish</code> (default ask). The group is chosen per call from the plan, as <code>forgePrToolGroup</code> already does for approving reviews. Messaging turns map to <code>tools.forge_write</code> through <code>isForgeWriteToolName</code>. An operator rule <code>stack_publish = allow</code> for one project and agent is the standing grant. That’s the operator’s call, not a hard-coded “never”.</p></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 7 -->
+      <section class="dv-turn" id="t7" data-screen-label="Turn 7 Automation">
+        <div class="dv-thd"><a class="dv-tid" href="#t7">7</a><span class="dv-tname">Automation: thread dependencies drive sync, and merges walk the stack bottom-up</span></div>
+        <p class="dv-sub">Stack automation is <b>Continue After with a structured continuation</b>. Creating or adopting a stack arms one dependency per layer above the bottom. The waiting thread is layer <i>k</i>. The condition is <code>pr_merged</code> on layer <i>k−1</i>’s thread, pinned to that PR’s URL, with <code>holdMerge: true</code> and <code>automatic: true</code>. When it fires, <code>ThreadDependencyCoordinator</code> passes a <code>stack:sync</code> continuation to the stack coordinator instead of a plain wake prompt. The thread is woken only after the sync, with the notice.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="7a" data-screen-label="7a Merge regimes">
+            <div class="dv-olabel"><a class="dv-oid" href="#7a">7a</a>Merging a whole stack: two regimes</div>
+            <div class="stage" style="width: 620px">
+              <svg width="584" height="250" viewBox="0 0 584 250" role="img" aria-label="Two merge regimes. With the GitHub Stack API: one merge-async call merges up to the chosen layer, queue-aware. Without it: merge 651, then the dependency fires, sync retargets 652 to main and replays it, CI passes, merge 652, and so on.">
+                <text x="0" y="14" fill="#8c857a" font-family="Geist, sans-serif" font-size="10" font-weight="700" letter-spacing=".8">STACK LINKED ON GITHUB</text>
+                <rect x="0" y="24" width="584" height="44" rx="8" fill="#101010" stroke="rgba(95,169,105,.4)" />
+                <text x="14" y="44" fill="#f7f3eb" font-family="Geist Mono, monospace" font-size="11">PUT /repos/acme/orbit-deploy/pulls/653/merge-async {merge_action}</text>
+                <text x="14" y="60" fill="#8c857a" font-family="Geist, sans-serif" font-size="10">one approval (approve_merge) · merges 651→653 all-or-nothing · merge_queue or direct_merge chosen like gh stack</text>
+                <text x="0" y="98" fill="#8c857a" font-family="Geist, sans-serif" font-size="10" font-weight="700" letter-spacing=".8">NO STACK API (404) · BOTTOM-UP CHAIN</text>
+                <g font-family="Geist Mono, monospace" font-size="10">
+                  <rect x="0" y="110" width="104" height="54" rx="7" fill="#101010" stroke="rgba(138,109,196,.55)" /><text x="10" y="130" fill="#c9b6f0">merge #651</text><text x="10" y="148" fill="#8c857a">queue · sha pin</text>
+                  <rect x="120" y="110" width="104" height="54" rx="7" fill="#101010" stroke="rgba(255,138,31,.42)" /><text x="130" y="130" fill="#ffb35c">pr_merged</text><text x="130" y="148" fill="#8c857a">dep fires</text>
+                  <rect x="240" y="110" width="104" height="54" rx="7" fill="#101010" stroke="rgba(255,138,31,.42)" /><text x="250" y="130" fill="#f7f3eb">sync 652+</text><text x="250" y="148" fill="#8c857a">retarget → push</text>
+                  <rect x="360" y="110" width="104" height="54" rx="7" fill="#101010" stroke="rgba(95,169,105,.4)" /><text x="370" y="130" fill="#9ce5b3">ci_passed</text><text x="370" y="148" fill="#8c857a">#652 on main</text>
+                  <rect x="480" y="110" width="104" height="54" rx="7" fill="#101010" stroke="rgba(138,109,196,.55)" /><text x="490" y="130" fill="#c9b6f0">merge #652</text><text x="490" y="148" fill="#8c857a">hold released</text>
+                </g>
+                <path d="M104 137 H120 M224 137 H240 M344 137 H360 M464 137 H480" stroke="#8c857a" stroke-width="1.5" />
+                <path d="M534 164 C 534 200, 52 190, 52 222" stroke="#8c857a" stroke-width="1.2" stroke-dasharray="3 4" fill="none" />
+                <text x="64" y="236" fill="#8c857a" font-family="Geist, sans-serif" font-size="10">repeat for #653, #654 · each merge passes expectedHeadSha · holdMerge keeps every upper layer out of the queue until its turn</text>
+              </svg>
+            </div>
+            <p class="note">When the stack is linked on GitHub, it uses gh stack’s own path (v0.3.0 <code>merge.go</code>): <code>merge-async</code> up to the chosen PR, merge-queue aware. Otherwise PwrAgent walks the chain itself, and every step is a mechanism that already exists: <code>merge_pull_request</code>, <code>pr_merged</code>, the sync, then <code>ci_passed</code>. A <code>merge_build</code> condition instead of <code>pr_merged</code> makes the layer above wait for main’s post-merge build before it restacks onto it, per project.</p>
+          </div>
+          <div class="dv-opt" id="7c" data-screen-label="7c Guidance">
+            <div class="dv-olabel"><a class="dv-oid" href="#7c">7c</a><code>prAutomation.guidance</code> for layer 2/4, before and after</div>
+            <pre class="code" style="width: 560px; white-space: pre-wrap"><span class="c">// today (getThreadPullRequestAutomationStatus)</span>
+<span class="w">Auto-fix PR monitoring is active for #652. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification…</span>
+
+<span class="c">// stacked: one sentence prepended, from the stack's health</span>
+<span class="k">#652 is layer 2 of 4 in stack windows, based on windows/model (#651). PwrAgent holds its merge until #651 merges, then syncs this branch onto main, retargets #652, and tells you what moved. Don't rebase, retarget, or merge it yourself, and don't enable auto-merge: call plan_stack_operation.</span> Auto-fix PR monitoring is active for #652…</pre>
+            <p class="note">The sentence comes from the same pure health function the chips use, so the guidance and the UI can’t disagree. Readiness sentences (<code>describePrReviewReadiness</code>) for a non-bottom layer stop offering a merge card. “Ready” for a layer means reviewed, green, and waiting on the layer below.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 8 -->
+      <section class="dv-turn" id="t8" data-screen-label="Turn 8 Failure paths">
+        <div class="dv-thd"><a class="dv-tid" href="#t8">8</a><span class="dv-tname">When it goes wrong across threads</span></div>
+        <p class="dv-sub">Every failure path has the same two guarantees. <b>Nothing moves until everything can move</b>: the forecast is <code>merge-tree</code>, and the apply is one <code>update-ref</code> transaction against expected tips. <b>The thread that owns the problem is the one asked to fix it.</b></p>
+        <div class="dv-opts">
+          <div class="find wide" id="8a" data-screen-label="8a Paths">
+            <div class="grid2" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 22px">
+              <div class="fitem"><span class="pin">1</span><div><h4>A conflict in another thread’s layer</h4><p>The plan stops before that layer. Options: apply only the clean layers below; route the conflict to the owning thread with <code>send_message_to_thread</code> (conflicting commit, files, and the parent change), which resolves it with a real <code>rebase --onto</code> in its own worktree and calls <code>manage_stack_operation continue</code>, after which the rest is re-planned from its tip; or abort. If the owner is archived, the lead resolves it in a disposable worktree.</p></div></div>
+              <div class="fitem"><span class="pin">2</span><div><h4>Two agents racing on one stack</h4><p>Applies serialize on the existing per-common-dir <code>PerKeyAsyncLock</code> (the key <code>worktreeMutationLocks</code> uses), then compare-and-swap in <code>update-ref</code>. The loser gets <code>stale_plan</code> with the refs that moved. A re-plan whose forecast is unchanged applies once on its own. One whose forecast changed goes back to the caller.</p></div></div>
+              <div class="fitem"><span class="pin">3</span><div><h4>gh stack is mid-operation</h4><p>A <code>gh-stack-rebase-state</code>, <code>-modify-state</code> or <code>-migration</code> journal, or a contended <code>gh-stack-operation.lock</code>, refuses with <code>gh_stack_busy</code> and names the worktree. PwrAgent never breaks a <code>flock</code> and never deletes a journal. The operation lock is held only from re-plan to catalog write: milliseconds, never a turn.</p></div></div>
+              <div class="fitem"><span class="pin">4</span><div><h4>The remote moved</h4><p>If the local tip is an ancestor of the remote one (a reviewer pushed a suggestion), the plan fast-forwards first and the worktree follows. If they really diverged, it’s <code>remote_diverged</code>. Leases never push over it. The layer thread is asked to integrate the remote commits, because it’s the one that knows them.</p></div></div>
+              <div class="fitem"><span class="pin">5</span><div><h4>The lease fails at push time</h4><p><code>--atomic</code> means none of the branches moved on GitHub. PwrAgent re-fetches and re-plans. Local refs are already correct, so only the push steps are retried, and with a new approval if the push list changed.</p></div></div>
+              <div class="fitem"><span class="pin">6</span><div><h4>PwrAgent quits mid-operation</h4><p>The engine’s journal (<code>pwrgit-stack-op.json</code>) records the phase. On restart, the coordinator releases holds for an operation that hadn’t reached the transaction. After the transaction, it re-sends notices, which are idempotent by <code>opId</code>, and then releases. Holds are journalled with the operation, so a crash can’t leave a thread held forever.</p></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ TURN 9 -->
+      <section class="dv-turn" id="t9" data-screen-label="Turn 9 Tests and phasing">
+        <div class="dv-thd"><a class="dv-tid" href="#t9">9</a><span class="dv-tname">Tests, phasing and open questions</span></div>
+        <p class="dv-sub">The coordinator is a state machine over concurrent turns, and its state is re-derived from git. That’s exactly what <code>docs/property-model-oracle-testing.md</code> says example tests miss.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="9a" data-screen-label="9a Tests">
+            <div class="dv-olabel"><a class="dv-oid" href="#9a">9a</a>Property, model and oracle tests</div>
+            <div class="tbl" style="width: 760px">
+              <div class="tr head" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span>Kind</span><span>Subject</span><span>Rule</span></div>
+              <div class="tr" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span><b>Model</b></span><span><code>StackCoordinator</code> under <code>fc.commands</code> + <code>fc.scheduler</code></span><span>Commands: agentCommit, turnStart/End, plan, apply, interrupt, releaseThread, remotePush, merge, ghStackLock, crash. Invariants: no worktree moves while its thread is active, unless it’s the caller or was interrupted; refs move all or none; every moved thread gets exactly one notice per op; every hold an op placed is released by done, abort or restart; the gh stack operation lock is never held across a turn wait.</span></div>
+              <div class="tr" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span><b>Property</b></span><span>Layer binding derivation</span><span>For random worktree lists and overlays, the result is independent of input order, and every branch has at most one owner or is marked ambiguous. The oracle is a brute-force enumeration.</span></div>
+              <div class="tr" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span><b>Differential</b></span><span>Inference vs catalog</span><span>For any catalog whose PRs exist with matching bases, <code>pullRequestStackOrder()</code> returns the catalog’s order. For any other catalog, health reports drift.</span></div>
+              <div class="tr" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span><b>Property</b></span><span>Merge guard (P0 bug fix)</span><span>For random stack states, <code>merge_pull_request</code> and auto-merge are allowed only for the lowest unmerged layer with base = trunk. This must fail on today’s main, which allows auto-merge on a middle layer.</span></div>
+              <div class="tr" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span><b>Oracle</b></span><span>gh stack v0.3.0 interop</span><span>A catalog written by PwrAgent reads back unchanged through <code>gh stack view --json</code>. A child process holding <code>flock</code> makes PwrAgent refuse, and never makes it break the lock. The #586 shape reuses <code>scripts/diagnostics/gh-stack-stale-boundary</code>. Skipped with a stated reason where the extension is missing.</span></div>
+              <div class="tr" style="grid-template-columns: 90px 200px minmax(0, 1fr)"><span><b>Budget</b></span><span>SQLite writes per op</span><span>One notice item per moved thread plus one op record, measured with <code>measureSqliteWrites</code> and checked into the budget JSON. Holds and plans live in memory and the journal.</span></div>
+            </div>
+          </div>
+          <div class="dv-opt" id="9b" data-screen-label="9b Phasing">
+            <div class="dv-olabel"><a class="dv-oid" href="#9b">9b</a>Phasing, each phase shippable</div>
+            <div class="tbl" style="width: 760px">
+              <div class="tr head" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span>Phase</span><span>Ships</span><span>Gate</span></div>
+              <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P0</span><span><b>See stacks, stop the footguns.</b> Catalog reader, health and inference in <code>packages/shared</code>; position chips, tray spine, PR rail card, Star Map edges; <code>list_stacks</code>; merge and auto-merge guards; stacked guidance sentence.</span><span>Needs no engine. Merge-guard property test fails on main first.</span></div>
+              <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P1</span><span><b>Restack across threads.</b> Plan/apply with <code>restack</code>, <code>add_branch</code>, <code>adopt</code>, <code>remove</code>; the handshake; notices; undo.</span><span>PwrGit’s P1 ships <code>@pwrdrvr/stack-engine</code>. Coordinator model test.</span></div>
+              <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P2</span><span><b>Publish and follow merges.</b> <code>submit</code>, <code>sync</code>, automatic dependencies, <code>stack_publish</code> with approval, GitHub Stack API with 404 fallback.</span><span>gh stack oracle tests; the Stack API confirmed for the org.</span></div>
+              <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P3</span><span><b>Shape the stack.</b> Drag-to-plan reorder, <code>move_onto</code>, <code>fold</code>, <code>merge</code> in both regimes.</span><span>Forecast soundness property from PwrGit.</span></div>
+            </div>
+          </div>
+        </div>
+        <p class="dv-next"><b>Open questions:</b> (1) Is the engine package published from the PwrGit monorepo to npm, or vendored? (2) Is GitHub’s Stack API (<code>/stacks</code>, <code>merge-async</code>) enabled for the org (a 404 means no)? (3) Should a notice to an idle thread ever start a turn? The proposal is no. (4) Should approving a merge also cover its mechanical follow-through (retarget, replay, leased push of the layer above)? The proposal is yes, listed on the merge card. (5) Should one stack span instances? The proposal is no, one clone. Engineering detail is in <code>docs/design/stacked-prs.md</code>. PwrGit’s board is <a href="https://claude.ai/artifact/9vMQKXLMcp8phcnzjsJaUk#page-Stacked-PRs---UX-Review">Stacked PRs · UX Review</a>.</p>
+      </section>
+    </x-dc>
+
+    <script
+      type="text/x-dc"
+      data-dc-script
+      data-props='{}'
+    >
+      const L = {
+        m: { name: "windows/model", title: "feat: DeployWindow model and parser", thread: "DeployWindow model", agent: "Codex", commits: 3, chk: "passing" },
+        s: { name: "windows/scheduler", title: "feat: scheduler waits for the window", thread: "Scheduler waits for windows", agent: "Claude", commits: 4, chk: "pending" },
+        a: { name: "windows/api", title: "feat: windows in the tenant API", thread: "Tenant API windows", agent: "Codex", commits: 2, chk: "passing" },
+        u: { name: "windows/ui", title: "ui: show the next deploy window", thread: "Next-window banner", agent: "Claude", commits: 2, chk: "pending" }
+      };
+      const IDS = ["m", "s", "a", "u"];
+      const LEAD = "Ship deploy windows";
+      const ROW = 74;
+      const SHAS = {
+        m: ["4e1a9c2", "7b3d0f5", "b81c4e0", "2c94e7a"],
+        s: ["9f3c2e1", "c04b7aa", "5d2e81f", "f0a3c19", "8a1e0b4", "e6d27c1"],
+        a: ["51ad0e7", "e2190d4", "92b6d1c", "3c7f0a8", "0b5e9d2", "7d13fa6"],
+        u: ["0d8c6b3", "a7f21e9", "6e4b2d7", "d19a5c3", "4f0c8b1", "c2a7e95"]
+      };
+      const STEP_MS = 620;
+      function clone(o) { return JSON.parse(JSON.stringify(o)); }
+      const INITIAL = {
+        order: ["m", "s", "a", "u"],
+        pr: { m: 651, s: 652, a: 653, u: 0 },
+        prBase: { m: "main", s: "windows/model", a: "windows/scheduler", u: "" },
+        rev: { m: 0, s: 0, a: 0, u: 0 },
+        stale: {}, unpushed: {}, merged: {}, gone: {}, fresh: {},
+        th: { m: "idle", s: "running", a: "idle", u: "running", lead: "idle" },
+        notice: {}, got: {}, held: {},
+        trunk: "8c1d2e0", trunkMoved: false,
+        phase: "idle", kind: "", steps: [], at: -1, by: "",
+        conflict: false, race: false, raced: false,
+        log: [], sel: "a", toast: "", ledger: [], op: 412, approval: null
+      };
+
+      class Component extends DCLogic {
+        constructor(props) {
+          super(props);
+          this.state = clone(INITIAL);
+          this.timers = [];
+        }
+        componentWillUnmount() { this.stopAll(); }
+        stopAll() { this.timers.forEach((t) => clearTimeout(t)); this.timers = []; }
+        later(ms, fn) { const t = setTimeout(() => { this.timers = this.timers.filter((x) => x !== t); fn(); }, ms); this.timers.push(t); }
+        busy() { return ["plan", "quiesce", "running", "paused", "approval", "resolving"].indexOf(this.state.phase) >= 0; }
+        head(s, id) { const list = SHAS[id]; return list[Math.min(s.rev[id], list.length - 1)]; }
+        parentOf(s, id) { const i = s.order.indexOf(id); return i <= 0 ? "main" : L[s.order[i - 1]].name; }
+        anyStale(s) { return s.order.some((id) => s.stale[id]); }
+        anyMerged(s) { return s.order.some((id) => s.merged[id]); }
+        pushLog(s, who, call, res) { s.log = [{ who: who, call: call, res: res || "" }].concat(s.log).slice(0, 7); }
+        markUpper(s, fromIndex, first) {
+          s.order.forEach((id, i) => {
+            if (i < fromIndex) return;
+            s.stale[id] = i === fromIndex ? first : "follows " + L[s.order[i - 1]].name;
+          });
+        }
+        settle(s) { s.phase = "idle"; s.kind = ""; s.steps = []; s.at = -1; s.ledger = []; s.fresh = {}; s.approval = null; s.by = ""; s.held = {}; }
+
+        /* ---------- things agents and GitHub do ---------- */
+        amend() {
+          if (this.busy()) return;
+          const s = clone(this.state); this.settle(s);
+          const b = s.order[0];
+          s.th[b] = "running"; s.toast = "";
+          this.pushLog(s, L[b].thread, "git commit -m \"fix: reject windows longer than 24h\"", "in its own worktree");
+          this.setState(s);
+          this.later(900, () => {
+            const t = clone(this.state);
+            t.rev[b] = t.rev[b] + 1; t.unpushed[b] = true; t.th[b] = "idle";
+            this.markUpper(t, 1, "needs restack · parent +1");
+            this.pushLog(t, "PwrAgent", "stack health → 3 layers need restack", "catalog base ≠ parent tip");
+            t.toast = L[b].thread + " committed " + this.head(t, b) + " on " + L[b].name + ". Three layers above it now sit on the old tip.";
+            t.th.lead = "running";
+            this.setState(t);
+            this.later(1100, () => { this.setState({ th: Object.assign(clone(this.state.th), { lead: "idle" }) }); this.restack(LEAD); });
+          });
+        }
+        merge() {
+          if (this.busy()) return;
+          const s0 = this.state; const b = s0.order[0];
+          if (s0.unpushed[b]) { this.setState({ toast: "#" + s0.pr[b] + " can't merge what GitHub hasn't seen. Submit first." }); return; }
+          if (this.anyStale(s0)) { this.setState({ toast: "Restack first: #" + s0.pr[b] + "'s children still sit on its old tip." }); return; }
+          const s = clone(s0); this.settle(s);
+          s.merged[b] = true; s.trunk = "3fa9b61"; s.trunkMoved = true;
+          this.markUpper(s, 1, "parent merged");
+          this.pushLog(s, "GitHub", "#" + s.pr[b] + " squash-merged as 3fa9b61", "");
+          this.pushLog(s, "PwrAgent", "Continue After fired on " + L[s.order[1]].thread, "pr_merged · " + L[b].name + " · automatic");
+          s.toast = "#" + s.pr[b] + " merged. The layer above was waiting on it, so stack automation staged a sync.";
+          this.setState(s);
+          this.later(700, () => this.sync("Stack automation · Continue After on " + L[s.order[1]].thread));
+        }
+        toggleConflict() { if (this.busy()) return; this.setState({ conflict: !this.state.conflict }); }
+        toggleRace() { if (this.busy()) return; this.setState({ race: !this.state.race }); }
+        reset() { this.stopAll(); this.setState(clone(INITIAL)); }
+        pick(id) { const notice = clone(this.state.notice); delete notice[id]; this.setState({ sel: id, notice: notice }); }
+
+        /* ---------- planning ---------- */
+        replayStep(s, id, ontoName, extra) {
+          const conflict = s.conflict && id === "a";
+          return {
+            t: "replay " + L[id].name + " onto " + ontoName,
+            sub: L[id].commits + " commits since its catalog base. " + (extra || ""),
+            fc: conflict ? "conflict · e2190d4 · src/api/tenants.ts" : "clean · merge-tree",
+            fcKind: conflict ? "conflict" : "clean",
+            eff: { kind: "replay", id: id }
+          };
+        }
+        affected(s, ids) {
+          return ids.map((id) => ({ id: id, was: s.th[id] }));
+        }
+        stage(kind, steps, title, sub, by, extra) {
+          const s = clone(this.state);
+          s.phase = "plan"; s.kind = kind; s.steps = steps; s.at = -1; s.ledger = []; s.fresh = {};
+          s.planTitle = title; s.planSub = sub; s.by = by; s.toast = ""; s.raced = false;
+          if (extra) Object.assign(s, extra);
+          this.setState(s);
+          return s;
+        }
+        restack(byArg) {
+          const s = this.state; if (this.busy() || !this.anyStale(s)) return;
+          if (this.anyMerged(s)) { this.sync(byArg); return; }
+          const agent = typeof byArg === "string";
+          const by = agent ? byArg + " · agent" : "Operator";
+          const ids = s.order.filter((id) => s.stale[id]);
+          const steps = [];
+          ids.forEach((id) => steps.push(this.replayStep(s, id, this.parentOf(s, id) + "@new", "Objects only.")));
+          steps.push({ t: "hold " + ids.length + " threads · wait for safe points", sub: "Running turns finish; nothing is interrupted.", fc: "", fcKind: "", eff: { kind: "quiesce", ids: ids } });
+          steps.push({ t: "re-plan · compare-and-swap " + ids.length + " expected tips", sub: "Anything that moved during the wait is replanned, not overwritten.", fc: "", fcKind: "", eff: { kind: "verify", ids: ids } });
+          steps.push({ t: "update-ref transaction · " + ids.length + " refs", sub: "Snapshot to refs/pwrgit/undo/op-0" + s.op + ", then all or none.", fc: "", fcKind: "", eff: { kind: "txn", ids: ids } });
+          steps.push({ t: "worktrees follow · reset --keep · notify " + ids.length + " threads", sub: "Each moved thread gets a stack notice; holds release.", fc: "", fcKind: "", eff: { kind: "notify", ids: ids } });
+          const t = this.stage("restack", steps, "Restack · " + ids.length + " layers", s.conflict ? "Forecast: windows/api conflicts. Nothing moves until that's settled." : "Forecast: clean. Nothing has moved yet.", by);
+          this.pushLog(t, agent ? byArg : "Operator", "pwragent.plan_stack_operation({ stack: \"windows\", operation: \"restack\" })", "plan op-0" + s.op + " · " + ids.length + " layers · " + (s.conflict ? "forecast: 1 conflict" : "forecast: clean"));
+          this.setState({ log: t.log });
+          if (agent) this.later(1300, () => this.apply(byArg));
+        }
+        sync(byArg) {
+          const s = this.state; if (this.busy()) return;
+          const b = s.order.find((id) => s.merged[id]);
+          if (!b) { this.setState({ toast: "Fetched origin. Nothing in this stack has merged." }); return; }
+          const by = typeof byArg === "string" ? byArg : "Operator";
+          const ids = s.order.filter((id) => id !== b);
+          const child = ids[0];
+          const steps = [{ t: "fetch · main 8c1d2e0 → 3fa9b61", sub: "#" + s.pr[b] + " is merged by GitHub's word, not by ancestry: it was squashed.", fc: "", fcKind: "", eff: { kind: "none" } }];
+          ids.forEach((id, i) => {
+            if (i === 0) steps.push(this.replayStep(s, id, "main", "--onto main " + this.head(s, b) + " skips #" + s.pr[b] + "'s commits."));
+            else steps.push(this.replayStep(s, id, L[ids[i - 1]].name + "@new"));
+          });
+          steps.push({ t: "hold " + ids.length + " threads · wait for safe points", sub: "", fc: "", fcKind: "", eff: { kind: "quiesce", ids: ids } });
+          steps.push({ t: "re-plan · compare-and-swap " + ids.length + " expected tips", sub: "", fc: "", fcKind: "", eff: { kind: "verify", ids: ids } });
+          steps.push({ t: "update-ref transaction · " + ids.length + " refs, drop " + L[b].name, sub: "Its thread is finished; its worktree is clean.", fc: "", fcKind: "", eff: { kind: "txn", ids: ids, collapse: b } });
+          steps.push({ t: "worktrees follow · notify " + ids.length + " threads", sub: "", fc: "", fcKind: "", eff: { kind: "notify", ids: ids } });
+          steps.push({ t: "publish · retarget #" + s.pr[child] + " → main, push " + ids.length + " leased, atomic", sub: "Retarget before the merged branch is deleted: deleting an open PR's base closes it.", fc: "", fcKind: "", eff: { kind: "publish", retarget: child, push: ids } });
+          const t = this.stage("sync", steps, "Sync · #" + s.pr[b] + " merged", "Follow a squash merge without replaying it.", by);
+          this.pushLog(t, "PwrAgent", "plan_stack_operation({ operation: \"sync\" })", "plan op-0" + s.op + " · " + (s.conflict ? "forecast: 1 conflict" : "forecast: clean") + " · publish needs approval");
+          this.setState({ log: t.log });
+          if (!s.conflict) this.later(1000, () => {
+            if (this.state.phase !== "plan") return;
+            this.setState({ phase: "approval", approval: { who: "Stack automation, for Scheduler waits for windows,", what: "retarget #" + s.pr[child] + " to main and push " + ids.length + " rewritten branches with leases" } });
+          });
+        }
+        submit() {
+          const s = this.state; if (this.busy()) return;
+          if (this.anyStale(s)) { this.setState({ toast: "Restack first: Submit would push layers that don't contain their parent's tip." }); return; }
+          if (this.anyMerged(s)) { this.setState({ toast: "Sync first: a parent has merged." }); return; }
+          const push = s.order.filter((id) => s.unpushed[id] || !s.pr[id]);
+          const create = s.order.filter((id) => !s.pr[id]);
+          if (!push.length) { this.setState({ toast: "Nothing to submit. GitHub already matches the stack." }); return; }
+          const steps = [
+            { t: "push " + push.length + " · --atomic · leased per branch", sub: push.map((id) => L[id].name + " → " + (s.pr[id] ? SHAS[id][Math.max(0, s.rev[id] - 1)] : "(new)")).join(" · "), fc: "", fcKind: "", eff: { kind: "push", ids: push } }
+          ];
+          create.forEach((id) => steps.push({ t: "open #654 " + L[id].name + " → " + this.parentOf(s, id) + " (draft)", sub: "Its thread gets the PR attached and a PR watch.", fc: "", fcKind: "", eff: { kind: "create", id: id } }));
+          steps.push({ t: "link " + s.order.length + " PRs into stack #12 on GitHub", sub: "POST /repos/acme/orbit-deploy/stacks/12/add", fc: "", fcKind: "", eff: { kind: "none" } });
+          const t = this.stage("submit", steps, "Submit · " + s.order.length + " layers", "Publishing: the operator approves it. A session grant never covers a push.", LEAD + " · agent", { approval: { who: LEAD, what: "push " + push.length + " branches, open " + create.length + " draft PR, link stack #12" } });
+          this.pushLog(t, LEAD, "pwragent.apply_stack_operation({ operation: \"submit\" })", "needs approval · publish");
+          t.phase = "approval";
+          this.setState(t);
+        }
+
+        /* ---------- running ---------- */
+        apply(who) {
+          const s = clone(this.state); if (s.phase !== "plan") return;
+          if (s.steps.some((x) => x.fcKind === "conflict")) { s.phase = "paused"; s.at = s.steps.findIndex((x) => x.fcKind === "conflict"); this.pushLog(s, who || LEAD, "apply_stack_operation(planId)", "refused · conflict forecast in windows/api"); this.setState(s); return; }
+          s.phase = "running"; s.at = 0;
+          this.pushLog(s, who || LEAD, "pwragent.apply_stack_operation({ planId: \"op-0" + s.op + "\" })", "accepted · will hold threads at safe points");
+          this.setState(s);
+          this.later(STEP_MS, () => this.tick());
+        }
+        approve() {
+          const s = clone(this.state); if (s.phase !== "approval") return;
+          s.phase = "running"; s.at = 0; s.approval = null;
+          this.pushLog(s, "Operator", "Approve", "this plan only · not a standing grant");
+          this.setState(s); this.later(STEP_MS, () => this.tick());
+        }
+        deny() {
+          const s = clone(this.state); if (s.phase !== "approval") return;
+          this.settle(s); this.pushLog(s, "Operator", "Deny", LEAD + " gets publish_denied");
+          s.toast = "Denied. " + LEAD + " was told, and nothing was pushed.";
+          this.setState(s);
+        }
+        localOnly() {
+          const s = clone(this.state); if (s.phase !== "approval") return;
+          const idx = s.steps.findIndex((x) => x.eff.kind === "publish");
+          if (idx < 0) return;
+          s.steps = s.steps.slice(0, idx);
+          s.phase = "running"; s.approval = null; s.at = 0; s.localOnly = true;
+          this.pushLog(s, "Operator", "Local only", "refs move; retarget and pushes returned as not done");
+          this.setState(s); this.later(STEP_MS, () => this.tick());
+        }
+        quiesceDone(s, ids) { return ids.every((id) => s.th[id] === "held"); }
+        quiesce(s, ids) {
+          ids.forEach((id) => {
+            if (s.th[id] === "idle") { s.th[id] = "held"; s.held[id] = "held · restack"; }
+            else if (s.th[id] === "running" && !s.held[id]) {
+              s.held[id] = "turn running · waits";
+              const ms = id === "s" ? 1500 : 2700;
+              this.later(ms, () => {
+                const t = clone(this.state);
+                if (t.th[id] !== "running") return;
+                if (t.race && id === "s" && !t.raced) { t.rev.s = t.rev.s + 1; t.raced = true; this.pushLog(t, L.s.thread, "git commit -m \"test: window edge at midnight\"", "before its turn ended"); }
+                t.th[id] = "held"; t.held[id] = "held · restack";
+                this.pushLog(t, "PwrAgent", L[id].thread + " finished its turn", "hold placed · queued sends wait");
+                this.setState(t);
+                this.later(250, () => this.tick());
+              });
+            }
+          });
+        }
+        interrupt() {
+          const s = clone(this.state); if (s.phase !== "running") return;
+          const st = s.steps[s.at]; if (!st || st.eff.kind !== "quiesce") return;
+          s.interrupted = s.interrupted || {};
+          st.eff.ids.forEach((id) => { if (s.th[id] === "running") { s.th[id] = "held"; s.held[id] = "interrupted · held"; s.interrupted[id] = true; } });
+          this.pushLog(s, "Operator", "Interrupt now", "turns stopped; each thread is told why");
+          this.setState(s); this.later(200, () => this.tick());
+        }
+        tick() {
+          const s = clone(this.state);
+          if (s.phase !== "running") return;
+          const st = s.steps[s.at];
+          if (!st) { this.finish(s); return; }
+          const e = st.eff;
+          if (e.kind === "quiesce") {
+            this.quiesce(s, e.ids);
+            if (!this.quiesceDone(s, e.ids)) { this.setState(s); return; }
+          } else if (e.kind === "verify") {
+            if (s.raced && !s.replanned) {
+              s.replanned = true;
+              st.t = "re-plan · windows/scheduler moved 9f3c2e1 → " + this.head(s, "s");
+              st.sub = "Its agent committed before its turn ended. CAS refused the stale plan; replayed from the new tip, still clean.";
+              st.fcKind = "resolved"; st.fc = "replanned · 0 refs had moved";
+              this.pushLog(s, "PwrAgent", "expected-tip CAS · 1 of " + e.ids.length + " moved", "re-planned, not overwritten");
+            }
+          } else if (e.kind === "txn") {
+            s.fresh = {};
+            e.ids.forEach((id) => { delete s.stale[id]; s.rev[id] = s.rev[id] + 1; s.unpushed[id] = true; s.fresh[id] = true; });
+            if (e.collapse) { s.gone[e.collapse] = true; s.th[e.collapse] = "done"; s.order = s.order.filter((id) => id !== e.collapse); }
+          } else if (e.kind === "notify") {
+            e.ids.forEach((id) => { s.notice[id] = true; s.got[id] = { kind: s.kind, op: s.op, sha: this.head(s, id), local: Boolean(s.localOnly), cut: Boolean(s.interrupted && s.interrupted[id]) }; s.th[id] = "idle"; delete s.held[id]; });
+            if (e.ids.indexOf("s") >= 0) {
+              s.th.s = "running";
+              this.later(2600, () => { const t = this.state; if (t.th.s === "running" && !t.held.s) this.setState({ th: Object.assign(clone(t.th), { s: "idle" }) }); });
+            }
+            this.pushLog(s, "PwrAgent", "stack notice → " + e.ids.length + " threads", "holds released");
+          } else if (e.kind === "push") {
+            s.fresh = {}; e.ids.forEach((id) => { delete s.unpushed[id]; s.fresh[id] = true; });
+          } else if (e.kind === "create") {
+            s.pr[e.id] = 654; s.prBase[e.id] = this.parentOf(s, e.id); s.fresh[e.id] = true;
+          } else if (e.kind === "publish") {
+            s.prBase[e.retarget] = "main";
+            e.push.forEach((id) => { delete s.unpushed[id]; });
+          }
+          if (s.phase === "paused") { this.setState(s); return; }
+          s.at = s.at + 1;
+          if (s.at >= s.steps.length) { this.finish(s); return; }
+          this.setState(s);
+          this.later(STEP_MS, () => this.tick());
+        }
+        finish(s) {
+          s.phase = "done"; s.at = s.steps.length;
+          const k = s.kind;
+          const led = {
+            restack: ["✓ forecast was merge-tree · no worktree touched while planning", "✓ no turn was interrupted · threads held at turn end", s.replanned ? "✓ a racing commit was replanned, not overwritten" : "✓ every expected tip matched at apply", "✓ patch-ids match · undo at refs/pwrgit/undo/op-0" + s.op, "· nothing pushed · publishing is a separate approval"],
+            sync: ["✓ #651's commits skipped · 0 replayed over the squash", "✓ #652 retargeted to main before windows/model was deleted", "✓ DeployWindow model marked done · its layer left the stack", "✓ 3 threads told what moved under them"],
+            submit: ["✓ pushed atomically · each lease named its expected sha", "✓ #654 opened as a draft and attached to Next-window banner", "✓ stack #12 linked on GitHub"]
+          }[k] || [];
+          const nCut = Object.keys(s.interrupted || {}).length;
+          if (nCut && k === "restack") led.splice(1, 1, "✓ " + nCut + " turns interrupted by the operator · each thread told why");
+          if (s.localOnly) led.splice(1, 1, "· #652 not retargeted · 3 pushes not done · returned as not done");
+          if (s.partial) led.splice(0, led.length, "✓ windows/scheduler restacked", "· windows/api and windows/ui unchanged · still marked", "✓ undo at refs/pwrgit/undo/op-0" + s.op);
+          s.ledger = led.map((t, i) => ({ t: t, cls: t.charAt(0) === "·" ? "n" : "", delay: i * 90 }));
+          const nMoved = s.steps.filter((x) => x.eff.kind === "replay").length;
+          s.toast = { restack: "Restacked " + nMoved + (nMoved === 1 ? " layer in 1 thread." : " layers across " + nMoved + " threads."), sync: "Synced: windows/model is in main, and the stack is one shorter.", submit: "Submitted. GitHub shows stack #12." }[k] || "";
+          if (s.localOnly && k === "sync") s.toast = "Synced locally. #652's retarget and the pushes wait for an approval.";
+          s.op = s.op + 1; s.replanned = false; s.localOnly = false; s.partial = false; s.interrupted = {};
+          this.setState(s);
+        }
+        routeResolve() {
+          const s = clone(this.state); if (s.phase !== "paused") return;
+          s.phase = "resolving"; s.th.a = "running"; s.held.a = "resolving the conflict";
+          this.pushLog(s, "PwrAgent", "send_message_to_thread(Tenant API windows)", "\"Restack paused at your layer …\"");
+          this.setState(s);
+          this.later(2400, () => {
+            const t = clone(this.state); if (t.phase !== "resolving") return;
+            const st = t.steps[t.at]; st.fcKind = "resolved"; st.fc = "resolved by Tenant API windows · rebase --onto in its own worktree";
+            t.th.a = "idle"; delete t.held.a; t.conflict = false;
+            this.pushLog(t, L.a.thread, "pwragent.resume_stack_operation({ op: \"op-0" + t.op + "\" })", "resolved 1 file");
+            t.phase = "plan"; this.setState(t);
+            this.later(500, () => this.apply(L.a.thread));
+          });
+        }
+        partial() {
+          const s = clone(this.state); if (s.phase !== "paused") return;
+          s.steps = s.steps.filter((x) => !(x.eff.kind === "replay" && (x.eff.id === "a" || x.eff.id === "u")));
+          s.steps.forEach((x) => { if (x.eff.ids) x.eff.ids = x.eff.ids.filter((id) => id !== "a" && id !== "u"); });
+          s.steps.forEach((x) => { if (x.eff.kind === "quiesce" || x.eff.kind === "verify" || x.eff.kind === "txn" || x.eff.kind === "notify") x.t = x.t.replace(/\d+ (threads|refs|expected)/, "1 $1"); });
+          s.phase = "running"; s.at = 0; s.partial = true;
+          this.pushLog(s, "Operator", "Apply below the conflict", "windows/scheduler only");
+          this.setState(s); this.later(STEP_MS, () => this.tick());
+        }
+        abort() {
+          this.stopAll();
+          const s = clone(this.state);
+          Object.keys(s.held).forEach((id) => { if (s.th[id] === "held") s.th[id] = "idle"; });
+          this.settle(s); s.toast = "Aborted. Nothing moved: the replays were objects, never refs."; this.setState(s);
+        }
+        close() { const s = clone(this.state); const keep = s.toast; this.settle(s); s.toast = keep; this.setState(s); }
+
+        /* ---------- view ---------- */
+        renderVals() {
+          const s = this.state;
+          const n = s.order.length;
+          const cur = s.steps[s.at];
+          const runningId = (s.phase === "running" && cur && cur.eff.kind === "replay") ? cur.eff.id : null;
+          const pausedId = s.phase === "paused" && cur ? cur.eff.id : null;
+          const cards = IDS.map((id) => {
+            const idx = s.order.indexOf(id);
+            const gone = idx < 0;
+            const parent = gone ? "main" : this.parentOf(s, id);
+            const badges = [];
+            if (s.merged[id]) badges.push({ t: "merged · squash 3fa9b61", cls: "bdg merged" });
+            if (s.stale[id]) badges.push({ t: s.stale[id], cls: "bdg warn" });
+            if (s.unpushed[id] && s.pr[id] && !s.merged[id]) badges.push({ t: "needs push", cls: "bdg push" });
+            if (s.pr[id] && !s.merged[id] && s.prBase[id] !== parent) badges.push({ t: "GitHub base: " + s.prBase[id], cls: "bdg drift" });
+            if (!s.pr[id]) badges.push({ t: "not submitted", cls: "bdg mute" });
+            if (s.fresh[id] && !s.stale[id] && badges.length <= 1) badges.push({ t: s.kind === "submit" ? "pushed" : "restacked", cls: "bdg ok" });
+            let cls = "card";
+            if (s.stale[id]) cls += " stale";
+            if (s.merged[id]) cls += " merged";
+            if (runningId === id || pausedId === id) cls += " run";
+            if (pausedId === id) cls += " stop";
+            if (s.fresh[id]) cls += " fresh";
+            if (gone) cls += " gone";
+            const tstate = s.th[id];
+            const owner = { running: "turn running", held: s.held[id] || "held", idle: "idle", done: "done" }[tstate] || tstate;
+            return {
+              cls: cls, y: gone ? n * ROW - 12 : (n - 1 - idx) * ROW, op: gone ? 0 : 1,
+              pos: gone ? "" : (idx + 1) + "/" + n, name: L[id].name,
+              prLabel: s.pr[id] ? "#" + s.pr[id] : "no PR", prCls: "prc " + (s.merged[id] ? "merged" : s.pr[id] ? L[id].chk : "none"),
+              parent: parent, sha: this.head(s, id), badges: badges, running: runningId === id,
+              thread: L[id].thread, ownerCls: "own " + tstate, owner: owner
+            };
+          });
+          const rows = IDS.map((id) => {
+            const idx = s.order.indexOf(id);
+            const gone = idx < 0;
+            const t = s.th[id];
+            let cls = "trow sub";
+            if (s.sel === id) cls += " sel";
+            if (gone) cls += " done";
+            const spine = gone ? "sp gone" : s.stale[id] ? "sp stale" : "sp";
+            let meta = "";
+            if (gone) meta = "merged · left the stack";
+            else if (s.held[id]) meta = s.held[id];
+            else if (t === "running") meta = "working";
+            else meta = s.stale[id] ? "needs restack" : "idle";
+            return {
+              cls: cls, spine: spine, title: L[id].thread, agent: L[id].agent,
+              pos: gone ? "" : (idx + 1) + "/" + n, hasPos: !gone,
+              posCls: "pos-chip" + (s.stale[id] ? " stale" : ""),
+              prLabel: s.pr[id] ? "#" + s.pr[id] : "draft", prCls: "pr-chip " + (s.merged[id] ? "merged" : s.pr[id] ? L[id].chk : "none"),
+              running: t === "running", meta: meta, metaCls: "tmeta" + (s.held[id] ? " held" : ""),
+              notice: Boolean(s.notice[id]), order: gone ? 9 : (n - idx),
+              pick: () => this.pick(id)
+            };
+          }).sort((x, y) => x.order - y.order);
+          const steps = s.steps.map((st, i) => {
+            let cls = "step";
+            if (s.phase === "done" || i < s.at) cls += " done";
+            else if (i === s.at && (s.phase === "running" || s.phase === "resolving")) cls += " now";
+            else if (i === s.at && s.phase === "paused") cls += " stop";
+            return { t: st.t, sub: st.sub, fc: st.fc, fcCls: "fc " + st.fcKind, cls: cls, delay: s.phase === "plan" || s.phase === "approval" ? i * 70 : 0 };
+          });
+          const staleN = s.order.filter((id) => s.stale[id]).length;
+          const pushN = s.order.filter((id) => s.unpushed[id] || !s.pr[id]).length;
+          let healthLabel = "in sync"; let healthCls = "health ok";
+          if (this.anyMerged(s)) { healthLabel = "parent merged · sync"; healthCls = "health warn"; }
+          else if (staleN) { healthLabel = staleN + " need restack"; healthCls = "health warn"; }
+          else if (pushN) { healthLabel = pushN + " to submit"; healthCls = "health push"; }
+          const busy = this.busy();
+          const quiescing = s.phase === "running" && cur && cur.eff.kind === "quiesce";
+          const kicker = { plan: "Plan · nothing has moved", running: quiescing ? "Waiting for threads" : "Running", paused: "Paused", done: "Done", approval: "Needs approval", resolving: "Waiting on Tenant API windows" }[s.phase] || "No operation";
+          const sel = s.sel;
+          const selGone = s.order.indexOf(sel) < 0;
+          const noticeFor = (id) => {
+            const name = L[id].name; const g = s.got[id];
+            if (g.kind === "sync") return [
+              "Stack windows · sync after #651 merged (op-0" + g.op + ", by stack automation). Your branch " + name + " moved to " + g.sha + ".",
+              name + " now sits on " + this.parentOf(s, id) + ". " + (id !== s.order[0] ? "Its PR base is unchanged." : g.local ? "#652 still targets windows/model on GitHub: the retarget and push wait for the operator's approval." : "#652's base is main; it was retargeted before windows/model was deleted."),
+              "Your commits replayed cleanly; patch-ids match. main gained 3fa9b61 (the squash of #651); none of its files overlap yours.",
+              "Your worktree followed with git reset --keep. Uncommitted files kept: none."
+            ];
+            return [
+              (g.cut ? "Your turn was interrupted by the operator so the stack could move. PwrAgent continues this thread next. " : "") + "Stack windows was restacked by " + LEAD + " (op-0" + g.op + "). Your branch " + name + " moved to " + g.sha + ".",
+              "Below you, windows/model gained 1 commit: fix: reject windows longer than 24h. It touches src/model/window.ts, which your layer imports.",
+              "Your " + L[id].commits + " commits replayed cleanly; patch-ids match. Your worktree followed with git reset --keep; uncommitted files kept: " + (id === "s" ? "src/scheduler/notes.md" : "none") + ".",
+              "Files you read this turn may have changed under you: reread src/model/window.ts before relying on it. Don't rebase this branch yourself. Call plan_stack_operation instead. Undo: refs/pwrgit/undo/op-0" + g.op + "."
+            ];
+          };
+          const selNotice = Boolean(s.got[sel]);
+          return {
+            cards: cards, rows: rows,
+            trunk: { y: n * ROW, sha: s.trunk, cls: "trunk" + (s.trunkMoved ? " moved" : "") },
+            countLabel: n + " layers · " + n + " threads · into main",
+            healthLabel: healthLabel, healthCls: healthCls,
+            steps: steps,
+            plan: {
+              kicker: kicker,
+              title: s.phase === "idle" ? "Nothing staged" : (s.planTitle || ""),
+              sub: s.phase === "idle" ? "Agents and stack automation stage plans here before anything moves." : (s.phase === "done" ? "Proof ledger" : (s.planSub || "")),
+              by: s.by ? "Requested by " + s.by : "", hasBy: Boolean(s.by) && s.phase !== "idle",
+              empty: s.phase === "idle"
+            },
+            paused: s.phase === "paused",
+            approval: s.phase === "approval" && s.approval ? s.approval : { who: "", what: "" },
+            needsApproval: s.phase === "approval",
+            ledger: s.ledger, hasLedger: s.phase === "done" && s.ledger.length > 0,
+            showFooter: s.phase === "paused" || s.phase === "done" || Boolean(quiescing) || s.phase === "plan",
+            btn: { interrupt: Boolean(quiescing), resolve: s.phase === "paused", partial: s.phase === "paused" && s.kind === "restack", abort: s.phase === "paused" || Boolean(quiescing) || s.phase === "plan", close: s.phase === "done", run: s.phase === "plan" },
+            log: s.log, hasLog: s.log.length > 0, noLog: s.log.length === 0,
+            toast: s.toast, hasToast: Boolean(s.toast),
+            selTitle: L[sel].thread, selAgent: L[sel].agent,
+            hasNotice: Boolean(selNotice), noNotice: !selNotice,
+            noticeLines: selNotice ? noticeFor(sel).map((t) => ({ t: t })) : [],
+            conflictCls: "sbtn" + (s.conflict ? " on" : ""), conflictPressed: s.conflict ? "true" : "false",
+            raceCls: "sbtn" + (s.race ? " on" : ""), racePressed: s.race ? "true" : "false",
+            dis: {
+              amend: busy || this.anyMerged(s) || s.th.m === "running",
+              merge: busy || this.anyMerged(s) || !s.pr[s.order[0]] || s.order.length < 2,
+              restack: busy || !staleN,
+              submit: busy || this.anyMerged(s),
+              sync: busy,
+              local: s.kind === "submit"
+            },
+            act: {
+              amend: () => this.amend(), merge: () => this.merge(),
+              conflict: () => this.toggleConflict(), race: () => this.toggleRace(), reset: () => this.reset(),
+              restack: () => this.restack(), sync: () => this.sync(), submit: () => this.submit(),
+              approve: () => this.approve(), deny: () => this.deny(), local: () => this.localOnly(),
+              interrupt: () => this.interrupt(), resolve: () => this.routeResolve(), partial: () => this.partial(),
+              abort: () => this.abort(), close: () => this.close(), run: () => this.apply("Operator")
+            }
+          };
+        }
+      }
+    </script>
+  </body>
+</html>
