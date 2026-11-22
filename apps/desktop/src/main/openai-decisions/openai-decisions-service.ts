@@ -14,6 +14,7 @@ import type {
   DecisionsProfileDeleteResult,
 } from "@pwragent/shared/decisions-rail";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES } from "@pwragent/shared/contracts/agent-tools";
 import { decisionImageCapabilities } from "@pwragent/shared/decision-models";
 import {
   DECISION_IMAGE_SCHEMA_KEY,
@@ -343,7 +344,11 @@ export class OpenAIDecisionsService {
         version: record.version,
         scope: record.scope,
         provider: record.provider,
-        inputCapabilities: { images: this.imageCapabilities(record.provider) },
+        inputCapabilities: {
+          images: this.imageCapabilities(record.provider),
+          maxHttpMcpRequestBytes: PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES,
+          maxBatchInputsJsonBytes: OPENAI_DECISION_BOUNDS.bulkMaxTotalBytes,
+        },
         ...(this.options.isProviderEnabled?.(record.provider) === false ? { providerDisabled: true } : {}),
         questions: record.questions.map((question) => summarizeQuestion(question, includeInstructions)),
         inputSchema: record.inputSchema,

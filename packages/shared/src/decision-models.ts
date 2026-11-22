@@ -23,11 +23,14 @@ export type DecisionImageMimeType = "image/png" | "image/jpeg";
 
 export const DECISION_IMAGE_MAX_COUNT = 4;
 const DECISION_IMAGE_MIME_TYPES: readonly DecisionImageMimeType[] = ["image/png", "image/jpeg"];
+// 512 KiB encodes to ~683 KiB, leaving room in the 1 MiB HTTP MCP body for
+// the 256 KiB evidence value and the tool envelope on a registered call.
+const DECISION_IMAGE_MAX_DECODED_BYTES = 512 * 1024;
 const DECISION_IMAGE_LIMITS = {
   mimeTypes: DECISION_IMAGE_MIME_TYPES,
   maxImages: DECISION_IMAGE_MAX_COUNT,
-  maxBytesPerImage: 2 * 1024 * 1024,
-  maxTotalBytes: 4 * 1024 * 1024,
+  maxBytesPerImage: DECISION_IMAGE_MAX_DECODED_BYTES,
+  maxTotalBytes: DECISION_IMAGE_MAX_DECODED_BYTES,
   minSide: 1,
   maxSide: 4096,
 } as const;
@@ -60,8 +63,9 @@ export function decisionImageCapabilities(
     // https://docs.typesafe.ai/images documents Jev 1.13 and 1.14 with an
     // experimental request header, PNG/JPEG, and 280–1568 px on each side.
     // Its provider limits are 16 MiB per file and 32 MiB per request.
+    // https://docs.typesafe.ai/models#aliases lists latest and preview.
     case "jev":
-      return /^jev-(?:latest|1\.(?:13|14)(?:\.\d+)?)$/.test(model ?? DECISION_JEV_DEFAULT_MODEL)
+      return /^jev-(?:latest|preview|1\.(?:13|14)(?:\.\d+)?)$/.test(model ?? DECISION_JEV_DEFAULT_MODEL)
         ? { ...DECISION_IMAGE_LIMITS, supported: true, experimental: true, minSide: 280, maxSide: 1568 }
         : { supported: false };
   }

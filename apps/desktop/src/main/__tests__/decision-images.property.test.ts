@@ -2,8 +2,11 @@ import { crc32, deflateSync } from "node:zlib";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
+import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
+import { buildPwrAgentOpenAIDecisionsToolRouter } from "../agent-tools/pwragent-openai-decisions-agent-tools";
 import { createHeadlessImage } from "../headless/image";
 import { OpenAIDecisionsService } from "../openai-decisions/openai-decisions-service";
 import type { OpenAIDecisionVersionRecord } from "../storage/openai-decision-store";
@@ -17,17 +20,23 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([length, contents, checksum]);
 }
 
-function pngDataUrl(side: number): string {
+function pngDataUrl(side: number, byteLength?: number): string {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(side, 0);
   header.writeUInt32BE(side, 4);
   header[8] = 8;
-  const png = Buffer.concat([
+  const chunks = [
     Buffer.from("89504e470d0a1a0a", "hex"),
     pngChunk("IHDR", header),
     pngChunk("IDAT", deflateSync(Buffer.alloc((side + 1) * side))),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
+  ];
+  const end = pngChunk("IEND", Buffer.alloc(0));
+  if (byteLength !== undefined) {
+    const text = Buffer.alloc(byteLength - chunks.reduce((sum, chunk) => sum + chunk.length, end.length) - 12, "a");
+    text.write("padding\0");
+    chunks.push(pngChunk("tEXt", text));
+  }
+  const png = Buffer.concat([...chunks, end]);
   return `data:image/png;base64,${png.toString("base64")}`;
 }
 
@@ -69,6 +78,7 @@ describe("decision image capability", () => {
   const providers = [
     { provider: "openai", model: "gpt-6-luna", accepts: true },
     { provider: "jev", model: "jev-latest", accepts: true },
+    { provider: "jev", model: "jev-preview", accepts: true },
     { provider: "jev", model: "jev-1.13.0", accepts: true },
     { provider: "jev", model: "jev-1.12.0", accepts: false },
     { provider: "local", model: "clef-flash", accepts: true },
@@ -132,29 +142,118 @@ describe("decision image capability", () => {
   it("enforces the count, type, dimension and byte bounds before sending images", async () => {
     const { service, fetch } = setup("jev", "jev-latest");
     const definition = { question };
+    const byteLimit = 512 * 1024;
+    const atHalf = { ...image, image_url: pngDataUrl(280, byteLimit / 2) };
     for (const input of [
       Array.from({ length: 5 }, () => image),
       [{ ...image, image_url: imageUrl.replace("image/png", "image/jpeg") }],
       [{ ...image, image_url: imageUrl.replace("image/png", "image/webp") }],
       [{ ...image, image_url: pngDataUrl(279) }],
       [{ ...image, image_url: pngDataUrl(1569) }],
-      [{ ...image, image_url: `data:image/png;base64,${Buffer.alloc(2 * 1024 * 1024 + 1).toString("base64")}` }],
+      [{ ...image, image_url: pngDataUrl(280, byteLimit + 1) }],
+      [atHalf, { ...image, image_url: pngDataUrl(280, byteLimit / 2 + 1) }],
     ]) {
       await expect(service.invoke(caller, { definition, input })).rejects.toMatchObject({ code: "invalid_image" });
     }
     expect(fetch).not.toHaveBeenCalled();
     await service.invoke(caller, { definition, input: [image] });
     await service.invoke(caller, { definition, input: [{ ...image, image_url: pngDataUrl(1568) }] });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    await service.invoke(caller, { definition, input: [atHalf, atHalf] });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("fits the advertised maximum image alongside text in an HTTP MCP request", async () => {
+    const { service, fetch: provider } = setup("openai", "gpt-6-luna");
+    const { name } = await service.register(caller, { name: "artwork", question, inputSchema: { type: "string" } });
+    const capabilities = service.list(caller, {}).decisions[0]!.inputCapabilities;
+    const { images } = capabilities;
+    if (!images.supported) throw new Error("OpenAI Decisions must accept images.");
+    const router = buildPwrAgentOpenAIDecisionsToolRouter({
+      invoke: (owner, args, signal) => service.invoke(owner, args, signal),
+      register: vi.fn(),
+      list: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      batchResults: vi.fn(),
+      cancelBatch: vi.fn(),
+    });
+    const turn = { backend: "claude", threadId: caller.threadId, turnId: "one" } as const;
+    // The registered definition is profile-scoped and visible to the MCP caller.
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [{ id: "openai_decisions", router }],
+      resolveCallContext: () => turn,
+    });
+    try {
+      const { server: registration } = await server.registerClient(turn);
+      const headers = new Headers(registration.headers.map(({ name, value }) => [name, value]));
+      headers.set("Content-Type", "application/json");
+      headers.set("Accept", "application/json, text/event-stream");
+      const post = (body: string) => fetch(registration.url, { method: "POST", headers, body });
+      const encoded = JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "decisions_invoke", arguments: {
+          name,
+          input: [
+            { type: "input_text", text: "x".repeat(256 * 1024 - 2) },
+            { ...image, image_url: pngDataUrl(280, images.maxBytesPerImage) },
+          ],
+        } },
+      });
+      const limit = 1024 * 1024;
+      expect(Buffer.byteLength(encoded)).toBeLessThan(limit);
+      // Trailing JSON whitespace counts toward the HTTP body, even when the
+      // parsed arguments and their image sizes are unchanged.
+      const atLimit = encoded.padEnd(limit);
+      const accepted = await post(atLimit);
+      expect(accepted.status, await accepted.text()).toBe(200);
+      expect(provider).toHaveBeenCalledOnce();
+      const rejected = await post(atLimit + " ");
+      expect(rejected.ok).toBe(false);
+      await rejected.text();
+      expect(provider).toHaveBeenCalledOnce();
+      expect(capabilities).toMatchObject({
+        maxHttpMcpRequestBytes: limit,
+        maxBatchInputsJsonBytes: 4 * limit,
+      });
+    } finally {
+      await server.close();
+      await service.close();
+    }
+  });
+
+  it("measures the batch budget on compact JSON including encoded image parts", async () => {
+    const { service, fetch } = setup("openai", "gpt-6-luna");
+    const definition = { question };
+    const encodedImage = { ...image, image_url: pngDataUrl(280, 512 * 1024) };
+    const inputs = [
+      ...Array.from({ length: 5 }, () => [encodedImage]),
+      ...Array.from({ length: 3 }, () => "x".repeat(200 * 1024)),
+    ];
+    const limit = 4 * 1024 * 1024;
+    const tailBytes = limit - Buffer.byteLength(JSON.stringify([...inputs, ""]));
+    const tail = "λ".repeat(Math.floor(tailBytes / 2)) + "x".repeat(tailBytes % 2);
+    const atLimit = [...inputs, tail];
+    await expect(service.invoke(caller, { definition, inputs: atLimit })).resolves.toMatchObject({
+      succeeded: atLimit.length, failed: 0,
+    });
+    await expect(service.invoke(caller, { definition, inputs: [...inputs, tail + "x"] })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    expect(fetch).toHaveBeenCalledTimes(atLimit.length);
   });
 
   it("keeps only image references and thumbnails across batch file reloads, including failures", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "decision-images-"));
     try {
       const { service, fetch } = setup("openai", "gpt-6-luna", directory);
-      fetch.mockResolvedValueOnce(Response.json({ error: { message: imageUrl } }, { status: 400 }));
+      const canvas = createCanvas(280, 280);
+      const context = canvas.getContext("2d");
+      context.fillStyle = "red";
+      context.fillRect(0, 0, 280, 280);
+      const redUrl = canvas.toDataURL("image/png");
+      fetch.mockResolvedValueOnce(Response.json({ error: { message: redUrl } }, { status: 400 }));
       const evidence = { case: "artwork" };
-      const input = [{ type: "input_json", data: evidence }, image];
+      const input = [{ type: "input_json", data: evidence }, { ...image, image_url: redUrl }];
       const result = await service.invoke(caller, {
         definition: { question, inputSchema: { type: "object", required: ["case"], "x-pwragent-images": true } },
         inputs: [input, input],
@@ -163,7 +262,7 @@ describe("decision image capability", () => {
       expect(result.results).toHaveLength(2);
       expect(result.results.every((item) => !("inputImages" in item))).toBe(true);
       const raw = await readFile(result.resultsFile, "utf8");
-      expect(raw).not.toContain(imageUrl);
+      expect(raw).not.toContain(redUrl);
       const fresh = setup("openai", "gpt-6-luna", directory).service;
       const page = await fresh.railBatchPage(caller, { batchId: result.batchId, status: "all", limit: 5, from: 0 });
       expect(page.items.map((item) => item.ok)).toEqual([false, true]);
@@ -173,6 +272,14 @@ describe("decision image capability", () => {
           mimeType: "image/png", width: 280, height: 280,
           thumbnail: expect.stringMatching(/^data:image\/jpeg;base64,/),
         }]);
+        const decoded = await loadImage(item.inputImages![0]!.thumbnail!);
+        const thumbnail = createCanvas(decoded.width, decoded.height).getContext("2d");
+        thumbnail.drawImage(decoded, 0, 0);
+        const [red, green, blue, alpha] = thumbnail.getImageData(10, 10, 1, 1).data;
+        expect(red).toBeGreaterThan(240);
+        expect(green).toBeLessThan(16);
+        expect(blue).toBeLessThan(16);
+        expect(alpha).toBe(255);
       }
     } finally {
       await rm(directory, { recursive: true, force: true });
