@@ -210,7 +210,8 @@ export function mcpSecretFields(state: PendingMcpInteractionState): PendingMcpFi
 }
 
 export function createMcpElicitationState(
-  request: AppServerMcpElicitationRequestNotification
+  request: AppServerMcpElicitationRequestNotification,
+  current?: PendingMcpInteractionState,
 ): PendingMcpInteractionState | undefined {
   const requestId = trimString(request.params.requestId);
   const threadId = trimString(request.params.threadId);
@@ -243,13 +244,44 @@ export function createMcpElicitationState(
     buildField(key, asRecord(value) ?? {}, required.has(key))
   );
 
-  return baseState(request, {
+  const state = baseState(request, {
     form: {
       empty: fields.length === 0,
       fields,
     },
     url: null,
   });
+  if (!current?.form || current.requestId !== state.requestId
+    || current.threadId !== state.threadId || current.turnId !== state.turnId
+    || current.serverName !== state.serverName || current.purpose !== state.purpose) {
+    return state;
+  }
+
+  const draftFields = new Map(current.form.fields.map((field) => [field.key, field]));
+  return {
+    ...state,
+    form: {
+      empty: fields.length === 0,
+      fields: fields.map((field) => {
+        const draft = draftFields.get(field.key);
+        if (!draft || draft.kind !== field.kind || !("value" in draft) || !("value" in field)) {
+          return field;
+        }
+        if (field.kind === "singleSelect" && draft.kind === "singleSelect"
+          && draft.value && !field.options.some((option) => option.value === draft.value)) {
+          return field;
+        }
+        if (field.kind === "multiSelect" && draft.kind === "multiSelect") {
+          return { ...field, value: draft.value.filter((value) =>
+            field.options.some((option) => option.value === value),
+          ) };
+        }
+        // Keep intermediate edits too. Submission validates the draft against
+        // the latest schema, including any new required fields or constraints.
+        return updateFieldValue(field, draft.value);
+      }),
+    },
+  };
 }
 
 export function updateMcpFieldValue(

@@ -5832,7 +5832,7 @@ export function useThreadSessionState(params: {
               : undefined;
           const hydratedPendingMcpInteraction =
             hydratedPendingRequest && isMcpElicitationNotification(hydratedPendingRequest)
-              ? createMcpElicitationState(hydratedPendingRequest)
+              ? createMcpElicitationState(hydratedPendingRequest, current.pendingMcpInteraction)
               : undefined;
           const hydratedApprovalRequest =
             hydratedPendingRequest && isApprovalRequestNotification(hydratedPendingRequest)
@@ -6729,7 +6729,7 @@ export function useThreadSessionState(params: {
         }
 
         if (isMcpElicitationNotification(event.notification)) {
-          const pendingMcpInteraction = createMcpElicitationState(event.notification);
+          const pendingMcpInteraction = createMcpElicitationState(event.notification, current.pendingMcpInteraction);
           if (!pendingMcpInteraction) {
             return current;
           }
@@ -8360,6 +8360,14 @@ export function useThreadSessionState(params: {
         return;
       }
 
+      // The owner acknowledged the response. A peer without event
+      // subscriptions may never send serverRequest/resolved, so fence reads
+      // that started before this acknowledgment here as well.
+      const previous = liveLifecycleVersionsRef.current.get(threadKey);
+      liveLifecycleVersionsRef.current.set(threadKey, {
+        revision: (previous?.revision ?? 0) + 1,
+        turnRevision: (previous?.turnRevision ?? 0) + 1,
+      });
       updateSession(threadKey, (current) => ({
         ...current,
         lastTouchedAt: Date.now(),

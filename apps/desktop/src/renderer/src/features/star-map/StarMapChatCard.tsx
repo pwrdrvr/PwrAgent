@@ -319,6 +319,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     desktopApi,
     thread,
     pendingRequest: session.pendingRequest,
+    pendingUserInput: session.pendingUserInput,
+    pendingMcpInteraction: session.pendingMcpInteraction,
     clearPendingRequest: session.clearPendingRequest,
     updatePendingUserInput: session.updatePendingUserInput,
     updatePendingMcpInteraction: session.updatePendingMcpInteraction,

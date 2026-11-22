@@ -1212,6 +1212,8 @@ export function ThreadView(props: ThreadViewProps) {
     desktopApi: props.desktopApi,
     thread: props.selectedThread,
     pendingRequest: props.pendingRequest,
+    pendingUserInput: props.pendingUserInput,
+    pendingMcpInteraction: props.pendingMcpInteraction,
     clearPendingRequest: props.clearPendingRequest,
     updatePendingUserInput: props.onUpdatePendingUserInput,
     updatePendingMcpInteraction: props.onUpdatePendingMcpInteraction,

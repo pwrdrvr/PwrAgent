@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { buildPendingRequestResponse, type PendingRequestAction } from "@pwragent/shared/pending-request-response";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   buildMcpElicitationResponse,
@@ -15,10 +16,17 @@ import { buildQuestionnaireResponse, type PendingQuestionnaireState } from "./qu
 
 type RequestResponse = Parameters<NonNullable<DesktopApi["submitServerRequest"]>>[0]["response"];
 
+type PendingRequestError = {
+  message: string;
+  request?: { threadKey: string | undefined; id: string };
+};
+
 export function usePendingRequestControls({
   desktopApi,
   thread,
   pendingRequest,
+  pendingUserInput,
+  pendingMcpInteraction,
   clearPendingRequest,
   updatePendingUserInput,
   updatePendingMcpInteraction,
@@ -26,6 +34,8 @@ export function usePendingRequestControls({
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
   pendingRequest?: AppServerPendingRequestNotification;
+  pendingUserInput?: PendingQuestionnaireState;
+  pendingMcpInteraction?: PendingMcpInteractionState;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   updatePendingUserInput?: (
     requestId: string,
@@ -37,7 +47,19 @@ export function usePendingRequestControls({
   ) => void;
 }) {
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
-  const [pendingRequestError, setPendingRequestError] = useState<string>();
+  const [error, setError] = useState<PendingRequestError>();
+  const threadKey = thread ? threadSummaryIdentityKey(thread) : undefined;
+  const pendingRequestError = !error?.request || (
+    error.request.threadKey === threadKey
+    && (error.request.id === pendingRequest?.params.requestId
+      || error.request.id === pendingUserInput?.requestId
+      || error.request.id === pendingMcpInteraction?.requestId)
+  ) ? error?.message : undefined;
+  // The thread view also reports errors for replies to asynchronous
+  // questions, which do not have a pending server request.
+  const setPendingRequestError = useCallback((message?: string) => {
+    setError(message === undefined ? undefined : { message });
+  }, []);
 
   async function submitRequest(
     requestId: string,
@@ -45,13 +67,14 @@ export function usePendingRequestControls({
     buildResponse: () => RequestResponse,
     nextStatus?: string,
   ): Promise<void> {
+    const request = { threadKey, id: requestId };
     if (!desktopApi?.submitServerRequest || !thread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      setError({ request, message: "Desktop bridge is missing submitServerRequest()." });
       return;
     }
 
     setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
+    setError(undefined);
     try {
       await desktopApi.submitServerRequest({
         backend: thread.source,
@@ -63,7 +86,7 @@ export function usePendingRequestControls({
       });
       clearPendingRequest(requestId, nextStatus);
     } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
+      setError({ request, message: error instanceof Error ? error.message : String(error) });
     } finally {
       setPendingRequestBusy(false);
     }
