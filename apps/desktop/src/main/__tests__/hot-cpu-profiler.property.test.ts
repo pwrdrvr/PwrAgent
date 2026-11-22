@@ -1,4 +1,5 @@
 import fc from "fast-check";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -18,6 +19,7 @@ type Rotation = {
   appCpuPercent: number;
   skipMetric: boolean;
   stopCounterWraps?: boolean;
+  failedCpuRead?: number;
 };
 
 let workspace: Awaited<ReturnType<typeof createTemporaryTestDirectory>>;
@@ -52,20 +54,28 @@ async function exerciseRotation(input: Rotation): Promise<void> {
   const rotationWallMs = rotationCpuMs + input.blockedWithoutCpuMs;
   const elapsedMs = rotationWallMs + SAMPLE_MS * (input.skipMetric ? 2 : 1);
   const applicationCpuMs = elapsedMs * input.appCpuPercent / 100;
-  const measuredRotationCpuMs = input.stopCounterWraps ? input.startCpuMs : rotationCpuMs;
+  const measuredStopCpuMs = input.stopCounterWraps || input.failedCpuRead === 1 || input.failedCpuRead === 2
+    ? 0
+    : input.stopCpuMs;
+  const measuredStartCpuMs = input.failedCpuRead === 3 || input.failedCpuRead === 4 ? 0 : input.startCpuMs;
+  const measuredRotationCpuMs = measuredStopCpuMs + measuredStartCpuMs;
   const expectedPercent = 100 * (applicationCpuMs + rotationCpuMs - measuredRotationCpuMs) / elapsedMs;
-  const shouldTrigger = expectedPercent > THRESHOLD_PERCENT;
   const threadCpuWrapMs = 24 * 60 * 60 * 1_000;
   let observerCpuMs = input.stopCounterWraps ? threadCpuWrapMs - 1 : 0;
+  let cpuReads = 0;
   let processCpuMs = 0;
   let elapsedDuringRotationMs = 0;
   let attached = false;
   let starts = 0;
   let recordingStartedAt = 0;
+  let initialRecordingStart = 0;
   let metricAvailable = true;
   const target: HotCpuTarget & { readProfilerThreadCpuMicros: () => number } = {
     getOSProcessId: () => 1,
-    readProfilerThreadCpuMicros: () => observerCpuMs * 1_000,
+    readProfilerThreadCpuMicros: () => {
+      if (++cpuReads === input.failedCpuRead) throw new Error("Thread CPU clock unavailable");
+      return observerCpuMs * 1_000;
+    },
     debugger: {
       attach: () => { attached = true; },
       detach: () => { attached = false; },
@@ -80,6 +90,7 @@ async function exerciseRotation(input: Rotation): Promise<void> {
             elapsedDuringRotationMs += input.startCpuMs;
           }
           recordingStartedAt = (Date.now() + elapsedDuringRotationMs) * 1_000;
+          if (starts === 1) initialRecordingStart = recordingStartedAt;
         }
         if (method === "Profiler.stop") {
           const endTime = (Date.now() + elapsedDuringRotationMs) * 1_000;
@@ -137,11 +148,20 @@ async function exerciseRotation(input: Rotation): Promise<void> {
     const sample = samples.at(-1)!;
     expect(sample.cumulativeCpuDeltaSeconds).toBeCloseTo((applicationCpuMs + rotationCpuMs) / 1_000, 8);
     expect(sample.wallDeltaSeconds).toBeCloseTo(elapsedMs / 1_000, 8);
-    expect(events.some((event) => event.type === "profile-started")).toBe(shouldTrigger);
     expect(sample.cpuPercent).toBeCloseTo(expectedPercent, 8);
-    expect(sample.recorderRotationCpuSeconds).toBeCloseTo(measuredRotationCpuMs / 1_000, 8);
+    expect(sample.recorderRotationCpuSeconds ?? 0).toBeCloseTo(measuredRotationCpuMs / 1_000, 8);
 
-    if (!shouldTrigger) {
+    const profileStarted = events.some((event) => event.type === "profile-started");
+    // The oracle and recorder use different arithmetic on floating-point CPU
+    // counters. Check trigger decisions away from rounding ties.
+    if (Math.abs(expectedPercent - THRESHOLD_PERCENT) > 1e-8) {
+      expect(profileStarted).toBe(expectedPercent >= THRESHOLD_PERCENT);
+    }
+    if (profileStarted) {
+      await profiler.stop();
+      const profile = JSON.parse(await fs.readFile(session.createProfilePath(1), "utf8"));
+      expect(profile.startTime).toBe(initialRecordingStart);
+    } else {
       processCpuMs += 100;
       await vi.advanceTimersByTimeAsync(SAMPLE_MS);
       expect(samples.at(-1)?.cpuPercent).toBeCloseTo(5, 8);
@@ -164,6 +184,13 @@ it("uses the valid start measurement when the thread CPU counter wraps during st
   });
 });
 
+it.each([1, 2, 3, 4])("retains the recorder and detects a spike when rotation CPU read %i fails", async (failedCpuRead) => {
+  await exerciseRotation({
+    stopCpuMs: 75, startCpuMs: 20, blockedWithoutCpuMs: 0, appCpuPercent: 55,
+    skipMetric: false, failedCpuRead,
+  });
+});
+
 it("uses application CPU over the actual sample interval across recorder rotations", async () => {
   await fc.assert(fc.asyncProperty(fc.record({
     stopCpuMs: fc.integer({ min: 10, max: 350 }),
@@ -171,5 +198,6 @@ it("uses application CPU over the actual sample interval across recorder rotatio
     blockedWithoutCpuMs: fc.integer({ min: 0, max: 200 }),
     appCpuPercent: fc.oneof(fc.integer({ min: 0, max: 49 }), fc.integer({ min: 51, max: 95 })),
     skipMetric: fc.boolean(),
+    failedCpuRead: fc.option(fc.integer({ min: 1, max: 4 }), { nil: undefined }),
   }), exerciseRotation), { numRuns: 30 });
 });
