@@ -11,8 +11,11 @@ import type {
   DesktopBootInfo,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
+  DiscoverRecentProjectsRequest,
+  DiscoverRecentProjectsResponse,
   RecentProjectAgent,
 } from "@pwragent/shared/contracts/settings";
+import { mergeRecentProjectDiscoveries } from "@pwragent/shared/recent-project-discovery";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { useModalDialog } from "../../lib/useModalDialog";
@@ -37,7 +40,9 @@ import {
 } from "./get-started-agents";
 import {
   checkedProjectPaths,
+  compareAgents,
   isProjectChecked,
+  keepListedChoices,
   projectRecencyLabel,
   projectScanNotices,
   rankProjectCandidates,
@@ -1144,8 +1149,12 @@ function AgentMark(props: { mark: AgentDefinition["mark"] }) {
    ---------------------------------------------------------------- */
 
 type ProjectsModel = {
-  /** `off` in a replay, or on a bridge that cannot look. */
+  /**
+   * `off` in a replay, or on a bridge that cannot look. `ready` once either
+   * part of the search answered; `pending` says the other is still out.
+   */
   status: "off" | "loading" | "ready";
+  pending: boolean;
   candidates: ProjectCandidate[];
   notices: ProjectScanNotice[];
   agentLabels: ReadonlyMap<RecentProjectAgent, string>;
@@ -1156,12 +1165,53 @@ type ProjectsModel = {
   checkedPaths: string[];
 };
 
+/** One part's answer, or why it has none. */
+type ProjectPartAnswer = {
+  response: DiscoverRecentProjectsResponse;
+  /** The request itself failed: no read in the part answered. */
+  failure?: string;
+  readAt: number;
+};
+
+/**
+ * Asks for one part of the search. Only the newest request for a part may
+ * set its answer: a slower, older one that answers last is dropped.
+ */
+function askForProjectPart(
+  discover: NonNullable<DesktopApi["discoverRecentProjects"]>,
+  request: DiscoverRecentProjectsRequest,
+  requestRef: { current: number },
+  setAnswer: (answer: ProjectPartAnswer | undefined) => void,
+  /** Runs just before an answer is shown, while the list is still the old one. */
+  beforeAnswer: () => void,
+): void {
+  const id = ++requestRef.current;
+  setAnswer(undefined);
+  discover(request).then((response) => {
+    if (id !== requestRef.current) return;
+    beforeAnswer();
+    setAnswer({ response, readAt: Date.now() });
+  }, (caught: unknown) => {
+    if (id !== requestRef.current) return;
+    beforeAnswer();
+    setAnswer({
+      response: { sources: [], observations: [] },
+      failure: caught instanceof Error ? caught.message : String(caught),
+      readAt: Date.now(),
+    });
+  });
+}
+
 /**
  * Recent project folders from every agent PwrAgent may read, newest first.
- * The most recent start checked. Looks again when the Codex login choice
- * changes, since a separate login's projects are not this computer's, and
- * when a Codex is found or Claude Code is first ready, since neither could
- * be read before.
+ * The most recent start checked. Two parts are asked for at once: Codex with
+ * PwrAgent's own threads, and Claude Code's history, so a slow history read
+ * never holds back the list. Each part shows when it answers; a row the
+ * operator toggled keeps that choice as the other part's rows arrive. The
+ * agents part looks again when the Codex login choice changes, since a
+ * separate login's projects are not this computer's, or a Codex is found;
+ * the history part looks again when Claude Code is first ready, since it
+ * could not be read before.
  */
 function useGetStartedProjects(params: {
   desktopApi?: DesktopApi;
@@ -1176,44 +1226,52 @@ function useGetStartedProjects(params: {
 }): ProjectsModel {
   const { desktopApi, enabled, ready, includeCodex, codexInstalled, claudeReady } = params;
   const available = enabled && Boolean(desktopApi?.discoverRecentProjects);
-  const [result, setResult] = useState<{
-    candidates: ProjectCandidate[];
-    notices: ProjectScanNotice[];
-    agentLabels: ReadonlyMap<RecentProjectAgent, string>;
-    readAt: number;
-  }>();
+  const [agentsAnswer, setAgentsAnswer] = useState<ProjectPartAnswer>();
+  const [historyAnswer, setHistoryAnswer] = useState<ProjectPartAnswer>();
   const [choices, setChoices] = useState<ReadonlyMap<string, boolean>>(new Map());
-  const requestRef = useRef(0);
+  const agentsRequestRef = useRef(0);
+  const historyRequestRef = useRef(0);
+  const listedRef = useRef<readonly ProjectCandidate[]>([]);
+  // An answer re-ranks the list, so the rows already listed keep the state
+  // they show before it lands.
+  const keepListed = useCallback((): void => {
+    setChoices((current) => keepListedChoices(listedRef.current, current));
+  }, []);
 
   useEffect(() => {
     const discover = desktopApi?.discoverRecentProjects;
     if (!enabled || !ready || !discover) return;
-    const request = ++requestRef.current;
-    setResult(undefined);
-    discover({ includeCodex }).then((response) => {
-      if (request !== requestRef.current) return;
-      const agentLabels = new Map<RecentProjectAgent, string>();
-      for (const source of response.sources) agentLabels.set(source.agent, source.label);
-      setResult({
-        candidates: rankProjectCandidates(response.observations),
-        notices: projectScanNotices(response.sources),
-        agentLabels,
-        readAt: Date.now(),
-      });
-    }, (caught: unknown) => {
-      if (request !== requestRef.current) return;
-      setResult({
-        candidates: [],
-        notices: [{
-          agent: "codex",
-          tone: "failed",
-          text: `Recent projects couldn't be read: ${caught instanceof Error ? caught.message : String(caught)}`,
-        }],
-        agentLabels: new Map(),
-        readAt: Date.now(),
-      });
-    });
-  }, [claudeReady, codexInstalled, desktopApi, enabled, includeCodex, ready]);
+    askForProjectPart(discover, { part: "agents", includeCodex }, agentsRequestRef, setAgentsAnswer, keepListed);
+  }, [codexInstalled, desktopApi, enabled, includeCodex, keepListed, ready]);
+
+  useEffect(() => {
+    const discover = desktopApi?.discoverRecentProjects;
+    if (!enabled || !ready || !discover) return;
+    askForProjectPart(discover, { part: "claude-history" }, historyRequestRef, setHistoryAnswer, keepListed);
+  }, [claudeReady, desktopApi, enabled, keepListed, ready]);
+
+  const result = useMemo(() => {
+    // The history answer first, so its detail wins a tie, as in one request.
+    const answers = [historyAnswer, agentsAnswer].filter((answer) => answer !== undefined);
+    if (answers.length === 0) return undefined;
+    const merged = mergeRecentProjectDiscoveries(answers.map((answer) => answer.response));
+    const sources = [...merged.sources].sort((left, right) => compareAgents(left.agent, right.agent));
+    const agentLabels = new Map<RecentProjectAgent, string>();
+    for (const source of sources) agentLabels.set(source.agent, source.label);
+    const notices: ProjectScanNotice[] = [];
+    if (agentsAnswer?.failure !== undefined) {
+      notices.push({ agent: "codex", tone: "failed", text: `Recent projects couldn't be read: ${agentsAnswer.failure}` });
+    }
+    if (historyAnswer?.failure !== undefined) {
+      notices.push({ agent: "claude", tone: "failed", text: `Claude Code couldn't be read: ${historyAnswer.failure}` });
+    }
+    return {
+      candidates: rankProjectCandidates(merged.observations),
+      notices: [...notices, ...projectScanNotices(sources)],
+      agentLabels,
+      readAt: Math.max(...answers.map((answer) => answer.readAt)),
+    };
+  }, [agentsAnswer, historyAnswer]);
 
   const toggle = useCallback((candidate: ProjectCandidate): void => {
     setChoices((current) => {
@@ -1227,6 +1285,7 @@ function useGetStartedProjects(params: {
     [choices],
   );
   const candidates = result?.candidates;
+  listedRef.current = candidates ?? [];
   const checkedPaths = useMemo(
     () => (candidates ? checkedProjectPaths(candidates, choices) : []),
     [candidates, choices],
@@ -1234,6 +1293,7 @@ function useGetStartedProjects(params: {
 
   return {
     status: !available ? "off" : result ? "ready" : "loading",
+    pending: available && (!agentsAnswer || !historyAnswer),
     candidates: result?.candidates ?? [],
     notices: result?.notices ?? [],
     agentLabels: result?.agentLabels ?? new Map(),
@@ -1269,7 +1329,7 @@ function ProjectList(props: { projects: ProjectsModel }) {
           Projects{checkedCount > 0 ? ` · ${checkedCount} selected` : ""}
         </h2>
       </div>
-      {projects.status === "loading" ? (
+      {projects.status === "loading" || (projects.pending && projects.candidates.length === 0) ? (
         <p className="get-started__fine" role="status">Looking for recent projects…</p>
       ) : projects.candidates.length === 0 ? (
         <p className="get-started__fine">
@@ -1299,8 +1359,11 @@ function ProjectList(props: { projects: ProjectsModel }) {
           {showAll ? "Show fewer" : `Review all (${projects.candidates.length})`}
         </button>
       ) : null}
-      {projects.notices.map((notice) => (
-        <p key={`${notice.agent}-${notice.tone}`} className="get-started__notice" role="status">
+      {projects.pending && projects.candidates.length > 0 ? (
+        <p className="get-started__fine" role="status">Looking for more recent projects…</p>
+      ) : null}
+      {projects.notices.map((notice, index) => (
+        <p key={`${notice.agent}-${notice.tone}-${index}`} className="get-started__notice" role="status">
           {notice.text}
         </p>
       ))}

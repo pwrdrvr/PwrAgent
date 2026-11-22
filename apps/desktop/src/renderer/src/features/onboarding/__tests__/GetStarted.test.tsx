@@ -6,7 +6,9 @@ import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/con
 import type {
   DesktopBootInfo,
   DesktopSettingsSnapshot,
+  DiscoverRecentProjectsRequest,
   DiscoverRecentProjectsResponse,
+  RecentProjectDiscoveryPart,
 } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ClaudeSignInControls } from "../../notifications/useClaudeSignIn";
@@ -450,23 +452,33 @@ describe("Get started", () => {
 describe("Get started projects", () => {
   const DAY = 24 * 60 * 60 * 1000;
 
-  /** `count` folders, newest first; the first is also a Claude Code project. */
-  function discovery(count: number, sources: DiscoverRecentProjectsResponse["sources"] = []) {
+  type Discover = NonNullable<DesktopApi["discoverRecentProjects"]>;
+
+  /**
+   * `count` Codex folders, newest first, from the agents part; the first is
+   * also a Claude Code project, from the Claude Code history part.
+   */
+  function discovery(count: number) {
     const now = Date.now();
-    const observations: DiscoverRecentProjectsResponse["observations"] = Array.from(
-      { length: count },
-      (_, index) => ({ path: `/home/sam/code/demo-${index + 1}`, agent: "codex", lastActiveAt: now - index * DAY }),
-    );
-    if (count > 0) observations.push({ path: "/home/sam/code/demo-1/", agent: "claude", lastActiveAt: now - DAY });
-    return vi.fn(async (): Promise<DiscoverRecentProjectsResponse> => ({
-      // Main reports a source for every agent it has an observation from.
-      sources: [
-        { agent: "codex", label: "Codex", status: "complete" },
-        ...(count > 0 ? [{ agent: "claude" as const, label: "Claude Code", status: "complete" as const }] : []),
-        ...sources,
-      ],
-      observations,
-    }));
+    return vi.fn<Discover>(async (request) => (request.part === "claude-history"
+      ? {
+        sources: [{ agent: "claude", label: "Claude Code", status: count > 0 ? "complete" : "skipped" }],
+        observations: count > 0 ? [{ path: "/home/sam/code/demo-1/", agent: "claude", lastActiveAt: now - DAY }] : [],
+      }
+      : {
+        sources: [{ agent: "codex", label: "Codex", status: "complete" }],
+        observations: Array.from(
+          { length: count },
+          (_, index) => ({ path: `/home/sam/code/demo-${index + 1}`, agent: "codex", lastActiveAt: now - index * DAY }),
+        ),
+      }));
+  }
+
+  /** The requests made for one part of the search, oldest first. */
+  function partRequests(discover: unknown, part: RecentProjectDiscoveryPart): DiscoverRecentProjectsRequest[] {
+    return (discover as ReturnType<typeof vi.fn<Discover>>).mock.calls
+      .map(([request]) => request)
+      .filter((request) => (request.part ?? "agents") === part);
   }
 
   function projectBoxes(): HTMLInputElement[] {
@@ -478,7 +490,8 @@ describe("Get started projects", () => {
     const desktopApi = api({ discoverRecentProjects: discovery(15) } as Partial<DesktopApi>);
     renderGetStarted({ desktopApi });
     await waitFor(() => expect(projectBoxes()).toHaveLength(12));
-    expect(desktopApi.discoverRecentProjects).toHaveBeenCalledWith({ includeCodex: true });
+    expect(partRequests(desktopApi.discoverRecentProjects, "agents")).toEqual([{ part: "agents", includeCodex: true }]);
+    expect(partRequests(desktopApi.discoverRecentProjects, "claude-history")).toEqual([{ part: "claude-history" }]);
     expect(projectBoxes().every((box) => box.checked)).toBe(true);
     expect(screen.getByRole("heading", { name: "Projects · 12 selected" })).toBeInTheDocument();
     // The same folder from two agents is one row naming both.
@@ -555,9 +568,13 @@ describe("Get started projects", () => {
       bootInfo: { mode: "bootstrap", decisionKind: "missing-named-profile", requestedProfileName: "work" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Set up work" }));
-    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenLastCalledWith({ includeCodex: false }));
+    await waitFor(() => expect(partRequests(desktopApi.discoverRecentProjects, "agents").at(-1))
+      .toEqual({ part: "agents", includeCodex: false }));
     fireEvent.click(screen.getByRole("radio", { name: /This computer's Codex login/ }));
-    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenLastCalledWith({ includeCodex: true }));
+    await waitFor(() => expect(partRequests(desktopApi.discoverRecentProjects, "agents").at(-1))
+      .toEqual({ part: "agents", includeCodex: true }));
+    // Claude Code's history is the same whichever Codex login is chosen.
+    expect(partRequests(desktopApi.discoverRecentProjects, "claude-history")).toHaveLength(1);
   });
 
   it("looks for projects after the first agent check, and again once a Codex turns up", async () => {
@@ -572,12 +589,14 @@ describe("Get started projects", () => {
     await waitFor(() => expect(desktopApi.listAcpAgents).toHaveBeenCalled());
     expect(desktopApi.discoverRecentProjects).not.toHaveBeenCalled();
     await act(async () => { finishAcpCheck({ fetchedAt: 1, entries: [] }); });
-    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledOnce());
+    await waitFor(() => expect(partRequests(desktopApi.discoverRecentProjects, "agents")).toHaveLength(1));
     // A Codex installed from this page: the next check finds it, and the
-    // projects are read again with it.
+    // agents part is read again with it. Claude Code's history is not.
     settings.snapshot = snapshot(true);
     setClaudeSignIn(undefined);
-    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(partRequests(desktopApi.discoverRecentProjects, "agents")).toHaveLength(2));
+    await settle();
+    expect(partRequests(desktopApi.discoverRecentProjects, "claude-history")).toHaveLength(1);
   });
 
   /** A Claude Code summary as the owner reports it after one check. */
@@ -626,63 +645,75 @@ describe("Get started projects", () => {
     return { desktopApi, setClaudeSignIn };
   }
 
+  /** A discovery whose answers the test gives, one held answer per request, by part. */
+  function heldDiscovery() {
+    const held: Record<RecentProjectDiscoveryPart, Array<PromiseWithResolvers<DiscoverRecentProjectsResponse>>> = {
+      agents: [],
+      "claude-history": [],
+    };
+    const discover = vi.fn<Discover>(async (request) => {
+      const answer = Promise.withResolvers<DiscoverRecentProjectsResponse>();
+      held[request.part ?? "agents"].push(answer);
+      return await answer.promise;
+    });
+    return { discover, held };
+  }
+
+  async function answer(
+    pending: PromiseWithResolvers<DiscoverRecentProjectsResponse> | undefined,
+    response: DiscoverRecentProjectsResponse,
+  ): Promise<void> {
+    expect(pending).toBeDefined();
+    await act(async () => { pending!.resolve(response); });
+  }
+
+  function projectRow(label: string): HTMLElement {
+    return screen.getByText(label, { selector: ".get-started__agent-name" }).closest("li") as HTMLElement;
+  }
+
   it("looks again once Claude Code signs in on this page, and only that once", async () => {
     const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks([
       "sign-in-required", "signed-in", "checking", "signed-in",
     ]);
-    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledOnce());
+    const history = () => partRequests(desktopApi.discoverRecentProjects, "claude-history");
+    await waitFor(() => expect(history()).toHaveLength(1));
     // Claude Code's history is read only while it is signed in.
     recheck(setClaudeSignIn);
-    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(history()).toHaveLength(2));
     // Later checks that find it again keep the list and its checkboxes.
     for (const calls of [3, 4]) {
       recheck(setClaudeSignIn);
       await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalledTimes(calls));
     }
     await settle();
-    expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2);
+    expect(history()).toHaveLength(2);
+    // Codex and PwrAgent's threads were never asked again.
+    expect(partRequests(desktopApi.discoverRecentProjects, "agents")).toHaveLength(1);
   });
 
   it("keeps the refreshed Claude Code projects when the signed-out look answers last", async () => {
     vi.stubEnv("DEV", false);
     const now = Date.now();
     const codexApp = { path: "/home/sam/code/codex-app", agent: "codex" as const, lastActiveAt: now - DAY };
-    const signedOut = Promise.withResolvers<DiscoverRecentProjectsResponse>();
-    const signedIn = Promise.withResolvers<DiscoverRecentProjectsResponse>();
-    const discoverRecentProjects = vi.fn<NonNullable<DesktopApi["discoverRecentProjects"]>>()
-      .mockReturnValueOnce(signedOut.promise)
-      .mockReturnValueOnce(signedIn.promise);
-    const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks(
-      ["sign-in-required", "signed-in"],
-      discoverRecentProjects,
-    );
-    // The first look starts while Claude Code is signed out, and is held.
-    await waitFor(() => expect(discoverRecentProjects).toHaveBeenCalledOnce());
+    const { discover, held } = heldDiscovery();
+    const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks(["sign-in-required", "signed-in"], discover);
+    // The first look starts while Claude Code is signed out, and its history read is held.
+    await waitFor(() => expect(held["claude-history"]).toHaveLength(1));
+    await answer(held.agents[0], { sources: [{ agent: "codex", label: "Codex", status: "complete" }], observations: [codexApp] });
     recheck(setClaudeSignIn);
-    await waitFor(() => expect(discoverRecentProjects).toHaveBeenCalledTimes(2));
-    await act(async () => {
-      signedIn.resolve({
-        sources: [
-          { agent: "codex", label: "Codex", status: "complete" },
-          { agent: "claude", label: "Claude Code", status: "complete" },
-        ],
-        observations: [codexApp, { path: "/home/sam/code/claude-app", agent: "claude", lastActiveAt: now }],
-      });
+    await waitFor(() => expect(held["claude-history"]).toHaveLength(2));
+    await answer(held["claude-history"][1], {
+      sources: [{ agent: "claude", label: "Claude Code", status: "complete" }],
+      observations: [{ path: "/home/sam/code/claude-app", agent: "claude", lastActiveAt: now }],
     });
     await waitFor(() => expect(projectBoxes()).toHaveLength(2));
     // The signed-out answer arrives last. It read no Claude Code history.
-    await act(async () => {
-      signedOut.resolve({
-        sources: [
-          { agent: "codex", label: "Codex", status: "complete" },
-          { agent: "claude", label: "Claude Code", status: "skipped" },
-        ],
-        observations: [codexApp],
-      });
+    await answer(held["claude-history"][0], {
+      sources: [{ agent: "claude", label: "Claude Code", status: "skipped" }],
+      observations: [],
     });
     await settle();
-    const claudeRow = screen.getByText("claude-app", { selector: ".get-started__agent-name" }).closest("li")!;
-    expect(within(claudeRow).getByRole("checkbox")).toBeChecked();
+    expect(within(projectRow("claude-app")).getByRole("checkbox")).toBeChecked();
     expect(screen.getByRole("heading", { name: "Projects · 2 selected" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
@@ -692,10 +723,11 @@ describe("Get started projects", () => {
     }));
   });
 
-  it("reads projects one more time exactly when Claude Code first turns ready after the first look", async () => {
-    // Model: Claude Code's projects are read once it is signed in. The first
+  it("reads Claude Code's history one more time exactly when it first turns ready after the first look", async () => {
+    // Model: Claude Code's history is read once it is signed in. The first
     // look covers a Claude Code that was ready from the start; one more look
-    // covers one that turned ready later; nothing else asks again.
+    // covers one that turned ready later; nothing else asks again, and the
+    // agents part is never asked again for Claude Code.
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom(...CLAUDE_CHECKS), { minLength: 1, maxLength: 4 }),
       async (checks) => {
@@ -709,9 +741,139 @@ describe("Get started projects", () => {
         await settle();
         const ready = checks.map((check) => check === "signed-in");
         const expected = !ready[0] && ready.some(Boolean) ? 2 : 1;
-        expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(expected);
+        expect(partRequests(desktopApi.discoverRecentProjects, "claude-history")).toHaveLength(expected);
+        expect(partRequests(desktopApi.discoverRecentProjects, "agents")).toHaveLength(1);
       },
     ), { numRuns: 20 });
+  });
+
+  describe("while Claude Code's history is still being read", () => {
+    const now = Date.now();
+    /** 13 Codex projects: 12 start checked, demo-13 waits behind Review all. */
+    const codexAnswer: DiscoverRecentProjectsResponse = {
+      sources: [{ agent: "codex", label: "Codex", status: "complete" }],
+      observations: Array.from({ length: 13 }, (_, index) => ({
+        path: `/home/sam/code/demo-${index + 1}`,
+        agent: "codex" as const,
+        lastActiveAt: now - (index + 1) * DAY,
+      })),
+    };
+    const codexPaths = codexAnswer.observations.map(({ path }) => path);
+
+    /** Codex answered, Claude Code's history held; the operator unchecks demo-2 and checks demo-13. */
+    async function chooseWhileHistoryIsOut() {
+      vi.stubEnv("DEV", false);
+      const { discover, held } = heldDiscovery();
+      const desktopApi = api({ discoverRecentProjects: discover, backends: [claudeSignedIn] } as Partial<DesktopApi>);
+      renderGetStarted({ desktopApi });
+      await waitFor(() => expect(held["claude-history"]).toHaveLength(1));
+      await answer(held.agents[0], codexAnswer);
+      await waitFor(() => expect(projectBoxes()).toHaveLength(12));
+      expect(screen.getByText("Looking for more recent projects…")).toBeInTheDocument();
+      fireEvent.click(within(projectRow("demo-2")).getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: "Review all (13)" }));
+      fireEvent.click(within(projectRow("demo-13")).getByRole("checkbox"));
+      expect(screen.getByRole("heading", { name: "Projects · 12 selected" })).toBeInTheDocument();
+      return { desktopApi, history: held["claude-history"][0]! };
+    }
+
+    /** The paths Start should seed from the 13 Codex projects after those two toggles. */
+    const chosenCodexPaths = codexPaths.filter((path) => !path.endsWith("/demo-2"));
+
+    it("lets the operator choose from the projects found so far and start with them", async () => {
+      const { desktopApi } = await chooseWhileHistoryIsOut();
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      await waitFor(() => expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
+        profile: "default",
+        seedOnboardingCompleted: true,
+        seedProjectPaths: chosenCodexPaths,
+      }));
+    });
+
+    it("keeps every choice when the history adds projects, and checks the newest new ones", async () => {
+      const { desktopApi, history } = await chooseWhileHistoryIsOut();
+      await answer(history, {
+        sources: [{ agent: "claude", label: "Claude Code", status: "complete" }],
+        observations: [
+          // Newer than every Codex project, so it ranks first and starts checked.
+          { path: "/home/sam/code/claude-app", agent: "claude", lastActiveAt: now },
+          // A folder Codex already listed: one row naming both agents.
+          { path: "/home/sam/code/demo-3", agent: "claude", lastActiveAt: now - DAY / 2 },
+        ],
+      });
+      await waitFor(() => expect(screen.queryByText("Looking for more recent projects…")).not.toBeInTheDocument());
+      expect(projectBoxes()).toHaveLength(14);
+      expect(within(projectRow("demo-2")).getByRole("checkbox")).not.toBeChecked();
+      expect(within(projectRow("demo-13")).getByRole("checkbox")).toBeChecked();
+      // demo-12 now ranks 13th, past the precheck cut, yet stays as it was shown.
+      expect(within(projectRow("demo-12")).getByRole("checkbox")).toBeChecked();
+      expect(within(projectRow("claude-app")).getByRole("checkbox")).toBeChecked();
+      expect(within(projectRow("demo-3")).getByText(/^Codex, Claude Code/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      await waitFor(() => expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
+        profile: "default",
+        seedOnboardingCompleted: true,
+        // Newest first: demo-3's Claude Code activity is newer than demo-1's Codex use.
+        seedProjectPaths: [
+          "/home/sam/code/claude-app",
+          "/home/sam/code/demo-3",
+          ...chosenCodexPaths.filter((path) => !path.endsWith("/demo-3")),
+        ],
+      }));
+    });
+
+    it.each([
+      {
+        outcome: "times out",
+        settle: (history: PromiseWithResolvers<DiscoverRecentProjectsResponse>) => answer(history, {
+          sources: [{
+            agent: "claude",
+            label: "Claude Code",
+            status: "failed",
+            detail: "Claude Code session discovery timed out.",
+          }],
+          observations: [],
+        }),
+        notice: "Claude Code couldn't be read: Claude Code session discovery timed out.",
+      },
+      {
+        outcome: "cannot be asked",
+        settle: async (history: PromiseWithResolvers<DiscoverRecentProjectsResponse>) => {
+          await act(async () => { history.reject(new Error("The window that asked for recent projects closed.")); });
+        },
+        notice: "Claude Code couldn't be read: The window that asked for recent projects closed.",
+      },
+    ])("keeps every choice when the history read $outcome", async ({ settle: finish, notice }) => {
+      const { desktopApi, history } = await chooseWhileHistoryIsOut();
+      await finish(history);
+      expect(await screen.findByText(notice)).toBeInTheDocument();
+      expect(screen.queryByText("Looking for more recent projects…")).not.toBeInTheDocument();
+      expect(projectBoxes()).toHaveLength(13);
+      expect(within(projectRow("demo-2")).getByRole("checkbox")).not.toBeChecked();
+      expect(within(projectRow("demo-13")).getByRole("checkbox")).toBeChecked();
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      await waitFor(() => expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
+        profile: "default",
+        seedOnboardingCompleted: true,
+        seedProjectPaths: chosenCodexPaths,
+      }));
+    });
+
+    it("lists the history's projects first when it answers before Codex", async () => {
+      const { discover, held } = heldDiscovery();
+      const desktopApi = api({ discoverRecentProjects: discover } as Partial<DesktopApi>);
+      renderGetStarted({ desktopApi });
+      await waitFor(() => expect(held.agents).toHaveLength(1));
+      await answer(held["claude-history"][0], {
+        sources: [{ agent: "claude", label: "Claude Code", status: "complete" }],
+        observations: [{ path: "/home/sam/code/claude-app", agent: "claude", lastActiveAt: now }],
+      });
+      await waitFor(() => expect(projectBoxes()).toHaveLength(1));
+      expect(screen.getByText("Looking for more recent projects…")).toBeInTheDocument();
+      await answer(held.agents[0], codexAnswer);
+      await waitFor(() => expect(projectBoxes()).toHaveLength(12));
+      expect(screen.queryByText("Looking for more recent projects…")).not.toBeInTheDocument();
+    });
   });
 
   it("neither looks for nor imports projects in a replay", async () => {
