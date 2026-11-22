@@ -254,7 +254,18 @@ type InFlightAcpRefresh = {
   promise: Promise<ListAcpAgentSettingsResponse>;
 };
 
-const LOCAL_ACP_REGISTRY_IDS = ["gemini", "grok", "kimi", "qwen"] as const;
+// One per key of the settings contract's `acpAgents`, which Settings and
+// guided setup also key by: an agent added there, or only here, fails
+// typecheck until both sides list it.
+const LOCAL_ACP_AGENTS: Record<keyof DesktopSettingsSnapshot["acpAgents"], true> = {
+  gemini: true,
+  grok: true,
+  kimi: true,
+  qwen: true,
+};
+const LOCAL_ACP_REGISTRY_IDS = Object.keys(LOCAL_ACP_AGENTS) as Array<
+  keyof DesktopSettingsSnapshot["acpAgents"]
+>;
 const inFlightAcpRefreshes = new Set<InFlightAcpRefresh>();
 const recentAcpRefreshes = new Set<
   InFlightAcpRefresh & {

@@ -102,21 +102,30 @@ async function renderFlow(
   return screen.getByRole("dialog", { name: "Set up an agent" });
 }
 
+/** Names and vendors are matched as literal text. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe("guided agent setup", () => {
   it("has a tab for every ACP agent, with that agent's own install copy and notice", async () => {
     const dialog = await renderFlow(fakeApi());
     const tabs = within(dialog).getByRole("tablist", { name: "Agents" });
     for (const [id, expected] of Object.entries(EXPECTED)) {
-      fireEvent.click(within(tabs).getByRole("tab", { name: new RegExp(`^${expected.name}`) }));
+      fireEvent.click(
+        within(tabs).getByRole("tab", { name: new RegExp(`^${escapeRegExp(expected.name)}`) }),
+      );
       const panel = within(dialog).getByRole("tabpanel");
       expect(panel).toHaveAttribute("aria-labelledby", `guided-agent-tab-${id}`);
       expect(within(panel).getByText(`Install or update ${expected.name} on macOS:`))
         .toBeInTheDocument();
-      // Not the catalogue's first entry standing in for a missing one.
+      // Not Codex's copy standing in for this agent's.
       expect(within(panel).queryByText(/@openai\/codex/)).toBeNull();
       expect(
         within(dialog).getByText(
-          new RegExp(`not affiliated with, endorsed by, or sponsored by ${expected.vendor}\\.$`),
+          new RegExp(
+            `not affiliated with, endorsed by, or sponsored by ${escapeRegExp(expected.vendor)}\\.$`,
+          ),
         ),
       ).toBeInTheDocument();
     }

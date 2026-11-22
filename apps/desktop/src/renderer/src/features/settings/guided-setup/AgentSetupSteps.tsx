@@ -31,7 +31,7 @@ import { SetupMark, type SetupMarkId } from "./SetupMark";
 
 /** An ACP agent PwrAgent supports: one per key of the settings contract's
  *  `acpAgents`. */
-export type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
+type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
 
 export type AgentBackendId = "codex" | AcpAgentId;
 
@@ -262,19 +262,19 @@ const ACP_AGENT_BACKENDS: Record<AcpAgentId, AgentBackendDefinition> = {
   },
 };
 
-export const ACP_AGENT_IDS = Object.keys(ACP_AGENT_BACKENDS) as AcpAgentId[];
+const ACP_AGENT_IDS: readonly AcpAgentId[] = Object.keys(
+  ACP_AGENT_BACKENDS,
+) as AcpAgentId[];
 
-const AGENT_BACKENDS: ReadonlyArray<
-  AgentBackendDefinition & { id: AgentBackendId }
-> = [
-  { id: "codex", ...CODEX_BACKEND },
-  ...ACP_AGENT_IDS.map((id) => ({ id, ...ACP_AGENT_BACKENDS[id] })),
-];
+const AGENT_BACKEND_IDS: readonly AgentBackendId[] = ["codex", ...ACP_AGENT_IDS];
+
+/** Every id has a definition, so there is no fallback to show in its place. */
+function agentBackendDefinition(id: AgentBackendId): AgentBackendDefinition {
+  return id === "codex" ? CODEX_BACKEND : ACP_AGENT_BACKENDS[id];
+}
 
 export function backendTrademarkNotice(id: AgentBackendId): string {
-  const backend =
-    AGENT_BACKENDS.find((candidate) => candidate.id === id)
-    ?? AGENT_BACKENDS[0];
+  const backend = agentBackendDefinition(id);
   return `${backend.trademarks} PwrAgent is independently developed and is not affiliated with, endorsed by, or sponsored by ${backend.vendor}.`;
 }
 
@@ -282,14 +282,13 @@ export function installedAgentBackendNames(
   snapshot: DesktopSettingsSnapshot | undefined,
   acpEntries: readonly AcpAgentSettingsEntry[],
 ): string[] {
-  return AGENT_BACKENDS.flatMap((backend) => {
+  return AGENT_BACKEND_IDS.flatMap((id) => {
     const installed =
-      backend.id === "codex"
+      id === "codex"
         ? Boolean(selectedCodexCandidate(snapshot))
-        : Boolean(acpEntryFor(acpEntries, backend.id)?.installed);
-    const enabled = backend.id === "codex"
-      || acpBackendEnabled(snapshot, backend.id);
-    return installed && enabled ? [backend.name] : [];
+        : Boolean(acpEntryFor(acpEntries, id)?.installed);
+    const enabled = id === "codex" || acpBackendEnabled(snapshot, id);
+    return installed && enabled ? [agentBackendDefinition(id).name] : [];
   });
 }
 
@@ -354,7 +353,7 @@ const CLAUDE_DEFINITION = {
 
 export function agentTabName(id: AgentTabId): string {
   if (id === "claude") return CLAUDE_DEFINITION.name;
-  return AGENT_BACKENDS.find((backend) => backend.id === id)?.name ?? id;
+  return agentBackendDefinition(id).name;
 }
 
 function agentTrademarkNotice(id: AgentTabId): string {
@@ -516,8 +515,7 @@ export function AgentChooseStep(props: {
   const activeDefinition =
     active === "claude"
       ? undefined
-      : AGENT_BACKENDS.find((backend) => backend.id === active)
-        ?? AGENT_BACKENDS[0];
+      : agentBackendDefinition(active);
   const activeAcpEntry =
     active === "codex" || active === "claude"
       ? undefined
@@ -991,8 +989,7 @@ function GeminiSignIn(props: {
 }
 
 function CliSignInNote(props: { active: Exclude<AgentBackendId, "codex" | "gemini"> }) {
-  const definition = AGENT_BACKENDS.find((backend) => backend.id === props.active);
-  if (!definition) return null;
+  const definition = agentBackendDefinition(props.active);
   return (
     <div className="guided-setup__prereq-card">
       <div className="guided-setup__prereq-sub">{definition.description}</div>
