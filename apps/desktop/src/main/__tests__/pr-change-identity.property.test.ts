@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 
 /*
@@ -18,6 +18,12 @@ import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
  * Each run builds a real repository under the OS temp directory.
  */
 
+// An empty global config, not os.devNull: Git on Windows cannot open `\\.\nul`.
+const configRoot = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-change-config-"));
+const emptyGlobalConfig = path.join(configRoot, "gitconfig");
+writeFileSync(emptyGlobalConfig, "");
+afterAll(() => rmSync(configRoot, { recursive: true, force: true }));
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
@@ -28,7 +34,7 @@ function git(cwd: string, ...args: string[]): string {
       GIT_COMMITTER_NAME: "Test",
       GIT_COMMITTER_EMAIL: "test@example.com",
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_GLOBAL: emptyGlobalConfig,
     },
   }).trim();
 }
