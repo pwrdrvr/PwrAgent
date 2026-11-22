@@ -141,6 +141,38 @@ describe("Get started", () => {
     expect(desktopApi.startCodexAuthProfileLogin).not.toHaveBeenCalled();
   });
 
+  it("finds the Claude Code CLI that ships with PwrAgent instead of offering Install", async () => {
+    // The owner's Claude summary names no executable until Claude discovery
+    // runs; only a discovery request finds the bundled CLI.
+    const undiscovered = {
+      kind: "claude",
+      label: "Claude Code",
+      available: false,
+      claude: { authStatus: "unknown" },
+    } as BackendSummary;
+    const bundled = {
+      kind: "claude",
+      label: "Claude Code",
+      available: false,
+      claude: { executable: "/Applications/PwrAgent.app/claude", source: "bundled", authStatus: "sign-in-required" },
+    } as BackendSummary;
+    const desktopApi = api({
+      listBackends: vi.fn(async (request?: { refreshModels?: unknown; discoveryIntent?: unknown }) => ({
+        fetchedAt: 1,
+        backends: [
+          request?.refreshModels === "claude" && request.discoveryIntent === "setup-user-action"
+            ? bundled
+            : undiscovered,
+        ],
+      })),
+    } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    await screen.findByRole("button", { name: "Check again" });
+    const claude = agentRow("Claude Code");
+    expect(within(claude).getByText("Needs sign-in")).toBeInTheDocument();
+    expect(within(claude).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
+  });
+
   it("enables Start once one agent is ready, and lists every ready agent", async () => {
     const desktopApi = api({ backends: [claudeSignedIn] });
     renderGetStarted({ desktopApi });

@@ -598,18 +598,24 @@ function useGetStartedAgents(params: {
     setError(undefined);
     const api = apiRef.current;
     try {
-      const [codexResult, acpResult] = await Promise.allSettled([
+      const [codexResult, acpResult, backendsResult] = await Promise.allSettled([
         api?.refreshCodexDiscovery?.({ discoveryIntent: "setup-user-action" }),
         api?.listAcpAgents?.({
           discoveryIntent: "setup-user-action",
           refresh: true,
           probeCapabilities: false,
         }),
+        // Claude Code's row comes from this summary, and the summary only
+        // knows the CLI once Claude discovery has run. PwrAgent ships the
+        // CLI, so a summary read before that would call it not installed.
+        api?.listBackends?.({
+          includeUnavailable: true,
+          refreshModels: "claude",
+          discoveryIntent: "setup-user-action",
+        }),
       ]);
-      // After discovery, so the summaries describe what it just found.
-      const backendsResult = await api?.listBackends?.({ includeUnavailable: true })
-        .catch(() => undefined);
-      setBackends((current) => backendsResult?.backends ?? current ?? []);
+      const backendsValue = backendsResult.status === "fulfilled" ? backendsResult.value : undefined;
+      setBackends((current) => backendsValue?.backends ?? current ?? []);
       const currentSettings = settingsRef.current;
       if (codexResult.status === "fulfilled" && codexResult.value && currentSettings.applySnapshot) {
         currentSettings.applySnapshot(codexResult.value.snapshot);
