@@ -2285,7 +2285,6 @@ export class StateDb {
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
-      db.exec(APP_UPDATE_NOTICE_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
@@ -2300,9 +2299,10 @@ export class StateDb {
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
-      // Additive index for current-version profiles too. Partial-schema repair
-      // fixtures may omit threads; normal profiles always have this table.
+      // These additive objects depend on threads, which partial-schema repair
+      // databases can omit.
       if (tableExists(db, "threads")) {
+        db.transaction(() => db.exec(APP_UPDATE_NOTICE_SCHEMA))();
         db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_pending_spend_alert
           ON threads(thread_id)
           WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`);
