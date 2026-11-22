@@ -10196,6 +10196,39 @@ export class CodexAppServerClient {
     }));
   }
 
+  /**
+   * The working folders of the most recently updated visible threads, for
+   * first-run project discovery. Reads only `thread/list` fields: no
+   * directory enrichment, Git probe, overlay or archived-metadata refresh.
+   * `complete` is false when the page budget ran out before the list did.
+   */
+  async listRecentThreadDirectories(params: {
+    limit: number;
+    maxPages: number;
+    deadlineAt?: number;
+  }): Promise<{ directories: Array<{ cwd: string; updatedAt?: number }>; complete: boolean }> {
+    await this.ensureInitialized();
+    const walk = await requestThreadListPages({
+      listingDiagnostics: this.host.listingDiagnostics,
+      logger: this.host.logger,
+      textCache: this.threadListTextCache,
+      archived: false,
+      client: this.connection,
+      diagnostics: { callerReason: "onboarding-project-discovery" },
+      limit: params.limit,
+      maxPages: params.maxPages,
+      deadlineAt: params.deadlineAt,
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const directories: Array<{ cwd: string; updatedAt?: number }> = [];
+    for (const thread of filterVisibleCodexThreads(walk.threads)) {
+      const cwd = thread.projectKey?.trim();
+      if (!cwd) continue;
+      directories.push(thread.updatedAt === undefined ? { cwd } : { cwd, updatedAt: thread.updatedAt });
+    }
+    return { directories, complete: walk.cursorExhausted };
+  }
+
   private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
     return this.archivedThreadMetadataByFilter.get(buildThreadMetadataCacheKey(filter)) ?? [];
   }

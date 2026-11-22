@@ -2,7 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
-import type { DesktopBootInfo, DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopBootInfo,
+  DesktopSettingsSnapshot,
+  DiscoverRecentProjectsResponse,
+} from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ClaudeSignInControls } from "../../notifications/useClaudeSignIn";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
@@ -436,5 +440,156 @@ describe("Get started", () => {
     await screen.findByRole("button", { name: "Check again" });
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Get started" }), { key: "Escape" });
     expect(onDismiss).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("Get started projects", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** `count` folders, newest first; the first is also a Claude Code project. */
+  function discovery(count: number, sources: DiscoverRecentProjectsResponse["sources"] = []) {
+    const now = Date.now();
+    const observations: DiscoverRecentProjectsResponse["observations"] = Array.from(
+      { length: count },
+      (_, index) => ({ path: `/home/sam/code/demo-${index + 1}`, agent: "codex", lastActiveAt: now - index * DAY }),
+    );
+    if (count > 0) observations.push({ path: "/home/sam/code/demo-1/", agent: "claude", lastActiveAt: now - DAY });
+    return vi.fn(async (): Promise<DiscoverRecentProjectsResponse> => ({
+      // Main reports a source for every agent it has an observation from.
+      sources: [
+        { agent: "codex", label: "Codex", status: "complete" },
+        ...(count > 0 ? [{ agent: "claude" as const, label: "Claude Code", status: "complete" as const }] : []),
+        ...sources,
+      ],
+      observations,
+    }));
+  }
+
+  function projectBoxes(): HTMLInputElement[] {
+    const section = screen.getByRole("region", { name: /Projects/ });
+    return within(section).queryAllByRole("checkbox") as HTMLInputElement[];
+  }
+
+  it("prechecks the 12 most recent projects and keeps the rest behind Review all", async () => {
+    const desktopApi = api({ discoverRecentProjects: discovery(15) } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    await waitFor(() => expect(projectBoxes()).toHaveLength(12));
+    expect(desktopApi.discoverRecentProjects).toHaveBeenCalledWith({ includeCodex: true });
+    expect(projectBoxes().every((box) => box.checked)).toBe(true);
+    expect(screen.getByRole("heading", { name: "Projects · 12 selected" })).toBeInTheDocument();
+    // The same folder from two agents is one row naming both.
+    expect(screen.getAllByText("demo-1", { selector: ".get-started__agent-name" })).toHaveLength(1);
+    expect(screen.getByText("Codex, Claude Code · Today")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review all (15)" }));
+    expect(projectBoxes()).toHaveLength(15);
+    expect(projectBoxes().slice(12).some((box) => box.checked)).toBe(false);
+    expect(screen.getByText(/Codex threads in these folders appear on their own/)).toBeInTheDocument();
+  });
+
+  it("says when a read was partial or an agent could not be read", async () => {
+    const desktopApi = api({
+      discoverRecentProjects: vi.fn(async (): Promise<DiscoverRecentProjectsResponse> => ({
+        sources: [
+          { agent: "codex", label: "Codex", status: "partial", detail: "Read the 300 most recent threads. Older projects may be missing." },
+          { agent: "claude", label: "Claude Code", status: "failed", detail: "metadata is unreadable" },
+        ],
+        observations: [],
+      })),
+    } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    expect(await screen.findByText("Codex: Read the 300 most recent threads. Older projects may be missing."))
+      .toBeInTheDocument();
+    expect(screen.getByText("Claude Code couldn't be read: metadata is unreadable")).toBeInTheDocument();
+    expect(screen.getByText(/No recent projects found/)).toBeInTheDocument();
+  });
+
+  it("hands the checked projects to the new profile on Start, and imports no threads", async () => {
+    vi.stubEnv("DEV", false);
+    const desktopApi = api({
+      discoverRecentProjects: discovery(3),
+      registerDirectoryFromDisk: vi.fn(),
+    } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    await waitFor(() => expect(projectBoxes()).toHaveLength(3));
+    fireEvent.click(projectBoxes()[1]!);
+    expect(screen.getByRole("heading", { name: "Projects · 2 selected" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(desktopApi.openPwrAgentProfile).toHaveBeenCalledWith({ profile: "default" }));
+    expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
+      profile: "default",
+      seedOnboardingCompleted: true,
+      seedProjectPaths: ["/home/sam/code/demo-1", "/home/sam/code/demo-3"],
+    });
+    // The bootstrap profile is thrown away, so it registers nothing itself.
+    expect(desktopApi.registerDirectoryFromDisk).not.toHaveBeenCalled();
+  });
+
+  it("registers the checked projects directly when first run is in a real profile", async () => {
+    const registerDirectoryFromDisk = vi.fn(async () => ({ ok: true }));
+    const desktopApi = api({
+      discoverRecentProjects: discovery(2),
+      registerDirectoryFromDisk,
+    } as unknown as Partial<DesktopApi>);
+    const { onComplete } = renderGetStarted({
+      desktopApi,
+      bootInfo: { mode: "active-profile", decisionKind: "open", activeProfileName: "work" },
+    });
+    await waitFor(() => expect(projectBoxes()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(registerDirectoryFromDisk.mock.calls).toEqual([
+      [{ path: "/home/sam/code/demo-1" }],
+      [{ path: "/home/sam/code/demo-2" }],
+    ]);
+    expect(desktopApi.createPwrAgentProfile).not.toHaveBeenCalled();
+  });
+
+  it("leaves Codex out for a profile with its own Codex login", async () => {
+    const desktopApi = api({ discoverRecentProjects: discovery(0) } as Partial<DesktopApi>);
+    renderGetStarted({
+      desktopApi,
+      bootInfo: { mode: "bootstrap", decisionKind: "missing-named-profile", requestedProfileName: "work" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Set up work" }));
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenLastCalledWith({ includeCodex: false }));
+    fireEvent.click(screen.getByRole("radio", { name: /This computer's Codex login/ }));
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenLastCalledWith({ includeCodex: true }));
+  });
+
+  it("looks for projects after the first agent check, and again once a Codex turns up", async () => {
+    let finishAcpCheck: (value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void = () => undefined;
+    const settings = settingsState(false);
+    const desktopApi = api({
+      discoverRecentProjects: discovery(1),
+      listAcpAgents: vi.fn(async () => await new Promise((resolve) => { finishAcpCheck = resolve; })),
+    } as Partial<DesktopApi>);
+    const { setClaudeSignIn } = renderGetStarted({ desktopApi, settings });
+    // Codex discovery is still running, so no Codex could be asked yet.
+    await waitFor(() => expect(desktopApi.listAcpAgents).toHaveBeenCalled());
+    expect(desktopApi.discoverRecentProjects).not.toHaveBeenCalled();
+    await act(async () => { finishAcpCheck({ fetchedAt: 1, entries: [] }); });
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledOnce());
+    // A Codex installed from this page: the next check finds it, and the
+    // projects are read again with it.
+    settings.snapshot = snapshot(true);
+    setClaudeSignIn(undefined);
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2));
+  });
+
+  it("neither looks for nor imports projects in a replay", async () => {
+    const desktopApi = api({
+      discoverRecentProjects: discovery(3),
+      registerDirectoryFromDisk: vi.fn(),
+    } as Partial<DesktopApi>);
+    const { onComplete } = renderGetStarted({
+      desktopApi,
+      isReplay: true,
+      bootInfo: { mode: "active-profile", decisionKind: "open", activeProfileName: "default" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("region", { name: /Projects/ })).not.toBeInTheDocument();
+    expect(desktopApi.discoverRecentProjects).not.toHaveBeenCalled();
+    expect(desktopApi.registerDirectoryFromDisk).not.toHaveBeenCalled();
   });
 });

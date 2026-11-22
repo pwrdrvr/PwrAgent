@@ -2310,6 +2310,43 @@ export type CheckDesktopCodexAuthProfileStatusResponse = {
   planType?: string;
 };
 
+/** Agents Get started reads recent projects from. */
+export type RecentProjectAgent = AppServerBackendKind;
+
+export type DiscoverRecentProjectsRequest = {
+  /**
+   * Read this computer's Codex threads. False when the profile being set up
+   * signs in to Codex on its own: that login's threads are not these.
+   */
+  includeCodex: boolean;
+};
+
+/**
+ * How one agent's read went. `complete` read every thread; `partial` stopped
+ * at its budget, so older projects may be missing; `failed` could not read;
+ * `skipped` was not asked for or has nothing PwrAgent may read.
+ */
+export type RecentProjectSourceReport = {
+  agent: RecentProjectAgent;
+  label: string;
+  status: "complete" | "partial" | "failed" | "skipped";
+  detail?: string;
+};
+
+/** One agent's evidence that a project folder was used, at its newest time. */
+export type RecentProjectObservation = {
+  /** The project root: a repository's primary checkout, else the folder. */
+  path: string;
+  agent: RecentProjectAgent;
+  /** Epoch milliseconds of the newest thread there, when the agent said. */
+  lastActiveAt?: number;
+};
+
+export type DiscoverRecentProjectsResponse = {
+  sources: RecentProjectSourceReport[];
+  observations: RecentProjectObservation[];
+};
+
 export type PickGhCommandResponse = {
   canceled: boolean;
   path?: string;
@@ -2490,6 +2527,13 @@ export type CreateDesktopPwrAgentProfileRequest = {
    * and the wizard auto-fires on their first open per #500).
    */
   seedOnboardingCompleted?: boolean;
+  /**
+   * Project folders the operator checked on Get started. The new profile
+   * registers each one as a sidebar directory the first time it starts,
+   * through the same path as adding a folder by hand. Get started runs in
+   * the throwaway bootstrap profile, so it cannot register them itself.
+   */
+  seedProjectPaths?: string[];
 };
 
 export type CreateDesktopPwrAgentProfileResponse = {

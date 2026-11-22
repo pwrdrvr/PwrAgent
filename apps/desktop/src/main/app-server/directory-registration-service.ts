@@ -61,15 +61,32 @@ async function defaultStat(
 function failed(
   reason: RegisterDirectoryFromDiskFailureReason,
   message: string,
-): RegisterDirectoryFromDiskResponse {
+): Extract<RegisterDirectoryFromDiskResponse, { ok: false }> {
   return { ok: false, reason, message };
 }
 
-export async function registerDirectoryFromDisk(
-  request: { path: string; preferredBackend?: AppServerBackendKind },
-  deps: DirectoryRegistrationDeps,
-): Promise<RegisterDirectoryFromDiskResponse> {
-  const candidate = request.path?.trim();
+export type DirectoryRegistrationRoot = {
+  /** What registration stores: a repository's primary checkout, else the folder. */
+  directoryPath: string;
+  /** Set when Git found a repository. */
+  repoRoot?: string;
+  /** The linked checkout the path was in, when it was not the primary. */
+  checkoutPath?: string;
+};
+
+/**
+ * The folder a path registers as. A path inside a repository registers as
+ * the repository's primary checkout; any other folder as itself. Git is
+ * best effort: a plain folder, or no Git, still resolves.
+ */
+export async function resolveDirectoryRegistrationRoot(
+  candidatePath: string,
+  deps: Pick<DirectoryRegistrationDeps, "runGit" | "statPath"> = {},
+): Promise<
+  | ({ ok: true } & DirectoryRegistrationRoot)
+  | Extract<RegisterDirectoryFromDiskResponse, { ok: false }>
+> {
+  const candidate = candidatePath?.trim();
   if (!candidate) {
     return failed("inaccessible", "Pick a folder to add it as a directory.");
   }
@@ -125,6 +142,23 @@ export async function registerDirectoryFromDisk(
     // Git metadata is optional: a plain folder (or unavailable Git) must
     // not prevent registration after filesystem validation succeeds.
   }
+
+  return {
+    ok: true,
+    directoryPath,
+    ...(repoRoot ? { repoRoot } : {}),
+    ...(checkoutPath ? { checkoutPath } : {}),
+  };
+}
+
+export async function registerDirectoryFromDisk(
+  request: { path: string; preferredBackend?: AppServerBackendKind },
+  deps: DirectoryRegistrationDeps,
+): Promise<RegisterDirectoryFromDiskResponse> {
+  const resolved = await resolveDirectoryRegistrationRoot(request.path, deps);
+  if (!resolved.ok) return resolved;
+  const { directoryPath, repoRoot, checkoutPath } = resolved;
+  const runGit = deps.runGit ?? defaultRunGit;
 
   // Resolve the current branch only for detected repos (best effort).
   let currentBranch: string | undefined;

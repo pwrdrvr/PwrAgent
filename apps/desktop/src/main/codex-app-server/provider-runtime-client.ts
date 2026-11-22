@@ -51,6 +51,7 @@ export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listThreads: "primary",
   listNativeSubAgentThreads: "primary",
   listThreadsForMigration: "primary",
+  listRecentThreadDirectories: "primary",
   readArchiveCleanupThreadSummary: "threadId",
   listArchiveCleanupThreadsPage: "primary",
   archiveCleanupRecencyReads: "primary",

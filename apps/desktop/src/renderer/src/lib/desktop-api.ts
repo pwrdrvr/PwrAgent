@@ -547,6 +547,8 @@ import type {
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
+  DiscoverRecentProjectsRequest,
+  DiscoverRecentProjectsResponse,
   CompleteOnboardingCodexBootstrapResponse,
   CreateDesktopCodexAuthProfileRequest,
   CreateDesktopCodexAuthProfileResponse,
@@ -1668,6 +1670,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   checkCodexAuthProfileStatus?: (
     request: CheckDesktopCodexAuthProfileStatusRequest,
   ) => Promise<CheckDesktopCodexAuthProfileStatusResponse>;
+  /** Get started: recent project folders, and how each agent's read went. */
+  discoverRecentProjects?: (
+    request: DiscoverRecentProjectsRequest,
+  ) => Promise<DiscoverRecentProjectsResponse>;
   /**
    * Wizard-issued signal that the operator picked a Codex profile model
    * and the deferred Codex `listThreads` probe may now run. Persists

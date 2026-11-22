@@ -909,6 +909,8 @@ export const SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL =
   "settings:start-codex-auth-profile-login";
 export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
   "settings:check-codex-auth-profile-status";
+export const SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL =
+  "settings:discover-recent-projects";
 export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
 export const SETTINGS_PICK_GLAB_COMMAND_CHANNEL =

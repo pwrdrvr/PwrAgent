@@ -34,6 +34,10 @@ export type PairedProfileApi = Pick<
 export async function provisionPairedProfiles(
   api: PairedProfileApi | undefined,
   names: readonly string[],
+  options?: {
+    /** Project folders each new profile registers on its first start. */
+    seedProjectPaths?: readonly string[];
+  },
 ): Promise<string[]> {
   if (
     !api?.createPwrAgentProfile ||
@@ -54,6 +58,9 @@ export async function provisionPairedProfiles(
         // The flag is honored by the main-process handler in
         // `apps/desktop/src/main/ipc/profiles.ts`.
         seedOnboardingCompleted: true,
+        ...(options?.seedProjectPaths?.length
+          ? { seedProjectPaths: [...options.seedProjectPaths] }
+          : {}),
       });
       await api.createCodexAuthProfile({ profile: name });
       await api.setPwrAgentProfileCodexProfile({

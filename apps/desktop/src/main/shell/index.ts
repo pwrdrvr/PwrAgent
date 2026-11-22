@@ -229,6 +229,7 @@ import {
   buildDockProfileSnapshot,
   cleanupBootstrapProfile,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
+  resolveActiveProfileDir,
   resolveActiveProfileName,
   resolveProfileBootDecision,
   resolvePwragentRoot,
@@ -237,6 +238,8 @@ import {
   type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "../profile";
+import { getDesktopAppServerService } from "../app-server/desktop-app-server-service";
+import { importOnboardingProjectSeed } from "../onboarding/onboarding-project-seed";
 import {
   isSecretStorageDisabledByEnv,
   SECRET_STORAGE_DISABLED_ENV,
@@ -1386,6 +1389,29 @@ export function bootstrapApp(): void {
     wireWindowControlsBridge();
     installWindowFrameSync(app);
     registerAppServerIpcHandlers();
+    if (bootMode === "active-profile") {
+      // Projects checked on Get started, handed over by the bootstrap
+      // profile. Registered once, like adding each folder by hand. Every
+      // step, even resolving the profile folder, runs inside the promise:
+      // this optional import must never stop the first window.
+      void Promise.resolve().then(async () => await importOnboardingProjectSeed(
+        resolveActiveProfileDir(),
+        async (folder) => await getDesktopAppServerService().registerDirectoryFromDisk({ path: folder }),
+      )).then((result) => {
+        if (!result) return;
+        mainLog.info("Registered Get started projects", {
+          registered: result.registered.length,
+          failed: result.failed.length,
+        });
+        for (const failure of result.failed) {
+          mainLog.warn("Get started project could not be registered", failure);
+        }
+      }, (error: unknown) => {
+        mainLog.warn("Get started projects could not be read", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     registerNativeVoiceIpcHandlers();
     registerAudioTranscriptionIpc(nativeVoiceBusy);
     registerAgentIpcHandlers();

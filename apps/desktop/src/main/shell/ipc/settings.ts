@@ -27,6 +27,8 @@ import type {
 import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
+  DiscoverRecentProjectsRequest,
+  DiscoverRecentProjectsResponse,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
   CompleteOnboardingCodexBootstrapResponse,
@@ -98,6 +100,7 @@ import {
   PROVIDER_CATALOG_REFRESH_START_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL,
   SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
   SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
   SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL,
@@ -208,6 +211,13 @@ import type {
 } from "../../acp/acp-registry-types";
 import { resolveWindowsCodexLaunchCommand } from "../../codex-windows-launch";
 import { normalizeProfileName } from "../../profile";
+import {
+  discoverRecentProjects,
+  RECENT_PROJECT_CODEX_MAX_PAGES,
+  RECENT_PROJECT_CODEX_PAGE_SIZE,
+} from "../../onboarding/recent-project-discovery";
+import { resolveDirectoryRegistrationRoot } from "../../app-server/directory-registration-service";
+import { isBootstrapProfile } from "../../profile-service";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
@@ -1145,6 +1155,72 @@ function resolveRequiredCodexProfileHome(profile: string): string {
 }
 
 
+const RECENT_PROJECT_DISCOVERY_TIMEOUT_MS = 20_000;
+
+/**
+ * Get started's recent projects. Codex answers `thread/list` from a
+ * one-off App Server on the login the new profile will use: the registry's
+ * own lists serve no thread data in the bootstrap profile, by design, and
+ * defer Codex until first run ends. Claude Code and ACP threads come from
+ * PwrAgent's lists, which the bootstrap profile does not have.
+ */
+async function discoverRecentProjectsForOnboarding(
+  service: DesktopSettingsService,
+  request: DiscoverRecentProjectsRequest,
+): Promise<DiscoverRecentProjectsResponse> {
+  const bootstrap = isBootstrapProfile();
+  const command = request.includeCodex
+    ? await resolveCodexCommandForProfileWorkflow(service).catch(() => undefined)
+    : undefined;
+  const codexHome = bootstrap
+    ? resolveDefaultCodexHome()
+    : service.readCodexProfiles().effectiveCodexHome;
+  const deadlineAt = Date.now() + RECENT_PROJECT_DISCOVERY_TIMEOUT_MS;
+  const registry = bootstrap ? undefined : getDesktopBackendRegistry();
+  const acpLabels = new Map<string, string>();
+  const response = await discoverRecentProjects({
+    includeCodex: request.includeCodex,
+    readCodexDirectories: command
+      ? async () => {
+        const client = new CodexAppServerClient({
+          command,
+          env: { ...process.env, CODEX_HOME: codexHome },
+        });
+        try {
+          return await client.listRecentThreadDirectories({
+            limit: RECENT_PROJECT_CODEX_PAGE_SIZE,
+            maxPages: RECENT_PROJECT_CODEX_MAX_PAGES,
+            deadlineAt,
+          });
+        } finally {
+          await client.close();
+        }
+      }
+      : undefined,
+    listPwrAgentThreads: registry
+      ? async () => {
+        const [threads, backends] = await Promise.all([
+          // The read-only projection: no navigation or list maintenance.
+          registry.listThreadSearchCandidates({ deadlineAt }),
+          registry.listBackends({ includeUnavailable: true }).catch(() => undefined),
+        ]);
+        for (const backend of backends?.backends ?? []) acpLabels.set(backend.kind, backend.label);
+        return threads;
+      }
+      : undefined,
+    labelFor: (agent) => agent === "codex"
+      ? "Codex"
+      : agent === "claude"
+        ? "Claude Code"
+        : acpLabels.get(agent) ?? agent,
+    resolveProjectRoot: async (folder) => {
+      const resolved = await resolveDirectoryRegistrationRoot(folder);
+      return resolved.ok ? resolved.directoryPath : undefined;
+    },
+  });
+  return response;
+}
+
 const pendingCodexProviderRecovery = new Map<string, { work?: Promise<void> }>();
 
 async function checkCodexProfileAuthStatus(
@@ -2045,6 +2121,16 @@ export function registerSettingsIpcHandlers(
       await checkCodexProfileAuthStatus(getService(service), request),
   );
 
+  ipcMain.removeHandler(SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL,
+    async (
+      _event,
+      request: DiscoverRecentProjectsRequest,
+    ): Promise<DiscoverRecentProjectsResponse> =>
+      await discoverRecentProjectsForOnboarding(getService(service), request),
+  );
+
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.handle(
     SETTINGS_PICK_GH_COMMAND_CHANNEL,
@@ -2504,6 +2590,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_PICK_GLAB_COMMAND_CHANNEL);
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.removeHandler(SETTINGS_PICK_GIT_COMMAND_CHANNEL);
