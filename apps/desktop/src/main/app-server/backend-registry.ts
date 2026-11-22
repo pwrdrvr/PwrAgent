@@ -15636,13 +15636,17 @@ export class DesktopBackendRegistry {
 
   private async buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
-    discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
-    eagerTools?: ReadonlySet<string>,
-    caller?: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext,
+    options: {
+      discoveryEnabled?: boolean;
+      eagerTools?: ReadonlySet<string>;
+      caller?: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext;
+      jobMonitorCreationEnabled?: boolean;
+    } = {},
   ): Promise<CodexDynamicToolSpec[]> {
-    const jobMonitorCreationEnabled = caller?.threadId
+    const { caller, discoveryEnabled = this.resolveCodexToolDiscoveryFn(), eagerTools } = options;
+    const jobMonitorCreationEnabled = options.jobMonitorCreationEnabled ?? (caller?.threadId
       ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId })
-      : true;
+      : true);
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         currentTurnInputSource: this.currentTurnInputSource,
@@ -15684,14 +15688,13 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     const discoveryEnabled = this.resolveCodexToolDiscoveryFn();
-    return this.buildCodexParentDynamicTools(
-      params.tokenMiserEnabled,
+    return this.buildCodexParentDynamicTools(params.tokenMiserEnabled, {
       discoveryEnabled,
-      discoveryEnabled
+      eagerTools: discoveryEnabled
         ? await this.resolveEagerPwrAgentTools(params.threadId)
         : undefined,
-      { backend: "codex", threadId: params.threadId },
-    );
+      caller: { backend: "codex", threadId: params.threadId },
+    });
   }
 
   /**
@@ -17481,9 +17484,7 @@ export class DesktopBackendRegistry {
             // Eager director tools are a latency optimization, not authority.
             const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
-              this.resolveCodexToolDiscoveryFn(),
-              undefined,
-              { backend: "codex", threadId },
+              { jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false },
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
@@ -18560,7 +18561,10 @@ export class DesktopBackendRegistry {
       }
       const tokenMiserEnabled = await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall);
       const router = new AgentToolRouter([buildPwrAgentToolSearchDefinition(
-        await this.buildCodexParentDynamicTools(tokenMiserEnabled, false, undefined, { backend, threadId: hostToolCall.threadId, turnId: hostToolCall.turnId }),
+        await this.buildCodexParentDynamicTools(tokenMiserEnabled, {
+          discoveryEnabled: false,
+          caller: { backend, threadId: hostToolCall.threadId, turnId: hostToolCall.turnId },
+        }),
         tokenMiserEnabled ? this.tokenMiserStore : undefined,
       )]);
       return await router.handleDynamicToolCall({ backend, call: hostToolCall });

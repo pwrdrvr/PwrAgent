@@ -427,11 +427,11 @@ describe("WaitingForPanel", () => {
         onTurnOffAutoFix={vi.fn()} onSendScheduledNow={vi.fn()} />,
     );
     // turn_control: the owner stops monitors and background tasks.
-    expect(screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+    const cancelMonitor = screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" });
     expect(screen.getByRole("button", { name: "Stop: pnpm test:desktop-e2e --shard 2/4" })).toBeInTheDocument();
     // No PR watch control, no scheduled actions, and dependencies stay local.
     expect(screen.queryByRole("button", { name: /^Stop: Waiting for CI/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Cancel:/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Cancel:/ })).toEqual([cancelMonitor]);
     expect(screen.queryByRole("button", { name: /^Turn Off:/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send Now" })).not.toBeInTheDocument();
     expect(screen.getByText("Some of these run on studio-mac. Stop them there.")).toBeInTheDocument();
