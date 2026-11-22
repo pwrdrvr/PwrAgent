@@ -1,3 +1,4 @@
+import { migrateHotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import { probe } from "../test/phase-probes";
 import { settleFakeTimers } from "../test/settle-fake-timers";
 import "@testing-library/jest-dom/vitest";
@@ -2623,6 +2624,15 @@ describe("App", () => {
         hotCpuProfilingStartDelayMs: {
           value: 0,
           source: "default",
+        },
+        hotCpuProfilingCaptureRules: {
+          value: migrateHotCpuCaptureRules(),
+          source: "default",
+          effective: {
+            intervalMs: 2_000,
+            rules: [{ id: "sustained", thresholdPercent: 50, durationMs: 4_000, sampleCount: 2 }],
+            overrides: {},
+          },
         },
         hotCpuProfilingTriggerMode: {
           value: "sustained",

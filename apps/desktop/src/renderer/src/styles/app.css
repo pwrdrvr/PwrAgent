@@ -17826,6 +17826,85 @@ a.button {
   font-weight: 600;
 }
 
+.settings-cpu-rules {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-cpu-rules p {
+  margin: 0;
+}
+
+.settings-cpu-rules code {
+  overflow-wrap: anywhere;
+}
+
+.settings-cpu-rules__rule {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-cpu-rules__rule + .settings-cpu-rules__rule {
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: 10px;
+}
+
+.settings-cpu-rules__head,
+.settings-cpu-rules__values,
+.settings-cpu-rules__toggle,
+.settings-cpu-rules__threshold,
+.settings-cpu-rules__duration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-cpu-rules__head,
+.settings-cpu-rules__values {
+  flex-wrap: wrap;
+}
+
+.settings-cpu-rules__toggle {
+  min-width: 104px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-cpu-rules__toggle input {
+  inline-size: 14px;
+  block-size: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.settings-cpu-rules__values {
+  padding-inline-start: 22px;
+}
+
+.settings-cpu-rules__threshold .settings-input {
+  width: 64px;
+  padding-inline: 7px;
+  text-align: end;
+}
+
+.settings-cpu-rules__duration .settings-input {
+  width: 150px;
+  font-family: inherit;
+}
+
+.settings-cpu-rules__error {
+  order: 1;
+  flex: 1 0 100%;
+}
+
+.settings-cpu-rules [role="status"]:empty {
+  position: absolute;
+}
+
 /* A value an operator has to hand to someone else verbatim (process ids,
    diagnostic paths): monospaced pill + Copy. */
 .settings-copyvalue {

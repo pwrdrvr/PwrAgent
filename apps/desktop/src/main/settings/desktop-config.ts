@@ -1,3 +1,12 @@
+import desktopPackage from "../../../package.json" with { type: "json" };
+import {
+  HOT_CPU_RULE_DURATIONS,
+  assertHotCpuCaptureRules,
+  isHotCpuThreshold,
+  migrateHotCpuCaptureRules,
+  primaryHotCpuRule,
+  type HotCpuCaptureRules,
+} from "@pwragent/shared/hot-cpu-rules";
 import type { DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import type { DesktopThreadArchiveConfig } from "@pwragent/shared/thread-archive-policy";
 import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
@@ -159,6 +168,7 @@ export type DesktopSettingsConfig = {
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
+    hotCpuProfilingCaptureRules?: HotCpuCaptureRules;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
     hotCpuProfilingCaptureChromiumTrace?: boolean;
@@ -487,6 +497,21 @@ const LEGACY_EXPERIMENTAL_MARKDOWN_LAST_VERSION = "1.4.10";
  * it exists, so a downgrade reads the operator's choice; a 1.6+ launch copies
  * it forward and removes it (`LEGACY_SETTINGS_RETIREMENTS`).
  */
+const LEGACY_HOT_CPU_TRIGGER = ["general", "hot_cpu_profiling_trigger_mode"] as const;
+const LEGACY_HOT_CPU_TRIGGER_LAST_VERSION = "1.4.16";
+const LEGACY_HOT_CPU_TRIGGER_KEPT_THROUGH = "1.5";
+const HOT_CPU_RULE_KEYS = {
+  highEnabled: "hot_cpu_profiling_high_enabled",
+  highMode: "hot_cpu_profiling_high_mode",
+  spikeThreshold: "hot_cpu_profiling_spike_threshold_percent",
+  spikeDuration: "hot_cpu_profiling_spike_duration_ms",
+  sustainedThreshold: "hot_cpu_profiling_sustained_threshold_percent",
+  sustainedDuration: "hot_cpu_profiling_sustained_duration_ms",
+  slowburnEnabled: "hot_cpu_profiling_slowburn_enabled",
+  slowburnDuration: "hot_cpu_profiling_slowburn_duration_ms",
+} as const;
+const HOT_CPU_SLOWBURN_THRESHOLD = "hot_cpu_profiling_slowburn_threshold_percent";
+
 const LEGACY_EXPERIMENTAL_MARKDOWN_KEYS = {
   incrementalRendering: {
     legacy: ["experimental", "incremental_markdown_rendering"],
@@ -668,11 +693,25 @@ export type LegacySettingRetirement = Readonly<{
   current?: readonly string[];
   /** The last `major.minor` series that keeps the legacy key. */
   keptThroughSeries: string;
+  migrate?: (tables: TomlTables) => TomlEdit[];
 }>;
 
 export const LEGACY_SETTINGS_RETIREMENTS: readonly LegacySettingRetirement[] = [
   { ...LEGACY_EXPERIMENTAL_MARKDOWN_KEYS.incrementalRendering, keptThroughSeries: "1.5" },
   { ...LEGACY_EXPERIMENTAL_MARKDOWN_KEYS.mathRendering, keptThroughSeries: "1.5" },
+  {
+    legacy: LEGACY_HOT_CPU_TRIGGER,
+    keptThroughSeries: LEGACY_HOT_CPU_TRIGGER_KEPT_THROUGH,
+    migrate: (tables) => {
+      const general = tables.general;
+      if (readHotCpuCaptureRules(general)) return [];
+      const mode = readHotCpuProfileTriggerMode(general[LEGACY_HOT_CPU_TRIGGER[1]]);
+      if (!mode) return [];
+      return hotCpuCaptureRulesEdits(migrateHotCpuCaptureRules(
+        mode, readNumber(general[HOT_CPU_SLOWBURN_THRESHOLD]),
+      ));
+    },
+  },
 ];
 
 /**
@@ -707,7 +746,7 @@ export function retireLegacyDesktopSettings(
   const tables = parseTomlTables(source, configPath);
   const edits: TomlEdit[] = [];
   const retired: string[] = [];
-  for (const { legacy, current } of due) {
+  for (const { legacy, current, migrate } of due) {
     const legacyValue = tables[legacy[0]]?.[legacy[1]];
     if (legacyValue === undefined) continue;
     if (current) {
@@ -721,6 +760,7 @@ export function retireLegacyDesktopSettings(
         edits.push({ op: "set", path: current, value: legacyValue });
       }
     }
+    if (migrate) edits.push(...migrate(tables));
     // Match this key's own marker, not any legacy marker that happens to sit
     // above it in a hand-edited file.
     edits.push({
@@ -851,13 +891,27 @@ export function desktopSettingsPatchToEdits(
       patch.general.hotCpuProfilingStartDelayMs,
     );
   }
-  if (patch.general?.hotCpuProfilingTriggerMode !== undefined) {
+  if (patch.general?.hotCpuProfilingCaptureRules !== undefined) {
+    const rules = patch.general.hotCpuProfilingCaptureRules;
+    assertHotCpuCaptureRules(rules);
+    edits.push(...hotCpuCaptureRulesEdits(rules));
+    if (!isPastReleaseSeries(desktopPackage.version, LEGACY_HOT_CPU_TRIGGER_KEPT_THROUGH)) {
+      set(LEGACY_HOT_CPU_TRIGGER, primaryHotCpuRule(rules));
+      edits.push({
+        op: "ensureCommentBefore",
+        path: LEGACY_HOT_CPU_TRIGGER,
+        marker: LEGACY_SETTINGS_MARKER,
+        comment: `# ${LEGACY_SETTINGS_MARKER} key=${LEGACY_HOT_CPU_TRIGGER[1]} shape=mode-string used_through=${LEGACY_HOT_CPU_TRIGGER_LAST_VERSION} kept_for_older_clients`,
+      });
+    }
+  } else if (patch.general?.hotCpuProfilingTriggerMode !== undefined) {
     set(
       ["general", "hot_cpu_profiling_trigger_mode"],
       patch.general.hotCpuProfilingTriggerMode,
     );
   }
-  if (patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined) {
+  if (patch.general?.hotCpuProfilingCaptureRules === undefined
+    && patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined) {
     set(
       ["general", "hot_cpu_profiling_slowburn_threshold_percent"],
       patch.general.hotCpuProfilingSlowburnThresholdPercent,
@@ -2505,6 +2559,7 @@ function normalizeDesktopConfig(
       hotCpuProfilingStartDelayMs: readHotCpuProfileStartDelayMs(
         general?.hot_cpu_profiling_start_delay_ms,
       ),
+      hotCpuProfilingCaptureRules: readHotCpuCaptureRules(general),
       hotCpuProfilingTriggerMode: readHotCpuProfileTriggerMode(
         general?.hot_cpu_profiling_trigger_mode,
       ),
@@ -3010,6 +3065,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const hotCpuProfilingEnabled = config.general?.hotCpuProfilingEnabled;
   const hotCpuProfilingStartDelayMs =
     config.general?.hotCpuProfilingStartDelayMs;
+  const hotCpuProfilingCaptureRules = config.general?.hotCpuProfilingCaptureRules;
   const hotCpuProfilingTriggerMode =
     config.general?.hotCpuProfilingTriggerMode;
   const hotCpuProfilingSlowburnThresholdPercent =
@@ -3046,6 +3102,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     developerMode !== undefined ||
     hotCpuProfilingEnabled !== undefined ||
     hotCpuProfilingStartDelayMs !== undefined ||
+    hotCpuProfilingCaptureRules !== undefined ||
     hotCpuProfilingTriggerMode !== undefined ||
     hotCpuProfilingSlowburnThresholdPercent !== undefined ||
     hotCpuProfilingCaptureChromiumTrace !== undefined ||
@@ -3077,6 +3134,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (hotCpuProfilingStartDelayMs !== undefined) {
       pruned.general.hotCpuProfilingStartDelayMs = hotCpuProfilingStartDelayMs;
+    }
+    if (hotCpuProfilingCaptureRules !== undefined) {
+      pruned.general.hotCpuProfilingCaptureRules = hotCpuProfilingCaptureRules;
     }
     if (hotCpuProfilingTriggerMode !== undefined) {
       pruned.general.hotCpuProfilingTriggerMode = hotCpuProfilingTriggerMode;
@@ -3666,6 +3726,53 @@ function readMergeMethod(
   value: TomlScalar | undefined,
 ): ThreadTodoMergeMethod | undefined {
   return isThreadTodoMergeMethod(value) ? value : undefined;
+}
+
+function readHotCpuCaptureRules(general?: TomlTables[string]): HotCpuCaptureRules | undefined {
+  if (!general || !Object.values(HOT_CPU_RULE_KEYS).some((key) => general[key] !== undefined)) {
+    return undefined;
+  }
+  const keys = HOT_CPU_RULE_KEYS;
+  const defaults = migrateHotCpuCaptureRules();
+  const readThreshold = (key: string, fallback: number) => {
+    const value = general[key];
+    return isHotCpuThreshold(value) ? value : fallback;
+  };
+  const readDuration = <T extends number>(key: string, choices: readonly T[], fallback: T): T =>
+    choices.find((choice) => choice === general[key]) ?? fallback;
+  const slowburnEnabled = readBoolean(general[keys.slowburnEnabled]) ?? false;
+  return {
+    highEnabled: !slowburnEnabled || (readBoolean(general[keys.highEnabled]) ?? true),
+    highMode: general[keys.highMode] === "spike" ? "spike" : "sustained",
+    spike: {
+      thresholdPercent: readThreshold(keys.spikeThreshold, defaults.spike.thresholdPercent),
+      durationMs: readDuration(keys.spikeDuration, HOT_CPU_RULE_DURATIONS.spike, defaults.spike.durationMs),
+    },
+    sustained: {
+      thresholdPercent: readThreshold(keys.sustainedThreshold, defaults.sustained.thresholdPercent),
+      durationMs: readDuration(keys.sustainedDuration, HOT_CPU_RULE_DURATIONS.sustained, defaults.sustained.durationMs),
+    },
+    slowburn: {
+      enabled: slowburnEnabled,
+      thresholdPercent: readThreshold(HOT_CPU_SLOWBURN_THRESHOLD, defaults.slowburn.thresholdPercent),
+      durationMs: readDuration(keys.slowburnDuration, HOT_CPU_RULE_DURATIONS.slowburn, defaults.slowburn.durationMs),
+    },
+  };
+}
+
+function hotCpuCaptureRulesEdits(rules: HotCpuCaptureRules): TomlEdit[] {
+  const keys = HOT_CPU_RULE_KEYS;
+  return Object.entries({
+    [keys.highEnabled]: rules.highEnabled,
+    [keys.highMode]: rules.highMode,
+    [keys.spikeThreshold]: rules.spike.thresholdPercent,
+    [keys.spikeDuration]: rules.spike.durationMs,
+    [keys.sustainedThreshold]: rules.sustained.thresholdPercent,
+    [keys.sustainedDuration]: rules.sustained.durationMs,
+    [keys.slowburnEnabled]: rules.slowburn.enabled,
+    [keys.slowburnDuration]: rules.slowburn.durationMs,
+    [HOT_CPU_SLOWBURN_THRESHOLD]: rules.slowburn.thresholdPercent,
+  }).map(([key, value]) => ({ op: "set", path: ["general", key], value }));
 }
 
 function readHotCpuProfileTriggerMode(

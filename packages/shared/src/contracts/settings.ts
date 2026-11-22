@@ -1,3 +1,4 @@
+import type { HotCpuCaptureRules, HotCpuRulePlan } from "../hot-cpu-rules";
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
@@ -973,6 +974,7 @@ export type DesktopGeneralSettingsSnapshot = {
   developerMode: DesktopSettingsValue<boolean>;
   hotCpuProfilingEnabled: DesktopSettingsValue<boolean>;
   hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
+  hotCpuProfilingCaptureRules: DesktopSettingsValue<HotCpuCaptureRules> & { effective: HotCpuRulePlan };
   hotCpuProfilingTriggerMode: DesktopSettingsValue<DesktopHotCpuProfileTriggerMode>;
   hotCpuProfilingSlowburnThresholdPercent: DesktopSettingsValue<number>;
   hotCpuProfilingCaptureChromiumTrace: DesktopSettingsValue<boolean>;
@@ -1853,6 +1855,7 @@ export type DesktopSettingsConfigPatch = {
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
+    hotCpuProfilingCaptureRules?: HotCpuCaptureRules;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
     hotCpuProfilingCaptureChromiumTrace?: boolean;

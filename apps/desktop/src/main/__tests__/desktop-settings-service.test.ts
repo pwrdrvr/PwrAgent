@@ -1,3 +1,4 @@
+import { migrateHotCpuCaptureRules, type HotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import { bundledGitDirectory, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import * as gitDiscovery from "../settings/git-discovery";
 import { suggestedSlackAppName } from "../messaging/messaging-settings-domain";
-import { managedGrokBuildsEnabledForRuntime } from "../settings/desktop-config";
+import { managedGrokBuildsEnabledForRuntime, readDesktopSettingsConfig, retireLegacyDesktopSettings } from "../settings/desktop-config";
 import {
   MemoryDesktopSecretStore,
   type DesktopSecretStore,
@@ -1377,6 +1378,90 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "default",
     });
+  });
+
+  it("lazily migrates CPU rules, keeps a downgrade mirror and round-trips the pruned config", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const legacy = [
+      "[general]",
+      "# Representative operator comment",
+      'hot_cpu_profiling_trigger_mode = "slowburn"',
+      "hot_cpu_profiling_slowburn_threshold_percent = 26",
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, legacy);
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    const initial = (await service.readSettingsProjection()).general.hotCpuProfilingCaptureRules;
+    expect(initial).toMatchObject({
+      source: "config", value: migrateHotCpuCaptureRules("slowburn", 26),
+      effective: { rules: [{ id: "slowburn", thresholdPercent: 26, durationMs: 4_000, sampleCount: 2 }] },
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(legacy);
+
+    const rules: HotCpuCaptureRules = {
+      ...initial.value,
+      highEnabled: true,
+      highMode: "spike",
+      spike: { thresholdPercent: 400, durationMs: 1_000 },
+      sustained: { thresholdPercent: 180, durationMs: 20_000 },
+      slowburn: { enabled: true, thresholdPercent: 105, durationMs: 60_000 },
+    };
+    await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: rules } });
+    await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: rules } });
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved.match(/pwragent-legacy-settings key=hot_cpu_profiling_trigger_mode/g)).toHaveLength(1);
+    expect(saved).toContain('hot_cpu_profiling_trigger_mode = "spike"');
+    expect(saved).toContain("# Representative operator comment");
+    expect(readDesktopSettingsConfig(configPath).general?.hotCpuProfilingCaptureRules).toEqual(rules);
+
+    // A downgraded client can change the mirror; the present rules remain authoritative.
+    fs.writeFileSync(configPath, saved.replace('trigger_mode = "spike"', 'trigger_mode = "sustained"'));
+    const withEnv = new DesktopSettingsService({
+      configPath,
+      env: {
+        PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "slowburn",
+        PWRAGENT_HOT_CPU_PROFILING_SLOWBURN_THRESHOLD_PERCENT: "23.5",
+        PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "500",
+      },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await withEnv.readSettingsProjection()).general.hotCpuProfilingCaptureRules).toMatchObject({
+      source: "env", overriddenByEnv: true, value: rules,
+      effective: { intervalMs: 500, rules: [{ id: "slowburn", thresholdPercent: 23.5, durationMs: 1_000, sampleCount: 2 }] },
+    });
+  });
+
+  it("rejects all-off rules and safely repairs invalid stored values at read time", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    const invalid = { ...migrateHotCpuCaptureRules(), highEnabled: false };
+    await expect(service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: invalid } }))
+      .rejects.toThrow("Enable at least one rule");
+    expect(fs.existsSync(configPath)).toBe(false);
+    fs.writeFileSync(configPath, [
+      "[general]",
+      'hot_cpu_profiling_trigger_mode = "slowburn"',
+      "hot_cpu_profiling_high_enabled = false",
+      "hot_cpu_profiling_slowburn_enabled = false",
+      "hot_cpu_profiling_spike_duration_ms = 3000",
+      "hot_cpu_profiling_sustained_threshold_percent = 401",
+    ].join("\n"));
+    expect((await service.readSettingsProjection()).general.hotCpuProfilingCaptureRules.value)
+      .toEqual(migrateHotCpuCaptureRules());
+  });
+
+  it("converts an untouched legacy trigger when its downgrade mirror retires", () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[general]",
+      'hot_cpu_profiling_trigger_mode = "slowburn"',
+      "hot_cpu_profiling_slowburn_threshold_percent = 27",
+    ].join("\n"));
+    expect(retireLegacyDesktopSettings(configPath, "1.5.9").changed).toBe(false);
+    expect(retireLegacyDesktopSettings(configPath, "1.6.0-alpha.1").retired)
+      .toContain("general.hot_cpu_profiling_trigger_mode");
+    expect(readDesktopSettingsConfig(configPath).general?.hotCpuProfilingCaptureRules)
+      .toEqual(migrateHotCpuCaptureRules("slowburn", 27));
   });
 
   it("defaults hot CPU profiling to disabled and persists overrides", async () => {

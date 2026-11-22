@@ -3,19 +3,20 @@ type Profiler = {
   stop: (reason: string) => Promise<void>;
 };
 
-type Owner = {
+type Owner<TProfiler extends Profiler> = {
   key: string;
-  create: () => Promise<Profiler | null>;
+  create: () => Promise<TProfiler | null>;
+  update?: (profiler: TProfiler) => void;
 };
 
 // Windows share the main V8 isolate. Serialize ownership changes, including
 // settings changes and window closure, before connecting another inspector.
-export class SharedHotCpuProfiler {
-  private readonly owners = new Map<symbol, Owner>();
-  private active: { key: string; profiler: Profiler } | null = null;
+export class SharedHotCpuProfiler<TProfiler extends Profiler = Profiler> {
+  private readonly owners = new Map<symbol, Owner<TProfiler>>();
+  private active: { key: string; profiler: TProfiler } | null = null;
   private queue: Promise<void> = Promise.resolve();
 
-  acquire(owner: symbol, request: Owner): Promise<void> {
+  acquire(owner: symbol, request: Owner<TProfiler>): Promise<void> {
     return this.enqueue(async () => {
       this.owners.set(owner, request);
       await this.reconcile("settings-changed");
@@ -37,7 +38,10 @@ export class SharedHotCpuProfiler {
 
   private async reconcile(reason: string): Promise<void> {
     const desired = [...this.owners.values()].at(-1);
-    if (desired && desired.key === this.active?.key) return;
+    if (desired && this.active?.key === desired.key) {
+      desired.update?.(this.active.profiler);
+      return;
+    }
     if (this.active) {
       const previous = this.active;
       this.active = null;

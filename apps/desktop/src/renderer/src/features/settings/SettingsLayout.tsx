@@ -634,6 +634,7 @@ export function SettingsField(props: {
    *  the accessibility contract is explicit — empty/null/array would
    *  render a malformed label. */
   label: string;
+  labelId?: string;
   /** 12-px description below the label. Single sentence framing. */
   sub?: ReactNode;
   /** 11.5-px hint below the control. */
@@ -676,7 +677,7 @@ export function SettingsField(props: {
   return (
     <div className="settings-field">
       <div className="settings-field__label">
-        <span>{props.label}</span>
+        <span id={props.labelId}>{props.label}</span>
         {props.sub ? (
           <span className="settings-field__sub">{props.sub}</span>
         ) : null}
@@ -870,13 +871,14 @@ export function ToggleField(props: {
  */
 export type SegmentedControlProps<TValue extends string | number> = {
   disabled?: boolean;
+  rovingFocus?: boolean;
   /** Names the group for assistive tech. */
   label: string;
   /** An option carrying `meta` renders stacked, with the secondary line under
    *  its label — release versions, delays, thresholds. The two always went
    *  together in the hand-rolled groups this replaced, so presence of `meta`
    *  is what selects the variant rather than a separate flag to keep in sync. */
-  options: Array<{ label: string; meta?: ReactNode; value: TValue }>;
+  options: Array<{ label: string; meta?: ReactNode; tooltip?: string; value: TValue }>;
   value: TValue;
 } & (
   | {
@@ -907,7 +909,23 @@ export function SegmentedControl<TValue extends string | number>(
   const [busyValues, setBusyValues] = useState<ReadonlyArray<TValue>>([]);
 
   return (
-    <div className="settings-segmented" role="radiogroup" aria-label={props.label}>
+    <div
+      className="settings-segmented"
+      role="radiogroup"
+      aria-label={props.label}
+      onKeyDown={props.rovingFocus ? (event) => {
+        const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1
+          : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0;
+        if (delta === 0) return;
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="radio"]:enabled')];
+        const index = buttons.findIndex((button) => button === event.target);
+        if (index < 0) return;
+        event.preventDefault();
+        const next = buttons[(index + delta + buttons.length) % buttons.length];
+        next.focus();
+        next.click();
+      } : undefined}
+    >
       {props.options.map((option) => (
         <button
           key={option.value}
@@ -917,8 +935,10 @@ export function SegmentedControl<TValue extends string | number>(
             option.meta === undefined
               ? ""
               : " settings-segmented__button--stacked"
-          }${props.value === option.value ? " is-active" : ""}`}
+          }${props.value === option.value ? " is-active" : ""}${option.tooltip ? " tooltip-target" : ""}`}
           disabled={props.disabled}
+          tabIndex={props.rovingFocus && option.value !== props.value ? -1 : undefined}
+          data-tooltip={option.tooltip}
           role="radio"
           type="button"
           onClick={() => {

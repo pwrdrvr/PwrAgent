@@ -1459,6 +1459,7 @@ export function bootstrapApp(): void {
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
           patch.general?.hotCpuProfilingStartDelayMs !== undefined ||
+          patch.general?.hotCpuProfilingCaptureRules !== undefined ||
           patch.general?.hotCpuProfilingTriggerMode !== undefined ||
           patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined ||
           patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined ||

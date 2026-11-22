@@ -1,3 +1,5 @@
+import { migrateHotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
+import type { HotCpuRuleMatch } from "../../shared/hot-cpu-profile";
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
@@ -221,7 +223,11 @@ describe("HotCpuProfiler", () => {
     options: ConstructorParameters<typeof HotCpuProfiler>[0],
   ): HotCpuProfiler {
     const tracker = createSampleTracker();
+    let sampleTimeMs: number | undefined;
     const profiler = new HotCpuProfiler({
+      sampleNow: () => (sampleTimeMs = sampleTimeMs === undefined
+        ? performance.now()
+        : sampleTimeMs + options.config.intervalMs),
       ...options,
       onSampleCaptured: () => {
         options.onSampleCaptured?.();
@@ -294,6 +300,7 @@ describe("HotCpuProfiler", () => {
         });
       }
       const onProfileWritten = vi.fn();
+      let cpu = 0;
       const written = deferred<void>();
       const profiler = createProfiler({
         config,
@@ -310,7 +317,7 @@ describe("HotCpuProfiler", () => {
         target: createTarget().target,
         session: created.session,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        getAppMetrics: () => [createMetric(transition === "window-closed" ? 0 : 95)],
+        getAppMetrics: () => [createMetric(0, transition === "window-closed" ? 0 : (cpu += 0.005))],
         onProfileWritten: (event) => {
           onProfileWritten(event);
           written.resolve();
@@ -318,7 +325,7 @@ describe("HotCpuProfiler", () => {
       });
       await profiler.start();
       expect(recording).toBe(true);
-      await samplesOf(profiler).waitForCount(1);
+      await samplesOf(profiler).waitForCount(2);
       if (transition === "settings-changed" || transition === "window-closed") {
         await profiler.stop(transition);
       } else {
@@ -350,6 +357,8 @@ describe("HotCpuProfiler", () => {
     cleanups.push(workspace.cleanup);
     const config = createEnabledConfig(workspace.path, {
       PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "1000",
+      PWRAGENT_HOT_CPU_PROFILING_THRESHOLD_PERCENT: "8",
       PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
       PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
     });
@@ -360,16 +369,15 @@ describe("HotCpuProfiler", () => {
     });
     if (!sessionResult.ok) throw new Error(sessionResult.message);
     const written = deferred();
-    let burstFinished = false;
     const profiler = createProfiler({
       config,
       session: sessionResult.session,
       target: createMainProcessHotCpuTarget(),
-      getAppMetrics: () => [{
-        ...createMetric(burstFinished ? 90 : 0),
-        pid: process.pid,
-        cpu: { percentCPUUsage: burstFinished ? 90 : 0, idleWakeupsPerSecond: 0 },
-      } as ProcessMetric],
+      sampleNow: () => performance.now(),
+      getAppMetrics: () => {
+        const { user, system } = process.cpuUsage();
+        return [{ ...createMetric(0, (user + system) / 1_000_000), pid: process.pid }];
+      },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       onProfileWritten: async () => { written.resolve(); },
     });
@@ -378,11 +386,17 @@ describe("HotCpuProfiler", () => {
     // The inspector samples this synchronous function, but the timer cannot
     // evaluate the CPU trigger until the function has returned.
     function preTriggerCpuBurst(): void {
-      const end = performance.now() + 150;
-      while (performance.now() < end) Math.sqrt(Math.random());
+      const start = process.threadCpuUsage();
+      let used = 0;
+      while (used < 150_000) {
+        for (let index = 0; index < 10_000; index += 1) Math.sqrt(Math.random());
+        const elapsed = process.threadCpuUsage(start);
+        used = elapsed.user + elapsed.system;
+      }
     }
     preTriggerCpuBurst();
-    burstFinished = true;
+    await samplesOf(profiler).waitForCount(2);
+    expect(profiler.hasActiveProfile).toBe(true);
     await written.promise;
     await profiler.stop();
     const profile = JSON.parse(await fs.readFile(sessionResult.session.createProfilePath(1), "utf8"));
@@ -451,13 +465,15 @@ describe("HotCpuProfiler", () => {
       } };
     });
     let hot = false;
+    let metricReads = 0;
     const written = deferred();
     const profiler = createProfiler({
       config,
       session: sessionResult.session,
       target,
       now: () => new Date(clockMs()),
-      getAppMetrics: () => missingMetrics && !hot ? [] : [{
+      sampleNow: () => performance.now(),
+      getAppMetrics: () => missingMetrics && ++metricReads < 3 ? [] : [{
         ...createMetric(0),
         cpu: { percentCPUUsage: hot ? 80 : 0, idleWakeupsPerSecond: 0 },
       } as ProcessMetric],
@@ -600,9 +616,9 @@ describe("HotCpuProfiler", () => {
     const onProfileWritten = vi.fn(async () => undefined);
     let nowCallCount = 0;
     const metrics = [
-      createMetric(0, 100),
-      createMetric(4, 101.5),
-      createMetric(4, 103),
+      createMetric(0, 0),
+      createMetric(4, 0.00375),
+      createMetric(4, 0.0075),
     ];
     const profiler = createProfiler({
       config,
@@ -681,8 +697,8 @@ describe("HotCpuProfiler", () => {
         expect.objectContaining({
           cpuPercent: 75,
           electronCpuPercent: 4,
-          cumulativeCpuDeltaSeconds: 1.5,
-          wallDeltaSeconds: 2,
+          cumulativeCpuDeltaSeconds: 0.00375,
+          wallDeltaSeconds: 0.005,
         }),
       ]),
     );
@@ -996,6 +1012,98 @@ describe("HotCpuProfiler", () => {
     await profiler.stop("test-complete");
   });
 
+  it("resets rule evidence on edits and publishes one capture with the original matches", async () => {
+    vi.useFakeTimers();
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const defaults = migrateHotCpuCaptureRules();
+    const rules = { ...defaults, slowburn: { ...defaults.slowburn, enabled: true } };
+    const config = (captureRules: typeof rules) => {
+      const resolved = resolveHotCpuProfileConfig({ enabled: true, captureRules, env: {}, repoRoot: workspace.path });
+      if (!resolved.enabled) throw new Error("Expected enabled capture");
+      return resolved;
+    };
+    const initial = config(rules);
+    const created = await createHotCpuProfileSession({
+      config: initial,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version },
+    });
+    if (!created.ok) throw new Error(created.message);
+    const { target } = createTarget();
+    let cpu = 0;
+    const report = vi.fn();
+    const profiler = createProfiler({
+      config: initial,
+      getAppMetrics: () => [createMetric(0, cpu += 1.5)],
+      session: created.session,
+      target,
+      onProfileWritten: report,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await profiler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await samplesOf(profiler).waitForCount(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await samplesOf(profiler).waitForCount(2);
+    profiler.updateRules(config({ ...rules, sustained: { ...rules.sustained, thresholdPercent: 55 } }));
+    for (let count = 3; count <= 5; count += 1) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await samplesOf(profiler).waitForCount(count);
+      expect(profiler.hasActiveProfile).toBe(count === 5);
+    }
+    profiler.updateRules(config({ ...rules, highEnabled: false }));
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(profiler.hasActiveProfile).toBe(true);
+    await profiler.stop();
+    expect(report).toHaveBeenCalledOnce();
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({
+      triggerMode: "sustained",
+      triggerThresholdPercent: 55,
+      matchedRules: [
+        { id: "sustained", thresholdPercent: 55, durationMs: 4_000, sampleCount: 2, intervalMs: 2_000,
+          measuredDurationMs: 4_000, minimumCpuPercent: 75, peakCpuPercent: 75, triggerCpuPercent: 75, usedElectronInterval: false },
+        { id: "slowburn", thresholdPercent: 15, durationMs: 4_000, sampleCount: 2, intervalMs: 2_000,
+          measuredDurationMs: 4_000, minimumCpuPercent: 75, peakCpuPercent: 75, triggerCpuPercent: 75, usedElectronInterval: false },
+      ],
+    }));
+    const events = (await fs.readFile(created.session.eventsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.type === "profile-started")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "profile-written")).toHaveLength(1);
+  });
+
+  it("requires two observed hot intervals after a missing metric", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "100",
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "300",
+    });
+    const session = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version },
+    });
+    if (!session.ok) throw new Error(session.message);
+    const { target } = createTarget();
+    const observations = [
+      [createMetric(0, 100)],
+      [createMetric(95, 100.1)],
+      [],
+      [createMetric(95, 100.4)],
+    ];
+    let wallTime = 1_780_000_000_000;
+    const profiler = createProfiler({
+      config,
+      getAppMetrics: () => { wallTime += 100; return observations.shift() ?? []; },
+      session: session.session,
+      target,
+      now: () => new Date(wallTime),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await profiler.start();
+    await samplesOf(profiler).waitForCount(4);
+    expect(profiler.hasActiveProfile).toBe(false);
+  });
+
   it("starts a profile after one hot sample in spike mode", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
@@ -1305,13 +1413,23 @@ describe("HotCpuProfiler", () => {
       profiler as unknown as {
         startProfile: (options: {
           capturedAt: string;
-          cpuPercent: number;
+          capturedAtMonotonicMs: number;
+          matches: HotCpuRuleMatch[];
           pid: number;
         }) => Promise<void>;
       }
     ).startProfile({
       capturedAt: new Date().toISOString(),
-      cpuPercent: 89,
+      capturedAtMonotonicMs: performance.now(),
+      matches: config.rules.map((rule) => ({
+        ...rule,
+        intervalMs: config.intervalMs,
+        measuredDurationMs: rule.durationMs,
+        minimumCpuPercent: 89,
+        peakCpuPercent: 89,
+        triggerCpuPercent: 89,
+        usedElectronInterval: false,
+      })),
       pid: 1234,
     });
 
@@ -1542,13 +1660,23 @@ describe("HotCpuProfiler", () => {
       profiler as unknown as {
         startProfile: (options: {
           capturedAt: string;
-          cpuPercent: number;
+          capturedAtMonotonicMs: number;
+          matches: HotCpuRuleMatch[];
           pid: number;
         }) => Promise<void>;
       }
     ).startProfile({
       capturedAt: new Date().toISOString(),
-      cpuPercent: 89,
+      capturedAtMonotonicMs: performance.now(),
+      matches: config.rules.map((rule) => ({
+        ...rule,
+        intervalMs: config.intervalMs,
+        measuredDurationMs: rule.durationMs,
+        minimumCpuPercent: 89,
+        peakCpuPercent: 89,
+        triggerCpuPercent: 89,
+        usedElectronInterval: false,
+      })),
       pid: 1234,
     });
 
@@ -1613,13 +1741,23 @@ describe("HotCpuProfiler", () => {
       profiler as unknown as {
         startProfile: (options: {
           capturedAt: string;
-          cpuPercent: number;
+          capturedAtMonotonicMs: number;
+          matches: HotCpuRuleMatch[];
           pid: number;
         }) => Promise<void>;
       }
     ).startProfile({
       capturedAt: new Date().toISOString(),
-      cpuPercent: 89,
+      capturedAtMonotonicMs: performance.now(),
+      matches: config.rules.map((rule) => ({
+        ...rule,
+        intervalMs: config.intervalMs,
+        measuredDurationMs: rule.durationMs,
+        minimumCpuPercent: 89,
+        peakCpuPercent: 89,
+        triggerCpuPercent: 89,
+        usedElectronInterval: false,
+      })),
       pid: 1234,
     });
 
@@ -1690,13 +1828,23 @@ describe("HotCpuProfiler", () => {
       profiler as unknown as {
         startProfile: (options: {
           capturedAt: string;
-          cpuPercent: number;
+          capturedAtMonotonicMs: number;
+          matches: HotCpuRuleMatch[];
           pid: number;
         }) => Promise<void>;
       }
     ).startProfile({
       capturedAt: new Date().toISOString(),
-      cpuPercent: 89,
+      capturedAtMonotonicMs: performance.now(),
+      matches: config.rules.map((rule) => ({
+        ...rule,
+        intervalMs: config.intervalMs,
+        measuredDurationMs: rule.durationMs,
+        minimumCpuPercent: 89,
+        peakCpuPercent: 89,
+        triggerCpuPercent: 89,
+        usedElectronInterval: false,
+      })),
       pid: 1234,
     });
 

@@ -1,3 +1,4 @@
+import { migrateHotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -144,6 +145,15 @@ function createSnapshot(
       hotCpuProfilingStartDelayMs: {
         value: 0,
         source: "default",
+      },
+      hotCpuProfilingCaptureRules: {
+        value: migrateHotCpuCaptureRules(),
+        source: "default",
+        effective: {
+          intervalMs: 2_000,
+          rules: [{ id: "sustained", thresholdPercent: 50, durationMs: 4_000, sampleCount: 2 }],
+          overrides: {},
+        },
       },
       hotCpuProfilingTriggerMode: {
         value: "sustained",
@@ -2281,7 +2291,7 @@ describe("SettingsScreen", () => {
         screen.getByRole("radiogroup", { name: "Profiling start delay" }),
       ).getByRole("radio", { name: /5 seconds/ }),
     ).not.toBeDisabled();
-    expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Slow burn" })).not.toBeDisabled();
     const chromiumTrace = getLabeledSwitch("Chromium trace");
     expect(chromiumTrace).toHaveAttribute("aria-checked", "false");
     fireEvent.click(chromiumTrace);
@@ -2969,6 +2979,12 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    fireEvent.click(screen.getByRole("button", { name: "Stop Capture" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { hotCpuProfilingEnabled: false, hotCpuProfilingCaptureHeapSnapshot: false },
+      });
+    });
   });
 
   it("copies Troubleshooting diagnostics with the profile, PIDs, and log path", async () => {
@@ -3213,7 +3229,7 @@ describe("SettingsScreen", () => {
     ).toBeDisabled();
   });
 
-  it("saves hot CPU profiling delay and trigger mode presets", async () => {
+  it("saves hot CPU start delay and independently enables Slow burn", async () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -3245,11 +3261,17 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: /Slowburn/ }));
+    const rules = screen.getByRole("group", { name: "Capture rules" });
+    fireEvent.click(within(rules).getByRole("checkbox", { name: "High CPU" }));
+    expect(within(rules).getByRole("status")).toHaveTextContent("At least one rule stays on");
+    fireEvent.click(within(rules).getByRole("checkbox", { name: "Slow burn" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
-          hotCpuProfilingTriggerMode: "slowburn",
+          hotCpuProfilingCaptureRules: {
+            ...migrateHotCpuCaptureRules(),
+            slowburn: { enabled: true, thresholdPercent: 15, durationMs: 4_000 },
+          },
         },
       });
     });
