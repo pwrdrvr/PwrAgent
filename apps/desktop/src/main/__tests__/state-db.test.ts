@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CURRENT_STATE_DB_USER_VERSION,
   SQLITE_AUTO_VACUUM_INCREMENTAL,
@@ -60,6 +60,23 @@ afterEach(() => {
 });
 
 describe("StateDb", () => {
+  it.each([false, true])("returns the winning profile identity after another writer's stale read (swap %s)", (swap) => {
+    const dbPath = useFileStateDb();
+    const secondDb = StateDb.open(dbPath);
+    const [winner, stale] = swap ? [secondDb, stateDb] : [stateDb, secondDb];
+    const key = "federation_instance_id";
+    try {
+      expect(stale.getMeta(key)).toBeUndefined();
+      expect(winner.getOrInsertMeta(key, "pwr_first")).toBe("pwr_first");
+      // Pause the loser between its original read and attempted insert.
+      vi.spyOn(stale, "getMeta").mockReturnValueOnce(undefined);
+      expect(stale.getOrInsertMeta(key, "pwr_second")).toBe("pwr_first");
+      expect(winner.getMeta(key)).toBe("pwr_first");
+    } finally {
+      secondDb.close();
+    }
+  });
+
   it("adds account attribution to a v70 ledger without relabeling existing usage", () => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN account_key");

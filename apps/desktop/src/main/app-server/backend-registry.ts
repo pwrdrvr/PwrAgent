@@ -1,3 +1,4 @@
+import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
@@ -1284,6 +1285,7 @@ export class DesktopBackendRegistry {
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   private researchHandler?: ResearchAgentHandler;
+  private checkoutHandler?: CheckoutToolHandler;
   private researchEnabled: () => boolean = () => false;
   private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
   private agentThreadActions?: AgentThreadActions;
@@ -2207,6 +2209,7 @@ export class DesktopBackendRegistry {
       get threadStarts() { return current().threadStarts; },
       get threadTodoHandler() { return current().threadTodoHandler; },
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
+      get checkoutHandler() { return current().checkoutHandler; },
       get mcpResearchHandler() { return current().mcpResearchHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
@@ -2757,6 +2760,13 @@ export class DesktopBackendRegistry {
     handler: PwrAgentOpenAIDecisionsHandler | null | undefined,
   ): void {
     this.openAIDecisionsHandler = handler ?? undefined;
+  }
+
+  setResourceCheckoutHandler(handler: CheckoutToolHandler): void {
+    this.checkoutHandler = (operation, args, context) => {
+      if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Resource tools require an active thread turn.");
+      return handler(operation, args, context);
+    };
   }
 
   setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean, enabled: () => boolean = () => false): void {
@@ -8232,6 +8242,7 @@ export class DesktopBackendRegistry {
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
       researchHandler: this.advertisedResearchHandler,
+      checkoutHandler: this.checkoutHandler,
     });
     const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -15478,6 +15489,7 @@ export class DesktopBackendRegistry {
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
+        checkoutHandler: this.checkoutHandler,
       }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
@@ -18440,6 +18452,7 @@ export class DesktopBackendRegistry {
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
+        checkoutHandler: this.checkoutHandler,
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and

@@ -31,9 +31,12 @@ export async function readOrCreateFederationMachineId(options?: {
     // Missing or unreadable — fall through to mint.
   }
   const minted = `mach_${randomUUID()}`;
+  const stagedPath = path.join(rootDir, `.machine-id-${randomUUID()}`);
   try {
     await fs.mkdir(rootDir, { recursive: true });
-    await fs.writeFile(filePath, `${minted}\n`, { flag: "wx" });
+    await fs.writeFile(stagedPath, `${minted}\n`, { flag: "wx", mode: 0o600 });
+    // Publish a complete ID without replacing another process’s winner.
+    await fs.link(stagedPath, filePath);
     return minted;
   } catch {
     // Lost a mint race or the root is read-only. Re-read; a concurrent
@@ -44,6 +47,8 @@ export async function readOrCreateFederationMachineId(options?: {
     } catch {
       return undefined;
     }
+  } finally {
+    await fs.rm(stagedPath, { force: true }).catch(() => undefined);
   }
 }
 

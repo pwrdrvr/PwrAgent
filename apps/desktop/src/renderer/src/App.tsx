@@ -4752,7 +4752,7 @@ function DesktopAppShell(props: {
               ? () => void desktopApi.openUsageActivity?.()
               : undefined}
             onOpenResources={resourceCheckoutsSource
-              ? () => setMainView("resources")
+              ? (opener) => setMainView("resources", undefined, opener)
               : undefined}
             onSelectThread={(thread, options) => {
               setMainView("thread");
@@ -5713,14 +5713,14 @@ function useMainView() {
   // otherwise act on a window the operator is still deciding whether to
   // leave, and "Keep editing" would cancel only half of it.
   const setMainView = useCallback(
-    (next: SetStateAction<MainView>, onShown?: () => void) => {
+    (next: SetStateAction<MainView>, onShown?: () => void, opener?: HTMLElement | null) => {
       const current = mainViewRef.current;
       const target = typeof next === "function" ? next(current) : next;
       const show = () => {
         if (!isLayerView(current) && isLayerView(target)) {
-          const opener = document.activeElement;
+          const target = opener ?? document.activeElement;
           layerOpenerRef.current =
-            opener instanceof HTMLElement && opener !== document.body ? opener : null;
+            target instanceof HTMLElement && target !== document.body ? target : null;
         }
         mainViewRef.current = target;
         setMainViewState(target);

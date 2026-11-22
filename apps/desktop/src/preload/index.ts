@@ -1,3 +1,6 @@
+import type {
+  ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent,
+} from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
 import type {
@@ -890,6 +893,9 @@ import {
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
+  RESOURCE_CHECKOUTS_CHANGED_CHANNEL,
+  RESOURCE_CHECKOUTS_READ_CHANNEL,
+  RESOURCE_CHECKOUTS_PERFORM_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
   OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL,
@@ -2872,6 +2878,17 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(THREAD_TODOS_DELTA_EVENT_CHANNEL, listener);
     };
   },
+  ...(process.argv.includes("--pwragent-resource-checkouts") ? {
+    readResourceCheckouts: (): Promise<ResourceCheckoutsSnapshot> =>
+      ipcRenderer.invoke(RESOURCE_CHECKOUTS_READ_CHANNEL),
+    performResourceCheckoutAction: (request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> =>
+      ipcRenderer.invoke(RESOURCE_CHECKOUTS_PERFORM_CHANNEL, request),
+    onResourceCheckoutsChanged: (callback: (event: ResourceCheckoutsChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ResourceCheckoutsChangedEvent) => callback(payload);
+      ipcRenderer.on(RESOURCE_CHECKOUTS_CHANGED_CHANNEL, listener);
+      return () => { ipcRenderer.off(RESOURCE_CHECKOUTS_CHANGED_CHANNEL, listener); };
+    },
+  } : {}),
   listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>
     await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL, request),
   listDismissedOperatorQuestions: async (request: OperatorQuestionThreadRequest): Promise<string[]> =>

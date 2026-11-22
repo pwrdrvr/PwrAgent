@@ -188,13 +188,14 @@ export function ResourcesScreen(props: {
   const dialogResource = dialog && dialog.kind !== "register"
     ? presented.find((item) => item.resource.resourceId === dialog.resourceId)
     : undefined;
+  const dialogOpen = dialog?.kind === "register" || Boolean(dialogResource);
   const closeDialog = () => setDialog(null);
   const filterLabel = FILTERS.find((entry) => entry.value === filter)?.label ?? "All resources";
   const registerGate = snapshot?.registerGate;
 
   return (
     <section aria-label="Resources" className="resources-screen">
-      <nav aria-label="Resource navigation" className="settings-nav">
+      <nav aria-label="Resource navigation" className="settings-nav" inert={dialogOpen}>
         <header className="settings-nav__masthead">
           <BrandLockup variant="settings-nav" />
         </header>
@@ -242,7 +243,7 @@ export function ResourcesScreen(props: {
         ))}
       </nav>
 
-      <div className="resources-main">
+      <div className="resources-main" inert={dialogOpen}>
         <header className="settings-titlebar">
           <div className="settings-titlebar__breadcrumb">
             <span className="settings-titlebar__eyebrow">Resources</span>

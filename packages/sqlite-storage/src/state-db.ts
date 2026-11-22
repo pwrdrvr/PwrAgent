@@ -2584,6 +2584,13 @@ export class StateDb {
       .run(key, value);
   }
 
+  getOrInsertMeta(key: string, value: string): string {
+    const existing = this.getMeta(key);
+    if (existing !== undefined) return existing;
+    this.db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").run(key, value);
+    return this.getMeta(key)!;
+  }
+
   getSecret(key: string): Buffer | undefined {
     const row = this.db
       .prepare("SELECT ciphertext FROM secrets WHERE key = ?")

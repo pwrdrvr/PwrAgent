@@ -22,28 +22,23 @@ export type SubmitResourceAction = (
 ) => Promise<ResourceCheckoutActionResult>;
 
 /**
- * Sends operator intents. Each intent gets one idempotency key for the life
- * of the dialog, so "Send again" after an unknown outcome cannot apply twice,
- * while two different steps (fence, then verify) never share a key.
+ * Retries the original intent after an unknown response. A confirmed result
+ * retires the key so the next deliberate attempt is evaluated independently.
  */
 function useDialogSubmit(submit: SubmitResourceAction, onDone: () => void) {
-  const keys = useRef(new Map<string, string>());
+  const pending = useRef(new Map<string, ResourceCheckoutActionRequest>());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ text: string; unknown: boolean } | null>(null);
-  const keyFor = (intent: string): string => {
-    const existing = keys.current.get(intent);
-    if (existing) return existing;
-    const created = newResourceActionIdempotencyKey();
-    keys.current.set(intent, created);
-    return created;
-  };
   const send = async (
     build: (idempotencyKey: string) => ResourceCheckoutActionRequest,
     intent = "default",
   ) => {
+    const request = pending.current.get(intent) ?? build(newResourceActionIdempotencyKey());
+    pending.current.set(intent, request);
     setBusy(true);
     setProblem(null);
-    const result = await submit(build(keyFor(intent)));
+    const result = await submit(request);
+    if (result.outcome !== "unknown") pending.current.delete(intent);
     setBusy(false);
     if (result.outcome === "rejected") {
       setProblem({ text: result.message, unknown: false });
@@ -123,12 +118,20 @@ export function RequestCheckoutDialog(props: {
   onClose: () => void;
 }): ReactElement {
   const { resource } = props;
-  const durations = DURATION_CHOICES_MS.filter((ms) => !resource.policy.maxHoldMs || ms <= resource.policy.maxHoldMs);
+  const maximum = resource.policy.maxHoldMs ?? Infinity;
+  const durations = DURATION_CHOICES_MS.filter((ms) => ms <= maximum);
+  if (!durations.length) durations.push(maximum);
   const [purpose, setPurpose] = useState("");
-  const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)] ?? 15 * 60_000);
+  const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)]);
   const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
+  const [unitCount, setUnitCount] = useState("1");
+  const units = Number(unitCount);
+  const counted = resource.sharing.mode === "counted" ? resource.sharing : undefined;
+  const validUnits = !counted || (Number.isSafeInteger(units) && units > 0 && units <= counted.capacity);
   const holder = resource.allocations[0];
-  const waits = props.action.waits === true;
+  const waits = props.action.waits === true || resource.queue.length > 0
+    || (!!counted && units > counted.capacity - counted.inUse);
+  const actionLabel = waits ? "Join queue" : "Request checkout";
   return (
     <ResourceDialog
       busy={busy}
@@ -136,7 +139,7 @@ export function RequestCheckoutDialog(props: {
         ? "You'll be added to the end of the queue and woken when it's your turn."
         : "The authority grants it now if capacity is still free, or queues you."}
       problem={problem}
-      title={`${props.action.label}: ${resource.displayName}`}
+      title={`${actionLabel}: ${resource.displayName}`}
       titleId="resources-request-title"
       onClose={props.onClose}
       footer={(
@@ -144,7 +147,7 @@ export function RequestCheckoutDialog(props: {
           <button className="button button--secondary" disabled={busy} type="button" onClick={props.onClose}>Cancel</button>
           <button
             className="button button--primary"
-            disabled={busy || purpose.trim() === ""}
+            disabled={busy || (!problem?.unknown && (purpose.trim() === "" || !validUnits))}
             type="button"
             onClick={() => void send((idempotencyKey) => ({
               kind: "request",
@@ -152,9 +155,10 @@ export function RequestCheckoutDialog(props: {
               resourceId: resource.resourceId,
               purpose: purpose.trim(),
               expectedDurationMs: duration,
+              ...(counted ? { units } : {}),
             }))}
           >
-            {busy ? "Sending…" : problem?.unknown ? "Send again" : props.action.label}
+            {busy ? "Sending…" : problem?.unknown ? "Send again" : actionLabel}
           </button>
         </>
       )}
@@ -166,14 +170,25 @@ export function RequestCheckoutDialog(props: {
           placeholder="What the checkout is for"
           type="text"
           value={purpose}
+          disabled={busy || problem?.unknown}
           onChange={(event) => setPurpose(event.target.value)}
         />
         <small>Shown to other waiters and kept in the audit record.</small>
       </label>
+      {counted ? (
+        <div className="resources-field">
+          <label htmlFor="resources-request-units">Units</label>
+          <input id="resources-request-units" aria-describedby="resources-request-unit-capacity"
+            className="settings-input resources-input" type="number" min={1} max={counted.capacity}
+            value={unitCount} onChange={(event) => setUnitCount(event.target.value)} disabled={busy || problem?.unknown} />
+          <small id="resources-request-unit-capacity">{Math.max(0, counted.capacity - counted.inUse)} of {counted.capacity} units free.</small>
+        </div>
+      ) : null}
       <div className="resources-field">
         <span>Expected duration</span>
         <SegmentedControl
           label="Expected duration"
+          disabled={busy || problem?.unknown}
           options={durations.map((ms) => ({ label: formatDuration(ms), value: ms }))}
           value={duration}
           onChange={setDuration}
