@@ -462,7 +462,10 @@ describe("DesktopBackendRegistry", () => {
         for (const monitorId of ["other-1", "other-2"]) {
           expect(guard.reserve({ ...parent, monitorId }, 0)).toBe("admitted");
         }
-        expect(guard.reserve({ ...parent, monitorId: "overflow" }, 0)).toBe("tripped");
+        expect(guard.reserve({ ...parent, monitorId: "overflow" }, 0)).toBe("review");
+        const review = guard.claimReview(parent);
+        if (typeof review === "string") throw new Error(`Expected a claimed review, received ${review}`);
+        expect(guard.settleReview(parent, review, "loop")).toBe(true);
         await first.registry.close();
 
         const second = launch(store, "instance-b", ["instance-b"], guard);
