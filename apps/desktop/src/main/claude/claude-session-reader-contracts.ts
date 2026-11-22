@@ -17,14 +17,17 @@ export type ClaudeSessionReads = {
 export type ClaudeSessionReader = ClaudeSessionReads & { close(): void };
 
 
-export type ClaudeSessionReadRequest = {
-  id: number;
-  method: keyof ClaudeSessionReads;
-  sessionId: string;
-  /** The sub-agent `getSubagentMessages` reads. */
-  agentId?: string;
-  options?: { dir?: string };
-};
+export type ClaudeSessionRead =
+  | {
+    method: keyof ClaudeSessionReads;
+    sessionId: string;
+    /** The sub-agent `getSubagentMessages` reads. */
+    agentId?: string;
+    options?: { dir?: string };
+  }
+  | { method: "listRecentDirectories" };
+
+export type ClaudeSessionReadRequest = ClaudeSessionRead & { id: number };
 
 
 export type ClaudeSessionReadReply = { id: number; result?: unknown; error?: string };

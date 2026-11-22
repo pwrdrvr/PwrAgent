@@ -1893,6 +1893,69 @@ describe("settings ipc", () => {
     }
   });
 
+  it.each(["signed-in", "sign-in-required"] as const)(
+    "uses the Claude profile environment during bootstrap when auth status is %s",
+    async (authStatus) => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+      tempRoots.push(tempRoot);
+      vi.stubEnv("PWRAGENT_HOME", tempRoot);
+      const { initializeAppState, disposeAppState } = await import("../state/app-state");
+      const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+      const { SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL } = await import("../../shared/ipc");
+      const claudeExecutable = await import("../claude/claude-executable");
+      const claudeSessionReader = await import("../claude/claude-session-reader");
+      const service = new DesktopSettingsService({
+        configPath: path.join(tempRoot, "config.toml"),
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const project = fs.realpathSync(tempRoot);
+      const env = { CLAUDE_CONFIG_DIR: path.join(tempRoot, "claude-fixture") };
+      const resolveEnv = vi.spyOn(service, "resolveTerminalSpawnEnvAsync").mockResolvedValue(env);
+      const inspect = vi.spyOn(claudeExecutable, "inspectClaudeInstallation")
+        .mockResolvedValue({ authStatus, executable: "/fake/claude" });
+      const listRecentDirectories = vi.fn(async () => ({
+        complete: true,
+        directories: [{ cwd: project, updatedAt: 50 }],
+      }));
+      const close = vi.fn();
+      const open = vi.spyOn(claudeSessionReader, "openClaudeSessionReader").mockReturnValue({
+        listRecentDirectories, close,
+        getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), getSubagentMessages: vi.fn(),
+      });
+
+      initializeAppState("bootstrap");
+      try {
+        registerSettingsIpcHandlers(service);
+        const sender = Object.assign(new EventEmitter(), { id: 1 });
+        const result = await handlers.get(SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL)!({ sender }, { includeCodex: false });
+        const available = authStatus === "signed-in";
+        expect(getDesktopBackendRegistryMock).not.toHaveBeenCalled();
+        expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ env: expect.objectContaining(env) }));
+        if (available) {
+          expect(open).toHaveBeenCalledWith(expect.objectContaining(env), expect.anything());
+          expect(listRecentDirectories).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledOnce();
+        } else {
+          expect(open).not.toHaveBeenCalled();
+        }
+        expect(result).toEqual({
+          sources: [
+            expect.objectContaining({ agent: "codex", status: "skipped" }),
+            { agent: "claude", label: "Claude Code", status: available ? "complete" : "skipped" },
+          ],
+          observations: available ? [{ path: project.replaceAll("\\", "/"), agent: "claude", lastActiveAt: 50 }] : [],
+        });
+      } finally {
+        open.mockRestore();
+        inspect.mockRestore();
+        resolveEnv.mockRestore();
+        disposeSettingsIpcHandlers();
+        disposeAppState();
+      }
+    },
+  );
+
   it("excludes a previously installed Claude ACP adapter from the settings catalog", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);

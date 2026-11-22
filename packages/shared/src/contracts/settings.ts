@@ -2325,9 +2325,11 @@ export type DiscoverRecentProjectsRequest = {
 };
 
 /**
- * How one agent's read went. `complete` read every thread; `partial` stopped
- * at its budget, so older projects may be missing; `failed` could not read;
- * `skipped` was not asked for or has nothing PwrAgent may read.
+ * How one agent's discovery went. `complete` finished the work; `partial`
+ * hit a budget, so older projects may be missing; `failed` could not finish
+ * a read; `skipped` was not asked for or has nothing PwrAgent may read.
+ * Claude Code history and PwrAgent threads share one Claude report. The
+ * worst attempted status wins, and observations can survive a failed read.
  */
 export type RecentProjectSourceReport = {
   agent: RecentProjectAgent;
@@ -2341,7 +2343,7 @@ export type RecentProjectObservation = {
   /** The project root: a repository's primary checkout, else the folder. */
   path: string;
   agent: RecentProjectAgent;
-  /** Epoch milliseconds of the newest thread there, when the agent said. */
+  /** Epoch milliseconds of the newest activity there, when the agent reported it. */
   lastActiveAt?: number;
 };
 

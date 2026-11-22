@@ -1,6 +1,7 @@
 import { getOwnerHostServices } from "../owner-host";
-import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeSessionReads, ClaudeSessionReader, ClaudeSessionReadRequest, ClaudeSessionReadReply, ClaudeSessionReaderChild } from "./claude-session-reader-contracts";
+import type { listSessions, SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { readRecentClaudeCodeDirectories, type RecentClaudeCodeDirectories } from "./claude-recent-projects";
+import type { ClaudeSessionRead, ClaudeSessionReads, ClaudeSessionReader, ClaudeSessionReadRequest, ClaudeSessionReadReply, ClaudeSessionReaderChild } from "./claude-session-reader-contracts";
 export type { ClaudeSessionReads, ClaudeSessionReader, ClaudeSessionReadRequest, ClaudeSessionReadReply, ClaudeSessionReaderChild } from "./claude-session-reader-contracts";
 
 /**
@@ -28,14 +29,20 @@ export function openClaudeSessionReader(
     fork?: (env: NodeJS.ProcessEnv) => Promise<ClaudeSessionReaderChild>;
     timeoutMs?: number;
   },
-): ClaudeSessionReader {
+): ClaudeSessionReader & { listRecentDirectories(): Promise<RecentClaudeCodeDirectories> } {
   const timeoutMs = options.timeoutMs ?? CLAUDE_SESSION_READ_TIMEOUT_MS;
-  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  const pending = new Map<number, {
+    method: ClaudeSessionRead["method"];
+    resolve(value: unknown): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   let nextId = 1;
   let ended: Error | undefined;
   let child: ClaudeSessionReaderChild | undefined;
   const end = (error: Error) => {
-    ended ??= error;
+    if (ended) return;
+    ended = error;
     for (const [id, request] of pending) {
       clearTimeout(request.timer);
       pending.delete(id);
@@ -55,8 +62,13 @@ export function openClaudeSessionReader(
       if (!request) return;
       clearTimeout(request.timer);
       pending.delete(reply.id);
-      if (reply.error !== undefined) request.reject(new Error(`Claude's conversation could not be read: ${reply.error}`));
-      else request.resolve(reply.result);
+      if (reply.error !== undefined) {
+        request.reject(new Error(request.method === "listRecentDirectories"
+          ? reply.error
+          : `Claude's conversation could not be read: ${reply.error}`));
+      } else {
+        request.resolve(reply.result);
+      }
     });
     forked.once("exit", () => end(new ClaudeSessionReaderError("Claude's conversation could not be read: the reader stopped.")));
     return forked;
@@ -65,29 +77,28 @@ export function openClaudeSessionReader(
   });
   // A failed start rejects each read; it must not also go unhandled here.
   started.catch(() => {});
-  const request = async (
-    method: ClaudeSessionReadRequest["method"], sessionId: string, readOptions?: { dir?: string }, agentId?: string,
-  ) => {
+  const request = async (read: ClaudeSessionRead) => {
     if (ended) throw ended;
     const forked = await started;
     if (ended) throw ended;
     const id = nextId++;
     return await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => end(new ClaudeSessionReaderError("Claude's conversation could not be read in time.")), timeoutMs);
-      pending.set(id, { resolve, reject, timer });
-      forked.postMessage({
-        id, method, sessionId, ...(agentId ? { agentId } : {}),
-        ...(readOptions?.dir ? { options: { dir: readOptions.dir } } : {}),
-      });
+      pending.set(id, { method: read.method, resolve, reject, timer });
+      forked.postMessage({ id, ...read });
     });
   };
+  const sessionOptions = (options?: { dir?: string }) =>
+    options?.dir ? { options: { dir: options.dir } } : {};
   return {
     getSessionMessages: async (sessionId, readOptions) =>
-      await request("getSessionMessages", sessionId, readOptions) as SessionMessage[],
+      await request({ method: "getSessionMessages", sessionId, ...sessionOptions(readOptions) }) as SessionMessage[],
     getSessionInfo: async (sessionId, readOptions) =>
-      await request("getSessionInfo", sessionId, readOptions) as SDKSessionInfo | undefined,
+      await request({ method: "getSessionInfo", sessionId, ...sessionOptions(readOptions) }) as SDKSessionInfo | undefined,
     getSubagentMessages: async (sessionId, agentId, readOptions) =>
-      await request("getSubagentMessages", sessionId, readOptions, agentId) as SessionMessage[],
+      await request({ method: "getSubagentMessages", sessionId, ...(agentId ? { agentId } : {}), ...sessionOptions(readOptions) }) as SessionMessage[],
+    listRecentDirectories: async () =>
+      await request({ method: "listRecentDirectories" }) as RecentClaudeCodeDirectories,
     close: () => end(new ClaudeSessionReaderError("Claude's session reader was closed.")),
   };
 }
@@ -95,7 +106,7 @@ export function openClaudeSessionReader(
 /** Answer one request from the main process with the SDK's own reads. */
 export async function answerClaudeSessionRead(
   request: ClaudeSessionReadRequest,
-  reads: ClaudeSessionReads,
+  reads: ClaudeSessionReads & { listSessions: typeof listSessions },
 ): Promise<ClaudeSessionReadReply> {
   try {
     let result: unknown;
@@ -104,6 +115,8 @@ export async function answerClaudeSessionRead(
     } else if (request.method === "getSubagentMessages") {
       if (!request.agentId) throw new Error("A sub-agent read needs the agent's id.");
       result = await reads.getSubagentMessages(request.sessionId, request.agentId, request.options);
+    } else if (request.method === "listRecentDirectories") {
+      result = await readRecentClaudeCodeDirectories(reads.listSessions);
     } else {
       result = await reads.getSessionInfo(request.sessionId, request.options);
     }

@@ -10,6 +10,7 @@ import type {
   RecentProjectObservation,
 } from "@pwragent/shared/contracts/settings";
 import { registerDirectoryFromDisk, resolveDirectoryRegistrationRoot, type DirectoryRegistrationDeps } from "../app-server/directory-registration-service";
+import { readRecentClaudeCodeDirectories } from "../claude/claude-recent-projects";
 import { discoverRecentProjects, type RecentProjectDiscoveryDeps } from "../onboarding/recent-project-discovery";
 
 /*
@@ -299,5 +300,94 @@ describe.skipIf(process.platform !== "darwin")("recent projects against the macO
         expect(ensureDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ directoryKey: expected }));
       });
     }), { numRuns: 12 });
+  });
+});
+
+describe("Claude Code recent projects", () => {
+  it("keeps only directory metadata, even when SDK errors quote private text", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({
+        sessionId: fc.uuid(),
+        summary: fc.uuid().map((id) => `summary:${id}`),
+        firstPrompt: fc.uuid().map((id) => `prompt:${id}`),
+        customTitle: fc.uuid().map((id) => `title:${id}`),
+        tag: fc.uuid().map((id) => `tag:${id}`),
+        lastModified: fc.nat(),
+      }), { minLength: 1 }),
+      fc.boolean(),
+      async (sessions, fails) => {
+        const privateText = sessions.flatMap(({ summary, firstPrompt, customTitle, tag }) =>
+          [summary, firstPrompt, customTitle, tag]);
+        const cwd = "/home/dev/project";
+        const read = () => readRecentClaudeCodeDirectories(async () => {
+          if (fails) throw new Error(privateText.join(" "));
+          return sessions.map((entry) => ({ ...entry, cwd }));
+        });
+        const result = await discoverRecentProjects({
+          includeCodex: false,
+          platform: "linux",
+          readClaudeCodeDirectories: read,
+          labelFor: (agent) => agent,
+          resolveProjectRoot: async (folder) => folder,
+        });
+        expect(result.sources.find(({ agent }) => agent === "claude")?.status).toBe(fails ? "failed" : "complete");
+        const serializedResult = JSON.stringify(result);
+        const serializedAdapter = fails ? "" : JSON.stringify(await read());
+        for (const value of privateText) {
+          expect(serializedResult).not.toContain(value);
+          expect(serializedAdapter).not.toContain(value);
+        }
+      },
+    ));
+  });
+
+  it("keeps the newest activity for each resolved folder and the worst attempted status", async () => {
+    const activity = fc.array(fc.record({
+      project: fc.integer({ min: 0, max: 4 }),
+      checkout: fc.integer({ min: 0, max: 2 }),
+      updatedAt: fc.nat(),
+    }), { minLength: 1 });
+    await fc.assert(fc.asyncProperty(
+      activity, activity,
+      fc.constantFrom("skipped", "complete", "partial", "failed"),
+      fc.constantFrom("skipped", "complete", "failed"),
+      async (history, saved, historyStatus, savedStatus) => {
+        const root = (project: number) => `/dev/project-${project}`;
+        const folder = (entry: { project: number; checkout: number }) => `${root(entry.project)}/checkout-${entry.checkout}`;
+        const historyRead = historyStatus === "complete" || historyStatus === "partial";
+        const result = await discoverRecentProjects({
+          includeCodex: false,
+          platform: "linux",
+          readClaudeCodeDirectories: async () => {
+            if (historyStatus === "failed") throw new Error("history failed");
+            if (!historyRead) return undefined;
+            return {
+              complete: historyStatus === "complete",
+              directories: history.map((entry) => ({ cwd: folder(entry), updatedAt: entry.updatedAt })),
+            };
+          },
+          listPwrAgentThreads: async () => {
+            if (savedStatus === "failed") throw new Error("PwrAgent read failed");
+            return savedStatus === "skipped" ? [] : saved.map((entry, index) => thread({
+              agent: "claude", cwd: folder(entry), lastActiveAt: entry.updatedAt,
+            }, index));
+          },
+          labelFor: (agent) => agent,
+          resolveProjectRoot: async (cwd) => cwd.slice(0, cwd.lastIndexOf("/")),
+        });
+        const status = (["failed", "partial", "complete", "skipped"] as const)
+          .find((candidate) => candidate === historyStatus || candidate === savedStatus);
+        expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+          expect.objectContaining({ agent: "claude", status }),
+        ]);
+        const available = [...(historyRead ? history : []), ...(savedStatus === "complete" ? saved : [])];
+        const expected = [...new Set(available.map(({ project }) => project))].map((project) => ({
+          agent: "claude" as const,
+          path: root(project),
+          lastActiveAt: Math.max(...available.filter((entry) => entry.project === project).map((entry) => entry.updatedAt)),
+        }));
+        expect(sorted(result.observations)).toEqual(sorted(expected));
+      },
+    ));
   });
 });

@@ -1,4 +1,9 @@
+import { addAbortListener } from "node:events";
+import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
+import { claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable } from "../../claude/claude-executable";
+import { openClaudeSessionReader } from "../../claude/claude-session-reader";
+import { getOwnerHostServices } from "../../owner-host";
 import { registerReceivingFolderIpc } from "./receiving-folder";
 import { registerWorktreeFolderIpc } from "./worktree-folder";
 import { CodexAppServerClient } from "../../codex-app-server/desktop-client";
@@ -1162,8 +1167,8 @@ const recentProjectDiscoveryRuns = new RecentProjectDiscoveryRuns();
  * Get started's recent projects. Codex answers `thread/list` from a
  * one-off App Server on the login the new profile will use: the registry's
  * own lists serve no thread data in the bootstrap profile, by design, and
- * defer Codex until first run ends. Claude Code and ACP threads come from
- * PwrAgent's lists, which the bootstrap profile does not have.
+ * defer Codex until first run ends. Claude Code answers through the Agent
+ * SDK, which can read history during bootstrap too.
  */
 async function discoverRecentProjectsForOnboarding(
   service: DesktopSettingsService,
@@ -1193,6 +1198,28 @@ async function discoverRecentProjectsForOnboarding(
         { deadlineAt, signal },
       )
       : undefined,
+    readClaudeCodeDirectories: async (claudeSignal) => {
+      const policy = getOwnerHostServices().runtimePolicy;
+      if (policy && !policy.enabledBackends.includes("claude")) return undefined;
+      // The backend uses this same login-shell environment for its profile
+      // account. Per-thread shell overrides apply only to those threads.
+      const env = claudeEnvironment(await service.resolveTerminalSpawnEnvAsync());
+      claudeSignal.throwIfAborted();
+      const installation = await inspectClaudeInstallation({ env, signal: claudeSignal });
+      claudeSignal.throwIfAborted();
+      if (!isClaudeInstallationAvailable(installation)) return undefined;
+      // Use the worker even when CLAUDE_CONFIG_DIR matches, so a cancelled
+      // or timed-out discovery can stop reading immediately.
+      const reader = openClaudeSessionReader(env, {
+        workerPath: join(__dirname, "claude-session-reader-worker.js"),
+      });
+      using _abort = addAbortListener(claudeSignal, () => reader.close());
+      try {
+        return await reader.listRecentDirectories();
+      } finally {
+        reader.close();
+      }
+    },
     listPwrAgentThreads: registry
       ? async () => {
         const [threads, backends] = await Promise.all([
