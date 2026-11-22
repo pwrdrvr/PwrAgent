@@ -1489,22 +1489,23 @@ function reviewPullRequestsFor(params: {
     return { candidates: attached };
   }
   const workingState = thread.gitWorkingState;
-  const checkedOut = findCheckedOutPullRequest({
+  const checkout = {
     currentBranch: thread.observedGitBranch ?? thread.gitBranch,
     directoryGitStatus: params.directory?.gitStatus,
     gitWorkingState: workingState,
-    prs: attached,
-  });
-  // The thread's working state describes its primary checkout. A sole open PR
-  // is useful even without a head SHA comparison, provided there is no work
-  // in that checkout that still needs publishing.
+  };
+  const checkedOut = findCheckedOutPullRequest({ ...checkout, prs: attached });
+  // A clean checkout can default to the sole open PR when the comparison is
+  // inconclusive. A known difference keeps the checkout as the default.
   const clean = workingState?.dirtyFiles === 0
     && workingState.untrackedFiles === 0
     && workingState.unpushedCommits === 0;
+  const soleOpen = !checkedOut && clean ? soleOpenReviewPullRequest(attached) : undefined;
+  const sync = soleOpen ? describeAttachedPullRequestLocalSync({ ...checkout, pr: soleOpen }) : undefined;
   return {
     candidates: attached,
     checkedOut,
-    defaultPullRequest: checkedOut ?? (clean ? soleOpenReviewPullRequest(attached) : undefined),
+    defaultPullRequest: checkedOut ?? (sync?.known && !sync.matches ? undefined : soleOpen),
   };
 }
 

@@ -9388,7 +9388,10 @@ describe("Composer", () => {
     return { ...thread, prs };
   }
 
-  function renderReviewTarget(thread: NavigationThreadSummary) {
+  function renderReviewTarget(
+    thread: NavigationThreadSummary,
+    gitStatus?: NavigationDirectorySummary["gitStatus"],
+  ) {
     const backend = backendSummary(thread.source);
     backend.capabilities = {
       ...backend.capabilities,
@@ -9402,6 +9405,7 @@ describe("Composer", () => {
       backends={[backend]}
       desktopApi={{ onAgentEvent: () => () => undefined, startReview: vi.fn() }}
       disabled={false} skills={[]} thread={thread}
+      directory={gitStatus ? { key: "project", kind: "directory", label: "Project", path: "/repo/project", gitStatus } : undefined}
     />);
   }
 
@@ -9501,6 +9505,38 @@ describe("Composer", () => {
     expect(within(group).getByRole("button", { name: /Attached PR/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
   });
+
+  it.each(["branch", "head commit", "remote lag"] as const)(
+    "keeps local review when a clean checkout has a known %s difference",
+    async (difference) => {
+      await fc.assert(fc.asyncProperty(
+        fc.nat(),
+        fc.array(fc.constantFrom("merged" as const, "closed" as const), { maxLength: 3 }),
+        async (suffix, history) => {
+          const thread = reviewTargetWithHistory(reviewTargetThread({}), history, 0);
+          if (difference === "branch") thread.observedGitBranch = `feat/other-${suffix}`;
+          const sha = `b${suffix.toString(16).padStart(39, "0")}`;
+          const { unmount } = renderReviewTarget(thread, {
+            currentBranch: thread.observedGitBranch,
+            branches: [thread.observedGitBranch!],
+            syncState: difference === "remote lag" ? "behind" : "in-sync",
+            ...(difference === "head commit"
+              ? { recentCommits: [{ sha, shortSha: sha.slice(0, 7), subject: "Different head" }] }
+              : {}),
+            ...(difference === "remote lag" ? { behind: suffix + 1 } : {}),
+          });
+          try {
+            await openReviewComposer();
+            expect(screen.getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
+            fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+            expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/7"]);
+          } finally {
+            unmount();
+          }
+        },
+      ), { numRuns: 12, examples: [[0, []]] });
+    },
+  );
 
   it.each(["untrackedFiles", "unpushedCommits"] as const)("keeps local review when the checkout has %s", async (kind) => {
     renderReviewTarget(reviewTargetThread({ [kind]: 1 }));
