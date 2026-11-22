@@ -17,15 +17,36 @@ local platform fingerprint when available. A mismatch quarantines the
 store. Live profile advertisements come from the existing runtime markers
 and do not change durable registrations or capacity.
 
-The machine starts with one exclusive slot. Codex environment setup,
-environment actions, and local automation gates claim the slot before
-launch. Startup, explicit reruns, workspace restore and owner-routed
+The built-in machine pool starts with one slot per logical CPU reported by
+the OS, with a one-slot fallback. Its capacity is kept in the shared
+database so different CPU readings across restarts or profiles do not
+resize the pool or invalidate reservations. Units are reservations among
+cooperating jobs. They neither measure live load nor set process affinity. The same
+machine key and queue apply to every profile in the shared root.
+
+Use `resource_checkout_action` and omit `units` to reserve the whole machine
+for a full test suite or heavy build. Known smaller jobs can request their
+expected number of parallel workers. Acquire before launching and release
+after the command exits. A large request at the head of the queue waits
+for enough slots to clear, and later small requests wait behind it.
+
+Codex environment setup, environment actions, and local automation gates
+claim the whole pool before launch unless they bind an explicit grant.
+Startup, explicit reruns, workspace restore and owner-routed
 Federation environment actions use the same admission path. A finite setup
 can use its thread's existing grant and returns it to `granted` after verified
 cleanup. An environment action consumes the grant. A launch with an unknown
 thread or an automation gate can use idle capacity. An operator hold or
 earlier waiter blocks those launches. Agent shells, terminals, remote CI
 workers, and independent applications are advisory.
+
+A managed job can bind the thread's only idle grant. If it has more than
+one, release the extra grants before launching so the job uses the intended
+reservation and deadline.
+
+The pre-release single-slot database upgrades in place. Existing holders and
+waiters retain whole-machine reservations, their tokens and their queue
+order. The first upgraded profile commits the migration once.
 
 An expired bound job retains capacity and enters recovery. On POSIX the
 executor tracks the process group after shell exit and verifies that it
@@ -35,8 +56,9 @@ admission and waits briefly to persist that evidence. Work without verified
 cleanup remains in recovery. On platforms with a reliable boot ID, a new boot can clear
 process ownership from a prior boot on the same host. An operator can
 confirm that a recorded POSIX group is gone from the recovery dialog.
-Cleanup and administrative release recheck the proof. Administrative
-release includes the audit note in the action receipt.
+When multiple allocations need recovery, each has its own evidence and
+controls. Cleanup and administrative release recheck the selected proof.
+Administrative release includes the audit note in the action receipt.
 
 Packaged owners admit machine jobs only through the primary root. Paths
 that resolve to the same root share its store. An alternate production

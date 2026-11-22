@@ -75,6 +75,8 @@ function githubServing(checks: readonly RawCheck[]) {
       return { total_count: runs.length, check_runs: runs.slice((page - 1) * 100, page * 100) };
     }
     if (path.includes("/status?")) return { state: "pending", statuses };
+    // Nothing newer was pushed: a cancelled build has no later build to follow.
+    if (path.endsWith("/branches/main")) return { commit: { sha: MERGE_SHA } };
     throw new Error(`unexpected ${path}`);
   });
 }
@@ -287,8 +289,10 @@ describe("Continue After a merge build", () => {
 
     now += 30_000;
     await agent.handleMergeBuildObservation(PR_URL, build({}));
-    // The list shows the latest check, which is never stored.
+    // The list shows the latest check, which is never stored. The windows'
+    // active list carries it too, for PR chips and the rail.
     expect(agent.withCiRunObservations(store.active())[0]!.evidence[0]!.mergeBuild).toMatchObject({ status: "running" });
+    expect(agent.active()[0]!.evidence[0]!.mergeBuild).toMatchObject({ status: "running" });
     expect(store.active()[0]!.evidence[0]!.mergeBuild).toBeUndefined();
     expect(submit).not.toHaveBeenCalled();
 
@@ -304,6 +308,7 @@ describe("Continue After a merge build", () => {
     expect(prompt).toContain(`Merge commit ${MERGE_SHA} on main`);
     expect(prompt).toContain("Failed check: unit (ubuntu); https://github.com/example/app/actions/runs/5/job/9");
     expect(prompt).toContain("combined with others merged before it");
+    expect(prompt).not.toContain("A newer push cancelled");
     expect(agent.mergeBuildUrls()).toEqual([]);
     expect(store.list("codex", "feature")[0]).toMatchObject({ status: "delivered", outcome: "failure" });
   });

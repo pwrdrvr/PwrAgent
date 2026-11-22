@@ -138,7 +138,7 @@ jobs:
             // scripts.
             const isPlatformPath = (path) =>
               path === "pnpm-lock.yaml"
-              || path === "apps/desktop/e2e/onboarding-wizard.spec.ts"
+              || path === "apps/desktop/e2e/get-started.spec.ts"
               || path === "apps/desktop/e2e/fixtures/detached-profile-instances.ts"
               || path.startsWith("apps/desktop/e2e/visual-regression.spec.ts")
               || path.startsWith("apps/desktop/e2e/macos-")

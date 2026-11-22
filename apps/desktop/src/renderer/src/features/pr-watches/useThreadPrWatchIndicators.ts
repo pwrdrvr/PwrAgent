@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadPrAutoFixState, ThreadPrCiWatchMark } from "@pwragent/shared/contracts/thread-pr-watches";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import type {
   ThreadPullRequestWatchEvent,
   ThreadPullRequestWatchSummary,
@@ -14,6 +15,11 @@ import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/t
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
+import {
+  readThreadDependencyIndicator,
+  ThreadDependencyIndicatorsContext,
+} from "../thread-dependencies/useThreadDependencyIndicators";
+import { mergeBuildWaitForPr } from "./merge-build-watches";
 
 /**
  * What one PR chip says about the watches that wake its thread. Only a CI
@@ -28,6 +34,11 @@ export type PrChipWatch = {
     notifyOn: readonly ThreadPullRequestWatchEvent[];
   };
   terminal?: { createdAt: number };
+  /**
+   * The thread's active merge build watch on this PR: a Continue After
+   * `merge_build` wait, with its latest build check.
+   */
+  mergeBuild?: ThreadDependency;
   /** Auto-fix starts a repair turn on this thread when the PR fails CI. */
   autoFix?: boolean;
   /**
@@ -55,6 +66,8 @@ export type ThreadPrWatches = {
    * projects it. Absent when main sent no projection.
    */
   autoFixByPrKey?: ReadonlyMap<string, ThreadPrAutoFixState>;
+  /** The thread's own active merge build waits, from Continue After. */
+  mergeBuildWaits?: readonly ThreadDependency[];
 };
 
 export type ThreadPrWatchIndicatorsValue = {
@@ -83,6 +96,13 @@ export type ThreadPrWatchIndicatorsValue = {
    * composer. It never sends. Absent where no composer can take it.
    */
   askAgentToWatchCi?: (thread: NavigationThreadSummary, pr: PrSummary) => void;
+  /**
+   * Watches a PR's merge build on the thread, waking it on pass or fail.
+   * Absent where this window cannot change Continue After.
+   */
+  watchMergeBuild?: (thread: NavigationThreadSummary, pr: PrSummary) => Promise<void>;
+  /** Stops one merge build watch, which also opts its PR out of the automatic one. */
+  stopMergeBuild?: (thread: NavigationThreadSummary, wait: ThreadDependency) => Promise<void>;
 };
 
 /** What Stop needs to name one watch on its owner. */
@@ -129,9 +149,39 @@ export function useThreadPrWatches(
   thread: Pick<NavigationThreadSummary, "id" | "source" | "federation" | "prCiWatches"> | undefined,
 ): ThreadPrWatches | undefined {
   const context = useContext(ThreadPrWatchIndicatorsContext);
+  // Merge build watches are Continue After waits, listed with the others.
+  const dependencies = useContext(ThreadDependencyIndicatorsContext);
   if (!context || !thread) return undefined;
-  if (thread.federation) return summarizePeerPrCiWatches(thread.prCiWatches);
-  return context.byThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+  const watches = thread.federation
+    ? summarizePeerPrCiWatches(thread.prCiWatches)
+    : context.byThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+  return withMergeBuildWaits(watches, readThreadDependencyIndicator(dependencies, thread)?.mergeBuildWaits);
+}
+
+const EMPTY_THREAD_WATCHES: ThreadPrWatches = { watches: [], byPrKey: new Map() };
+const withMergeBuildWaitsCache = new WeakMap<ThreadPrWatches, WeakMap<readonly ThreadDependency[], ThreadPrWatches>>();
+
+/**
+ * A thread's watches with its merge build waits. One object per pair, so an
+ * unchanged thread keeps its chips' props.
+ */
+export function withMergeBuildWaits(
+  watches: ThreadPrWatches | undefined,
+  waits: readonly ThreadDependency[] | undefined,
+): ThreadPrWatches | undefined {
+  if (!waits?.length) return watches;
+  const base = watches ?? EMPTY_THREAD_WATCHES;
+  let byWaits = withMergeBuildWaitsCache.get(base);
+  if (!byWaits) {
+    byWaits = new WeakMap();
+    withMergeBuildWaitsCache.set(base, byWaits);
+  }
+  let combined = byWaits.get(waits);
+  if (!combined) {
+    combined = { ...base, mergeBuildWaits: waits };
+    byWaits.set(waits, combined);
+  }
+  return combined;
 }
 
 const peerWatchesCache = new WeakMap<readonly ThreadPrCiWatchMark[], ThreadPrWatches>();
@@ -298,6 +348,30 @@ const withBlockedAutoFixCache = new WeakMap<ThreadPrAutoFixState, WeakMap<PrChip
  * `autoFixRepository` comes from `resolveThreadAutoFixRepository`.
  */
 export function resolvePrChipWatch(
+  watches: ThreadPrWatches | undefined,
+  pr: PrSummary,
+  autoFixRepository: string | undefined,
+): PrChipWatch | undefined {
+  const chip = resolveCiChipWatch(watches, pr, autoFixRepository);
+  const mergeBuild = mergeBuildWaitForPr(watches?.mergeBuildWaits, pr);
+  if (!mergeBuild) return chip;
+  const key = chip ?? NO_CHIP_WATCH;
+  let byWait = withMergeBuildCache.get(key);
+  if (!byWait) {
+    byWait = new WeakMap();
+    withMergeBuildCache.set(key, byWait);
+  }
+  let combined = byWait.get(mergeBuild);
+  if (!combined) {
+    combined = { ...chip, mergeBuild };
+    byWait.set(mergeBuild, combined);
+  }
+  return combined;
+}
+
+const withMergeBuildCache = new WeakMap<PrChipWatch, WeakMap<ThreadDependency, PrChipWatch>>();
+
+function resolveCiChipWatch(
   watches: ThreadPrWatches | undefined,
   pr: PrSummary,
   autoFixRepository: string | undefined,

@@ -367,6 +367,8 @@ type RunningTurn = {
   fileDiffs: string[];
   /** Each artifact tool call's action, by tool-use id: its result carries the page's link. */
   artifactCalls: Map<string, string>;
+  /** Only top-level REPL calls may expose their direct tools here. */
+  codeToolUseIds: Set<string>;
   ending?: boolean;
   titlePrompt?: string;
   /** Owned by the turn, but never awaited by the streaming message pump. */
@@ -573,7 +575,7 @@ function claudeTurn(authSequence: number, session?: ClaudeSession, followUp = fa
     ended: claudeDeferred(),
     turnId: randomUUID(), authSequence, startedAt: Date.now(), entries: new Map(), savedEntries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
-    artifactCalls: new Map(), lastResultSeq: 0,
+    artifactCalls: new Map(), codeToolUseIds: new Set(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
     ...(followUp ? { followUp, started: true } : {}),
   };
@@ -2199,7 +2201,8 @@ export class ClaudeBackend {
   private taskRows(live: LiveSession, tasks = live.tasks.actionTasks()): AppServerBackgroundTask[] {
     return tasks.map((task) => {
       const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
-      const command = claudeShellCommand(row?.entry.details[0]);
+      const command = row?.entry.details[0]?.command?.rawCommand === "Code"
+        ? "Code" : claudeShellCommand(row?.entry.details[0]);
       return claudeTaskRow(task, { cwd: live.session.cwd, ...(command !== undefined ? { command } : {}) });
     });
   }
@@ -2697,8 +2700,8 @@ export class ClaudeBackend {
         threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text },
       } });
     }
-    if (message.type === "assistant" && !message.parent_tool_use_id) {
-      const text = message.message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+    if (message.type === "assistant" && (!message.parent_tool_use_id || turn.codeToolUseIds.has(message.parent_tool_use_id))) {
+      const text = message.parent_tool_use_id ? "" : message.message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
       if (text) {
         // A later text block of the same message must extend, not replace,
         // the text an earlier block completed.
@@ -2737,7 +2740,13 @@ export class ClaudeBackend {
         }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
-        const params = { id: block.id, name: block.name, input, status: "in_progress" as const };
+        const script = !message.parent_tool_use_id && block.name === "REPL" && typeof input.code === "string"
+          ? input.code : undefined;
+        if (script !== undefined) turn.codeToolUseIds.add(block.id);
+        const preview = script === undefined ? undefined : script.slice(0, 4000)
+          + (script.length > 4000 ? "\n[Script truncated at 4000 characters]" : "");
+        const params = { id: block.id, name: script !== undefined ? "Code" : block.name,
+          input: script !== undefined ? { code: preview } : input, status: "in_progress" as const };
         const detail = command === undefined ? claudeToolDetail(params) ?? claudeToolCallDetail(params) : undefined;
         const activity: AppServerThreadActivityEntry = {
           ...(command !== undefined
@@ -2753,7 +2762,7 @@ export class ClaudeBackend {
         const item = {
           id: block.id, status: "in_progress",
           ...(command !== undefined ? { type: "commandExecution", command }
-            : { type: "dynamicToolCall", arguments: input,
+            : { type: "dynamicToolCall", arguments: params.input,
               toolName: detail?.command?.source === "tool" ? detail.command.rawCommand : block.name }),
         };
         await this.emit({ method: "item/started", params: { threadId, turnId, item } });

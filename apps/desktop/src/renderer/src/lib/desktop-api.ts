@@ -95,6 +95,7 @@ import type {
   ResourceCheckoutActionResult,
   ResourceCheckoutsChangedEvent,
   ResourceCheckoutsSnapshot,
+  ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type {
   ReadUsageActivityRequest,
@@ -1459,6 +1460,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * points stay hidden until all three exist. See
    * apps/desktop/docs/resource-checkouts-ui.md for the contract.
    */
+  openResourceCheckoutsWindow?: () => Promise<void>;
+  openResourceCheckoutThread?: (thread: ResourceThreadRef) => Promise<void>;
   readResourceCheckouts?: () => Promise<ResourceCheckoutsSnapshot>;
   /** Marker event; re-read with `readResourceCheckouts`. */
   onResourceCheckoutsChanged?: (

@@ -4,6 +4,7 @@ import type {
   ResourceAllocationState,
   ResourceHolder,
   ResourceReadinessState,
+  ResourceRecoveryStatus,
   ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { ConditionGlyph, ResourceConditionChip, StatusDot, type StatusDotTone } from "./ResourceConditionChip";
@@ -15,9 +16,12 @@ import {
   formatAge,
   formatDeadline,
   formatDuration,
+  freeUnits,
   holderLabel,
   presentCondition,
   resourceActions,
+  resourceRecoveries,
+  resourceRecoveryGates,
   type PresentedResource,
   type ResourceActionDescriptor,
 } from "./resource-view-model";
@@ -25,7 +29,7 @@ import {
 /** The header controls group recovery steps behind one Recover control. */
 export type ResourceInspectorIntent =
   | { kind: "action"; action: ResourceActionDescriptor }
-  | { kind: "recover" }
+  | { kind: "recover"; allocationId: string; generation: number }
   | { kind: "resolve" };
 
 const LIFECYCLE: ReadonlyArray<ResourceAllocationState | "queued" | "released"> = [
@@ -72,10 +76,26 @@ export function ResourceInspector(props: {
     action.kind === "fence" || action.kind === "verify_cleanup" || action.kind === "administrative_release");
   const headerActions = actions.filter((action) => !recoveryActions.includes(action) && action.kind !== "resolve_ownership");
   const resolve = actions.find((action) => action.kind === "resolve_ownership");
-  const recoverGate = recoveryActions.some((action) => action.gate.allowed)
-    ? { allowed: true as const }
-    : recoveryActions[0]?.gate;
+  const recoveries = resourceRecoveries(resource);
+  const recoverButton = (recovery: ResourceRecoveryStatus, label: string, testId?: string) => {
+    const gates = Object.values(resourceRecoveryGates(resource, authority, recovery));
+    const gate = gates.find((candidate) => candidate?.allowed) ?? gates.find(Boolean);
+    return gate ? (
+      <ResourceActionButton
+        emphasis="danger"
+        gate={gate}
+        testId={testId}
+        onClick={() => props.onIntent({ kind: "recover", allocationId: recovery.allocationId, generation: recovery.generation })}
+      >
+        {label}
+      </ResourceActionButton>
+    ) : null;
+  };
   const counted = capacitySummary(resource);
+  const unitLabel = resource.placement === "machine" ? "CPU slot" : "unit";
+  const firstRequest = resource.queue[0]?.units;
+  const free = freeUnits(resource);
+  const waitingForSlots = condition === "busy" && firstRequest !== undefined && free !== undefined && firstRequest > free;
 
   return (
     <aside aria-labelledby="resources-inspector-title" className="resources-inspector">
@@ -107,11 +127,7 @@ export function ResourceInspector(props: {
         <StateCallout
           item={item}
           now={props.now}
-          recover={recoverGate ? (
-            <ResourceActionButton emphasis="danger" gate={recoverGate} testId="resources-action-recover" onClick={() => props.onIntent({ kind: "recover" })}>
-              Recover…
-            </ResourceActionButton>
-          ) : null}
+          recover={recoveries.length === 1 ? recoverButton(recoveries[0], "Recover…", "resources-action-recover") : null}
           resolve={resolve ? (
             <ResourceActionButton emphasis="danger" gate={resolve.gate} testId="resources-action-resolve" onClick={() => props.onIntent({ kind: "resolve" })}>
               Resolve ownership…
@@ -129,6 +145,7 @@ export function ResourceInspector(props: {
               <AllocationDetail
                 key={allocation.allocationId}
                 allocation={allocation}
+                unitLabel={unitLabel}
                 now={props.now}
                 onOpenThread={props.onOpenThread}
               />
@@ -137,6 +154,11 @@ export function ResourceInspector(props: {
         </Section>
 
         <Section title="Queue" aside="First in, first out">
+          {waitingForSlots ? (
+            <p className="resources-note">
+              The first request needs {firstRequest} {unitLabel}s. {free} free now. Later requests wait behind it.
+            </p>
+          ) : null}
           {resource.queue.length === 0 ? (
             <p className="resources-note">Nobody is waiting.</p>
           ) : (
@@ -148,6 +170,7 @@ export function ResourceInspector(props: {
                     <HolderName holder={entry.requester} onOpenThread={props.onOpenThread} />
                     <span className="resources-row__meta">
                       {entry.purpose}
+                      {entry.units !== undefined ? ` · ${entry.units} ${unitLabel}${entry.units === 1 ? "" : "s"} requested` : ""}
                       {entry.expectedDurationMs ? ` · ${formatDuration(entry.expectedDurationMs)}` : ""}
                       {` · waiting ${formatAge(entry.requestedAt, props.now)}`}
                       {entry.eligibility.eligible ? "" : ` · ${entry.eligibility.reason}`}
@@ -226,19 +249,28 @@ export function ResourceInspector(props: {
             <dd>{resource.policy.finalEffect}</dd>
             <dt>Last cleanup</dt>
             <dd>{resource.cleanup.detail}</dd>
-            {resource.recovery ? (
-              <>
-                <dt>Fencing</dt>
-                <dd>{resource.recovery.fencing === "verified" ? "Verified" : "Not verified"}</dd>
-                <dt>Evidence</dt>
-                <dd>
-                  <ul className="resources-evidence">
-                    {resource.recovery.evidence.map((line) => <li key={line}>{line}</li>)}
-                  </ul>
-                </dd>
-              </>
-            ) : null}
           </dl>
+          {recoveries.map((recovery) => {
+            const label = resource.allocations.find(({ allocationId }) => allocationId === recovery.allocationId)?.taskLabel
+              ?? `Grant ${recovery.generation}`;
+            return (
+              <div className="resources-allocation" key={recovery.allocationId}>
+                <dl className="resources-pairs">
+                  <dt>Task</dt><dd>{label}</dd>
+                  <dt>Fencing</dt><dd>{recovery.fencing === "verified" ? "Verified" : "Not verified"}</dd>
+                  <dt>Evidence</dt>
+                  <dd>
+                    {recovery.evidence.length ? (
+                      <ul className="resources-evidence">
+                        {recovery.evidence.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    ) : recovery.reason}
+                  </dd>
+                </dl>
+                {recoveries.length > 1 ? recoverButton(recovery, `Recover ${label}`) : null}
+              </div>
+            );
+          })}
         </Section>
 
         <Section title="Policy">
@@ -331,7 +363,7 @@ function StateCallout(props: {
       break;
     case "recovery_required":
       title = "Recovery required";
-      body = `${resource.recovery?.reason ?? presentation.meaning} The resource stays reserved and the next waiter isn't woken.`;
+      body = `${resourceRecoveries(resource).length > 1 ? "Multiple jobs need cleanup." : (resource.recovery?.reason ?? presentation.meaning)} The resource stays reserved and the next waiter isn't woken.`;
       action = props.recover;
       tone = "danger";
       break;
@@ -365,6 +397,7 @@ function StateCallout(props: {
 
 function AllocationDetail(props: {
   allocation: ResourceAllocation;
+  unitLabel: string;
   now: number;
   onOpenThread: (thread: ResourceThreadRef) => void;
 }): ReactElement {
@@ -394,7 +427,7 @@ function AllocationDetail(props: {
           {allocation.lastKnown ? <span className="resources-note"> · last known</span> : null}
         </dd>
         <dt>Task</dt>
-        <dd>{allocation.taskLabel}{allocation.units ? ` · ${allocation.units} ${allocation.units === 1 ? "unit" : "units"}` : ""}</dd>
+        <dd>{allocation.taskLabel}{allocation.units ? ` · ${allocation.units} ${props.unitLabel}${allocation.units === 1 ? "" : "s"} held` : ""}</dd>
         <dt>Runs on</dt>
         <dd>{allocation.executorLabel}</dd>
         <dt>Deadline</dt>

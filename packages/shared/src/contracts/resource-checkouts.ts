@@ -162,7 +162,9 @@ export type ResourceDomain = {
   instructions: ResourceInstructionsRef | null;
   policy: ResourcePolicySummary;
   cleanup: ResourceCleanupStatus;
+  /** First failed allocation, retained for clients that display one recovery. */
   recovery: ResourceRecoveryStatus | null;
+  recoveries?: ResourceRecoveryStatus[];
   ownershipConflict: ResourceOwnershipConflict | null;
   definition: ResourceDefinitionStatus;
   /** Per-action gates from the authority for this viewer. */
@@ -313,6 +315,8 @@ export type ResourceRecoveryStatus = {
   /** Whether an old grant has been proven unable to act. */
   fencing: "verified" | "unverified" | "unknown";
   evidence: string[];
+  /** Gates scoped to this exact allocation. Absent on older snapshots. */
+  actions?: ResourceRecoveryActionGates;
 };
 
 export type ResourceOwnershipConflict = {
@@ -354,6 +358,8 @@ export type ResourceActionBlockReason =
 export type ResourceActionGate =
   | { allowed: true }
   | { allowed: false; reason: ResourceActionBlockReason; detail: string };
+
+export type ResourceRecoveryActionGates = Partial<Record<"fence" | "verify_cleanup" | "administrative_release", ResourceActionGate>>;
 
 /** Absent means the action is not offered for this resource at all. */
 export type ResourceActionGates = Partial<Record<ResourceActionKind, ResourceActionGate>>;

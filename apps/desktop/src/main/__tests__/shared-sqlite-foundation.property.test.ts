@@ -19,7 +19,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // recovery guard, research, request-pricing, sub-agent dismissal,
   // operator-request scope, pricing summary, gate pricing, usage completion,
   // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
-  // action projections.
+  // action projections and targeted managed membership.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
@@ -52,6 +52,8 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "thread_pricing_summary_delta_update"
     && row.name !== "thread_pricing_summary_delta_delete"
     && !row.name.startsWith("scheduled_action_projection_")
+    && !row.name.startsWith("thread_managed_legacy_")
+    && row.name !== "thread_sub_agents_padded_child"
     && row.name !== "idx_scheduled_thread_actions_projection_order"
     && row.name !== "idx_scheduled_thread_actions_terminal_updated"
   ).map(row => {

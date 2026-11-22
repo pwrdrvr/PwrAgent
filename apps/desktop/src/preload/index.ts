@@ -1,5 +1,5 @@
 import type {
-  ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent,
+  ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
@@ -895,6 +895,8 @@ import {
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   RESOURCE_CHECKOUTS_CHANGED_CHANNEL,
   RESOURCE_CHECKOUTS_READ_CHANNEL,
+  RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL,
+  RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL,
   RESOURCE_CHECKOUTS_PERFORM_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
@@ -2879,6 +2881,8 @@ const desktopApi = Object.freeze({
     };
   },
   ...(process.argv.includes("--pwragent-resource-checkouts") ? {
+    openResourceCheckoutsWindow: (): Promise<void> => ipcRenderer.invoke(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL),
+    openResourceCheckoutThread: (thread: ResourceThreadRef): Promise<void> => ipcRenderer.invoke(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, thread),
     readResourceCheckouts: (): Promise<ResourceCheckoutsSnapshot> =>
       ipcRenderer.invoke(RESOURCE_CHECKOUTS_READ_CHANNEL),
     performResourceCheckoutAction: (request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> =>
