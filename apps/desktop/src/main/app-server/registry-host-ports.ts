@@ -217,6 +217,7 @@ export interface RegistryHostPorts {
     fastMode?: boolean;
     mcpConnectionIds?: string[];
     mcpProviderServersEnabled?: boolean;
+    codexSkillProfileId?: string;
     agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];

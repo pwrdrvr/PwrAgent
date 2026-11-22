@@ -1,3 +1,4 @@
+import type { CodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import { ContinueAfterStatus } from "../thread-dependencies/ContinueAfterStatus";
 import type { ModelRoutingNotification } from "./model-routing-activity";
 import {
@@ -823,6 +824,8 @@ export type ThreadViewProps = {
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  codexSkillProfiles?: readonly CodexSkillProfile[];
+  onOpenCodexSkillProfiles?: () => void;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
   onOpenAutomations?: () => void;
@@ -1032,6 +1035,7 @@ export type ThreadViewProps = {
         | "imageAttachments"
         | "mcpConnectionIds"
         | "mcpProviderServersEnabled"
+        | "codexSkillProfileId"
         | "agent"
       >
     >,
@@ -3323,6 +3327,8 @@ export function ThreadView(props: ThreadViewProps) {
           props.onDismissFullAccessRiskWarning
         }
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+        codexSkillProfiles={props.codexSkillProfiles}
+        onOpenCodexSkillProfiles={props.onOpenCodexSkillProfiles}
         onPickDirectoryForReference={props.onPickDirectoryForReference}
         pastedImageMaxPatches={props.pastedImageMaxPatches}
         pdfAnalysisEnabled={props.pdfAnalysisEnabled}

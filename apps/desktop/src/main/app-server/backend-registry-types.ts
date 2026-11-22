@@ -331,10 +331,12 @@ export type BackendClient = {
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   provideThreadDeveloperInstructions?: CodexAppServerClient["provideThreadDeveloperInstructions"];
+  provideThreadSkillExclusions?: CodexAppServerClient["provideThreadSkillExclusions"];
   replaceThreadDeveloperInstructions?(
     params: Parameters<CodexAppServerClient["replaceThreadDeveloperInstructions"]>[0],
   ): Promise<void>;
   startThread(params: {
+    skillExclusions?: readonly string[];
     cwd?: string;
     ephemeral?: boolean;
     model?: string;
@@ -353,6 +355,7 @@ export type BackendClient = {
     developerInstructions?: string;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
+    skillExclusions?: readonly string[];
     threadId: string;
     path?: string;
     cwd?: string;

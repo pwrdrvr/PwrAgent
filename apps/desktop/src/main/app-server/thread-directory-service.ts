@@ -1818,6 +1818,7 @@ export class ThreadDirectoryService {
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+      codexSkillProfileId: launchpad.backend === "codex" ? launchpad.codexSkillProfileId ?? undefined : undefined,
       mcpConnectionIds: launchpad.mcpConnectionIds,
       // Same Codex-only guard as `fastMode` above: switching a draft's
       // provider leaves the stale isolation flag behind, and the ACP path
@@ -1889,6 +1890,7 @@ export class ThreadDirectoryService {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
       executionMode: startThreadResponse.executionMode,
+      codexSkillProfile: startThreadResponse.codexSkillProfile,
       ...(startThreadResponse.pinnedRank
         ? { pinnedRank: startThreadResponse.pinnedRank }
         : {}),

@@ -1,6 +1,7 @@
 import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { FORGE_SETTINGS } from "./forge-settings";
-import type { GhStatus } from "@pwragent/shared/contracts/navigation";
+import type { GhStatus, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SkillProfileDirectory } from "./CodexSkillProfilesSettings";
 import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
@@ -342,6 +343,8 @@ const SECTION_LABELS = new Map(
 
 
 export function SettingsScreen(props: {
+  skillProfileDirectories?: readonly SkillProfileDirectory[];
+  skillProfileThreads?: readonly NavigationThreadSummary[];
   /** Live theme + density controller from the App root. Threaded down to
    *  Settings → General → Appearance. Optional so the fatal-settings
    *  early-return fallbacks (which render SettingsScreen alone) can omit
@@ -978,6 +981,8 @@ export function SettingsScreen(props: {
               <GuidedSetupLaunchProvider launch={setGuidedSetup}>
                 <SettingsSectionBody
                   acpAgents={acpCatalog.entries}
+                  skillProfileDirectories={props.skillProfileDirectories}
+                  skillProfileThreads={props.skillProfileThreads}
                   appearanceController={props.appearanceController}
                   cachedBackends={props.cachedBackends}
                   claudeSignIn={props.claudeSignIn}
@@ -1022,6 +1027,8 @@ export function SettingsScreen(props: {
 }
 
 function SettingsSectionBody(props: {
+  skillProfileDirectories?: readonly SkillProfileDirectory[];
+  skillProfileThreads?: readonly NavigationThreadSummary[];
   /** The ACP agent catalog the nav already read. */
   acpAgents?: AcpAgentSettingsEntry[];
   appearanceController?: AppearanceController;
@@ -1732,6 +1739,8 @@ function SettingsSectionBody(props: {
       claudeSignIn={props.claudeSignIn}
       desktopApi={props.desktopApi}
       focus={props.sub}
+      skillProfileDirectories={props.skillProfileDirectories}
+      skillProfileThreads={props.skillProfileThreads}
       onFocusChange={(focus) => props.onOpenRoute("models", focus)}
       saving={props.settings.saving}
       snapshot={props.snapshot}
@@ -1777,6 +1786,9 @@ function SettingsSectionBody(props: {
       }}
       onSaveCodexModelProviders={async (providers) => {
         return await props.settings.writeConfig({ models: { codex: { providers } } });
+      }}
+      onSaveCodexSkillProfiles={async (skillProfiles) => {
+        return await props.settings.writeConfig({ models: { codex: { skillProfiles } } });
       }}
       onSaveDecisionModels={async (decisionModels) => {
         return await props.settings.writeConfig({

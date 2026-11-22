@@ -1,3 +1,6 @@
+import type { CodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { CodexSkillProfilesSettings, type SkillProfileDirectory } from "./CodexSkillProfilesSettings";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { buildProviderPickerEntries, providerPickerValue } from "@pwragent/shared/provider-picker";
 import { DECISION_PROVIDER_IDS, resolveDecisionModelSettings } from "@pwragent/shared/decision-models";
@@ -169,6 +172,9 @@ function migrationMatchesSelection(
 }
 
 export function ModelsSettings(props: {
+  skillProfileDirectories?: readonly SkillProfileDirectory[];
+  skillProfileThreads?: readonly NavigationThreadSummary[];
+  onSaveCodexSkillProfiles?: (profiles: CodexSkillProfile[]) => Promise<boolean>;
   cachedBackends?: BackendSummary[];
   claudeSignIn?: ClaudeSignInControls;
   desktopApi?: DesktopApi;
@@ -811,11 +817,12 @@ export function ModelsSettings(props: {
     );
   }
 
-  if (props.focus === "codex") {
+  if (props.focus === "codex" || props.focus === "codex-skill-profiles") {
     return (
       <SettingsSectionStack
         paneId="models-codex"
         aria-label="Codex provider settings"
+        focusSectionId={props.focus === "codex-skill-profiles" ? "skill-profiles" : undefined}
       >
         <SettingsPanelHead
           eyebrow="AI Providers"
@@ -858,6 +865,15 @@ export function ModelsSettings(props: {
                 }
               : undefined}
             onSave={props.onSaveCodexModelProviders}
+          />
+        ) : null}
+        {props.onSaveCodexSkillProfiles ? (
+          <CodexSkillProfilesSettings
+            profiles={props.snapshot.models.codex.skillProfiles ?? []}
+            desktopApi={props.desktopApi}
+            directories={props.skillProfileDirectories}
+            threads={props.skillProfileThreads}
+            onSave={props.onSaveCodexSkillProfiles}
           />
         ) : null}
         {props.onSaveUsageAccountGroups ? (

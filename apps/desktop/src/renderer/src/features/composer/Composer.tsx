@@ -1,3 +1,5 @@
+import type { CodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
+import { CodexSkillProfileControl } from "./CodexSkillProfileControl";
 import { useComposerWorkspaceHandoffState } from "./useComposerWorkspaceHandoffState";
 import { useComposerSendPreparation } from "./useComposerSendPreparation";
 import { useComposerScheduleMenu } from "./useComposerScheduleMenu";
@@ -427,6 +429,8 @@ function isEditingOutsideComposer(): boolean {
 }
 
 export type ComposerProps = {
+  codexSkillProfiles?: readonly CodexSkillProfile[];
+  onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
@@ -637,6 +641,7 @@ export type ComposerProps = {
         | "editorDocument"
         | "backend"
         | "codexModelProviderId"
+        | "codexSkillProfileId"
         | "executionMode"
         | "model"
         | "reasoningEffort"
@@ -6027,18 +6032,34 @@ function useComposerController(props: ComposerProps) {
   }, [ensureMentionNavigation, mentionNavigationQuery, releaseMentionNavigation]);
   const localHashSearchSettled = !mentionNavigation.loading
     && mentionNavigation.settledQuery === (rawHashReferenceQuery ?? "").trim().toLowerCase();
-  const filteredSkills = useMemo(() => {
+  const threadSkillProfile = props.thread?.codexSkillProfile;
+  const launchpadSkillProfile = props.launchpad?.backend === "codex"
+    ? props.codexSkillProfiles?.find(({ id }) => id === props.launchpad?.codexSkillProfileId)
+    : undefined;
+  const profileName = threadSkillProfile?.profileName ?? launchpadSkillProfile?.name;
+  const hiddenSkillNames = threadSkillProfile?.hiddenSkills ?? launchpadSkillProfile?.hiddenSkills;
+  const hiddenSkills = useMemo(() => new Set(hiddenSkillNames), [hiddenSkillNames]);
+  const matchingSkills = useMemo(() => {
     if (!trigger) {
       return [];
     }
 
     return filterSkillAutocompleteCandidates(props.skills, trigger.query);
   }, [props.skills, trigger]);
+  const filteredSkills = useMemo(() => matchingSkills.filter(({ name }) => !hiddenSkills.has(name)), [matchingSkills, hiddenSkills]);
+  const hiddenMatchingSkills = useMemo(() => matchingSkills.filter(({ name }) => hiddenSkills.has(name)), [matchingSkills, hiddenSkills]);
+  const draftHiddenSkills = useMemo(() => [...new Set(
+    listMentionedSkills(canonicalDraft, (hiddenSkillNames ?? []).map((name) => ({ name })))
+      .filter(({ name }) => hiddenSkills.has(name))
+      .map(({ name }) => name),
+  )],
+  [canonicalDraft, hiddenSkillNames, hiddenSkills]);
   // Chips minted before the catalog loaded learn whether their name is
   // shared as soon as it does.
   const displaySkillTokens = useMemo(
-    () => applySkillOriginVisibility(skillTokens, props.skills),
-    [props.skills, skillTokens],
+    () => applySkillOriginVisibility(skillTokens, props.skills).map((token) =>
+      !token.kind && hiddenSkills.has(token.name) ? { ...token, hiddenByProfile: true } : token),
+    [hiddenSkills, props.skills, skillTokens],
   );
   const skillOriginCard = useSkillOriginCard({
     desktopApi: props.desktopApi,
@@ -6127,7 +6148,7 @@ function useComposerController(props: ComposerProps) {
     mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
-  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && (filteredSkills.length > 0 || props.onEnsureSkillsLoaded)
+  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && (matchingSkills.length > 0 || props.onEnsureSkillsLoaded)
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
@@ -8390,7 +8411,7 @@ function useComposerController(props: ComposerProps) {
     const build = (
       resolvedInspection: ComposerReferenceInspection,
     ): ComposerTurnPayload => {
-      const turnSkills = listMentionedSkills(textDraft, props.skills);
+      const turnSkills = listMentionedSkills(textDraft, props.skills).filter(({ name }) => !hiddenSkills.has(name));
       // File-reference pills ride the outgoing text as `[@label](~/path)`
       // markdown appended after the typed draft — part of BOTH the display
       // text and the text input item, so the agent and the transcript see
@@ -11539,6 +11560,7 @@ function useComposerController(props: ComposerProps) {
         NavigationLaunchpadDraft,
         | "backend"
         | "codexModelProviderId"
+        | "codexSkillProfileId"
         | "executionMode"
         | "model"
         | "reasoningEffort"
@@ -12993,7 +13015,8 @@ function useComposerController(props: ComposerProps) {
 
     const commitActiveAutocomplete = (): void => {
       if (autocompleteKind === "skills") {
-        applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+        const active = filteredSkills[activeSkillIndex] ?? filteredSkills[0];
+        if (active) applySkill(active);
         return;
       }
 
@@ -15005,7 +15028,9 @@ function useComposerController(props: ComposerProps) {
           ) : null}
           {filteredSkills.length === 0 ? (
             <p className="composer__skill-picker-empty" role="status">
-              {props.skillLoading ? "Loading skills…" : "No matching skills."}
+              {props.skillLoading ? "Loading skills…" : hiddenMatchingSkills.length
+                ? `No usable skills match. ${hiddenMatchingSkills.length} are hidden by ${profileName}.`
+                : "No matching skills."}
             </p>
           ) : null}
           <div
@@ -15057,6 +15082,23 @@ function useComposerController(props: ComposerProps) {
                 </span>
               </button>
             ))}
+            {hiddenMatchingSkills.length ? (
+              <div role="group" aria-label={`Hidden by ${profileName}`}>
+                <p className="composer__skill-picker-empty">Hidden by {profileName}</p>
+                {hiddenMatchingSkills.map((skill) => (
+                  <div
+                    key={skill.path ?? skill.name}
+                    className="composer__autocomplete-option composer__autocomplete-option--hidden"
+                    role="option"
+                    aria-disabled="true"
+                    aria-selected="false"
+                  >
+                    <span className="composer__autocomplete-title">${skill.name}</span>
+                    <span className="composer__autocomplete-meta">Hidden on this thread by the {profileName} profile</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : autocompleteKind === "slash" ? (
@@ -16010,6 +16052,17 @@ function useComposerController(props: ComposerProps) {
             >
               <LightningIcon size={15} aria-hidden="true" />
             </button>
+          ) : null}
+
+          {threadSkillProfile || props.launchpad?.backend === "codex" ? (
+            <CodexSkillProfileControl
+              profiles={props.codexSkillProfiles}
+              selected={launchpadSkillProfile}
+              snapshot={threadSkillProfile}
+              disabled={launchpadSubmitting || composerDisabled}
+              onChange={props.launchpad ? (id) => handleLaunchpadPatch({ codexSkillProfileId: id }) : undefined}
+              onEdit={filesystemFederationTarget?.scope !== "remote" ? props.onOpenCodexSkillProfiles : undefined}
+            />
           ) : null}
 
           {supportsPlanMode ? (
@@ -17214,6 +17267,7 @@ function useComposerController(props: ComposerProps) {
               selectionRequest={composerSelectionRequest}
               editorDocument={editorDocument}
               skillTokens={displaySkillTokens}
+              hiddenSkillNames={hiddenSkillNames}
               value={draft}
               onChange={handleComposerChange}
               onPaste={handlePaste}
@@ -17229,6 +17283,14 @@ function useComposerController(props: ComposerProps) {
             chips. It portals to the body, so where it sits here only decides
             that it outlives the picker. */}
           {skillOriginCard.cardNode}
+          {draftHiddenSkills.length ? (
+            <p className="composer__meta" role="status">
+              {draftHiddenSkills.length === 1
+                ? `$${draftHiddenSkills[0]} is hidden`
+                : `$${draftHiddenSkills[0]} and ${draftHiddenSkills.length - 1} more are hidden`}
+              {" "}on this thread by the {profileName} profile. Codex won't load {draftHiddenSkills.length === 1 ? "it" : "them"}. The text is sent as written.
+            </p>
+          ) : null}
 
           {/* The draft is deliberately still on screen and still selectable, so
             the only thing distinguishing it from a live input is this line and

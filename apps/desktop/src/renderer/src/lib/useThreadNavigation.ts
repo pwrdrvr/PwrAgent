@@ -2716,6 +2716,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   executionMode: ThreadExecutionMode;
   workMode: NavigationLaunchpadDraft["workMode"];
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
+  codexSkillProfile?: NavigationThreadSummary["codexSkillProfile"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
@@ -2747,6 +2748,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
     tokenMiserEnabled: params.launchpad.tokenMiserEnabled,
+    ...(params.codexSkillProfile ? { codexSkillProfile: params.codexSkillProfile } : {}),
     ...(params.launchpad.agent
       ? {
           agent: {
@@ -8527,6 +8529,7 @@ export function useThreadNavigation(
           executionMode: response.executionMode,
           workMode: response.workMode,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
+          codexSkillProfile: response.codexSkillProfile,
           optimisticUserMessage: response.turnStartFailure
             || response.scheduledAction
             ? undefined

@@ -230,6 +230,7 @@ export class NavigationDetailService {
     const launchpad: NavigationLaunchpadConfiguration | undefined = storedLaunchpad ? {
       backend: storedLaunchpad.backend,
       codexModelProviderId: storedLaunchpad.codexModelProviderId,
+      codexSkillProfileId: storedLaunchpad.codexSkillProfileId,
       executionMode: storedLaunchpad.executionMode,
       workMode: storedLaunchpad.workMode,
       model: storedLaunchpad.model,

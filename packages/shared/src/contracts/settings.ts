@@ -1,3 +1,4 @@
+import type { CodexSkillProfile } from "./codex-skill-profiles";
 import type { HotCpuCaptureRules, HotCpuRulePlan } from "../hot-cpu-rules";
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
@@ -1715,6 +1716,7 @@ export type DesktopSettingsSnapshot = {
       managedBuildsRequiredBy?: "token-miser";
       versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
+      skillProfiles?: CodexSkillProfile[];
       localModelIds?: DesktopSettingsValue<string[]>;
       /** Endpoints Codex can run threads on besides its default provider. */
       providers?: DesktopCodexModelProvider[];
@@ -2080,6 +2082,8 @@ export type DesktopSettingsConfigPatch = {
       managedBuildChannel?: DesktopUpdateChannel;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
+      /** Replaces the profile list for this PwrAgent instance. */
+      skillProfiles?: CodexSkillProfile[];
       /** Exact model IDs explicitly declared to have zero local API cost. */
       localModelIds?: string[];
       /**

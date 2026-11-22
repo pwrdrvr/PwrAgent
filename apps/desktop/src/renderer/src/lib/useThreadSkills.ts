@@ -311,7 +311,9 @@ export function useThreadSkills(params: {
   // streamed item. Without this ref a thread whose first `listSkills` failed
   // would re-request on every delta of the turn.
   const autoLoadedKeysRef = useRef<Set<string>>(new Set());
-  const autoLoadKey = originDirectories.length > 1 ? skillTarget?.key : undefined;
+  const needsRemoteProfiles = skillTarget?.federationTarget?.scope === "remote"
+    && skillTarget.backend === "codex" && (!thread || Boolean(thread.codexSkillProfile));
+  const autoLoadKey = originDirectories.length > 1 || needsRemoteProfiles ? skillTarget?.key : undefined;
   useEffect(() => {
     if (!autoLoadKey || autoLoadedKeysRef.current.has(autoLoadKey)) {
       return;

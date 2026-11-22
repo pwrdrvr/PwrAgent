@@ -1740,6 +1740,7 @@ export class DesktopSettingsService {
             value: config.models?.codex?.configOverrides ?? [],
             source: config.models?.codex?.configOverrides === undefined ? "default" : "config",
           },
+          skillProfiles: config.models?.codex?.skillProfiles ?? [],
           providers: (config.models?.codex?.providers ?? []).map((provider) => ({
             ...provider,
             hasApiKey: codexModelProviderKeyIds.has(provider.id),

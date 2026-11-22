@@ -831,6 +831,29 @@ describe("sqlite write metrics", () => {
     } finally { active.mockRestore(); await registry.close(); }
   });
 
+  it("stores a Codex skill snapshot with the existing creation write and keeps it across resume", async () => {
+    const target = { backend: "codex" as const, threadId: "profiled", executionMode: "default" as const };
+    const codexSkillProfile = {
+      profileId: "release",
+      profileName: "Release prep",
+      hiddenSkills: ["design-preview"],
+    };
+    const { writes: baseline } = await measureSqliteWrites(() =>
+      store.setThreadExecutionMode({ ...target, threadId: "default-skills" }));
+    const { writes: profiled } = await measureSqliteWrites(() =>
+      store.setThreadExecutionMode({ ...target, codexSkillProfile }));
+    expect(profiled.commits).toBe(baseline.commits);
+    expect(profiled.statements).toBe(baseline.statements);
+    const reopened = new SqliteOverlayStore(stateDb);
+    const { writes: resumed } = await measureSqliteWrites(async () => {
+      for (let turn = 0; turn < 10; turn++) {
+        expect((await reopened.getThreadOverlayState(target))?.codexSkillProfile).toEqual(codexSkillProfile);
+        await reopened.setThreadExecutionMode(target);
+      }
+    });
+    expect(resumed.commits).toBe(0);
+  });
+
   it("persists an operator Auto selection and audit entry without per-review writes", async () => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "auto-thread", executionMode: "default" });
     const { writes } = await measureSqliteWrites(async () => {
