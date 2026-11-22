@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DiscoverRecentProjectsResponse,
@@ -6,10 +7,12 @@ import type {
   RecentProjectSourceReport,
 } from "@pwragent/shared/contracts/settings";
 import { canonicalizeNavigationPath, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
+import { RECENT_PROJECT_CLAUDE_SESSION_LIMIT, type RecentClaudeCodeDirectories } from "../claude/claude-recent-projects";
 
 /** Codex is read newest first, one page at a time, up to this budget. */
 export const RECENT_PROJECT_CODEX_PAGE_SIZE = 100;
 export const RECENT_PROJECT_CODEX_MAX_PAGES = 3;
+export const RECENT_PROJECT_CLAUDE_TIMEOUT_MS = 20_000;
 /**
  * Folders are resolved newest first until this many distinct projects are
  * found. Deleted folders and extra worktrees of one repository do not count.
@@ -32,13 +35,15 @@ export type RecentProjectDiscoveryDeps = {
    * `c:/code/app` are one folder, checked once and sent as one path.
    */
   ignorePathCase: boolean;
-  /** Aborted when a newer discovery replaces this one; no more folders are checked. */
+  /** Aborted when a newer discovery replaces this one; stops Claude and folder checks. */
   signal?: AbortSignal;
   /**
    * Reads Codex's `thread/list` through the App Server protocol. Undefined
    * when no Codex is set up, which the agent rows already say.
    */
   readCodexDirectories?: () => Promise<RecentCodexDirectories>;
+  /** Returns undefined if Claude Code is unavailable for the profile. */
+  readClaudeCodeDirectories?: (signal: AbortSignal) => Promise<RecentClaudeCodeDirectories | undefined>;
   /**
    * Claude Code and ACP threads from PwrAgent's own lists. Undefined in the
    * bootstrap profile, which serves no thread data and has none of its own.
@@ -141,8 +146,8 @@ export async function folderInRealCase(
 
 /**
  * Recent project folders for Get started, with how each agent's read went.
- * Nothing here reads an agent's own storage: Codex answers through its
- * protocol, and Claude Code and ACP agents through PwrAgent's thread lists.
+ * Codex answers through its protocol and Claude Code through its Agent SDK.
+ * PwrAgent's thread lists also contribute Claude and ACP folders.
  * Two spellings of one folder leave here as one path, since only main knows
  * whether the platform's folder names ignore case. Ranking, prechecking and
  * merging the same folder from two agents happen in the renderer
@@ -154,8 +159,9 @@ export async function discoverRecentProjects(
   const sources: RecentProjectSourceReport[] = [];
   const raw: RawObservation[] = [];
 
-  const [codexRead, pwrAgentRead] = await Promise.allSettled([
+  const [codexRead, claudeRead, pwrAgentRead] = await Promise.allSettled([
     deps.includeCodex && deps.readCodexDirectories ? deps.readCodexDirectories() : undefined,
+    deps.readClaudeCodeDirectories ? readClaudeCodeWithTimeout(deps.readClaudeCodeDirectories, deps.signal) : undefined,
     deps.listPwrAgentThreads?.(),
   ]);
 
@@ -186,27 +192,45 @@ export async function discoverRecentProjects(
       });
   }
 
-  if (deps.listPwrAgentThreads) {
-    if (pwrAgentRead.status === "rejected") {
-      sources.push({
-        agent: "claude",
-        label: deps.labelFor("claude"),
-        status: "failed",
-        detail: errorText(pwrAgentRead.reason),
-      });
-    } else {
-      const seen = new Set<RecentProjectAgent>();
-      for (const thread of pwrAgentRead.value ?? []) {
-        // Codex is read above, from the login this profile will use.
-        if (thread.source === "codex" || thread.archivedAt !== undefined) continue;
-        const cwd = threadFolder(thread);
-        if (!cwd) continue;
-        seen.add(thread.source);
-        raw.push({ cwd, agent: thread.source, lastActiveAt: thread.updatedAt ?? thread.createdAt });
+  const claude: RecentProjectSourceReport = { agent: "claude", label: deps.labelFor("claude"), status: "skipped" };
+  if (claudeRead.status === "rejected") {
+    claude.status = "failed";
+    claude.detail = errorText(claudeRead.reason);
+  } else if (claudeRead.value) {
+    for (const { cwd, updatedAt } of claudeRead.value.directories) {
+      raw.push({ cwd, agent: "claude", lastActiveAt: updatedAt });
+    }
+    claude.status = claudeRead.value.complete ? "complete" : "partial";
+    if (claude.status === "partial") {
+      claude.detail = `Read the ${RECENT_PROJECT_CLAUDE_SESSION_LIMIT} most recent sessions. Older projects may be missing.`;
+    }
+  }
+
+  sources.push(claude);
+  // One report for both Claude reads. Failed outranks partial and complete;
+  // a skipped history read is neutral when PwrAgent contributes Claude folders.
+  // When both fail, keep the Claude Code history error.
+  if (pwrAgentRead.status === "rejected") {
+    if (claude.status !== "failed") {
+      claude.status = "failed";
+      claude.detail = errorText(pwrAgentRead.reason);
+    }
+  } else {
+    const seenAcp = new Set<RecentProjectAgent>();
+    for (const thread of pwrAgentRead.value ?? []) {
+      // Codex is read above, from the login this profile will use.
+      if (thread.source === "codex" || thread.archivedAt !== undefined) continue;
+      const cwd = threadFolder(thread);
+      if (!cwd) continue;
+      if (thread.source === "claude") {
+        if (claude.status === "skipped") claude.status = "complete";
+      } else {
+        seenAcp.add(thread.source);
       }
-      for (const agent of seen) {
-        sources.push({ agent, label: deps.labelFor(agent), status: "complete" });
-      }
+      raw.push({ cwd, agent: thread.source, lastActiveAt: thread.updatedAt ?? thread.createdAt });
+    }
+    for (const agent of seenAcp) {
+      sources.push({ agent, label: deps.labelFor(agent), status: "complete" });
     }
   }
 
@@ -223,6 +247,27 @@ export async function discoverRecentProjects(
     }
   }
   return { sources, observations };
+}
+
+async function readClaudeCodeWithTimeout(
+  read: NonNullable<RecentProjectDiscoveryDeps["readClaudeCodeDirectories"]>,
+  parentSignal?: AbortSignal,
+): Promise<RecentClaudeCodeDirectories | undefined> {
+  const timeout = new AbortController();
+  const signal = parentSignal ? AbortSignal.any([parentSignal, timeout.signal]) : timeout.signal;
+  signal.throwIfAborted();
+  const cancelled = Promise.withResolvers<never>();
+  using _abort = addAbortListener(signal, () => cancelled.reject(signal.reason));
+  const timer = setTimeout(() => timeout.abort(new Error("Claude Code session discovery timed out.")),
+    RECENT_PROJECT_CLAUDE_TIMEOUT_MS);
+  try {
+    return await Promise.race([cancelled.promise, Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return read(signal);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function threadFolder(thread: AppServerThreadSummary): string | undefined {

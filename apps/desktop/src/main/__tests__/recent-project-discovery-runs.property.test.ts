@@ -135,7 +135,7 @@ describe("superseded recent project searches", () => {
 
     clients[1]!.finish();
     const [replaced, kept] = await Promise.all([first, second]);
-    expect(replaced.sources).toEqual([expect.objectContaining({ agent: "codex", status: "failed" })]);
+    expect(replaced.sources).toContainEqual(expect.objectContaining({ agent: "codex", status: "failed" }));
     expect(replaced.observations).toEqual([]);
     expect(kept.observations).toEqual([{ path: "/home/dev/w1-r2", agent: "codex" }]);
     expect(clients[1]!.closed).toBe(true);
