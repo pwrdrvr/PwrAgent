@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AppServerBackendScope, AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
   navigationQueryEventRequiresRefresh,
@@ -202,14 +203,13 @@ async function projectNavigationCheckoutDirectories(
 ): Promise<AppServerThreadSummary[]> {
   const candidates = new Map<string, AppServerThreadSummary[]>();
   for (const thread of threads) {
-    // A cheap provider row can already carry a relationship from a prior live
-    // read. Only project rows whose directory is still the raw cwd fallback.
-    if (thread.source !== "codex" || !thread.projectKey || thread.observedGitBranch || thread.linkedDirectories.length !== 1) continue;
-    const cwd = path.resolve(thread.projectKey);
+    // Recheck provider-derived relationships, including remembered Git roots.
+    // The overlay projection below still owns explicit attachments.
+    if (thread.source !== "codex" || !thread.projectKey || thread.workspaceHandoff || thread.linkedDirectories.length > 1) continue;
     const [directory] = thread.linkedDirectories;
-    if (!directory || path.resolve(directory.id) !== cwd || path.resolve(directory.path) !== cwd
-      || (directory.kind !== "local" && !directory.worktreePath)
-      || (directory.worktreePath && path.resolve(directory.worktreePath) !== cwd)) continue;
+    if (directory && (isWorkspaceHandoffDirectory(directory) || directory.worktreeOwnership
+      || (directory.kind === "worktree" && !directory.worktreePath))) continue;
+    const cwd = path.resolve(thread.projectKey);
     const rows = candidates.get(cwd) ?? [];
     rows.push(thread);
     candidates.set(cwd, rows);
@@ -220,7 +220,19 @@ async function projectNavigationCheckoutDirectories(
     checkpoint();
     const directories = await readNavigationCheckoutDirectory(cwd);
     if (!directories) return;
-    for (const row of rows) projected.set(row, { ...row, linkedDirectories: directories });
+    const [current] = directories;
+    for (const row of rows) {
+      const [previous] = row.linkedDirectories;
+      // A missing cwd can retire a provisional folder. Keep the last known
+      // repository and branch of an unavailable checkout for status polling.
+      if (!current && (!previous || row.observedGitBranch || path.relative(cwd, previous.id) !== ""
+        || path.relative(cwd, previous.path) !== ""
+        || path.relative(cwd, previous.worktreePath ?? previous.path) !== "")) continue;
+      if (current && previous && current.kind === previous.kind
+        && path.relative(current.path, previous.path) === ""
+        && path.relative(current.worktreePath ?? current.path, previous.worktreePath ?? previous.path) === "") continue;
+      projected.set(row, { ...row, linkedDirectories: directories, observedGitBranch: undefined });
+    }
   });
   return threads.map((thread) => projected.get(thread) ?? thread);
 }

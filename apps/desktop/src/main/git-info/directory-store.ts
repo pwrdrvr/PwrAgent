@@ -170,6 +170,7 @@ export function readNavigationCheckoutDirectory(cwd: string): Promise<LinkedDire
     }
     try {
       const observed = await observeNavigationCheckout(key);
+      if (observed?.repository === false) return [buildFallbackLinkedDirectory(key)];
       if (!observed?.checkoutRoot || !observed.gitDirectory) return undefined;
       if (!observed.dotGitDirectory) {
         const linked = await resolveWorktreeRepositoryDirectory(observed.checkoutRoot, true);

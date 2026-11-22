@@ -1,7 +1,27 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 const MAX_POINTER_BYTES = 1024 * 1024;
+
+/** Bound both the file opened and the bytes read if a pointer is replaced. */
+export async function readBoundedGitPointer(target: string): Promise<string> {
+  const before = await stat(target);
+  if (!before.isFile() || before.size > MAX_POINTER_BYTES) throw new Error("Unrecognized Git pointer");
+  const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const opened = await file.stat();
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) {
+      throw new Error("Git pointer changed before it was read");
+    }
+    const buffer = Buffer.alloc(before.size + 1);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead !== before.size) throw new Error("Git pointer changed during read");
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await file.close();
+  }
+}
 
 export type GitDirectoryObservation = {
   repository: boolean;
@@ -61,7 +81,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     if (files.get(target)?.signature === state.signature) {
       return files.get(target)!.value;
     }
-    const value = await readFile(target, "utf8");
+    const value = options.navigation ? await readBoundedGitPointer(target) : await readFile(target, "utf8");
     if ((await fileState(target))?.signature !== state.signature) {
       throw new Error("Git pointer changed during directory observation");
     }

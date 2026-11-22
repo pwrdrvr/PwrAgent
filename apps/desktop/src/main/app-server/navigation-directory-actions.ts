@@ -60,6 +60,9 @@ export async function removeLocalNavigationDirectory(
       throw new Error("Use Project Checkouts to ungroup this project.");
     }
     if (archiveWorkspace && directory?.kind !== "workspace") throw new Error("This workspace is no longer available on its owner.");
+    if (request.archiveThreads && !directory) {
+      throw new Error("Directory membership changed. Refresh navigation and try again.");
+    }
     if (request.archiveThreads && directory) {
       const keys = new Set(directory.threadKeys);
       const threads = new Map(index.threads.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));

@@ -369,6 +369,14 @@ it("refuses incomplete archive membership before archiving any thread", async ()
   expect(archive).not.toHaveBeenCalled();
 });
 
+it("rejects a displayed directory key absent from the verified archive inventory", async () => {
+  const archive = vi.fn();
+  await expect(removeLocalNavigationDirectory({ directoryKey: `${key}/nested`, archiveThreads: true }, archive))
+    .rejects.toThrow("Refresh navigation");
+  expect(archive).not.toHaveBeenCalled();
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
 
 it("archives the Workspaces group without removing its permanent navigation entry", async () => {
   const workspaceKey = "workspace:/scratch";

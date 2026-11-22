@@ -10415,7 +10415,6 @@ export class CodexAppServerClient {
       return threads.map((thread) => {
         const {
           codexThreadSourceKind: _codexThreadSourceKind,
-          gitOriginUrl: _gitOriginUrl,
           originator: _originator,
           path: _path,
           ...publicThread

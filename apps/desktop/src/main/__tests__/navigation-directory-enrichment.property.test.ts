@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -28,6 +28,29 @@ vi.mock("../storage/desktop-overlay-store", () => ({
 }));
 
 const normalize = (cwd: string) => cwd.replace(/\\/g, "/");
+const originUrl = "https://github.com/example/project.git";
+
+function navigationFixture(paths: string[], now?: () => number) {
+  const rows = paths.map((cwd, index) => ({
+    id: `thread-${index}`, cwd, preview: `Thread ${index}`, source: "cli",
+    updatedAt: paths.length - index, gitInfo: { branch: "recorded", originUrl },
+  }));
+  const client = new CodexAppServerClient({ threadDirectoryEnricher: createThreadDirectoryEnricher({ now }) });
+  client["ensureInitialized"] = async () => {};
+  Object.defineProperty(client, "connection", {
+    value: { request: async () => ({ data: rows, nextCursor: null }) },
+  });
+  const registry = {
+    listThreads: (params: Parameters<typeof client.listThreads>[0]) =>
+      client.listThreads({ ...params, skipArchivedMetadataRefresh: true }),
+    withNavigationPrimaryGitRepositories: (threads: unknown[]) => threads,
+    hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
+    withNavigationSubAgentActivity: (threads: unknown[]) => threads,
+    getNavigationInputRequestThreadKeys: () => new Set<string>(),
+  } as unknown as DesktopBackendRegistry;
+  return { client, rows, read: (refreshProviders = false) =>
+    loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", refreshProviders }) };
+}
 
 it("keeps navigation inventory independent of historical checkout discovery and refreshes the selected checkout", async () => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-enrichment-")));
@@ -52,32 +75,17 @@ it("keeps navigation inventory independent of historical checkout discovery and 
       fc.array(fc.constantFrom(repo, linked, nested, plain, missing), { minLength: 1, maxLength: 35, size: "large" }),
       async (history) => {
         const paths = [nested, ...history];
-        const rows = paths.map((cwd, index) => ({
-          id: `thread-${index}`, cwd, preview: `Thread ${index}`, source: "cli",
-          updatedAt: paths.length - index, gitInfo: { branch: "recorded" },
-        }));
         let now = 0;
-        const client = new CodexAppServerClient({ threadDirectoryEnricher: createThreadDirectoryEnricher({ now: () => now }) });
-        client["ensureInitialized"] = async () => {};
-        Object.defineProperty(client, "connection", {
-          value: { request: async () => ({ data: rows, nextCursor: null }) },
-        });
-        const registry = {
-          listThreads: (params: Parameters<typeof client.listThreads>[0]) =>
-            client.listThreads({ ...params, skipArchivedMetadataRefresh: true }),
-          withNavigationPrimaryGitRepositories: (threads: unknown[]) => threads,
-          hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
-          withNavigationSubAgentActivity: (threads: unknown[]) => threads,
-          getNavigationInputRequestThreadKeys: () => new Set<string>(),
-        } as unknown as DesktopBackendRegistry;
+        const { client, rows, read } = navigationFixture(paths, () => now);
         const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
         try {
-          const index = await loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query" });
+          const index = await read();
           expect(index.threads.map((thread) => thread.id)).toEqual(rows.map((row) => row.id));
           expect(launches.mock.calls.filter((call) => call[2] === "directory-enrichment")).toHaveLength(0);
           const [primary, worktree] = git(repo, "worktree", "list", "--porcelain").split("\n")
             .filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
           for (const [indexPosition, cwd] of paths.entries()) {
+            expect(index.threads[indexPosition]?.gitOriginUrl).toBe(originUrl);
             const [directory] = index.threads[indexPosition]!.linkedDirectories;
             if (cwd === missing) {
               expect(directory).toBeUndefined();
@@ -102,8 +110,44 @@ it("keeps navigation inventory independent of historical checkout discovery and 
           await client.close();
         }
       },
-    ), { examples: [[[repo]], [[plain, repo]]], numRuns: 8 });
+    ), { examples: [[[repo]], [[plain, repo]], [[missing]]], numRuns: 8 });
   } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("refreshes a previously verified parent mapping when a nested checkout appears", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-nested-")));
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe", encoding: "utf8" });
+  const cwd = path.join(root, "nested");
+  const { client, read } = navigationFixture([cwd]);
+  vi.stubEnv("PWRAGENT_GIT_PATH", "git");
+  try {
+    await mkdir(cwd);
+    git(root, "init", "--initial-branch=parent");
+    git(root, "config", "core.hooksPath", path.join(root, "empty-hooks"));
+    git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture");
+    const [raw] = await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true });
+    await client.enrichThreadDirectories([raw!], "selected-thread");
+    expect((await read()).threads[0]).toMatchObject({
+      linkedDirectories: [{ path: normalize(root) }], observedGitBranch: "parent",
+    });
+    git(cwd, "init", "--initial-branch=child");
+    const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1_001);
+    const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const [thread] = (await read(true)).threads;
+      expect(thread).toMatchObject({ linkedDirectories: [{ path: git(cwd, "rev-parse", "--show-toplevel").trim() }] });
+      expect(thread?.observedGitBranch).toBeUndefined();
+      expect(launches.mock.calls.filter((call) => call[2] === "directory-enrichment")).toHaveLength(0);
+    } finally {
+      launches.mockRestore();
+      clock.mockRestore();
+    }
+  } finally {
+    await client.close();
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   }
@@ -136,6 +180,14 @@ it("observes ordinary and linked checkout roots, leaving Git overrides to live v
     git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
       "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture");
     git(repo, "worktree", "add", "--detach", linked);
+    const admin = git(linked, "rev-parse", "--absolute-git-dir").trim();
+    const backlink = path.join(admin, "gitdir");
+    const originalBacklink = await readFile(backlink, "utf8");
+    const linkedNested = path.join(linked, "nested");
+    await mkdir(linkedNested);
+    await writeFile(backlink, `${originalBacklink}${" ".repeat(1024 * 1024)}`);
+    expect(await readNavigationCheckoutDirectory(linkedNested)).toBeUndefined();
+    await writeFile(backlink, originalBacklink);
     git(repo, "worktree", "move", linked, moved);
     const movedRoot = git(moved, "rev-parse", "--show-toplevel").trim();
     expect(await readNavigationCheckoutDirectory(linked)).toEqual([]);

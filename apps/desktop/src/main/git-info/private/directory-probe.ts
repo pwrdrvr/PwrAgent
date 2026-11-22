@@ -5,6 +5,7 @@ import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildPwrAgentChildProcessEnv } from "../../child-process-env";
 import { getMainLogger } from "../../log";
 import { runGitCommand } from "../../app-server/git-executable";
+import { readBoundedGitPointer } from "./directory-observation";
 
 import {
   directoryEnrichmentDiagnostics,
@@ -146,11 +147,8 @@ async function readGitMetadataEvidence(
     if (rootOnly) {
       const info = await stat(dotGitPath);
       if (info.isDirectory()) return { dotGitKind: "directory", dotGitPath };
-      if (!info.isFile() || info.size > GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES) {
-        return { dotGitKind: "unreadable", dotGitPath };
-      }
     }
-    const dotGitContent = await readFile(dotGitPath, "utf8");
+    const dotGitContent = rootOnly ? await readBoundedGitPointer(dotGitPath) : await readFile(dotGitPath, "utf8");
     const gitdirMatch = dotGitContent.match(/^gitdir:\s*(.+?)\s*$/m);
     const gitdirPath = gitdirMatch
       ? path.resolve(path.dirname(dotGitPath), gitdirMatch[1])
@@ -204,8 +202,8 @@ async function buildLinkedDirectoryFromGitMetadata(
 async function hasLiveWorktreeOwner(dotGit: string, admin: string, repository: string): Promise<boolean> {
   try {
     const [backlink, common, primaryGit, hasHead] = await Promise.all([
-      readFile(path.join(admin, "gitdir"), "utf8"),
-      readFile(path.join(admin, "commondir"), "utf8"),
+      readBoundedGitPointer(path.join(admin, "gitdir")),
+      readBoundedGitPointer(path.join(admin, "commondir")),
       realpath(path.join(repository, ".git")),
       pathExists(path.join(repository, ".git", "HEAD")),
     ]);
