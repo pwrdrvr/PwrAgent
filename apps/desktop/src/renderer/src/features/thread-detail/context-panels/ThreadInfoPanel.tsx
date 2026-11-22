@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useState } from "react";
+import { agentCapabilityRuntimeSupport } from "@pwragent/shared/contracts/agent-capability-policy";
 import type { AgentMemoryArgs } from "@pwragent/shared/contracts/agent-memory";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -44,7 +45,9 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentError, setAgentError] = useState<string>();
   const memoryAccess = props.desktopApi?.accessAgentMemory;
-  const { id, source, federation } = props.thread;
+  const { agent, id, source, federation } = props.thread;
+  const capabilitySupport = agent && agentCapabilityRuntimeSupport(agent.capabilityPolicy, source, "interactive");
+  const providerLabel = formatOwnerProviderLabel(source, props.thread.model, props.backends);
   const instanceId = federation?.ref.target.scope === "remote" ? federation.ref.target.instanceId : undefined;
   const accessMemory = useCallback(async (operation: AgentMemoryArgs) => {
     if (!memoryAccess) throw new Error("Agent memory is unavailable.");
@@ -112,7 +115,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
             </div>
             <button
               className="context-list__action"
-              disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+              disabled={agentSaving || !props.desktopApi?.setThreadAgent || capabilitySupport?.status !== "legacy"}
               type="button"
               onClick={() => void setThreadAgent(null)}
             >
@@ -136,6 +139,22 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
             </button>
           </div>
         )}
+        {capabilitySupport ? (
+          <div className="context-list__item">
+            <div className="context-list__content">
+              <p className="context-list__label">
+                Runtime policy · {capabilitySupport.status === "legacy" ? "Legacy" : "Unavailable"}
+              </p>
+              <p className="context-list__meta">
+                {capabilitySupport.status === "legacy"
+                  ? `Provider settings apply. ${providerLabel} cannot run restricted Agent policies.`
+                  : capabilitySupport.status === "unsupported"
+                    ? `${providerLabel} cannot enforce this policy. Interactive turns, Automations, and child runs are blocked.`
+                    : "This policy is invalid or unsupported. Agent execution is blocked."}
+              </p>
+            </div>
+          </div>
+        ) : null}
         {memoryAccess && props.thread.agent ? (
           <AgentMemoryPanel key={JSON.stringify([instanceId, source, id])}
             access={accessMemory}
@@ -170,7 +189,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
         <dl className="context-grid">
           <div>
             <dt>Backend</dt>
-            <dd>{formatOwnerProviderLabel(props.thread.source, props.thread.model, props.backends)}</dd>
+            <dd>{providerLabel}</dd>
           </div>
           <div>
             <dt>Initial load</dt>
