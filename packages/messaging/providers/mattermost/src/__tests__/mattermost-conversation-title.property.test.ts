@@ -1,8 +1,5 @@
 import type { Client4 } from "@mattermost/client";
-import type {
-  MessagingChannelRef,
-  MessagingConversationKind,
-} from "@pwragent/messaging-interface";
+import type { MessagingChannelRef } from "@pwragent/messaging-interface";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { MattermostAdapter } from "../mattermost-adapter.ts";
@@ -42,6 +39,7 @@ function threadUnder(channel: MessagingChannelRef, rootPostId: string): Messagin
       kind: "thread",
       parentId: rootPostId,
       parentConversationId: channel.conversation.id,
+      ...(channel.conversation.isDirectMessage ? { isDirectMessage: true } : {}),
     },
   };
 }
@@ -65,7 +63,21 @@ describe("Mattermost conversation title scope", () => {
     expect(result).toMatchObject({ conversation: thread.conversation, outcome: "unsupported" });
   });
 
-  it("patches only the channel header even when a thread shares the channel ID", async () => {
+  it("updates the header of a top-level Mattermost DM", async () => {
+    const { adapter, patchChannel } = setup();
+    const id = "0aaaaaaa0000aaa0a00aa00000";
+    const channel: MessagingChannelRef = {
+      channel: "mattermost",
+      conversation: { id, kind: "dm", isDirectMessage: true },
+    };
+
+    const result = await adapter.setConversationTitle({ channel, title: "A" });
+
+    expect(patchChannel).toHaveBeenCalledExactlyOnceWith(id, { header: "A" });
+    expect(result).toMatchObject({ outcome: "updated", title: "A" });
+  });
+
+  it("updates top-level channel and DM headers and leaves their threads untouched", async () => {
     await fc.assert(fc.asyncProperty(
       conversationId,
       conversationId,
@@ -76,13 +88,22 @@ describe("Mattermost conversation title scope", () => {
           channel: "mattermost",
           conversation: { id, kind: "channel" },
         };
+        const dm: MessagingChannelRef = {
+          channel: "mattermost",
+          conversation: { id, kind: "dm", isDirectMessage: true },
+        };
         const thread = threadUnder(channel, rootPostId);
-        for (const kind of ["thread", "channel", "dm"] satisfies MessagingConversationKind[]) {
-          const destination = kind === "thread" ? thread : {
-            ...channel,
-            conversation: { id, kind },
-          };
-          const supported = kind === "channel";
+        const legacyThread: MessagingChannelRef = {
+          ...thread,
+          conversation: { ...thread.conversation, kind: "channel" },
+        };
+        for (const [destination, supported] of [
+          [thread, false],
+          [legacyThread, false],
+          [threadUnder(dm, rootPostId), false],
+          [channel, true],
+          [dm, true],
+        ] satisfies [MessagingChannelRef, boolean][]) {
           patchChannel.mockClear();
 
           const result = await adapter.setConversationTitle({ channel: destination, title });

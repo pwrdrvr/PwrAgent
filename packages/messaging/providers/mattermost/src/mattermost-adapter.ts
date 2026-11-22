@@ -1011,7 +1011,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return {
         channel: this.channel,
         conversation,
-        errorMessage: "Mattermost name sync is only available for channels.",
+        errorMessage: "Mattermost name sync needs a top-level channel or DM.",
         outcome: "unsupported",
         title: header,
         updatedAt: this.now(),
@@ -1051,9 +1051,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     const conversation = request.channel.conversation;
     // A reply shares its channel ID. A root post ID still makes this a
     // thread target on legacy references that carry kind "channel".
-    return conversation.kind === "channel"
-      && !conversation.parentId
-      && !conversation.isDirectMessage;
+    return (conversation.kind === "channel" || conversation.kind === "dm")
+      && !conversation.parentId;
   }
 
   // -------------------------------------------------------------
