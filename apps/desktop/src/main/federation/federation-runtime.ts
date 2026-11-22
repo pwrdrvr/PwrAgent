@@ -28,11 +28,12 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { desktopThreadPullRequestMergeDeps } from "../pr-status/desktop-thread-pull-request-merge";
-import { mergeThreadPullRequest, readThreadPullRequestMerge } from "../pr-status/thread-pull-request-merge";
 import {
-  mergeThreadPullRequestForPeer,
-  readFederationReadThreadPullRequestMergeRequest,
-} from "../pr-status/thread-pull-request-merge-federation";
+  mergeThreadPullRequest,
+  readThreadPullRequestMerge,
+  readThreadPullRequestMergeThread,
+} from "../pr-status/thread-pull-request-merge";
+import { mergeThreadPullRequestForPeer } from "../pr-status/thread-pull-request-merge-federation";
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
@@ -8124,7 +8125,7 @@ function localBackendOperations(): FederationBackendOperations {
     // owner reads only the allowlisted fields and runs the same validation,
     // holds and `gh` as its own window's merge.
     async readThreadPullRequestMergeV1(request) {
-      const owned = readFederationReadThreadPullRequestMergeRequest(request);
+      const owned = readThreadPullRequestMergeThread(request);
       if (!owned) throw new Error("backend and threadId are required.");
       return await readThreadPullRequestMerge(peerThreadPullRequestMergeDeps(), owned);
     },

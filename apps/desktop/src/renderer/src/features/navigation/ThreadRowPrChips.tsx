@@ -23,11 +23,22 @@ type WatchedThread = Pick<
  */
 function useThreadPrMerge(thread: WatchedThread): ComponentProps<typeof PrChip>["merge"] {
   const service = usePullRequestMergeService();
-  const { source, id, federation } = thread;
-  return useMemo(() => {
-    const target = service ? threadPullRequestMergeTarget({ source, id, federation }) : undefined;
-    return target && service ? { thread: target, service } : undefined;
-  }, [service, source, id, federation]);
+  const target = service ? threadPullRequestMergeTarget(thread) : undefined;
+  // Keyed on the route, not the row's federation object, which a navigation
+  // snapshot rebuilds with equal content: the memoized chip keeps bailing out.
+  const owner = target?.federationTarget?.scope === "remote" ? target.federationTarget.instanceId : undefined;
+  const routed = target !== undefined;
+  const { source, id } = thread;
+  return useMemo(() => service && routed
+    ? {
+        thread: {
+          backend: source,
+          threadId: id,
+          ...(owner ? { federationTarget: { scope: "remote" as const, instanceId: owner } } : {}),
+        },
+        service,
+      }
+    : undefined, [service, routed, owner, source, id]);
 }
 
 /**

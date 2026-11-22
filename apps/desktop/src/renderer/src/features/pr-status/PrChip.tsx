@@ -240,6 +240,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     // What the merge control offers.
     merge?.thread.backend,
     merge?.thread.threadId,
+    merge?.thread.federationTarget?.scope === "remote" ? merge.thread.federationTarget.instanceId : undefined,
     Boolean(merge?.service),
     pr.url,
     pr.reviewState,

@@ -22,6 +22,9 @@ import {
   THREAD_PULL_REQUEST_MERGE_FORBIDDEN_MESSAGE,
   THREAD_PULL_REQUEST_MERGE_UNSUPPORTED_MESSAGE,
 } from "../pr-status/thread-pull-request-merge-federation";
+
+/** A peer's PR card merge: `gh pr merge` (60s) plus merge-queue reads. */
+const MERGE_THREAD_PULL_REQUEST_TIMEOUT_MS = 180_000;
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
 } from "@pwragent/shared/contracts/normalized-app-server";
@@ -2960,13 +2963,20 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.requestThreadPullRequestMerge<FederationMergeThreadPullRequestResultV1>(
       FEDERATION_BACKEND_METHODS.mergeThreadPullRequestV1,
       request,
+      // The owner's `gh pr merge` alone may take 60s, and a queue adds reads:
+      // the default 30s would report a merge that is still landing as failed.
+      MERGE_THREAD_PULL_REQUEST_TIMEOUT_MS,
     );
   }
 
   /** An older owner, or one that withholds turn control, explains itself. */
-  private async requestThreadPullRequestMerge<T>(method: FederationBackendMethod, params: unknown): Promise<T> {
+  private async requestThreadPullRequestMerge<T>(
+    method: FederationBackendMethod,
+    params: unknown,
+    timeoutMs?: number,
+  ): Promise<T> {
     try {
-      return await this.rpc.request<T>({ method, params });
+      return await this.rpc.request<T>({ method, params, ...(timeoutMs ? { timeoutMs } : {}) });
     } catch (error) {
       if (hasFederationErrorCode(error, "method_not_found")) {
         throw new Error(THREAD_PULL_REQUEST_MERGE_UNSUPPORTED_MESSAGE, { cause: error });

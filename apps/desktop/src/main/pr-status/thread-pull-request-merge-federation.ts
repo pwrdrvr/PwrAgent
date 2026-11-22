@@ -9,11 +9,9 @@ import type {
   ThreadPullRequestMergeTarget,
 } from "@pwragent/shared/contracts/navigation";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
-import {
-  isAppServerBackendKind,
-  THREAD_PULL_REQUEST_MERGE_CAPABILITY,
-} from "@pwragent/shared/contracts/navigation";
+import { THREAD_PULL_REQUEST_MERGE_CAPABILITY } from "@pwragent/shared/contracts/navigation";
 import { isThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import { readThreadPullRequestMergeThread } from "./thread-pull-request-merge";
 
 /** What a viewer hears when the owning instance cannot merge for it. */
 export const THREAD_PULL_REQUEST_MERGE_UNSUPPORTED_MESSAGE =
@@ -72,7 +70,8 @@ export async function readRemoteThreadPullRequestMerge(
   runtime: ThreadPullRequestMergeFederationRuntime,
 ): Promise<ReadThreadPullRequestMergeResponse> {
   assertOwnerMerges(target, runtime);
-  const owned = readFederationReadThreadPullRequestMergeRequest(request);
+  // Only the thread crosses: never a target, which would send it on again.
+  const owned = readThreadPullRequestMergeThread(request);
   if (!owned) throw new Error("backend and threadId are required.");
   return await runtime.remoteBackend(target).readThreadPullRequestMergeV1(owned);
 }
@@ -111,37 +110,14 @@ export async function mergeThreadPullRequestForPeer(
   }
 }
 
-function readOwnedThread(value: unknown): FederationReadThreadPullRequestMergeRequestV1 | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const request = value as Record<string, unknown>;
-  const backend = request.backend;
-  const threadId = request.threadId;
-  if (
-    typeof backend !== "string"
-    || !isAppServerBackendKind(backend)
-    || typeof threadId !== "string"
-    || !threadId.trim()
-  ) {
-    return undefined;
-  }
-  return { backend, threadId };
-}
-
 /**
- * The owner's copy of a viewer's read. Only the named fields cross: never a
+ * The owner's copy of a viewer's merge. Only the named fields cross: never a
  * federation target, which would send the request on again.
  */
-export function readFederationReadThreadPullRequestMergeRequest(
-  value: unknown,
-): FederationReadThreadPullRequestMergeRequestV1 | undefined {
-  return readOwnedThread(value);
-}
-
-/** The owner's copy of a viewer's merge, with the same allowlist. */
 export function readFederationMergeThreadPullRequestRequest(
   value: unknown,
 ): FederationMergeThreadPullRequestRequestV1 | undefined {
-  const thread = readOwnedThread(value);
+  const thread = readThreadPullRequestMergeThread(value);
   if (!thread) return undefined;
   const request = value as Record<string, unknown>;
   const url = request.url;

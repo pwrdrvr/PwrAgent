@@ -38,14 +38,25 @@ export type ThreadPullRequestMergeDeps = {
   onRefreshFailed?: (error: unknown) => void;
 };
 
-/** The renderer names the thread, so its shape is checked here. */
-function readTarget(request: unknown): ThreadPullRequestMergeTarget {
+/**
+ * The thread a request names, with only its backend and id: a renderer or a
+ * peer names it, so its shape is checked here. Undefined when malformed.
+ */
+export function readThreadPullRequestMergeThread(
+  request: unknown,
+): { backend: ThreadPullRequestMergeTarget["backend"]; threadId: string } | undefined {
   const record = (request ?? {}) as { backend?: unknown; threadId?: unknown };
   if (typeof record.backend !== "string" || !isAppServerBackendKind(record.backend)
     || typeof record.threadId !== "string" || !record.threadId.trim()) {
-    throw new Error("Choose a thread to merge from.");
+    return undefined;
   }
   return { backend: record.backend, threadId: record.threadId };
+}
+
+function readTarget(request: unknown): ThreadPullRequestMergeTarget {
+  const thread = readThreadPullRequestMergeThread(request);
+  if (!thread) throw new Error("Choose a thread to merge from.");
+  return thread;
 }
 
 /** One identity per PR, whatever case or trailing path the URL was stored with. */
