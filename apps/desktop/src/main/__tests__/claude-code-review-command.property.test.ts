@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { StartReviewRequest } from "@pwragent/shared/contracts/agent";
-import { parseClaudeCodeReviewPullRequests } from "../claude/claude-review-findings";
+import { claudeCodeReviewReadsWorkingTree, parseClaudeCodeReviewPullRequests } from "../claude/claude-review-findings";
 import { prepareClaudeCodeReview } from "../app-server/claude-code-review-start";
 import {
   CLAUDE_CODE_REVIEW_LEVELS,
@@ -78,6 +78,31 @@ describe("claudeCodeReviewCommand", () => {
       });
       expect(parseClaudeCodeReviewPullRequests(command).map((entry) => entry.url)).toEqual(urls);
     }));
+  });
+
+  // A review that reads the working tree records it as reviewed, so only the
+  // command for current changes may count. See docs/pr-review-readiness.md.
+  it("reads the working tree only for current changes, never for a named target", () => {
+    const named: fc.Arbitrary<AppServerReviewTarget> = fc.oneof(
+      members.map((picked) => ({
+        type: "pullRequests" as const,
+        pullRequests: picked.map((member) => ({ url: url(member.number, member.other ? "other" : "project") })),
+      })),
+      branch.map((value) => ({ type: "branch" as const, branch: value })),
+      path.map((value) => ({ type: "path" as const, path: value })),
+    );
+    fc.assert(fc.property(named, level, fc.boolean(), (target, chosenLevel, fix) => {
+      const current = claudeCodeReviewCommand({
+        target: { type: "uncommittedChanges" }, level: chosenLevel, repository: REPOSITORY, fix,
+      });
+      expect(claudeCodeReviewReadsWorkingTree(current)).toBe(true);
+      const other = claudeCodeReviewCommand({ target, level: chosenLevel, repository: REPOSITORY, fix });
+      expect(claudeCodeReviewReadsWorkingTree(other)).toBe(false);
+    }));
+    expect(claudeCodeReviewReadsWorkingTree("/code-review high --max-findings 5")).toBe(true);
+    expect(claudeCodeReviewReadsWorkingTree("/code-review high focus on retries")).toBe(false);
+    expect(claudeCodeReviewReadsWorkingTree("Please review this")).toBe(false);
+    expect(claudeCodeReviewReadsWorkingTree(undefined)).toBe(false);
   });
 
   it("names no pull request for current changes, a branch, or a path", () => {

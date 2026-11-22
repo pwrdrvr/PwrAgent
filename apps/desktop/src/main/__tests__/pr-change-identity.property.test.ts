@@ -148,8 +148,10 @@ describe("PR change identity", () => {
         const index = readFileSync(path.join(repo, ".git", "index"));
         const status = git(repo, "status", "--porcelain");
 
-        const tree = await captureReviewedWorkingTree(repo);
-        expect(tree).toMatch(/^[0-9a-f]{40}$/);
+        const captured = await captureReviewedWorkingTree(repo);
+        expect(captured?.head).toBe(reviewedHead);
+        expect(captured?.tree).toMatch(/^[0-9a-f]{40}$/);
+        const tree = captured!.tree;
         // The operator's index, stash list, and working tree are untouched.
         expect(readFileSync(path.join(repo, ".git", "index")).equals(index)).toBe(true);
         expect(git(repo, "stash", "list")).toBe("");
@@ -186,6 +188,28 @@ describe("PR change identity", () => {
       }
     }), { numRuns: 4 });
   }, 30_000);
+
+  it("records nothing past its limits, before hashing anything", async () => {
+    const repo = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-change-"));
+    try {
+      git(repo, "init", "-q", "-b", "main");
+      write(repo, "app.txt", ["one"]);
+      git(repo, "add", ".");
+      git(repo, "commit", "-qm", "base");
+      write(repo, "app.txt", ["one", "two"]);
+      write(repo, "data.txt", ["0123456789".repeat(10)]);
+      const objects = git(repo, "count-objects");
+
+      expect(await captureReviewedWorkingTree(repo, undefined, { maxBytes: 64, maxFiles: 10 })).toBeUndefined();
+      expect(await captureReviewedWorkingTree(repo, undefined, { maxBytes: 1024, maxFiles: 1 })).toBeUndefined();
+      // Nothing was written to the object store.
+      expect(git(repo, "count-objects")).toBe(objects);
+      expect(await captureReviewedWorkingTree(repo, undefined, { maxBytes: 1024, maxFiles: 10 }))
+        .toMatchObject({ tree: expect.stringMatching(/^[0-9a-f]{40}$/) });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 
   it("prefers the forge's base commit, reads a missing commit as unknown, and caches by commit", async () => {
     const repo = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-change-"));

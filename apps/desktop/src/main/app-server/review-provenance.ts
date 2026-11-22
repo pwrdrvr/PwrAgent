@@ -340,16 +340,17 @@ export async function resolveReviewProvenance(params: {
   runGit?: ReviewGitRunner;
   target: AppServerReviewTarget;
   /**
-   * The review reads the checkout's working tree, as Claude Code's
-   * `/code-review` without a target does. An `uncommittedChanges` or
-   * `baseBranch` target always does.
+   * The review reads the checkout's uncommitted changes, untracked files
+   * included, as Claude Code's `/code-review` without a target does. An
+   * `uncommittedChanges` target always does. A base-branch review does not:
+   * `git diff <merge-base>` leaves untracked files out.
    */
   reviewsWorkingTree?: boolean;
   /**
-   * Records the working tree's content. A caller that supplies its own
-   * `runGit` supplies this too, or no tree is recorded.
+   * Records the working tree's content and the HEAD it sits on. A caller
+   * that supplies its own `runGit` supplies this too, or no tree is recorded.
    */
-  captureWorkingTree?: (cwd: string) => Promise<string | undefined>;
+  captureWorkingTree?: (cwd: string) => Promise<{ head: string; tree: string } | undefined>;
 }): Promise<AppServerReviewContext | undefined> {
   const cwd = params.cwd?.trim();
   if (!cwd) {
@@ -474,12 +475,10 @@ export async function resolveReviewProvenance(params: {
   // A review of uncommitted changes reads more than HEAD. Its tree lets the
   // commit that later records those changes count as reviewed.
   const readsWorkingTree = inspectsLocalGit
-    && (params.reviewsWorkingTree === true
-      || params.target.type === "uncommittedChanges"
-      || params.target.type === "baseBranch");
+    && (params.reviewsWorkingTree === true || params.target.type === "uncommittedChanges");
   const captureWorkingTree = params.captureWorkingTree
     ?? (params.runGit ? undefined : captureReviewedWorkingTree);
-  const [headCommit, baseCommit, checkedOutBranch, reviewedTree] = inspectsLocalGit
+  const [headCommit, baseCommit, checkedOutBranch, captured] = inspectsLocalGit
     ? await Promise.all([
         resolveCommitSha(runGit, cwd, ["rev-parse", "HEAD"]),
         context.baseBranch
@@ -495,8 +494,9 @@ export async function resolveReviewProvenance(params: {
     : [undefined, undefined, undefined, undefined];
   if (headCommit) {
     context.headCommit = headCommit;
-    if (reviewedTree) {
-      context.reviewedTree = reviewedTree;
+    // A commit between the two reads would pair the tree with another HEAD.
+    if (captured && captured.head === headCommit.toLowerCase()) {
+      context.reviewedTree = captured.tree;
     }
   }
   if (baseCommit) {

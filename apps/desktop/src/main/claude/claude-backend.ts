@@ -82,7 +82,8 @@ import {
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReportFindingsHooks, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
-  parseClaudeCodeReviewPullRequests, parseClaudeFindingsReport, type ClaudeFindingsReport,
+  claudeCodeReviewReadsWorkingTree, parseClaudeCodeReviewPullRequests, parseClaudeFindingsReport,
+  type ClaudeFindingsReport,
 } from "./claude-review-findings";
 import {
   claudeMonitorSuggestionHooks, mergeClaudeHooks, type ClaudeMonitorSuggestionRequest,
@@ -119,9 +120,13 @@ export type ClaudeBackendOptions = {
   /** Overrides CLAUDE_REWIND_PREVIEW_TIMEOUT_MS. */
   rewindPreviewTimeoutMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
-  /** `pullRequests` are the targets the turn's `/code-review` named, when it named any. */
+  /**
+   * `pullRequests` are the targets the turn's `/code-review` named, when it
+   * named any. `readsWorkingTree` is set when it named no target at all, so
+   * it reviewed the checkout's current changes, uncommitted ones included.
+   */
   resolveReviewContext?: (params: {
-    threadId: string; cwd: string; pullRequests?: NamedReviewPullRequest[];
+    threadId: string; cwd: string; pullRequests?: NamedReviewPullRequest[]; readsWorkingTree?: boolean;
   }) => Promise<AppServerReviewContext | undefined>;
   /**
    * Guidance to append to a Bash or Monitor result that waits on CI or polls,
@@ -3005,6 +3010,7 @@ export class ClaudeBackend {
       const pullRequests = parseClaudeCodeReviewPullRequests(turn.titlePrompt);
       context = await this.options.resolveReviewContext?.({
         threadId, cwd: session.cwd, ...(pullRequests.length > 0 ? { pullRequests } : {}),
+        ...(claudeCodeReviewReadsWorkingTree(turn.titlePrompt) ? { readsWorkingTree: true } : {}),
       });
     } catch (error) {
       claudeBackendLog.warn("could not resolve review context", { error: error instanceof Error ? error.message : String(error) });

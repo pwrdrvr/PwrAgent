@@ -107,6 +107,26 @@ export function parseClaudeCodeReviewPullRequests(prompt: string | undefined): N
   return targets;
 }
 
+/**
+ * A `/code-review` prompt that reviews the checkout's current changes,
+ * uncommitted ones included: it names no target, only a level and flags. A
+ * pull request, branch, path, or note names something else, so it does not.
+ */
+export function claudeCodeReviewReadsWorkingTree(prompt: string | undefined): boolean {
+  const command = CODE_REVIEW_COMMAND.exec(prompt?.trim() ?? "");
+  if (!command) return false;
+  const tokens = command[1]?.trim().split(/\s+/).filter(Boolean) ?? [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token.startsWith("--")) {
+      if (CODE_REVIEW_VALUE_FLAGS.has(token)) index += 1;
+      continue;
+    }
+    if (!CODE_REVIEW_LEVELS.has(token.toLowerCase())) return false;
+  }
+  return true;
+}
+
 function parseCodeReviewPullRequest(token: string): NamedReviewPullRequest | undefined {
   const number = PULL_REQUEST_NUMBER.exec(token);
   if (number) return { number: Number(number[1]) };

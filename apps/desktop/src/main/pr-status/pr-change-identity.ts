@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runGitCommand } from "../app-server/git-executable";
@@ -199,38 +199,72 @@ export class PrChangeIdentityReader {
 const defaultTreeRunner: PrChangeGitRunner = async (cwd, args, options) =>
   await runGitCommand(cwd, args, { ...options, purpose: "review-working-tree" });
 
+/** What a capture may hash; past either, it records nothing. */
+export type ReviewedTreeLimits = { maxBytes: number; maxFiles: number };
+
+const REVIEWED_TREE_LIMITS: ReviewedTreeLimits = {
+  // A larger change has no identity anyway.
+  maxBytes: MAX_DIFF_BYTES,
+  maxFiles: 5_000,
+};
+const MAX_LISTING_BYTES = 8 * 1024 * 1024;
+
 /**
- * The tree a commit of everything in the checkout would record right now:
- * staged, unstaged, and untracked files Git does not ignore. Undefined when
- * the checkout has no uncommitted changes or Git cannot say.
+ * The tree a commit of everything in the checkout would record right now,
+ * staged, unstaged, and untracked files Git does not ignore, with the HEAD it
+ * sits on. Undefined when the checkout has no uncommitted changes, when they
+ * are past `limits`, or when Git cannot say.
  *
  * It stages into a copy of the checkout's index under `GIT_INDEX_FILE`, so
  * the operator's index, stash list, and refs are untouched. The copy keeps
- * Git's cached file stats, so only changed files are hashed. The blobs and
- * tree it writes are unreachable objects, which `git gc` prunes after its
- * usual grace period. Three Git processes.
+ * Git's cached file stats, so only changed files are hashed, and the limits
+ * are checked before any is. The blobs and tree it writes are unreachable
+ * objects, which `git gc` prunes after its usual grace period. Four Git
+ * processes.
  */
 export async function captureReviewedWorkingTree(
   cwd: string,
   run: PrChangeGitRunner = defaultTreeRunner,
-): Promise<string | undefined> {
+  limits: ReviewedTreeLimits = REVIEWED_TREE_LIMITS,
+): Promise<{ head: string; tree: string } | undefined> {
   let scratch: string | undefined;
   try {
-    const { stdout } = await run(cwd, ["rev-parse", "--git-path", "index", "HEAD^{tree}"], {
-      timeout: GIT_TIMEOUT_MS,
-    });
-    const [indexPath, headTree] = stdout.trim().split(/\r?\n/).map((line) => line.trim());
-    if (!indexPath || !headTree || !GIT_OBJECT_ID.test(headTree)) return undefined;
+    // One read, so the tree and the HEAD it is recorded against agree.
+    const { stdout } = await run(cwd, [
+      "rev-parse", "--show-toplevel", "--git-path", "index", "HEAD", "HEAD^{tree}",
+    ], { timeout: GIT_TIMEOUT_MS });
+    const [top, indexPath, head, headTree] = stdout.trim().split(/\r?\n/).map((line) => line.trim());
+    if (!top || !indexPath || !head || !headTree) return undefined;
+    if (!GIT_OBJECT_ID.test(head) || !GIT_OBJECT_ID.test(headTree)) return undefined;
+    // What `add` would hash: untracked files and tracked files changed since
+    // the index. Staged content is already in the object store.
+    const { stdout: listed } = await run(top, [
+      "ls-files", "-z", "--others", "--modified", "--exclude-standard",
+    ], { timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_LISTING_BYTES });
+    const paths = new Set(listed.split("\0").filter(Boolean));
+    if (paths.size > limits.maxFiles) return undefined;
+    let bytes = 0;
+    for (const relative of paths) {
+      // A deleted file is listed as modified and has nothing to hash.
+      const stats = await lstat(path.join(top, relative)).catch(() => undefined);
+      bytes += stats?.isFile() ? stats.size : 0;
+      if (bytes > limits.maxBytes) return undefined;
+    }
     scratch = await mkdtemp(path.join(os.tmpdir(), "pwragent-review-tree-"));
     const index = path.join(scratch, "index");
-    // A checkout with nothing staged yet has no index; `add` starts one.
-    await copyFile(path.resolve(cwd, indexPath), index).catch(() => undefined);
+    try {
+      await copyFile(path.resolve(cwd, indexPath), index);
+    } catch (error) {
+      // A checkout with nothing staged yet has no index, and `add` starts
+      // one. Any other failure would rehash every file, so give up.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+    }
     const env = { ...process.env, GIT_INDEX_FILE: index, GIT_OPTIONAL_LOCKS: "0" };
     await run(cwd, ["add", "--all", "--", ":/"], { timeout: GIT_TIMEOUT_MS, env });
     const { stdout: treeOut } = await run(cwd, ["write-tree"], { timeout: GIT_TIMEOUT_MS, env });
     const tree = treeOut.trim().toLowerCase();
     if (!GIT_OBJECT_ID.test(tree) || tree === headTree.toLowerCase()) return undefined;
-    return tree;
+    return { head: head.toLowerCase(), tree };
   } catch {
     return undefined;
   } finally {

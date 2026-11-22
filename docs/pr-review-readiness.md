@@ -54,9 +54,11 @@ the eight newest reviews are read.
 - **Committing reviewed uncommitted changes.** A review whose target is the
   checkout's uncommitted changes records the tree a commit of everything
   would hold: staged, unstaged, and untracked files that Git does not ignore.
-  That covers a base-branch review and Claude Code's `/code-review` without a
-  named pull request too, since both read the working tree. The tree's change
-  is its diff from the merge base of `headCommit`, so the commit that later
+  Claude Code's `/code-review` with no target at all, only a level and flags,
+  reads the same changes and records them too. A review of a pull request, a
+  branch, or a path does not, and neither does a base-branch review, whose
+  `git diff <merge-base>` leaves untracked files out. The tree's change is
+  its diff from the merge base of `headCommit`, so the commit that later
   records exactly that work, and any rebase of it, is covered. Any further
   edit is not.
 
@@ -153,11 +155,14 @@ PwrAgent does no scan at startup, runs no timer, and makes no forge request.
     entries. A target branch that moves is read again.
   - A settlement costs one `rev-parse`, plus a `merge-base --is-ancestor` for
     a detached review.
-  - A review that reads the working tree costs three more processes when it
-    starts: `rev-parse`, `add --all` into a scratch copy of the index under
-    `GIT_INDEX_FILE`, and `write-tree`. The scratch index keeps Git's cached
-    file stats, so only changed files are hashed. The checkout's index, stash
-    list, and refs are untouched (purpose `review-working-tree`).
+  - A review that reads the working tree costs four more processes when it
+    starts: `rev-parse` (HEAD and its tree in one read), `ls-files`, `add
+    --all` into a scratch copy of the index under `GIT_INDEX_FILE`, and
+    `write-tree`. The scratch index keeps Git's cached file stats, so only
+    changed files are hashed. Before hashing, `ls-files` lists the untracked
+    and changed files. Past 32 MB or 5,000 files nothing is recorded, since
+    such a change has no identity anyway. The checkout's index, stash list,
+    and refs are untouched (purpose `review-working-tree`).
   - The tree adds one field to the review row it is recorded with, so it
     adds no commit.
 - **Concurrency.** Evaluations for the same thread and PR coalesce. A burst
