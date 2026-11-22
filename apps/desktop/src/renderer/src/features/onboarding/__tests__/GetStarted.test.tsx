@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
@@ -375,7 +376,10 @@ describe("Get started", () => {
       isReplay: true,
       bootInfo: { mode: "active-profile", decisionKind: "open", activeProfileName: "default" },
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    // Done stays disabled until the first agent check finds a ready agent.
+    const done = await screen.findByRole("button", { name: "Done" });
+    await waitFor(() => expect(done).toBeEnabled());
+    fireEvent.click(done);
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(desktopApi.createPwrAgentProfile).not.toHaveBeenCalled();
     expect(desktopApi.openPwrAgentProfile).not.toHaveBeenCalled();
@@ -576,6 +580,140 @@ describe("Get started projects", () => {
     await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2));
   });
 
+  /** A Claude Code summary as the owner reports it after one check. */
+  type ClaudeCheck = "signed-in" | "sign-in-required" | "session-expired" | "unknown" | "not-installed" | "checking";
+  const CLAUDE_CHECKS: readonly ClaudeCheck[] = [
+    "signed-in", "sign-in-required", "session-expired", "unknown", "not-installed", "checking",
+  ];
+
+  function claudeAfter(check: ClaudeCheck): BackendSummary {
+    if (check === "not-installed") {
+      return { ...claudeSignedIn, available: false, claude: { authStatus: "sign-in-required" } } as BackendSummary;
+    }
+    if (check === "checking") return { ...claudeSignedIn, discoveryPending: true } as BackendSummary;
+    return { ...claudeSignedIn, claude: { ...claudeSignedIn.claude, authStatus: check } } as BackendSummary;
+  }
+
+  /** Lets every pending check, discovery and effect finish. */
+  async function settle(): Promise<void> {
+    await act(async () => {
+      for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  /** The agent rows' Check again, as an in-app Claude Code sign-in ending does. */
+  function recheck(setClaudeSignIn: (controls?: ClaudeSignInControls) => void): void {
+    setClaudeSignIn({ onSignIn: () => undefined, signingIn: true });
+    setClaudeSignIn({ onSignIn: () => undefined, signingIn: false });
+  }
+
+  function renderWithClaudeChecks(
+    checks: readonly ClaudeCheck[],
+    discoverRecentProjects: DesktopApi["discoverRecentProjects"] = discovery(1),
+  ) {
+    let check = 0;
+    const desktopApi = api({
+      discoverRecentProjects,
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [claudeAfter(checks[Math.min(check++, checks.length - 1)])],
+      })),
+    } as Partial<DesktopApi>);
+    const { setClaudeSignIn } = renderGetStarted({
+      desktopApi,
+      claudeSignIn: { onSignIn: () => undefined, signingIn: false },
+    });
+    return { desktopApi, setClaudeSignIn };
+  }
+
+  it("looks again once Claude Code signs in on this page, and only that once", async () => {
+    const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks([
+      "sign-in-required", "signed-in", "checking", "signed-in",
+    ]);
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledOnce());
+    // Claude Code's history is read only while it is signed in.
+    recheck(setClaudeSignIn);
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2));
+    // Later checks that find it again keep the list and its checkboxes.
+    for (const calls of [3, 4]) {
+      recheck(setClaudeSignIn);
+      await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalledTimes(calls));
+    }
+    await settle();
+    expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the refreshed Claude Code projects when the signed-out look answers last", async () => {
+    vi.stubEnv("DEV", false);
+    const now = Date.now();
+    const codexApp = { path: "/home/sam/code/codex-app", agent: "codex" as const, lastActiveAt: now - DAY };
+    const signedOut = Promise.withResolvers<DiscoverRecentProjectsResponse>();
+    const signedIn = Promise.withResolvers<DiscoverRecentProjectsResponse>();
+    const discoverRecentProjects = vi.fn<NonNullable<DesktopApi["discoverRecentProjects"]>>()
+      .mockReturnValueOnce(signedOut.promise)
+      .mockReturnValueOnce(signedIn.promise);
+    const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks(
+      ["sign-in-required", "signed-in"],
+      discoverRecentProjects,
+    );
+    // The first look starts while Claude Code is signed out, and is held.
+    await waitFor(() => expect(discoverRecentProjects).toHaveBeenCalledOnce());
+    recheck(setClaudeSignIn);
+    await waitFor(() => expect(discoverRecentProjects).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      signedIn.resolve({
+        sources: [
+          { agent: "codex", label: "Codex", status: "complete" },
+          { agent: "claude", label: "Claude Code", status: "complete" },
+        ],
+        observations: [codexApp, { path: "/home/sam/code/claude-app", agent: "claude", lastActiveAt: now }],
+      });
+    });
+    await waitFor(() => expect(projectBoxes()).toHaveLength(2));
+    // The signed-out answer arrives last. It read no Claude Code history.
+    await act(async () => {
+      signedOut.resolve({
+        sources: [
+          { agent: "codex", label: "Codex", status: "complete" },
+          { agent: "claude", label: "Claude Code", status: "skipped" },
+        ],
+        observations: [codexApp],
+      });
+    });
+    await settle();
+    const claudeRow = screen.getByText("claude-app", { selector: ".get-started__agent-name" }).closest("li")!;
+    expect(within(claudeRow).getByRole("checkbox")).toBeChecked();
+    expect(screen.getByRole("heading", { name: "Projects · 2 selected" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
+      profile: "default",
+      seedOnboardingCompleted: true,
+      seedProjectPaths: ["/home/sam/code/claude-app", "/home/sam/code/codex-app"],
+    }));
+  });
+
+  it("reads projects one more time exactly when Claude Code first turns ready after the first look", async () => {
+    // Model: Claude Code's projects are read once it is signed in. The first
+    // look covers a Claude Code that was ready from the start; one more look
+    // covers one that turned ready later; nothing else asks again.
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.constantFrom(...CLAUDE_CHECKS), { minLength: 1, maxLength: 4 }),
+      async (checks) => {
+        cleanup();
+        const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks(checks);
+        await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalled());
+        for (let calls = 2; calls <= checks.length; calls += 1) {
+          recheck(setClaudeSignIn);
+          await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalledTimes(calls));
+        }
+        await settle();
+        const ready = checks.map((check) => check === "signed-in");
+        const expected = !ready[0] && ready.some(Boolean) ? 2 : 1;
+        expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(expected);
+      },
+    ), { numRuns: 20 });
+  });
+
   it("neither looks for nor imports projects in a replay", async () => {
     const desktopApi = api({
       discoverRecentProjects: discovery(3),
@@ -586,7 +724,10 @@ describe("Get started projects", () => {
       isReplay: true,
       bootInfo: { mode: "active-profile", decisionKind: "open", activeProfileName: "default" },
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    // Done stays disabled until the first agent check finds a ready agent.
+    const done = await screen.findByRole("button", { name: "Done" });
+    await waitFor(() => expect(done).toBeEnabled());
+    fireEvent.click(done);
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(screen.queryByRole("region", { name: /Projects/ })).not.toBeInTheDocument();
     expect(desktopApi.discoverRecentProjects).not.toHaveBeenCalled();
