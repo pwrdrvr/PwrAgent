@@ -210,7 +210,7 @@ export type SlackApi = {
     threadTs?: string;
     title?: string;
   }): Promise<void>;
-  usersInfo?(params: { user: string }): Promise<SlackUserInfo | undefined>;
+  usersInfo?(params: { user: string }, options?: { forAgentTrust?: boolean }): Promise<SlackUserInfo | undefined>;
   usersList?(params: {
     cursor?: string;
     limit?: number;
@@ -1319,7 +1319,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       || event.channel.conversation.workspaceId !== workspaceId
       || !validateSlackUserId(actorId).ok) return undefined;
 
-    const user = await this.api.usersInfo?.({ user: actorId });
+    const user = await this.api.usersInfo?.({ user: actorId }, { forAgentTrust: true });
     if (!this.started || this.lifecycleGeneration !== generation || this.workspaceId !== workspaceId
       || user?.id !== actorId || user.team_id !== workspaceId
       || user.is_admin !== true || user.deleted === true || user.is_bot === true
@@ -4236,6 +4236,7 @@ export function createSlackAdapter(
 
 export function createSlackApi(botToken: string): SlackApi {
   const client = new WebClient(botToken, { rejectRateLimitedCalls: true });
+  let agentTrustClient: WebClient | undefined;
   return {
     async startStream(params) {
       const response = await client.chat.startStream({
@@ -4420,8 +4421,15 @@ export function createSlackApi(botToken: string): SlackApi {
         params as unknown as Parameters<typeof client.chat.update>[0],
       ));
     },
-    async usersInfo(params) {
-      const response = await client.users.info(params);
+    async usersInfo(params, options) {
+      const userClient = options?.forAgentTrust
+        ? (agentTrustClient ??= new WebClient(botToken, {
+            timeout: 4_000,
+            retryConfig: { retries: 0 },
+            rejectRateLimitedCalls: true,
+          }))
+        : client;
+      const response = await userClient.users.info(params);
       return response.user as SlackUserInfo | undefined;
     },
     async botsInfo(params) {
