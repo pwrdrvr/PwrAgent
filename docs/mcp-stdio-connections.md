@@ -20,6 +20,7 @@ Design review: [Claude Design, PwrAgent project](https://claude.ai/design/p/019d
 |---|---|
 | Contract, splitter, display line, setup state | `packages/shared/src/contracts/mcp-connections.ts` |
 | Validation, executable lookup, environment, owned transport | `apps/desktop/src/main/mcp-connections/mcp-stdio-launch.ts` |
+| Bounded stdout framing, oversized-message envelope | `apps/desktop/src/main/mcp-connections/mcp-stdio-frames.ts` |
 | Encrypted secret values | `apps/desktop/src/main/mcp-connections/mcp-stdio-secret-vault.ts` |
 | Rows in `config.toml` | `apps/desktop/src/main/mcp-connections/mcp-connection-registry.ts` |
 | Test, sessions, attach lease, cleanup | `apps/desktop/src/main/mcp-connections/mcp-connection-gateway-service.ts` |
@@ -138,6 +139,36 @@ Windows the tree is stopped with `taskkill /T`.
 `mcp-stdio-connections.test.ts` asserts this against a fake server that
 starts a grandchild: closing a thread's lease stops both processes, and the
 other thread's process keeps running.
+
+## Message size
+
+PwrAgent reads at most `MCP_STDIO_MAX_MESSAGE_BYTES` (10 MB) for one message
+from a local server, including the PwrSnap and PwrGit relays. That is the MCP
+TypeScript SDK's stdio default, kept on purpose. An agent reads PwrAgent's
+bridge over stdio too. If it uses that SDK, it has the same limit, and a larger
+message would close the agent's whole PwrAgent connection there instead of
+failing one request.
+
+The SDK's `ReadBuffer` throws from a stream `data` listener when a message
+passes the limit. In the main process, that throw is an uncaught exception: a
+modal error, with the app frozen until it is dismissed. `McpStdioFrameReader`
+never throws. It skips an oversized line up to its newline, so the stream stays
+framed, and keeps only 4 KB from each end of the line so it can find the
+JSON-RPC id:
+
+- If the line answers an outstanding request, only that request fails. It gets
+  an MCP error, `-32603`, with `data.reason: "message_too_large"`. The message
+  names the size and the limit and asks for a smaller response. The connection
+  stays up.
+- If the line is a request or notification from the server, PwrAgent drops it
+  and reports `McpStdioMessageTooLargeError` through `onerror`.
+- If the id cannot be read and requests are waiting, any of them could be the
+  lost answer. Each one fails with the same error, and the connection closes.
+  The next use starts it again.
+
+`mcp-stdio-oversized-message.test.ts` replays the 14 MB video read.
+`mcp-stdio-frames.property.test.ts` checks the framing against a newline split
+and the transport against a model of a misbehaving server.
 
 ## Startup errors
 
