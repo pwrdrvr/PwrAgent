@@ -3333,6 +3333,68 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("does not walk the provider or reread listing overlays for an announced turn's active echo", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const client = new CodexAppServerClient({ command: "codex" });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const request = { backend: "codex", filter: "turn-echo", callerReason: "renderer-navigation-query",
+      enrichDirectories: false, skipArchivedMetadataRefresh: true } as const;
+    await registry["subAgentStartupReconciliation"];
+    await client.listThreads({ maxPages: 1, enrichDirectories: false, skipArchivedMetadataRefresh: true });
+    const transport = MockTransport.instances.at(-1)!;
+    const send = transport.send.bind(transport);
+    let pages = 0;
+    const pageSize = 100;
+    const pageCount = 8;
+    const primary = "turn-echo-0";
+    const metadata = vi.spyOn(store, "getThreadListingOverlayStates");
+    const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+      const request = JSON.parse(message);
+      if (request.method !== "thread/list" || request.params.searchTerm !== "turn-echo") { send(message); return; }
+      pages++;
+      const page = Number(request.params.cursor ?? 0);
+      MockTransport.threadListResultBySearchTerm.set("turn-echo", Array.from({ length: pageSize }, (_, index) => ({
+        id: `turn-echo-${page * pageSize + index}`, name: "Fixture turn", source: "vscode", status: { type: "idle" },
+      })));
+      const cursor = MockTransport.threadListNextCursor;
+      MockTransport.threadListNextCursor = page + 1 < pageCount ? String(page + 1) : undefined;
+      try { send(message); } finally { MockTransport.threadListNextCursor = cursor; }
+    });
+    try {
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: primary, turnId: "active-turn", turn: { id: "active-turn", status: "inProgress" },
+      } } });
+      const beforeEcho = await registry.listThreads(request);
+      expect(beforeEcho).toHaveLength(pageSize * pageCount);
+      expect(beforeEcho.find(({ id }) => id === primary)?.threadStatus).toBe("active");
+      for (let index = 0; index < 3; index++) {
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
+          threadId: primary, status: { type: "active" },
+        } } });
+        const rows = await registry.listThreads(request);
+        expect(rows.find(({ id }) => id === primary)?.threadStatus).toBe("active");
+      }
+      expect({ pages, listingOverlayReads: metadata.mock.calls.length }).toEqual({ pages: 8, listingOverlayReads: 2 });
+
+      // A status without a matching announced turn still owns discovery.
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: "turn-echo-1", status: { type: "active" },
+      } } });
+      const changed = await registry.listThreads(request);
+      expect(changed.find(({ id }) => id === "turn-echo-1")?.threadStatus).toBe("active");
+      expect(pages).toBe(pageCount * 2);
+    } finally {
+      rpc.mockRestore();
+      metadata.mockRestore();
+      await registry.close();
+      db.close();
+    }
+  });
+
   it("budgets physical pages across a create, pin, name and turn burst with mixed enrichment", async () => {
     const budget = navigationListingBudgets["codex-create-pin-name-turn-burst"];
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");

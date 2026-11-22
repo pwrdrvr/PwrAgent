@@ -888,3 +888,37 @@ describe("owner index coverage", () => {
     expect(listThreads).toHaveBeenCalledTimes(2);
   });
 });
+
+it("reuses membership across a PR status burst while pages observe the current registry", async () => {
+  const source = createSource();
+  const project = mocks.store.readNavigationQueryIndex;
+  const original = project.getMockImplementation()!;
+  const pr = { provider: "github.com", org: "fixture", repo: "work", number: 23,
+    url: "https://github.com/fixture/work/pull/23", state: "pending" } as const;
+  const threads = Array.from({ length: 800 }, (_, index): NavigationThreadSummary => ({
+    source: "codex", id: `fixture-${index}`, title: `Thread ${index}`, titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: true }, ...(index === 0 ? { prs: [pr] } : {}),
+  }));
+  source.listThreads.mockResolvedValue(threads);
+  project.mockClear().mockImplementation(({ threads }) => ({ threads, directories: [] }));
+  source.finish();
+  const store = new NavigationQueryStore();
+  const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar",
+    query: { kind: "exact", identities: [{ backend: "codex", threadId: "fixture-0" }] } };
+  let status: NonNullable<NavigationThreadSummary["prs"]>[number] = pr;
+  const read = () => store.readPage({ request, scopeKey: "fixture", loadIndex: () => source.read(),
+    pullRequests: { read: async () => [[status]], verify: async () => [[status]] } });
+  try {
+    expect((await read()).entries[0]?.row.prs?.[0]?.state).toBe("pending");
+    for (const state of ["failing", "passing", "merged"] as const) {
+      status = { ...pr, state };
+      source.emit("pullRequest/status/updated");
+      expect((await read()).entries[0]?.row.prs?.[0]?.state).toBe(state);
+    }
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+    expect(project).toHaveBeenCalledTimes(1);
+  } finally {
+    project.mockImplementation(original);
+    source.emit("thread/name/updated");
+  }
+});

@@ -6,12 +6,12 @@ const versions = new WeakMap<Database.Database, { value: number }>();
 export const PROJECT_CHECKOUT_GROUPS_META_KEY = "project-checkout-groups";
 const NAVIGATION_TABLES = [
   "directory_launchpads", "directory_overlay", "remote_directory_overlay", "remote_thread_pins",
-  "directory_git_status", "thread_git_working_state", "pr_status_cache",
+  "directory_git_status", "thread_git_working_state",
   // Rows carry their messaging bindings; a bind or unbind changes the row.
   "bindings",
 ];
 
-/** Navigation inputs, rather than every write on the connection. PR election
+/** Navigation index inputs, rather than every write on the connection. PR status and election
  * membership, separate usage tables and composer recovery do not change it.
  * TEMP triggers cover raw SQL too, without persistent counters or WAL writes.
  * Counters survive rollback; callers must bypass reuse inside transactions.

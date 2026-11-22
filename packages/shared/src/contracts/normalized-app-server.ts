@@ -2697,6 +2697,7 @@ export type AppServerNotification =
       method: "navigation/invalidated";
       params: {
         sourceMethod: string;
+        prKey?: string;
         directoryKey?: string;
         directoryGitRevisions?: NavigationDirectoryGitRevisions;
         threadId?: string;

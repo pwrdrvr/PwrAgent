@@ -64,13 +64,27 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
 
+/** A repository rename can change the key while keeping the forge and PR number. */
+export function navigationPullRequestKeysMayMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  const leftHost = left.indexOf("/");
+  const rightHost = right.indexOf("/");
+  const leftNumber = left.lastIndexOf("#");
+  const rightNumber = right.lastIndexOf("#");
+  // Unknown wire formats cannot exclude an attachment.
+  if (leftHost <= 0 || rightHost <= 0 || leftNumber <= leftHost || rightNumber <= rightHost) return true;
+  const host = (value: string) => value === "github" || value === "gitlab" ? `${value}.com` : value;
+  return host(left.slice(0, leftHost)) === host(right.slice(0, rightHost))
+    && left.slice(leftNumber) === right.slice(rightNumber);
+}
+
 // Only these events are known to leave group membership unchanged. Creation,
 // archive, reparenting, provider refreshes and unknown future events retain
 // discovery coverage even when the new child's identity is not subscribed yet.
 const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/dependencies/updated", "thread/scheduledAction/updated",
   "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
-  "thread/pullRequests/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
+  "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/turnQueue/updated", "thread/turnQueue/reordered",

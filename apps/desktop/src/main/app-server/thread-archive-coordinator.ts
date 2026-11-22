@@ -2618,11 +2618,9 @@ export class ThreadArchiveCoordinator {
     // Only a complete read can forget IDs. Every returned row, including a
     // partial first page, can protect its binding against older archive reads.
     const active = params.completeInventory || !previous ? new Map<string, number>() : previous;
-    let addedActiveThread = false;
     for (const thread of params.threads) {
       const lastSeen = previous?.get(thread.id);
       if (previous && lastSeen === undefined) {
-        addedActiveThread = true;
         this.recordArchiveWorkspaceChange(buildThreadIdentityKey(params.backend, thread.id), archiveWorkspacePaths(thread));
       }
       active.set(thread.id, Math.max(lastSeen ?? 0, params.observationSequence));
@@ -2635,7 +2633,10 @@ export class ThreadArchiveCoordinator {
       }
     }
     this.activeObservationsByBackend.set(params.backend, active);
-    if (addedActiveThread || missingThreadIds.size > 0) {
+    // A newly observed active row protects its own binding below and still
+    // fences checkout removal above. Only a disappearance can create newly
+    // missing archive candidates and invalidate the archived page walk.
+    if (missingThreadIds.size > 0) {
       this.invalidateArchiveCleanupReads(params.backend, undefined, false);
     }
     if (!params.completeInventory) return;
@@ -2661,13 +2662,15 @@ export class ThreadArchiveCoordinator {
       // change this membership. Use cheap IDs and one shared paginated walk.
       const evidence = await this.archiveCleanupReads.read(params.backend, async () => {
         if (this.context.lifecycle.closed) throw new Error("Registry closed during archive cleanup.");
+        let incomplete = false;
         const threads = await this.host().getClient(params.backend).listThreads({
           archived: true,
           enrichDirectories: false,
         }, {
           callerReason: "archive-cleanup",
           ownerId: this.host().threadListCacheOwnerId,
-        });
+        }, () => { incomplete = true; });
+        if (incomplete) throw new Error("Archived thread discovery ended before the cursor was exhausted.");
         return new Set(threads.map((thread) => thread.id));
       });
       if (this.context.lifecycle.closed || !this.archiveCleanupReads.isCurrent(params.backend, evidence)) return;

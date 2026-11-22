@@ -16290,11 +16290,18 @@ export class DesktopBackendRegistry {
       this.threadListCache.clear();
       return;
     }
+    this.invalidateBackendThreadLists(backend);
+  }
 
-    for (const key of this.threadListCache.keys()) {
-      if (key.includes(`"backend":"${backend}"`) || key.includes('"backend":"all"')) {
-        this.threadListCache.delete(key);
-      }
+  private invalidateBackendThreadLists(backend: AppServerBackendKind, activeEchoThreadId?: string): void {
+    for (const [key, cached] of this.threadListCache) {
+      if (!key.includes(`"backend":"${backend}"`) && !key.includes('"backend":"all"')) continue;
+      // Only a complete, settled inventory that already includes the active
+      // row can ignore the echo. Keep retries for partial or older listings.
+      if (activeEchoThreadId && cached.threads && !this.incompleteThreadLists.has(cached.threads)
+        && cached.threads.some((thread) => thread.source === backend
+          && thread.id === activeEchoThreadId && thread.threadStatus === "active")) continue;
+      this.threadListCache.delete(key);
     }
   }
 
@@ -20927,7 +20934,14 @@ export class DesktopBackendRegistry {
     }
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
-      this.invalidateThreadListCache(event.backend);
+      const statusThreadId = event.backend === "codex" && event.notification.method === "thread/status/changed"
+        && readStatusType(event.notification.params.status) === "active" ? event.notification.params.threadId : undefined;
+      const active = statusThreadId && this.context.turnState.statusObservation(statusThreadId)?.status === "active"
+        && this.getActiveTurnForThread({ backend: event.backend, threadId: statusThreadId });
+      // The announced turn already fenced provider listings. Still deliver
+      // the echo so navigation counts and every other observer can reconcile.
+      this.invalidateBackendThreadLists(event.backend, active && this.context.turnState.hasRegisteredTurn(active)
+        ? statusThreadId : undefined);
     }
 
     if (

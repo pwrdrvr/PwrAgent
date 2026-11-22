@@ -266,3 +266,110 @@ it("shares one continuation budget across metadata replacements", async () => {
     }));
   } finally { clock.mockRestore(); }
 });
+
+it("reads only PR-bearing rows and never list counts on a PR-only change", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 5, max: 18 }), fc.boolean(), async (size, remote) => {
+    const target = remote ? { scope: "remote" as const, instanceId: "peer" } : undefined;
+    const pr = { provider: "github.com", org: "fixture", repo: "changes", number: 71,
+      state: "pending", url: "https://github.com/fixture/changes/pull/71" } as const;
+    const parent = { backend: "codex", threadId: "parent", ownerInstanceId: target?.instanceId } as const;
+    const child = { ...parent, threadId: "child" };
+    const demand = new Map<string, NavigationQueryRequest>();
+    const request = (query: NavigationQueryRequest["query"]): NavigationQueryRequest => ({
+      protocol: 2, consumer: "main-sidebar", inventory: remote ? "owner" : "viewer", federationTarget: target, query,
+    });
+    demand.set("directory-index", request({ kind: "directory-index" }));
+    demand.set("children", request({ kind: "children", parent }));
+    demand.set("exact", request({ kind: "exact", identities: [child] }));
+    for (let index = 0; index < size; index += 1) {
+      demand.set(`project-${index}`, request({ kind: "directory", directoryKey: `project-${index}` }));
+    }
+    const read = vi.fn(async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+      const key = JSON.stringify(request.query);
+      const carriesChange = request.query.kind === "children" || request.query.kind === "exact";
+      const ref = carriesChange ? child : { ...parent, threadId: key };
+      const row: NavigationRow = { id: ref.threadId, source: ref.backend, ref, rowRevision: key, title: key,
+        titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+        nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown", ...(carriesChange ? { prs: [pr] } : {}) };
+      return { protocol: 2, queryKey: key, generation: key, ownerEpoch: "fixture", countsRevision: key,
+        counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+        metadataDependencies: { version: 1, threadKeys: [], prKeys: carriesChange ? ["github.com/fixture/changes#71"] : [], prKeysComplete: true },
+        entries: request.query.kind === "directory-index" ? [] : [{ row, orderKey: key, placement: { kind: "root" } }] };
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    try {
+      queries.setDemand(demand);
+      await queries.refresh();
+      read.mockClear();
+      const prKey = "github.com/fixture/changes#71";
+      queries.invalidate(undefined, [target ?? { scope: "local" }], { backend: "codex", federationTarget: target,
+        notification: target ? { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated", prKey } }
+          : { method: "pullRequest/status/updated", params: { prKey, pr } } });
+      await queries.refresh(undefined, undefined, true);
+      expect(read.mock.calls.map(([sent]) => sent.query.kind).sort()).toEqual(["children", "exact"]);
+    } finally {
+      queries.dispose();
+    }
+  }), { numRuns: 12 });
+});
+
+it("keeps PR recovery live through an attachment race, legacy notices and stream gaps", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (certified, partial) => {
+    const target = { scope: "remote", instanceId: "peer" } as const;
+    const ref = { backend: "codex", threadId: "visible", ownerInstanceId: target.instanceId } as const;
+    const key = "github.com/fixture/changes#71";
+    const page = (value: number): NavigationQueryPage => ({
+      protocol: 2, queryKey: "project", generation: String(value), ownerEpoch: "peer", countsRevision: String(value),
+      counts: { total: 2, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: !partial,
+      ...(partial ? { nextCursor: `cursor-${value}` } : {}),
+      ...(certified ? { metadataDependencies: { version: 1, threadKeys: [navigationIdentityKey({ ...ref, ownerInstanceId: undefined })],
+        workingStatePaths: [], prKeys: value ? [key] : [], prKeysComplete: true } } : {}),
+      entries: [{ orderKey: "visible", placement: { kind: "root" }, row: { ref, id: ref.threadId, source: ref.backend,
+        title: "Visible", rowRevision: String(value), titleSource: "explicit", linkedDirectories: [],
+        inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+        queueCount: 0, queueState: "unknown", ...(value ? { prs: [{ provider: "github.com", org: "fixture",
+          repo: "changes", number: 71, url: "https://github.com/fixture/changes/pull/71",
+          state: value === 1 ? "pending" : value === 2 ? "passing" : "merged" }] } : {}) } }],
+    });
+    let value = 0;
+    const started = deferred<void>();
+    const delayed = deferred<NavigationQueryPage>();
+    const api = vi.fn(async () => page(value));
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: api });
+    const invalidate = (sourceMethod: string, prKey?: string) => queries.invalidate(undefined, [target], {
+      backend: "codex", federationTarget: target, notification: { method: "navigation/invalidated",
+        params: { sourceMethod, prKey, ...(sourceMethod === "thread/pullRequests/updated" ? { threadId: ref.threadId } : {}) } },
+    });
+    const current = () => queries.getSnapshot().resources.get("project")?.state.page?.entries[0]?.row;
+    try {
+      queries.setDemand(new Map([["project", { protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: target,
+        query: { kind: "directory", directoryKey: "project" } }]]));
+      await queries.refresh();
+      expect(current()?.rowRevision).toBe("0");
+
+      api.mockImplementationOnce(() => { started.resolve(); return delayed.promise; });
+      invalidate("thread/pullRequests/updated");
+      const attachmentRead = queries.refresh(undefined, undefined, true);
+      await started.promise;
+      value = 2;
+      invalidate("pullRequest/status/updated", key);
+      delayed.resolve(page(1));
+      await attachmentRead;
+      expect(current()?.prs?.[0]?.state).toBe("passing");
+
+      value = 3;
+      invalidate("pullRequest/status/updated"); // Older peer omits the key.
+      await queries.refresh(undefined, undefined, true);
+      expect(current()?.prs?.[0]?.state).toBe("merged");
+
+      value = 2; // A missed status update is recovered by the stream gap.
+      queries.invalidate(undefined, [target], { backend: "codex", federationTarget: target,
+        notification: { method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "recovered" } } });
+      await queries.refresh(undefined, undefined, true);
+      expect(current()?.prs?.[0]?.state).toBe("passing");
+    } finally {
+      delayed.resolve(page(1));
+      queries.dispose();
+    }
+  }), { numRuns: 12 });
+});

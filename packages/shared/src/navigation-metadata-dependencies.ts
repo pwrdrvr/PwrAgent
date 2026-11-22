@@ -10,6 +10,7 @@ export function readNavigationMetadataDependencies(value: unknown): NavigationMe
   const proof = value as NavigationMetadataDependencies;
   const paths = proof.workingStatePaths;
   if (proof.version !== 1 || !Array.isArray(proof.threadKeys) || !Array.isArray(proof.prKeys)
+    || (proof.prKeysComplete !== undefined && proof.prKeysComplete !== true)
     || (paths !== undefined && !Array.isArray(paths))
     || proof.threadKeys.length + proof.prKeys.length + (paths?.length ?? 0) > NAVIGATION_METADATA_DEPENDENCY_MAX_KEYS
     || !proof.threadKeys.every((key) => typeof key === "string") || !proof.prKeys.every((key) => typeof key === "string")

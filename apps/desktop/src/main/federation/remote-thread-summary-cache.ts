@@ -18,9 +18,10 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import {
   navigationInvalidationMayChangeMembership,
+  navigationPullRequestKeysMayMatch,
   navigationWorkingStatePath,
 } from "@pwragent/shared/navigation-query-events";
-import { parseThreadIdentityKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { parseThreadIdentityKey, buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { rankThreadJumpMatches, sortThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import type { PinnedNavigationReadState } from "./federation-collection-client";
@@ -315,10 +316,18 @@ export class RemoteThreadSummaryCache {
   invalidate(instanceId?: string, event?: AgentEvent): void {
     if (instanceId && event) {
       const params = event.notification.params as {
-        sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; directoryGitRevisions?: unknown;
+        sourceMethod?: unknown; threadId?: unknown; prKey?: unknown;
+        worktreePath?: unknown; directoryKey?: unknown; directoryGitRevisions?: unknown;
       };
       const sourceMethod = event.notification.method === "navigation/invalidated"
         ? params?.sourceMethod : event.notification.method;
+      if (sourceMethod === "pullRequest/status/updated") {
+        const snapshot = this.cache.get(instanceId);
+        const key = typeof params.prKey === "string" && params.prKey ? params.prKey : undefined;
+        if (snapshot?.allMountedRowsObserved && !this.inFlight.has(instanceId) && this.hasCompletePinnedMembership(instanceId)
+          && snapshot.threads.every((thread) => !thread.prsTruncated && !thread.prs?.some((pr) =>
+            !key || navigationPullRequestKeysMayMatch(buildPullRequestStatusKey(pr), key)))) return;
+      }
       if (sourceMethod === "navigation/directoryGitStatus/updated") {
         if (!this.hasMountedDemand(instanceId)) return;
         const repository = readDirectoryGitRevisions(params?.directoryGitRevisions)?.repository;

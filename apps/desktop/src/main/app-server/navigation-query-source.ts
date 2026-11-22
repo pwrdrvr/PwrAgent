@@ -138,7 +138,10 @@ export async function loadLocalNavigationQueryIndex(params: {
     const unsubscribe = registry.onEvent?.((event) => {
       // Connectivity changes the liveness of retained peer pins without
       // changing SQLite membership or the local provider inventory.
-      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)
+      // A PR status observation changes page chips, not the compact index's
+      // attachments. The page reads those statuses from the live registry.
+      if ((event.notification.method !== "pullRequest/status/updated"
+        && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
         || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
         indexReads.invalidate(key);
@@ -261,11 +264,7 @@ async function buildLocalNavigationQueryIndex(params: {
     async () => await overlayStore.listAllActivePrStatusWatches(),
   );
   params.signal?.throwIfAborted();
-  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
-    watchedThreads, undefined, false,
-  );
-  params.signal?.throwIfAborted();
-  const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {
+  const threads = await registry.hydrateThreadGitWorkingStates(watchedThreads, {
     probeMissing: false,
   });
   params.signal?.throwIfAborted();

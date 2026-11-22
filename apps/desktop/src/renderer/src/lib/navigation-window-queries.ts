@@ -8,6 +8,7 @@ import {
 import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
 import {
   navigationInvalidationMayChangeMembership,
+  navigationPullRequestKeysMayMatch,
   navigationQueryEventRequiresRefresh,
   navigationWorkingStatePath,
   readNavigationDirectoryScope,
@@ -476,7 +477,6 @@ export class NavigationWindowQueries {
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))));
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
-    const batchPinLoading = selected.some((resource) => resource.pinPublicationPending && !resource.pending);
     let startedReads = false;
     const refreshed = Promise.all(selected.map(async (resource) => {
       const pending = resource.pending;
@@ -491,8 +491,8 @@ export class NavigationWindowQueries {
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
         if (resource.pending) resource.refreshAfterPending = true;
-        const read = this.read(resource, false, undefined, false, "refresh", !batchPinLoading);
-        startedReads ||= batchPinLoading && !pending && Boolean(resource.pending);
+        const read = this.read(resource, false, undefined, false, "refresh", false);
+        startedReads ||= !pending && Boolean(resource.pending);
         await read;
       }
       while (this.isCurrent(resource)) {
@@ -507,8 +507,8 @@ export class NavigationWindowQueries {
         await this.read(resource, false);
       }
     }));
-    // The pin discovery wave queues its reads in one turn. Publish its
-    // loading state once, with every newly queued read marked as loading.
+    // One refresh queues its reads in one turn. Publish every newly queued
+    // read's loading state together, including a refresh of multiple owners.
     if (startedReads) this.publish();
     return refreshed.then(() => undefined);
   }
@@ -547,12 +547,10 @@ export class NavigationWindowQueries {
       const method = event?.notification.method === "navigation/invalidated"
         ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
       const pinParams = event?.notification.params as { threadId?: unknown; rowChanges?: unknown } | undefined;
-      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges)
-        || method === "pullRequest/status/updated";
+      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges);
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
-          || (method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges))
-          || method === "pullRequest/status/updated");
+          || (method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges)));
       // An instance-only summary notice can discover new mounted children.
       // Its pending replacement cannot use the old membership to exclude a
       // subsequent metadata change to one of those newly discovered rows.
@@ -633,11 +631,31 @@ export class NavigationWindowQueries {
       && !resource.membershipUncertain && page?.coverage.state === "complete" && viewerRowOwners) {
       const resolvesPeer = request.query.kind === "exact" && request.query.resolveFromOwners
         && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner);
-      if (!resolvesPeer && !viewerRowOwners.includes(sourceOwner) && typeof method === "string" && OWNER_ROW_CHANGES.has(method)) return false;
+      // A compact PR notice only invalidates the serving peer's rows. A
+      // full observation can patch the same PR across owned and mounted rows.
+      const peerOnlyPrNotice = method === "pullRequest/status/updated" && event.notification.method === "navigation/invalidated";
+      if (!resolvesPeer && !viewerRowOwners.includes(sourceOwner)
+        && (peerOnlyPrNotice || (typeof method === "string" && OWNER_ROW_CHANGES.has(method)))) return false;
       // A pinned row's directory identity comes from the published pin
       // summary. A peer's Git notice refreshes its direct pages; a subsequent
       // local pin-summary publication refreshes this delegated projection.
       if (!resolvesPeer && gitRevisions && !resource.pending && !resource.value.state.stale) return false;
+    }
+    if (method === "pullRequest/status/updated") {
+      // Directory counts and descriptors contain no PR status, even while a
+      // read is in flight. An attachment change is a separate event.
+      if (request.query.kind === "directory-index") return false;
+      if (resource.membershipUncertain || resource.prAttachmentsUncertain || page?.coverage.state !== "complete") return true;
+      const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
+      const key = typeof params.prKey === "string" && params.prKey ? params.prKey : undefined;
+      if (dependencies?.prKeysComplete) {
+        return dependencies.prKeys.some((candidate) => !key || navigationPullRequestKeysMayMatch(candidate, key));
+      }
+      // Older peers omit the attachment proof. Preserve scoping for complete
+      // child trays, where the prior protocol already used row membership.
+      if (request.query.kind !== "children" || !page.complete || (page.rangeStart ?? 0) !== 0) return true;
+      return page.entries.some(({ row }) => row.prsTruncated || row.prs?.some((pr) =>
+        !key || navigationPullRequestKeysMayMatch(buildPullRequestStatusKey(pr), key)));
     }
     if (gitRevisions && typeof params?.directoryKey === "string" && params.directoryKey
       && federationTargetsEqual(request.federationTarget, event.federationTarget)
@@ -648,21 +666,27 @@ export class NavigationWindowQueries {
         return revision !== undefined && revision !== gitRevisions.repository && revision !== gitRevisions.descriptor;
       }
     }
+    const scopedActivity = method === "turn/started" && directoryScope !== undefined && request.query.kind === "children"
+      && federationTargetsEqual(request.federationTarget, event.federationTarget);
+    if ((method === "navigation/thread/seen" || scopedActivity) && !resource.membershipUncertain && page?.coverage.state === "complete"
+      && typeof params?.threadId === "string") {
+      const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
+      // The peer builds its proof before row expansion stamps federated refs.
+      const ref = { backend: event.backend, threadId: params.threadId,
+        ownerInstanceId: request.federationTarget?.scope === "remote" ? undefined : sourceOwner };
+      if (dependencies) return dependencies.threadKeys.includes(navigationIdentityKey(ref))
+        || (request.query.kind === "children" && request.query.parent.backend === ref.backend
+          && request.query.parent.threadId === ref.threadId && request.query.parent.ownerInstanceId === sourceOwner);
+    }
     if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
       const workingState = method === "navigation/threadGitWorkingState/updated";
       // The index holds directory Git status and counts. Working-state probes
       // only change thread rows, even when the inventory is incomplete.
       if (workingState && request.query.kind === "directory-index") return false;
-      if (!resource.membershipUncertain && page?.coverage.state === "complete"
-        && (workingState || method === "navigation/thread/seen")) {
+      if (!resource.membershipUncertain && page?.coverage.state === "complete" && workingState) {
         const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
         if (workingState && typeof params?.worktreePath === "string" && dependencies?.workingStatePaths) {
           return dependencies.workingStatePaths.includes(params.worktreePath);
-        }
-        if (method === "navigation/thread/seen" && typeof params?.threadId === "string" && dependencies) {
-          // The page proof was built on the serving owner, where native refs
-          // are local. Row expansion adds a federation identity only to rows.
-          return dependencies.threadKeys.includes(navigationIdentityKey({ backend: event.backend, threadId: params.threadId }));
         }
       }
       // A descriptor's unread count includes siblings outside the exact
@@ -671,14 +695,11 @@ export class NavigationWindowQueries {
         && (request.query.kind === "exact" || request.query.kind === "children")) return true;
     }
     if (request.inventory === "viewer" && request.federationTarget?.scope !== "remote" && !resource.membershipUncertain
-      && page?.coverage.state === "complete") {
+      && page?.coverage.state === "complete" && request.query.kind !== "children") {
       const dependencies = this.metadataDependencies(page);
       if (dependencies && event.federationTarget?.scope !== "remote"
         && method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId) {
         return params.rowChanges.some((ref) => dependencies.threadKeys.includes(navigationIdentityKey(ref)));
-      }
-      if (dependencies && method === "pullRequest/status/updated" && typeof params.prKey === "string") {
-        return Boolean(resource.prAttachmentsUncertain) || dependencies.prKeys.includes(params.prKey);
       }
       if (dependencies && !navigationInvalidationMayChangeMembership(method) && typeof params.threadId === "string") {
         const ref = { backend: event.backend, threadId: params.threadId,
@@ -703,8 +724,7 @@ export class NavigationWindowQueries {
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && (!navigationInvalidationMayChangeMembership(method)
         || method === "thread/pin/added" || method === "thread/pin/removed"
-        || (method === "navigation/remoteThreadPins/changed" && Array.isArray(params.rowChanges))
-        || method === "pullRequest/status/updated")) {
+        || (method === "navigation/remoteThreadPins/changed" && Array.isArray(params.rowChanges)))) {
       // Pins move roots between directory sections, but do not reparent children.
       // Metadata refreshes preserve this membership proof. Membership changes
       // withdraw it until their replacement is accepted, even while queued.
@@ -713,12 +733,6 @@ export class NavigationWindowQueries {
       // Unknown membership events still discover newly created/reparented children.
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
         : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
-      if (method === "pullRequest/status/updated" && typeof params.prKey === "string") {
-        // Status is keyed by PR across owners and backends, and cannot attach
-        // a new PR or reparent a child. Partial membership still reads broadly.
-        return Boolean(resource.prAttachmentsUncertain)
-          || page.entries.some(({ row }) => row.prs?.some((pr) => buildPullRequestStatusKey(pr) === params.prKey));
-      }
       if (method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId
         && event.federationTarget?.scope !== "remote" && request.federationTarget?.scope !== "remote") {
         // The cache compared complete published populations, including
@@ -777,6 +791,7 @@ export class NavigationWindowQueries {
     while (this.isCurrent(resource) && resource.pending) await resource.pending;
     if (!this.isCurrent(resource)) return;
     resource.anchor = anchor;
+    resource.membershipUncertain = true;
     return this.read(resource, false, anchor);
   }
 
@@ -787,6 +802,7 @@ export class NavigationWindowQueries {
     while (this.isCurrent(resource) && resource.pending) await resource.pending;
     if (!this.isCurrent(resource)) return;
     resource.anchor = undefined;
+    resource.membershipUncertain = true;
     resource.value = { ...resource.value, state: { ...resource.value.state, rebaselineRequired: false, stale: true } };
     return this.read(resource, false, undefined, true);
   }
@@ -1029,6 +1045,7 @@ export class NavigationWindowQueries {
           });
         } catch (error) {
           if (!cursor || !isNavigationCursorExpired(error)) throw error;
+          resource.membershipUncertain = true;
           navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "cursor-expired" });
           // Cursor cache eviction is ordinary pressure, not a broken folder.
           // Rebuild only the already displayed range plus the block this
