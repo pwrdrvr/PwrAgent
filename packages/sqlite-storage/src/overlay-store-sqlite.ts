@@ -273,6 +273,11 @@ type RemoteDirectoryOverlayPayload = DirectoryOverlayState & {
   legacyLaunchpadSettledAt?: number;
 };
 
+type RemotePinNavigationProjection = {
+  rows: NavigationThreadSummary[];
+  pins: RemoteThreadPin[];
+};
+
 type RemoteThreadPinSnapshotUpdate = {
   ref: FederatedThreadRef;
   summary: NavigationThreadSummary;
@@ -831,7 +836,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     rows: Map<string, string | null>;
     bytes: number;
   };
-  private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
+  private remotePinNavigationCache?: { version: string; expires: number; projection: RemotePinNavigationProjection };
   private backendReadCache?: {
     scope: string;
     dataVersion: number;
@@ -5144,21 +5149,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return row !== undefined;
   }
 
-  async removeRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
-    return this.deleteRemoteThreadPin(params.ref);
+  async removeRemoteThreadPin(params: { ref: FederatedThreadRef; mountToken?: string }): Promise<boolean> {
+    return this.deleteRemoteThreadPin(params.ref, params.mountToken);
   }
 
-  private deleteRemoteThreadPin(ref: FederatedThreadRef): boolean {
-    const result = this.stateDb.raw
-      .prepare(
-        `DELETE FROM remote_thread_pins
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
-      )
-      .run(
-        remotePinInstanceId(ref),
-        ref.backend,
-        ref.threadId,
-      );
+  private deleteRemoteThreadPin(ref: FederatedThreadRef, mountToken?: string): boolean {
+    const identity = [remotePinInstanceId(ref), ref.backend, ref.threadId];
+    const result = mountToken === undefined
+      ? this.stateDb.raw.prepare(`DELETE FROM remote_thread_pins
+          WHERE instance_id = ? AND backend = ? AND thread_id = ?`).run(...identity)
+      : this.stateDb.raw.prepare(`DELETE FROM remote_thread_pins
+          WHERE instance_id = ? AND backend = ? AND thread_id = ?
+            AND revoked_at IS NULL AND mount_token = ?`).run(...identity, Buffer.from(mountToken, "hex"));
     return result.changes > 0;
   }
 
@@ -5171,6 +5173,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    */
   async listRemoteThreadPins(options?: {
     includeRevoked?: boolean;
+    includeMountTokens?: boolean;
   }): Promise<RemoteThreadPin[]> {
     // Two fully-written statements rather than one with an interpolated
     // WHERE: the SQL guard rejects assembled query text outright, and a
@@ -5178,10 +5181,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const rows = this.stateDb.raw
       .prepare(
         options?.includeRevoked
-          ? `SELECT instance_id, backend, thread_id, added_at, payload, revoked_at
+          ? `SELECT instance_id, backend, thread_id, added_at, payload, revoked_at, hex(mount_token) AS mount_token
              FROM remote_thread_pins
              ORDER BY added_at DESC`
-          : `SELECT instance_id, backend, thread_id, added_at, payload, revoked_at
+          : `SELECT instance_id, backend, thread_id, added_at, payload, revoked_at, hex(mount_token) AS mount_token
              FROM remote_thread_pins
              WHERE revoked_at IS NULL
              ORDER BY added_at DESC`,
@@ -5193,6 +5196,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         added_at: number;
         payload: string;
         revoked_at: number | null;
+        mount_token: string;
       }>;
     const pins: RemoteThreadPin[] = [];
     for (const row of rows) {
@@ -5216,6 +5220,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           threadId: row.thread_id,
         }),
         addedAt: row.added_at,
+        ...(options?.includeMountTokens ? { mountToken: row.mount_token } : {}),
         instanceLabel:
           typeof parsed.instanceLabel === "string" && parsed.instanceLabel
             ? parsed.instanceLabel
@@ -5238,9 +5243,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /** The compact viewer projection and its membership proof share one read snapshot. */
-  readSubthreadOrderPeerPins(): { rows: NavigationThreadSummary[]; fingerprint: string } {
+  readSubthreadOrderPeerPins(): { pins: RemoteThreadPin[]; fingerprint: string } {
     return this.stateDb.raw.transaction(() => ({
-      rows: this.readRemoteThreadPinNavigationRowsSync(),
+      pins: this.readRemotePinNavigationProjection().pins,
       fingerprint: this.readSubthreadPeerPinFingerprint(),
     }))();
   }
@@ -5272,20 +5277,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   /** Viewer membership only: never materialize cached detail, FIFO, bindings or draft payloads. */
   async readRemoteThreadPinNavigationRows(): Promise<NavigationThreadSummary[]> {
-    return this.readRemoteThreadPinNavigationRowsSync();
+    return this.readRemotePinNavigationProjection().rows;
   }
 
-  private readRemoteThreadPinNavigationRowsSync(): NavigationThreadSummary[] {
+  /** Mounted pins from the same compact snapshot, with tokens for archive proofs. */
+  async readMountedRemoteThreadPinNavigationRows(): Promise<RemoteThreadPin[]> {
+    return this.readRemotePinNavigationProjection().pins;
+  }
+
+  private readRemotePinNavigationProjection(): RemotePinNavigationProjection {
     const version = this.stateDb.raw.inTransaction ? undefined : this.readNavigationSourceVersion();
     if (version && this.remotePinNavigationCache?.version === version
-      && this.remotePinNavigationCache.expires > Date.now()) return this.remotePinNavigationCache.rows;
+      && this.remotePinNavigationCache.expires > Date.now()) return this.remotePinNavigationCache.projection;
     const rows = this.stateDb.raw.prepare(`
       WITH pins AS (
-        SELECT instance_id, backend, thread_id, added_at,
+        SELECT instance_id, backend, thread_id, added_at, mount_token,
           CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS data
         FROM remote_thread_pins WHERE revoked_at IS NULL
       ), projected AS (
-      SELECT instance_id, backend, thread_id, added_at,
+      SELECT instance_id, backend, thread_id, added_at, mount_token,
         COALESCE(json_array_length(data, '$.summary.linkedDirectories'), 0) AS directory_count,
         json_object(
           'title', substr(COALESCE(json_extract(data, '$.summary.title'), thread_id), 1, 2048),
@@ -5314,11 +5324,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           'instanceLabel', substr(COALESCE(json_extract(data, '$.instanceLabel'), instance_id), 1, 512)
         ) AS compact
       FROM pins
-      ) SELECT instance_id, backend, thread_id, directory_count,
+      ) SELECT instance_id, backend, thread_id, added_at, hex(mount_token) AS mount_token, directory_count,
         CASE WHEN length(CAST(compact AS BLOB)) <= ? THEN compact END AS compact
       FROM projected ORDER BY added_at DESC
-    `).iterate(NAVIGATION_QUERY_MAX_RESULT_BYTES) as Iterable<{ instance_id: string; backend: string; thread_id: string; directory_count: number; compact: string | null }>;
-    const result: NavigationThreadSummary[] = [];
+    `).iterate(NAVIGATION_QUERY_MAX_RESULT_BYTES) as Iterable<{ instance_id: string; backend: string; thread_id: string; added_at: number;
+      mount_token: string; directory_count: number; compact: string | null }>;
+    const projection: RemotePinNavigationProjection = { rows: [], pins: [] };
     let retainedBytes = 2;
     for (const row of rows) {
       if (row.directory_count > 100 || row.compact === null) {
@@ -5337,14 +5348,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (rowBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         throw new Error("A pinned thread exceeds the navigation index row budget. Reduce its linked directories or cached metadata before refreshing.");
       }
-      retainedBytes += rowBytes + (result.length ? 1 : 0);
+      retainedBytes += rowBytes + (projection.rows.length ? 1 : 0);
       if (retainedBytes > 8 * 1024 * 1024) {
         throw new Error("Pinned navigation exceeds the 8 MiB viewer index budget. Remove unused pins before refreshing.");
       }
-      result.push(projected);
+      projection.rows.push(projected);
+      projection.pins.push({ ref, addedAt: row.added_at, mountToken: row.mount_token, instanceLabel,
+        summary: projected, localPinnedRank: projected.pinnedRank });
     }
-    if (version) this.remotePinNavigationCache = { version, expires: Date.now() + 1_000, rows: result };
-    return result;
+    if (version) this.remotePinNavigationCache = { version, expires: Date.now() + 1_000, projection };
+    return projection;
   }
 
   async updateRemoteThreadPinSnapshots(
@@ -5877,7 +5890,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     observedLocalKeys?: ReadonlySet<string>;
     peerPins?: {
       fingerprint: string;
-      archived: FederatedThreadRef[];
+      archived: Array<{ ref: FederatedThreadRef; mountToken: string }>;
       refreshed: RemoteThreadPinSnapshotUpdate[];
     };
     insertAfter?: { threadId: string; sourceThreadId: string };
@@ -6007,7 +6020,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (pins.fingerprint !== this.readSubthreadPeerPinFingerprint()) {
         throw new Error("The mounted peer threads changed while discovering children. Try the move again.");
       }
-      for (const ref of pins.archived) this.deleteRemoteThreadPin(ref);
+      for (const { ref, mountToken } of pins.archived) this.deleteRemoteThreadPin(ref, mountToken);
       this.writeRemoteThreadPinSnapshots(pins.refreshed);
       // Pin refresh remains useful when live peer data rules out the move.
       // Only the rank write rolls back on that rejection.

@@ -10,7 +10,7 @@ import type {
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { getDesktopOverlayStore, type DesktopOwnerStorage } from "../storage/desktop-overlay-store";
-import { viewerNavigationPinInputs } from "./navigation-viewer-pins";
+import { archivedRemoteThreadPinMounts } from "./navigation-viewer-pins";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { peerSubthreadKey } from "./thread-archive-sweeper";
 
@@ -167,8 +167,9 @@ async function updateRelativeOrder(
     if (peers && localInstanceId) {
       const saved = store.readSubthreadOrderPeerPins();
       // Resolve and commit without yielding to a newer live cache publication.
-      const resolved = peers.summaries.readPinnedThreads(viewerNavigationPinInputs(saved.rows));
-      peerPins = { fingerprint: saved.fingerprint, archived: resolved.archived, refreshed: resolved.refreshed };
+      const resolved = peers.summaries.readPinnedThreads(saved.pins);
+      peerPins = { fingerprint: saved.fingerprint, archived: archivedRemoteThreadPinMounts(saved.pins, resolved.archived),
+        refreshed: resolved.refreshed };
       for (const thread of resolved.threads) {
         const ref = thread.federation?.ref;
         if (!ref || !isRemoteFederationTarget(ref.target) || thread.federation?.derivedFromMountedParent

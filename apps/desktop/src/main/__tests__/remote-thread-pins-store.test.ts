@@ -97,6 +97,18 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     }
   });
 
+  it("conditions archive deletion on the token from the observed mount", async () => {
+    const pin = { ref: ref(), summary: summary(), instanceLabel: "Laptop", addedAt: 1_000 };
+    await store.addRemoteThreadPin(pin);
+    const [observed] = await store.readMountedRemoteThreadPinNavigationRows();
+    await store.removeRemoteThreadPin({ ref: pin.ref });
+    await store.addRemoteThreadPin(pin);
+    expect(await store.removeRemoteThreadPin({ ref: pin.ref, mountToken: observed!.mountToken })).toBe(false);
+    const [current] = await store.listRemoteThreadPins({ includeMountTokens: true });
+    expect(current?.mountToken).not.toBe(observed?.mountToken);
+    expect(await store.removeRemoteThreadPin({ ref: pin.ref, mountToken: current!.mountToken })).toBe(true);
+  });
+
   it("repairs the mount-token schema on an existing current or newer profile", async () => {
     const { dbPath, tempDir } = createTempStateDb("pwragent-pin-mount-upgrade-");
     try {

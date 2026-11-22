@@ -34,6 +34,7 @@ vi.mock("../app-server/backend-registry", () => ({
 }));
 import { type PeerChildSource, peerSubthreadChildren, updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { peerSubthreadKey } from "../app-server/thread-archive-sweeper";
+import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 
 let db: ReturnType<typeof openInMemoryStateDb>;
 
@@ -615,4 +616,49 @@ it("commits the chosen live peer view before a cache-only publication can interl
   expect(events).toEqual(["resolve", "commit", "publish"]);
   expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["mounted", "child"]);
+});
+
+
+it("keeps a replacement mounted before the reorder when the real cache has archive proof for the old mount", async () => {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-queued-proof-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  const published = Promise.withResolvers<void>();
+  const cache = new RemoteThreadSummaryCache({
+    peers: () => [{ target: { scope: "remote", instanceId: PEER }, label: "Peer", capabilities: ["thread_navigation"] }],
+    fetchSnapshot: async () => ({ backend: "all", fetchedAt: 0, unchanged: false, threads: [], inboxThreadKeys: [], directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" } }),
+    fetchArchivedThreads: vi.fn().mockResolvedValueOnce([summary("codex", "mounted")]).mockResolvedValue([]),
+    peerStatus: () => ({ status: "connected" }),
+    onPinnedSummariesRefreshed: () => published.resolve(),
+  });
+  try {
+    const store = mocks.store = new SqliteOverlayStore(reader);
+    const target = { backend: "codex", parentThreadId: "root" } as const;
+    for (const threadId of ["anchor", "child"]) await store.setThreadParent({ ...target, threadId });
+    await pinPeerChild("mounted");
+    await store.updateSubthreadOrder({ ...target, threadIds: ["anchor", "child", "mounted"] });
+    mocks.readProvider.mockResolvedValue({ threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) });
+
+    cache.readPinnedThreads(store.readSubthreadOrderPeerPins().pins);
+    await published.promise;
+    writer.raw.transaction(() => {
+      const row = writer.raw.prepare("SELECT instance_id, backend, thread_id, added_at, payload FROM remote_thread_pins")
+        .raw().get() as [string, string, string, number, string];
+      writer.raw.prepare("DELETE FROM remote_thread_pins").run();
+      writer.raw.prepare("INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload) VALUES (?, ?, ?, ?, ?)")
+        .run(...row);
+    })();
+
+    await updateLocalSubthreadOrder({ ...target, move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } },
+      { peers: { localInstanceId: async () => LOCAL, summaries: cache } });
+    expect((await store.listRemoteThreadPins()).map(({ ref }) => ref.threadId)).toEqual(["mounted"]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+      .toEqual(["child", "anchor", "mounted"]);
+  } finally {
+    cache.dispose();
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
 });

@@ -4,7 +4,7 @@ import {
   findRemoteHomeDirectoryIndex,
   remoteThreadPlaceholderDirectory,
 } from "@pwragent/shared/federation-project-match";
-import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { FederatedThreadRef, FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
   NavigationDirectorySummary,
   NavigationIdentity,
@@ -17,12 +17,12 @@ import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
 
 /** Resolve compact viewer membership through the live owner cache, without awaiting a peer. */
 export async function loadViewerNavigationPins(
-  store: Pick<DesktopOwnerStorage, "readRemoteThreadPinNavigationRows" | "updateRemoteThreadPinSnapshots" | "removeRemoteThreadPin">,
+  store: Pick<DesktopOwnerStorage, "readMountedRemoteThreadPinNavigationRows" | "updateRemoteThreadPinSnapshots" | "removeRemoteThreadPin">,
   cache: Pick<RemoteThreadSummaryCache, "resolvePinnedThreads">,
 ): Promise<NavigationThreadSummary[]> {
-  const pins = viewerNavigationPinInputs(await store.readRemoteThreadPinNavigationRows());
+  const pins = await store.readMountedRemoteThreadPinNavigationRows();
   const resolved = await cache.resolvePinnedThreads(pins);
-  for (const ref of resolved.archived) await store.removeRemoteThreadPin({ ref });
+  for (const mount of archivedRemoteThreadPinMounts(pins, resolved.archived)) await store.removeRemoteThreadPin(mount);
   await store.updateRemoteThreadPinSnapshots(resolved.refreshed);
   const ranks = new Map(pins.map((pin) => [federatedThreadIdentityKey(pin.ref), pin.localPinnedRank]));
   return resolved.threads.map(({ pinnedRank: _ownerRank, ...thread }) => {
@@ -31,11 +31,17 @@ export async function loadViewerNavigationPins(
   });
 }
 
-export function viewerNavigationPinInputs(saved: readonly NavigationThreadSummary[]): RemoteThreadPin[] {
-  return saved.flatMap((summary) => summary.federation ? [{
-    ref: summary.federation.ref, instanceLabel: summary.federation.instanceLabel,
-    addedAt: 0, summary, localPinnedRank: summary.pinnedRank,
-  }] : []);
+/** Delete only the mount that supplied the archived view. */
+export function archivedRemoteThreadPinMounts(
+  pins: readonly RemoteThreadPin[],
+  archived: readonly FederatedThreadRef[],
+): Array<{ ref: FederatedThreadRef; mountToken: string }> {
+  if (!archived.length) return [];
+  const tokens = new Map(pins.map((pin) => [federatedThreadIdentityKey(pin.ref), pin.mountToken]));
+  return archived.flatMap((ref) => {
+    const mountToken = tokens.get(federatedThreadIdentityKey(ref));
+    return mountToken === undefined ? [] : [{ ref, mountToken }];
+  });
 }
 
 /**

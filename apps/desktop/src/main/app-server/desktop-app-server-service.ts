@@ -429,7 +429,7 @@ import {
 } from "../app-server/project-forge-automation-requests";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, archivedRemoteThreadPinMounts, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
 import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
@@ -2533,7 +2533,7 @@ class DesktopAppServerService {
       const overlayStore = this.getOverlayStore();
       const pins =
         typeof overlayStore.listRemoteThreadPins === "function"
-          ? await overlayStore.listRemoteThreadPins()
+          ? await overlayStore.listRemoteThreadPins({ includeMountTokens: true })
           : [];
       if (pins.length > 0) {
         const cache = getDesktopFederationRuntime().remoteThreadSummaries();
@@ -2565,9 +2565,8 @@ class DesktopAppServerService {
         };
         if (resolution.archived.length > 0) {
           await Promise.all(
-            resolution.archived.map(async (ref) => {
-              await this.getOverlayStore().removeRemoteThreadPin({ ref });
-            }),
+            archivedRemoteThreadPinMounts(pins, resolution.archived).map((mount) =>
+              this.getOverlayStore().removeRemoteThreadPin(mount)),
           );
         }
         if (resolution.refreshed.length > 0) {
