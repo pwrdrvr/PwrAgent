@@ -3385,11 +3385,20 @@ export type DetachThreadPullRequestResponse = {
   prs: PrSummary[];
 };
 
-/** A local thread whose attached PR the operator merges from its PR card. */
+/**
+ * A thread whose attached PR the operator merges from its PR card. A peer's
+ * thread names its owner, which reads the method and runs the merge.
+ */
 export type ThreadPullRequestMergeTarget = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Set for a peer's thread; its owner merges, as `THREAD_PULL_REQUEST_MERGE_CAPABILITY`. */
+  federationTarget?: FederationTarget;
 };
+
+/** The owner reads its project's method and merges a PR for a viewer. */
+export const THREAD_PULL_REQUEST_MERGE_CAPABILITY =
+  "thread_pull_request_merge_v1" satisfies FederationCapability;
 
 /**
  * The merge method a thread's PR card starts on: the operator's last pick for
@@ -3413,6 +3422,33 @@ export type MergeThreadPullRequestResponse = {
   /** Added to the base branch's merge queue rather than merged. */
   queued?: boolean;
 };
+
+/**
+ * A viewer's request to the thread's owner, as
+ * `backend.readThreadPullRequestMergeV1`. It names one of the owner's own
+ * threads, which answers with a `ReadThreadPullRequestMergeResponse`.
+ */
+export type FederationReadThreadPullRequestMergeRequestV1 = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+/** A viewer's merge, as `backend.mergeThreadPullRequestV1`, run by the owner. */
+export type FederationMergeThreadPullRequestRequestV1 = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  url: string;
+  method: PrMergeMethod;
+  rememberMethod?: boolean;
+};
+
+/**
+ * The owner's answer to a viewer's merge. A refusal crosses as a result,
+ * not a thrown error, so the viewer shows the owner's own reason.
+ */
+export type FederationMergeThreadPullRequestResultV1 =
+  | ({ ok: true } & MergeThreadPullRequestResponse)
+  | { ok: false; message: string };
 
 export type AttachDirectoryToThreadRequest = {
   backend?: AppServerBackendKind;

@@ -1,4 +1,11 @@
+import type {
+  FederationCapability,
+  FederationRemoteTarget,
+  FederationTarget,
+} from "./contracts/federation";
+import { isRemoteFederationTarget } from "./contracts/federation";
 import type { PrSummary } from "./contracts/navigation";
+import { THREAD_PULL_REQUEST_MERGE_CAPABILITY } from "./contracts/navigation";
 import {
   forgeMergeMethods,
   settleMergeMethod,
@@ -82,4 +89,40 @@ export function resolvePullRequestMergeOffer(input: {
     }),
     methods,
   };
+}
+
+/**
+ * Where a thread's PR card merges. `local` is this instance's own thread in
+ * its own window. `owner` is a peer's thread, merged by the instance that
+ * owns it. `none` offers no merge.
+ */
+export type PullRequestMergeRoute =
+  | { kind: "local" }
+  | { kind: "owner"; target: FederationRemoteTarget }
+  | { kind: "none" };
+
+/**
+ * A peer's thread merges on its owner only when that owner answers the merge
+ * request and grants this instance turn control, and only while it is
+ * reachable. A viewer window's rows all name their owner; one that does not
+ * cannot be routed, so it gets no merge.
+ */
+export function resolvePullRequestMergeRoute(input: {
+  /** The thread row's federation metadata, as navigation sends it. */
+  federation?: {
+    ref: { target: FederationTarget };
+    peerStatus?: string;
+    capabilities?: readonly FederationCapability[];
+  };
+  viewerWindow: boolean;
+}): PullRequestMergeRoute {
+  const target = input.federation?.ref.target;
+  if (target && isRemoteFederationTarget(target)) {
+    const { capabilities = [], peerStatus } = input.federation!;
+    if (peerStatus !== undefined && peerStatus !== "connected") return { kind: "none" };
+    return capabilities.includes(THREAD_PULL_REQUEST_MERGE_CAPABILITY) && capabilities.includes("turn_control")
+      ? { kind: "owner", target: { scope: "remote", instanceId: target.instanceId } }
+      : { kind: "none" };
+  }
+  return input.viewerWindow ? { kind: "none" } : { kind: "local" };
 }

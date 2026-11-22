@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
 import type {
   ManageThreadDependenciesResponse,
   ThreadDependency,
@@ -14,8 +14,8 @@ import { PullRequestMergeProvider, type PullRequestMergeService } from "../pull-
 /**
  * The sidebar card's merge, as the design has it: the pill runs the
  * project's method, the chevron lists only what the repository allows, every
- * path asks first, a pick from the list becomes the project's, and a held,
- * draft or federated PR offers nothing to click.
+ * path asks first, a pick from the list becomes the project's, a held or
+ * draft PR offers nothing to click, and a peer's thread merges on its owner.
  */
 const THREAD = { backend: "codex", threadId: "thread-a" } as const;
 
@@ -61,7 +61,11 @@ function api(options: { remembered?: "squash" | "rebase" | "merge"; held?: boole
   };
 }
 
-function renderChip(summary: PrSummary, desktopApi: ReturnType<typeof api>) {
+function renderChip(
+  summary: PrSummary,
+  desktopApi: ReturnType<typeof api>,
+  thread: ThreadPullRequestMergeTarget = THREAD,
+) {
   const merge = vi.fn<PullRequestMergeService["merge"]>(async () => true);
   const service: PullRequestMergeService = { api: desktopApi as unknown as DesktopApi, merge };
   render(
@@ -72,7 +76,7 @@ function renderChip(summary: PrSummary, desktopApi: ReturnType<typeof api>) {
         onOpen={vi.fn()}
         onDetach={vi.fn()}
         cardActions
-        merge={{ thread: THREAD, service }}
+        merge={{ thread, service }}
       />
     </aside>,
   );
@@ -163,6 +167,27 @@ describe("PrChip sidebar card merge", () => {
   });
 });
 
+describe("PrChip card merge on a peer's thread", () => {
+  it("reads the method and holds from the owner, and merges there", async () => {
+    const owner = { scope: "remote", instanceId: "peer-a" } as const;
+    const desktopApi = api({ remembered: "rebase" });
+    const { merge } = renderChip(pr(), desktopApi, { ...THREAD, federationTarget: owner });
+    const card = await openCard();
+    expect(desktopApi.readThreadPullRequestMerge).toHaveBeenCalledWith({ ...THREAD, federationTarget: owner });
+    expect(desktopApi.manageThreadDependencies).toHaveBeenCalledWith(expect.objectContaining({
+      action: "list", ...THREAD, federationTarget: owner,
+    }));
+
+    fireEvent.click(within(card).getByText("Rebase merge"));
+    await act(async () => {
+      fireEvent.click(within(card).getByText("Rebase and merge"));
+    });
+    expect(merge).toHaveBeenCalledWith(expect.objectContaining({
+      thread: { ...THREAD, federationTarget: owner }, method: "rebase",
+    }));
+  });
+});
+
 describe("PullRequestMergeProvider", () => {
   it("reports the merge's result as a toast, success or failure", async () => {
     const desktopApi = api();
@@ -180,6 +205,13 @@ describe("PullRequestMergeProvider", () => {
     );
     await expect(service!.merge({ thread: THREAD, pr: pr(), method: "squash", rememberMethod: false })).resolves.toBe(true);
     expect(showNotice).toHaveBeenLastCalledWith(expect.objectContaining({ tone: "success", title: "Squash-merged #11" }));
+
+    // A peer's thread names its owner, which main sends the merge to.
+    const owner = { scope: "remote", instanceId: "peer-a" } as const;
+    await service!.merge({ thread: { ...THREAD, federationTarget: owner }, pr: pr(), method: "squash", rememberMethod: false });
+    expect(desktopApi.mergeThreadPullRequest).toHaveBeenLastCalledWith({
+      ...THREAD, federationTarget: owner, url: pr().url, method: "squash", rememberMethod: false,
+    });
 
     desktopApi.mergeThreadPullRequest.mockRejectedValueOnce(
       new Error("Error invoking remote method 'thread-pull-request:merge': Error: gh pr merge failed: not mergeable"),

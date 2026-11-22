@@ -24,8 +24,8 @@ export type PullRequestMergeOfferState =
 
 /**
  * What a PR card or the merge dialog offers, read only while one is open:
- * the project's remembered method (from main) and the Continue After holds
- * on this thread's merge (from its owner). A sidebar of chips reads nothing.
+ * the project's remembered method and the Continue After holds on this
+ * thread's merge, both from the instance that owns the thread. A sidebar of chips reads nothing.
  */
 export function usePullRequestMergeOffer(
   pr: PrSummary,
@@ -35,8 +35,9 @@ export function usePullRequestMergeOffer(
   const base = resolvePullRequestMergeOffer({ pr });
   const offered = base.kind !== "none";
   const [preference, setPreference] = useState<{ key: string; value?: ReadThreadPullRequestMergeResponse }>();
-  const { backend, threadId } = thread;
-  const key = `${backend}\u0000${threadId}`;
+  const { backend, threadId, federationTarget } = thread;
+  const owner = federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined;
+  const key = `${owner ?? ""}\u0000${backend}\u0000${threadId}`;
   const wantsMethod = base.kind === "merge";
   useEffect(() => {
     if (!wantsMethod) return;
@@ -46,13 +47,14 @@ export function usePullRequestMergeOffer(
       setPreference({ key });
       return;
     }
-    read({ backend, threadId })
+    read({ backend, threadId, ...(owner ? { federationTarget: { scope: "remote", instanceId: owner } } : {}) })
       .then((value) => { if (!disposed) setPreference({ key, value }); })
       // Unreadable: start on the Settings order over the repository's methods.
       .catch(() => { if (!disposed) setPreference({ key }); });
     return () => { disposed = true; };
-  }, [wantsMethod, key, backend, threadId, service.api]);
-  const holds = useThreadDependencyList(thread.backend, thread.threadId, undefined, service.api, offered, pr.url);
+  }, [wantsMethod, key, backend, threadId, owner, service.api]);
+  // A peer's holds are read from its owner, which also enforces them.
+  const holds = useThreadDependencyList(backend, threadId, federationTarget, service.api, offered, pr.url);
   if (!offered) return base;
   // An owner that cannot answer still refuses a held merge itself.
   if (!holds.ready && !holds.error) return { kind: "loading" };

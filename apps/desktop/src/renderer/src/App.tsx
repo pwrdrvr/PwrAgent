@@ -4554,10 +4554,10 @@ function DesktopAppShell(props: {
       <OperatorWaitsContext.Provider value={operatorWaitsContext}>
       <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
       <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
-      {/* A federation viewer's PR cards do not merge: the owner holds the
-          thread's attachments and merge holds. */}
+      {/* A peer's thread merges on its owner, which holds the thread's
+          attachments and merge holds; see threadPullRequestMergeTarget. */}
       <PullRequestMergeProvider
-        desktopApi={readRendererFederationTarget() ? undefined : desktopApi}
+        desktopApi={desktopApi}
         showNotice={showAppNotice}
       >
       <ThreadProvidersContext.Provider value={threadProviders}>

@@ -1,10 +1,13 @@
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import type {
+  NavigationThreadSummary,
   PrSummary,
   ThreadPullRequestMergeTarget,
 } from "@pwragent/shared/contracts/navigation";
+import { resolvePullRequestMergeRoute } from "@pwragent/shared/pull-request-merge-offer";
 import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { isFederationViewerWindow } from "../../lib/federation-window";
 import { ipcErrorMessage } from "../../lib/open-path-failure";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 
@@ -26,7 +29,27 @@ export type PullRequestMergeService = {
 
 const PullRequestMergeContext = createContext<PullRequestMergeService | undefined>(undefined);
 
-/** Undefined outside a window that can merge, such as a federation viewer. */
+/**
+ * The thread a PR card merges from, or undefined when it offers no merge. A
+ * peer's thread names its owner, which runs the merge; see
+ * `resolvePullRequestMergeRoute`.
+ */
+export function threadPullRequestMergeTarget(
+  thread: Pick<NavigationThreadSummary, "source" | "id" | "federation">,
+): ThreadPullRequestMergeTarget | undefined {
+  const route = resolvePullRequestMergeRoute({
+    ...(thread.federation ? { federation: thread.federation } : {}),
+    viewerWindow: isFederationViewerWindow(),
+  });
+  if (route.kind === "none") return undefined;
+  return {
+    backend: thread.source,
+    threadId: thread.id,
+    ...(route.kind === "owner" ? { federationTarget: route.target } : {}),
+  };
+}
+
+/** Undefined where the desktop API cannot merge. */
 export function usePullRequestMergeService(): PullRequestMergeService | undefined {
   return useContext(PullRequestMergeContext);
 }

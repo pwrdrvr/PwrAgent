@@ -54,6 +54,7 @@ import type {
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+  ThreadPullRequestMergeTarget,
 } from "@pwragent/shared/contracts/navigation";
 import type {
   ProjectForgeAutomation,
@@ -147,7 +148,10 @@ import {
 } from "../pr-status/DetachPullRequestWarning";
 import { resolvePullRequestMergeOffer } from "@pwragent/shared/pull-request-merge-offer";
 import { MergePullRequestDialog } from "../pr-status/MergePullRequestDialog";
-import { usePullRequestMergeService } from "../pr-status/pull-request-merge-context";
+import {
+  threadPullRequestMergeTarget,
+  usePullRequestMergeService,
+} from "../pr-status/pull-request-merge-context";
 import { PullRequestWatchMenuItems } from "../pr-watches/PullRequestWatchMenuItems";
 import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
@@ -984,7 +988,7 @@ function SidebarContent(props: SidebarProps) {
   >();
   const pullRequestMerge = usePullRequestMergeService();
   const [mergingPullRequest, setMergingPullRequest] = useState<
-    { thread: NavigationThreadSummary; pr: PrSummary } | undefined
+    { thread: ThreadPullRequestMergeTarget; pr: PrSummary } | undefined
   >();
   const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
   // Another lens unmounts the field without a commit; forget the edit, or it
@@ -3052,6 +3056,9 @@ function SidebarContent(props: SidebarProps) {
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuPullRequest = contextMenu?.pullRequest;
+  const contextMenuMergeTarget = contextMenuPullRequest && pullRequestMerge
+    ? threadPullRequestMergeTarget(contextMenu.thread)
+    : undefined;
   // Opened from the row, not a chip: one item detaches the thread's PRs.
   // Minimal's single chip draws no ✕, so this is its visible way.
   const contextMenuPrThread = contextMenu && !contextMenuIsBulk && !contextMenuPullRequest
@@ -4601,13 +4608,13 @@ function SidebarContent(props: SidebarProps) {
                           />
                           {/* The PR card's merge, for the keyboard. A
                               thread another PwrAgent owns merges there. */}
-                          {pullRequestMerge && !contextMenu.thread.federation
+                          {pullRequestMerge && contextMenuMergeTarget
                             && resolvePullRequestMergeOffer({ pr: contextMenuPullRequest }).kind !== "none" ? (
                             <button
                               role="menuitem"
                               type="button"
                               onClick={() => {
-                                setMergingPullRequest({ thread: contextMenu.thread, pr: contextMenuPullRequest });
+                                setMergingPullRequest({ thread: contextMenuMergeTarget, pr: contextMenuPullRequest });
                                 setContextMenu(undefined);
                               }}
                             >
@@ -4723,7 +4730,7 @@ function SidebarContent(props: SidebarProps) {
         {mergingPullRequest && pullRequestMerge ? (
           <MergePullRequestDialog
             pr={mergingPullRequest.pr}
-            thread={{ backend: mergingPullRequest.thread.source, threadId: mergingPullRequest.thread.id }}
+            thread={mergingPullRequest.thread}
             service={pullRequestMerge}
             returnFocus={contextMenuOpenerRef}
             onClose={() => setMergingPullRequest(undefined)}

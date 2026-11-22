@@ -2,7 +2,10 @@ import { memo, useMemo, type ComponentProps } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { PrChip } from "../pr-status/PrChip";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
-import { usePullRequestMergeService } from "../pr-status/pull-request-merge-context";
+import {
+  threadPullRequestMergeTarget,
+  usePullRequestMergeService,
+} from "../pr-status/pull-request-merge-context";
 import {
   resolvePrChipWatch,
   useThreadAutoFixRepository,
@@ -15,15 +18,16 @@ type WatchedThread = Pick<
 >;
 
 /**
- * What lets a row's PR card merge: only a local thread's, in a window that
- * merges. A thread another PwrAgent owns merges there, with its own holds.
+ * What lets a row's PR card merge. A thread another PwrAgent owns merges
+ * there, with its own holds, when that owner accepts the request.
  */
 function useThreadPrMerge(thread: WatchedThread): ComponentProps<typeof PrChip>["merge"] {
   const service = usePullRequestMergeService();
-  const local = !thread.federation;
-  return useMemo(() => service && local
-    ? { thread: { backend: thread.source, threadId: thread.id }, service }
-    : undefined, [service, local, thread.source, thread.id]);
+  const { source, id, federation } = thread;
+  return useMemo(() => {
+    const target = service ? threadPullRequestMergeTarget({ source, id, federation }) : undefined;
+    return target && service ? { thread: target, service } : undefined;
+  }, [service, source, id, federation]);
 }
 
 /**
