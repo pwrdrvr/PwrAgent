@@ -308,6 +308,8 @@ export class ElicitationWireChannel {
     } catch {
       return;
     }
+    // `null` and other non-objects parse too; none of them is an answer.
+    if (!message || typeof message !== "object") return;
     if (message.elicitResult && typeof message.elicitResult.id === "number") {
       this.open.get(message.elicitResult.id)?.resolve(message.elicitResult.result);
       return;

@@ -4552,9 +4552,18 @@ export class McpConnectionGatewayService {
     // server's forms, and only a request that opted in listens for them.
     let followUp: ((line: string) => void) | undefined;
     const ignoreLine: (line: string) => void = () => undefined;
+    let refused = false;
+    // Nothing thrown here may escape: a throw from a socket listener is an
+    // uncaught exception in the main process.
     socket.on("data", (chunk: string) => {
+      if (refused) return;
       buffer += chunk;
       if (buffer.length > MAX_RPC_LINE_BYTES) {
+        // Answer once and stop reading, so a peer that keeps writing cannot
+        // grow the buffer while the answer drains.
+        refused = true;
+        buffer = "";
+        socket.pause();
         this.respond(socket, { ok: false, error: "request too large" });
         return;
       }
@@ -4563,11 +4572,22 @@ export class McpConnectionGatewayService {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         if (followUp) {
-          followUp(line);
+          try {
+            followUp(line);
+          } catch (error) {
+            connectionLog.warn("MCP bridge follow-up line failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           continue;
         }
         followUp = ignoreLine;
-        void this.handleBridgeLine(socket, line, (handler) => { followUp = handler; });
+        this.handleBridgeLine(socket, line, (handler) => { followUp = handler; }).catch((error: unknown) => {
+          connectionLog.warn("MCP bridge request failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.respond(socket, { ok: false, error: "request failed" });
+        });
       }
     });
     socket.on("error", () => socket.destroy());
@@ -4582,6 +4602,10 @@ export class McpConnectionGatewayService {
     try {
       request = JSON.parse(line) as BridgeRequest;
     } catch {
+      this.respond(socket, { ok: false, error: "malformed request" });
+      return;
+    }
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
       this.respond(socket, { ok: false, error: "malformed request" });
       return;
     }
