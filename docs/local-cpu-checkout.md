@@ -6,7 +6,7 @@ Use `resource_checkout_discover` on the host running the work. Continue with the
 - Desktop E2E — Budget 4 CPUs for `pnpm --filter @pwragent/desktop test:e2e:prebuilt --workers=1`. `pnpm test:desktop-e2e` also builds the app, so use the uncapped budget below.
 - Lint — Budget 4 CPUs for `OXLINT_THREADS=4 pnpm lint:oxlint` or `OXLINT_THREADS=2 GOMAXPROCS=2 pnpm lint:oxlint:typed`. For plain `pnpm lint`, use the uncapped budget.
 - Typecheck — Budget 4 CPUs for `GOMAXPROCS=4 pnpm -r --workspace-concurrency=1 --if-present typecheck`. This runs one native TypeScript compiler at a time.
-- Builds — For a Rust build, start with 8 CPUs and `cargo build --jobs 8`. If a listed workload may saturate the host and has no effective cap, reserve all but two CPUs, such as 16 of 18 or 12 of 14.
+- Uncapped heavy work — For `pnpm build` and other listed workloads that may saturate the host, reserve all but two CPUs, such as 16 of 18 or 12 of 14.
 
 1. Send `resource_checkout_action` with `kind: "request"`, the discovered `resourceId`, a short `purpose`, an `expectedDurationMs` that covers the run, and an `idempotencyKey`. Set `units` to the CPU count for a counted resource and omit it for an exclusive resource.
 2. Start only after the request is granted. If it queues, use `resource_checkout_status` with the original request key to check for promotion. Cancel an unneeded queued request with `kind: "cancel_request"` and its `queueEntryId`. Apply the parallelism cap in the command itself. A shell checkout coordinates with other PwrAgent checkouts, and shell CPU use is outside broker enforcement.
