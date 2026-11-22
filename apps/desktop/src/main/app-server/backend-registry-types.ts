@@ -1069,7 +1069,7 @@ export type CreatedThreadVisibilityRow = {
 
 export type CreatedThreadDirectoryVisibility = Pick<
   NavigationDirectorySummary,
-  "key" | "kind" | "path"
+  "key" | "kind" | "path" | "checkoutPaths"
 > & {
   directoryThreadsCollapsed: boolean;
   hasPinnedTopLevelThread: boolean;

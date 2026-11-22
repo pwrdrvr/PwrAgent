@@ -5037,6 +5037,7 @@ describe("DesktopBackendRegistry", () => {
     );
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadPin({ backend: "codex", threadId: "thread-pinned", pinnedRank: "1024" });
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
@@ -5079,6 +5080,7 @@ describe("DesktopBackendRegistry", () => {
     const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-project"));
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadPin({ backend: "codex", threadId: "thread-pinned", pinnedRank: "1024" });
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
