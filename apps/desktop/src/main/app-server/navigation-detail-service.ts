@@ -451,7 +451,7 @@ export class NavigationDetailService {
             gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined,
           }))
         : undefined,
-      thread.primaryGitRepository ?? resolvePrimaryThreadRepoKey(thread, undefined, prDemand),
+      thread.primaryGitRepository ?? resolvePrimaryThreadRepoKey(thread, undefined, { demand: prDemand }),
     ]);
     const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
       ? { name, ...subAgentCollection }

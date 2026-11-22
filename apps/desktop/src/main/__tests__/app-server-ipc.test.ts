@@ -2541,14 +2541,14 @@ describe("app server ipc", () => {
     const missing = await read(exact(1));
     expect(missing.entries[0]?.row.prs?.[0]?.number).toBe(2);
     expect((await read(exact(1), missing)).unchanged).toBe(true);
-    expect(runner.mock.calls.filter(([cwd]) => cwd === `${root}-1`)).toHaveLength(2);
+    expect(runner.mock.calls.filter(([cwd]) => cwd === `${root}-1`)).toHaveLength(1);
     now += 60_001;
     defaultBranch = "release";
     const refreshed = await read(exact(0), first);
     expect(refreshed.entries[0]?.row.prs?.[0]?.number).toBe(1);
     expect(refreshed.countsRevision).not.toBe(first.countsRevision);
     expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual([
-      ...Array(2).fill(`${root}-0`), `${root}-1`, `${root}-1`, `${root}-0`, `${root}-0`,
+      ...Array(2).fill(`${root}-0`), `${root}-1`, `${root}-0`, `${root}-0`,
     ]);
 
     getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
@@ -2556,7 +2556,7 @@ describe("app server ipc", () => {
     expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads).toEqual(rows.map((row) => ({
       backend: row.source, threadId: row.id, prKeys: [buildPullRequestStatusKey(row.prs[0]!)],
     })));
-    expect(runner.mock.calls).toHaveLength(6);
+    expect(runner.mock.calls).toHaveLength(5);
   });
 
   it.each([12, 24])("probes only PR-bearing checkouts when a thread starts in an inventory of %i worktrees", async (size) => {
@@ -2746,8 +2746,11 @@ describe("app server ipc", () => {
     expect(service.collectPrPollTargets().map(({ pr }) => pr.number)).toEqual(
       Array.from({ length: checkoutCount }, (_, index) => index + 1),
     );
+    // Plain directories use one config read. Missing paths also try the
+    // Git remote compatibility fallback.
+    const unknownOriginStarts = unownedCount + unownedCount / 2;
     expect(measurements.slice(0, 4).map(({ total, discovery }) => [total, discovery]))
-      .toEqual([[2 * unownedCount, 0], [0, 0], [0, 0], [2 * unownedCount, 0]]);
+      .toEqual([[unknownOriginStarts, 0], [0, 0], [0, 0], [unknownOriginStarts, 0]]);
     const unownedPaths = new Set(rows.slice(checkoutCount).map((row) => row.linkedDirectories[0]!.path));
     expect(starts.slice(0, selectedOffset).every(({ cwd }) => unownedPaths.has(cwd))).toBe(true);
     expect(starts.slice(selectedOffset).map(({ cwd }) => cwd))

@@ -156,8 +156,8 @@ it.each([8, 16])("shares a checkout's remote observation between attachment vali
   const headReads = process.platform === "win32" ? ["symbolic-ref", "symbolic-ref"] : ["rev-parse"];
   const remoteStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-remotes");
   const discoveryStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-discovery");
-  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 4, discovery: size * headReads.length });
-  expect(remoteStarts.map(([cwd]) => cwd).sort()).toEqual([...directories, plain, missing].sort());
+  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 3, discovery: size * headReads.length });
+  expect(remoteStarts.map(([cwd]) => cwd).sort()).toEqual([...directories, missing].sort());
   for (const cwd of checkouts) {
     expect(discoveryStarts.filter(([directory]) => directory === cwd).map(([, args]) => args[0])).toEqual(headReads);
   }

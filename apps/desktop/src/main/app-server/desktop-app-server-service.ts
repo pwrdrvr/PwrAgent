@@ -2799,7 +2799,9 @@ class DesktopAppServerService {
       const unresolved = !stored.key || (live.length > 0
         && !live.some((pr) => this.matchesPrimaryRepository(pr, stored.key)));
       return workspaceChanged || (stored.canProbe && unresolved)
-        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, options.inventoryDemand, Boolean(workspaceChanged))
+        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, {
+            demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : {}),
+          })
         : stored.key;
     }));
     const liveThreadKeys = new Set<string>();
@@ -2888,7 +2890,7 @@ class DesktopAppServerService {
         ...summary.linkedDirectories,
         ...(overlay?.extraLinkedDirectories ?? []),
       ]),
-    }, undefined, demand, fresh);
+    }, undefined, demand ? { demand, confirmEmpty: true, ...(fresh ? { fresh } : {}) } : undefined);
   }
 
   /** Repository authority for forge rules, resolved from the current workspace. */
