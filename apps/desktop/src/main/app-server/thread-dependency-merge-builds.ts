@@ -120,7 +120,13 @@ export async function readMergeBuild(get: MergeBuildGet, target: MergeBuildTarge
     if (observation.conclusion !== "cancelled" || (follow?.count ?? 0) >= THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS || !target.baseBranch) {
       return observation;
     }
-    const head = await readNewerBranchHead(get, target, sha);
+    const head = await readNewerBranchHead(get, target, sha).catch((error: unknown) => {
+      // A branch or commit the forge no longer has, such as a stacked PR's
+      // deleted base branch, has no newer build: the cancelled build stands,
+      // as it did before builds were followed. Any other error is retried.
+      if (isGoneForgeError(error)) return undefined;
+      throw error;
+    });
     if (!head) return observation;
     follow = { sha: head, at: now, count: (follow?.count ?? 0) + 1 };
   }
@@ -154,6 +160,11 @@ async function readNewerBranchHead(get: MergeBuildGet, target: MergeBuildTarget,
   return compare.status === "ahead" ? head : undefined;
 }
 
+/** The forge answered that a ref, or a comparison of two, does not exist. */
+function isGoneForgeError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error.code === "not_found" || error.code === "rejected");
+}
+
 /** A full commit id from a provider, else undefined. */
 function commitId(value: unknown): string | undefined {
   return typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(value) ? value.toLowerCase() : undefined;
@@ -161,9 +172,8 @@ function commitId(value: unknown): string | undefined {
 
 async function readGithubChecks(get: MergeBuildGet, target: MergeBuildTarget, sha: string): Promise<Check[]> {
   const { repository } = target;
-  const mergeCommitSha = sha;
-  const commit = `repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/commits/${encodeURIComponent(mergeCommitSha)}`;
-  const fallback = `${repositoryUrl(repository)}/commit/${mergeCommitSha}`;
+  const commit = `repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/commits/${encodeURIComponent(sha)}`;
+  const fallback = `${repositoryUrl(repository)}/commit/${sha}`;
   const checks: Check[] = [];
   for (let page = 1; page <= MAX_CHECK_PAGES; page++) {
     const body = record(await get(repository, `${commit}/check-runs?filter=latest&per_page=100&page=${page}`));
@@ -193,14 +203,13 @@ async function readGithubChecks(get: MergeBuildGet, target: MergeBuildTarget, sh
   return checks;
 }
 
-/** GitLab: each pipeline for the merge commit on the target branch is one check. */
+/** GitLab: each pipeline for `sha` (the merge commit, or a followed head) on the target branch is one check. */
 async function readGitlabPipelines(get: MergeBuildGet, target: MergeBuildTarget, sha: string): Promise<Check[]> {
   const { repository, baseBranch } = target;
-  const mergeCommitSha = sha;
-  const query = new URLSearchParams({ sha: mergeCommitSha, per_page: "20" });
+  const query = new URLSearchParams({ sha, per_page: "20" });
   if (baseBranch) query.set("ref", baseBranch);
   const rows = list(await get(repository, `projects/${encodeURIComponent(`${repository.owner}/${repository.repo}`)}/pipelines?${query}`));
-  const fallback = `${repositoryUrl(repository)}/-/commit/${mergeCommitSha}`;
+  const fallback = `${repositoryUrl(repository)}/-/commit/${sha}`;
   return rows.map((row) => {
     const status = typeof row.status === "string" ? row.status : "pending";
     const state: Check["state"] = ["created", "waiting_for_resource", "preparing", "pending", "scheduled"].includes(status) ? "queued"
@@ -296,9 +305,11 @@ export function evaluateMergeBuildCondition(condition: ThreadDependencyCondition
     return fired("failed", `Merge build failed${branch}${followed}: ${checks?.failed ?? 0} of ${checks?.total ?? 0} checks failed${names ? ` (${names})` : ""}`);
   }
   if (observation.conclusion === "cancelled") {
-    return fired("satisfied", observation.followedSha
-      ? `Merge build cancelled${branch}${followed}: ${checks?.cancelled ?? 0} checks cancelled, none failed; stopped following after ${observation.follows ?? 1} newer builds`
-      : `Merge build cancelled${branch}: ${checks?.cancelled ?? 0} checks cancelled, none failed; no newer build on the branch contains the merge`);
+    // Only the follow limit stops a follow; otherwise no newer head held the merge.
+    const follows = observation.follows ?? 0;
+    return fired("satisfied", follows >= THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS
+      ? `Merge build cancelled${branch}${followed}: ${checks?.cancelled ?? 0} checks cancelled, none failed; stopped following after ${follows} newer builds`
+      : `Merge build cancelled${branch}${followed}: ${checks?.cancelled ?? 0} checks cancelled, none failed; no newer build on the branch contains the merge`);
   }
   return fired("satisfied", `Merge build passed${branch}${followed}: ${checks?.passed ?? 0} of ${checks?.total ?? 0} checks passed`);
 }

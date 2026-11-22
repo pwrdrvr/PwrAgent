@@ -198,6 +198,50 @@ describe("following a merge build that a newer push cancelled", () => {
     expect(evidence?.reason).toContain(`stopped following after ${THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS} newer builds`);
   });
 
+  it("says no newer build held the merge when a followed build is cancelled below the limit", async () => {
+    // The merge build was cancelled by one push, whose own build was then
+    // cancelled with nothing newer on the branch.
+    const history: History = {
+      builds: [{ conclusion: "cancelled", finishesAtPoll: 0 }, { conclusion: "cancelled", finishesAtPoll: 0 }],
+      pushedAt: [0, 0],
+      diverged: [false, false],
+    };
+    for (const repository of [GITHUB, GITLAB]) {
+      const { evidence, observation } = await run(history, repository, 4);
+      expect(observation?.follows).toBe(1);
+      expect(evidence).toMatchObject({ state: "satisfied" });
+      expect(evidence?.reason).toContain("no newer build on the branch contains the merge");
+      expect(evidence?.reason).not.toContain("stopped following");
+    }
+  });
+
+  it("keeps a cancelled build's pass when the branch is gone, and retries any other read error", async () => {
+    const target = (repository: ForgeRepository): MergeBuildTarget => ({ repository, mergeCommitSha: sha(0), baseBranch: "feat/parent", mergedAt: MERGED_AT });
+    const cancelled = (path: string): unknown => /check-runs/.test(path)
+      ? { total_count: 1, check_runs: [{ name: "unit", status: "completed", conclusion: "cancelled" }] }
+      : /\/status\?/.test(path) ? { statuses: [] }
+        : /pipelines\?/.test(path) ? [{ id: 1, status: "canceled" }]
+          : undefined;
+    const now = MERGED_AT + MERGE_BUILD_SETTLE_MS;
+    for (const repository of [GITHUB, GITLAB]) {
+      // A stacked PR's base branch, deleted after its parent merged: 404.
+      for (const code of ["not_found", "rejected"]) {
+        const gone = async (_repository: ForgeRepository, path: string): Promise<unknown> =>
+          cancelled(path) ?? Promise.reject(Object.assign(new Error("Not Found"), { code }));
+        const observation = await readMergeBuild(gone, target(repository), now);
+        expect(observation).toMatchObject({ status: "completed", conclusion: "cancelled" });
+        expect(observation.followedSha).toBeUndefined();
+        const evidence = evaluateMergeBuildCondition(condition, mergedPr, observation, undefined, now);
+        expect(evidence).toMatchObject({ state: "satisfied" });
+        expect(evidence.reason).toContain("no newer build on the branch contains the merge");
+      }
+      // A transient error is the poller's to retry, not a verdict.
+      const flaky = async (_repository: ForgeRepository, path: string): Promise<unknown> =>
+        cancelled(path) ?? Promise.reject(Object.assign(new Error("Bad gateway"), { code: "provider_error" }));
+      await expect(readMergeBuild(flaky, target(repository), now)).rejects.toThrow("Bad gateway");
+    }
+  });
+
   it("counts a followed build's windows from when it was followed", async () => {
     // The merge build was cancelled at once; the newer build finished as it was followed.
     const history: History = {
