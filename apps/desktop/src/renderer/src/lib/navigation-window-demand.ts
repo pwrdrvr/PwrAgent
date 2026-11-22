@@ -1,6 +1,7 @@
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
+  NavigationAttentionScope,
   NavigationDirectoryRow,
   NavigationIdentity,
   NavigationQueryRequest,
@@ -65,6 +66,8 @@ export function buildNavigationWindowDemand(params: {
   draftRefs?: readonly NavigationIdentity[];
   /** `general.pinned_threads_on_top`; defaults on, as the setting does. */
   pinnedThreadsOnTop?: boolean;
+  /** Attention narrowed to one kind of member; ignored by every other lens. */
+  attentionScope?: NavigationAttentionScope;
 }): Map<string, NavigationQueryRequest> {
   const demand = new Map<string, NavigationQueryRequest>();
   const request = (query: NavigationQueryRequest["query"], pageSize = 10): NavigationQueryRequest => ({
@@ -129,8 +132,10 @@ export function buildNavigationWindowDemand(params: {
     // first page asks for the whole queue up to one protocol page. At the
     // browsing lenses' 10 rows, an 11th running or review thread sat behind
     // "Load more threads" while the badge still counted it.
-    demand.set("lens", request({ kind: "lens", lens: params.browseMode },
-      params.browseMode === "attention" ? NAVIGATION_QUERY_MAX_PAGE_ROWS : undefined));
+    demand.set("lens", request(params.browseMode === "attention" && params.attentionScope
+      ? { kind: "lens", lens: "attention", attention: params.attentionScope }
+      : { kind: "lens", lens: params.browseMode },
+    params.browseMode === "attention" ? NAVIGATION_QUERY_MAX_PAGE_ROWS : undefined));
   }
   for (const parent of params.disclosedParents ?? []) {
     const directoryKey = params.browseMode === "directories"

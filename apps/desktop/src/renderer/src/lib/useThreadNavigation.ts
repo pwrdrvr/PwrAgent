@@ -7,7 +7,7 @@ import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeTo
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
 import type { LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
-import type { RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
+import type { NavigationAttentionScope, RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
@@ -3288,6 +3288,10 @@ export function useThreadNavigation(
     options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
+  /** The kind of member Attention is narrowed to; undefined lists the whole queue. */
+  attentionScope?: NavigationAttentionScope;
+  /** Opens Attention narrowed to `scope`, or the whole queue when undefined. */
+  setAttentionScope: (scope: NavigationAttentionScope | undefined) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   markThreadsSeen: (threads: NavigationThreadSummary[]) => Promise<void>;
   markThreadUnread: (thread: NavigationThreadSummary) => Promise<void>;
@@ -3472,6 +3476,11 @@ export function useThreadNavigation(
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useRecoverableState<BrowseMode>("navigation.browseMode", readBridgedBrowseMode);
+  // Window-local, like the lens itself, and never persisted: a narrowed
+  // queue is a glance, and relaunching into one would hide work the
+  // operator did not ask to hide.
+  const [attentionScope, setAttentionScopeState] = useRecoverableState<NavigationAttentionScope | undefined>(
+    "navigation.attentionScope", undefined);
   const [pinnedGroupCollapsed, setPinnedGroupCollapsedState] = useRecoverableState<boolean>(
     "navigation.pinnedGroupCollapsed", readBridgedPinnedGroupCollapsed);
   const [bridgedPinnedThreadsOnTop] = useState(readBridgedPinnedThreadsOnTop);
@@ -3802,13 +3811,21 @@ export function useThreadNavigation(
     setNavigationBrowseModeRequestRef.current = setNavigationBrowseModeRequest;
   }, [setNavigationBrowseModeRequest]);
 
+  // Choosing a lens, by tab or hotkey, always shows all of it: a narrowed
+  // Attention is reached only from the Attention card's rows.
   const updateBrowseMode = useCallback((nextBrowseMode: BrowseMode): void => {
     const normalized = normalizeBrowseMode(nextBrowseMode);
     setBrowseMode(normalized);
+    setAttentionScopeState(undefined);
     void setNavigationBrowseModeRequestRef.current?.({
       browseMode: normalized,
     }).catch(() => undefined);
-  }, [setBrowseMode]);
+  }, [setAttentionScopeState, setBrowseMode]);
+
+  const selectAttentionScope = useCallback((scope: NavigationAttentionScope | undefined): void => {
+    updateBrowseMode("attention");
+    setAttentionScopeState(scope);
+  }, [setAttentionScopeState, updateBrowseMode]);
 
   // One write per change: a reveal that finds the group already open, or a
   // repeated toggle to the same value, must not commit.
@@ -3893,6 +3910,7 @@ export function useThreadNavigation(
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     loadedRowsByQuery, onLoadMore: rememberLoadedRows, onRangeReset: forgetLoadedRows,
     browseMode, target: rendererFederationTarget, attentionView,
+    attentionScope: browseMode === "attention" ? attentionScope : undefined,
     pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
     selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys, disclosedParents,
@@ -10423,6 +10441,8 @@ export function useThreadNavigation(
 
   return {
     browseMode: shownBrowseMode,
+    attentionScope: shownBrowseMode === "attention" ? attentionScope : undefined,
+    setAttentionScope: selectAttentionScope,
     pinnedThreadsOnTop,
     pinnedGroupCollapsed,
     setPinnedGroupCollapsed,

@@ -4664,6 +4664,8 @@ function DesktopAppShell(props: {
             remoteBackends={remoteSidebarBackends}
             onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
             browseMode={navigation.browseMode}
+            attentionScope={navigation.attentionScope}
+            onAttentionScopeChange={navigation.setAttentionScope}
             pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
             pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
             onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}

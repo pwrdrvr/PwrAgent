@@ -4752,6 +4752,98 @@ describe("Sidebar", () => {
       // The consequence lines exist nowhere else, so the card has to be
       // reachable to a screen reader rather than sighted-only.
       expect(tab).toHaveAttribute("aria-describedby", card.id);
+      // Without a way to narrow the lens, the card stays a readout.
+      expect(within(card).queryByRole("button")).toBeNull();
+    });
+
+    it("narrows the lens from a card the pointer can cross into", () => {
+      vi.useFakeTimers();
+      try {
+        const onAttentionScopeChange = vi.fn();
+        render(
+          <Sidebar
+            backends={backends}
+            browseMode="inbox"
+            directories={directories}
+            inboxThreads={allThreads}
+            loading={false}
+            creatingThread={undefined}
+            selectedItemKey={undefined}
+            threads={allThreads}
+            onBrowseModeChange={() => undefined}
+            onAttentionScopeChange={onAttentionScopeChange}
+            onCreateThread={async () => undefined}
+            onOpenLaunchpad={async () => undefined}
+            onSelectThread={() => undefined}
+          />,
+        );
+        const tab = screen.getByRole("tab", { name: /^Attention,/ });
+        fireEvent.mouseEnter(tab);
+        const card = screen.getByRole("tooltip");
+        // Leaving the tab keeps the card across the bridge; reaching it
+        // holds it there for as long as the pointer stays.
+        fireEvent.mouseLeave(tab);
+        act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 1));
+        fireEvent.mouseEnter(card);
+        act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS * 2));
+        expect(screen.getByRole("tooltip")).toBe(card);
+
+        fireEvent.click(within(card).getByRole("button", { name: /To review/ }));
+        expect(onAttentionScopeChange).toHaveBeenLastCalledWith("review");
+        expect(screen.queryByRole("tooltip")).toBeNull();
+
+        // A card left for good closes once the bridge runs out.
+        fireEvent.mouseEnter(tab);
+        fireEvent.mouseLeave(tab);
+        act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+        expect(screen.queryByRole("tooltip")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("names a narrowed lens on the tab, over the list and in the card", () => {
+      const onAttentionScopeChange = vi.fn();
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          attentionScope="review"
+          directories={directories}
+          inboxThreads={allThreads}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onAttentionScopeChange={onAttentionScopeChange}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      const tab = screen.getByRole("tab", {
+        name: "Attention, 1 active thread, 1 thread to review, showing to review only",
+      });
+      expect(tab).toHaveAttribute("data-attention-scope", "review");
+      const browseSection = screen.getByRole("region", { name: "Thread browser" });
+      expect(within(browseSection).getByText(unreadThread.title)).toBeInTheDocument();
+      expect(within(browseSection).queryByText(activeThread.title)).toBeNull();
+
+      fireEvent.mouseEnter(tab);
+      const card = screen.getByRole("tooltip");
+      expect(within(card).getByRole("button", { name: /To review/ })).toHaveAttribute("aria-current", "true");
+      expect(within(card).getByRole("button", { name: /In progress/ })).not.toHaveAttribute("aria-current");
+      fireEvent.click(within(card).getByRole("button", { name: /Show All Attention/ }));
+      expect(onAttentionScopeChange).toHaveBeenLastCalledWith(undefined);
+
+      // The strip's Show All is the keyboard's way back: the card's rows
+      // stay out of the Tab order.
+      const showAll = screen.getByRole("button", { name: "Show All" });
+      expect(showAll).not.toHaveAttribute("tabindex", "-1");
+      onAttentionScopeChange.mockClear();
+      fireEvent.click(showAll);
+      expect(onAttentionScopeChange).toHaveBeenCalledWith(undefined);
     });
 
     it("pushes fresh counts into a card the pointer is still resting on", async () => {

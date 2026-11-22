@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
+  NAVIGATION_ATTENTION_SCOPES,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -244,6 +245,11 @@ function validateRequest(request: NavigationQueryRequest): void {
   if (request.query.kind === "lens" && request.query.roots !== undefined
     && !["pinned", "unpinned"].includes(request.query.roots)) {
     throw new NavigationQueryError("navigation_invalid_request", "Invalid lens root split.");
+  }
+  if (request.query.kind === "lens" && request.query.attention !== undefined
+    && (request.query.lens !== "attention"
+      || !(NAVIGATION_ATTENTION_SCOPES as readonly string[]).includes(request.query.attention))) {
+    throw new NavigationQueryError("navigation_invalid_request", "Invalid Attention scope.");
   }
   if (request.query.kind === "exact" && request.query.identities.length > 100) {
     throw new NavigationQueryError(

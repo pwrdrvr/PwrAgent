@@ -6555,6 +6555,164 @@ body.is-project-index-resizing {
   line-height: 1.3;
 }
 
+/* The sidebar tab's card is enterable (AttentionSignals `scopes`): each
+   counted row narrows Attention to its kind, and the footer shows all of it
+   again. Rows take the project card's target recipe (`.project-card__target`)
+   so the app's clickable card rows read as one family. The negative margin
+   keeps the indicator, label and count columns where the readout card has
+   them; the 2px gap replaces the readout's 8px because the rows' own
+   padding now carries the air. */
+.attention-card__section--pick {
+  gap: 2px;
+}
+
+.attention-card__row--pick {
+  width: calc(100% + 12px);
+  min-height: 28px;
+  margin: 0 -6px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.attention-card__row--pick {
+  cursor: pointer;
+}
+
+button.attention-card__row--pick:hover {
+  background: var(--accent-soft);
+}
+
+/* The current scope wears the active lens tab's paint. */
+.attention-card__row--pick.is-selected {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+button.attention-card__row--pick:hover .attention-card__row-label,
+.attention-card__row--pick.is-selected .attention-card__row-label {
+  color: var(--accent-bright);
+}
+
+.attention-card__footer--pick {
+  padding-top: 6px;
+}
+
+.attention-card__show-all {
+  display: block;
+  width: calc(100% + 12px);
+  margin: 0 -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.attention-card__show-all:hover {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+/* A narrowed Attention, read off the tab: the readouts outside the scope
+   take the zero treatment's grey. Colour rather than opacity, so the
+   digits keep the muted token's contrast, and the count stays — it is
+   still true, only not listed. */
+.lens-switch__button--attention[data-attention-scope="review"] .signal-count--active,
+.lens-switch__button--attention[data-attention-scope="review"] .signal-count--remote-active,
+.lens-switch__button--attention[data-attention-scope="active"] .signal-count--idle,
+.lens-switch__button--attention[data-attention-scope="active-local"] .signal-count--idle,
+.lens-switch__button--attention[data-attention-scope="active-local"] .signal-count--remote-active,
+.lens-switch__button--attention[data-attention-scope="active-remote"] .signal-count--active,
+.lens-switch__button--attention[data-attention-scope="active-remote"] .signal-count--idle {
+  color: var(--text-muted);
+}
+
+/* The scanner sets its own tint, so the grey goes on it directly — the
+   recipe `.signal-count--remote-active .thinking-scanner` uses. */
+.lens-switch__button--attention[data-attention-scope="review"] .signal-count--active .thinking-scanner,
+.lens-switch__button--attention[data-attention-scope="active-remote"] .signal-count--active .thinking-scanner {
+  --thinking-scanner-tint: var(--text-muted);
+  --thinking-scanner-tint-bright: var(--text-secondary);
+  --thinking-scanner-track: var(--bg-panel-hover);
+}
+
+.lens-switch__button--attention[data-attention-scope^="active"] .signal-count--idle .thread-row__status-cookie {
+  border-color: var(--border-subtle);
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+/* The line over a narrowed Attention list (Sidebar `AttentionScopeStrip`).
+   Inset to the lane like the rows under it; it does not scroll with them. */
+.attention-scope {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  margin: 6px var(--sidebar-lane-inset) 2px;
+  padding: 2px 3px 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.attention-scope .signal-count {
+  justify-content: center;
+  width: 16px;
+  gap: 0;
+}
+
+.attention-scope__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-scope__count {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.attention-scope__show-all {
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.attention-scope__show-all:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.attention-scope__show-all:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* The turn readouts, stacked. One row is the common case and reads exactly as
    it did when it was a bare child of the tab — a single-item column is its own
    content box, so nothing moves. The second row only exists while a peer has

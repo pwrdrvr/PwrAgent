@@ -84,7 +84,21 @@ export function navigationQueryFixture(
   }
   if (query.kind === "search") threads = rankThreadJumpMatches(all, query.text);
   if (query.kind === "lens") {
-    if (query.lens === "attention") threads = all.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox);
+    if (query.lens === "attention") {
+      threads = all.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox);
+      // The owner's scope predicates (`isInAttentionScope`), restated for
+      // the fixture's simpler notion of a running thread.
+      const scope = query.attention;
+      if (scope) {
+        threads = threads.filter((thread) => {
+          const active = thread.threadStatus === "active";
+          const remote = thread.federation?.ref.target.scope === "remote";
+          return scope === "review" ? thread.inbox.inInbox && !active
+            : scope === "active" ? active
+              : active && remote === (scope === "active-remote");
+        });
+      }
+    }
     else if (!options?.ownerLensOrder) threads = [...all].sort((left, right) => query.lens === "recents"
       ? (right.createdAt ?? 0) - (left.createdAt ?? 0) : (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }

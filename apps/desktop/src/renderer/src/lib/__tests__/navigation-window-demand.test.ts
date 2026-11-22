@@ -247,3 +247,14 @@ it("treats the Pinned group as a visible collection for children and mounted own
   addVisibleMountedOwnerDemand({ demand, pages });
   expect(demand.get('visible-owner:"peer":0')?.query).toEqual({ kind: "exact", identities: [ref("mounted", "peer")] });
 });
+
+it("asks the owner for a narrowed Attention queue, and only on Attention", () => {
+  const lens = (params: Partial<Parameters<typeof buildNavigationWindowDemand>[0]>) =>
+    buildNavigationWindowDemand({ ...base, ...params }).get("lens")?.query;
+  expect(lens({ browseMode: "attention", attentionScope: "review" }))
+    .toEqual({ kind: "lens", lens: "attention", attention: "review" });
+  expect(lens({ browseMode: "attention" })).toEqual({ kind: "lens", lens: "attention" });
+  // A stale scope from Attention must never narrow another lens.
+  expect(lens({ browseMode: "recents", pinnedThreadsOnTop: false, attentionScope: "review" }))
+    .toEqual({ kind: "lens", lens: "recents" });
+});

@@ -808,6 +808,28 @@ export const NAVIGATION_BROWSE_MODES = [
 export const DEFAULT_NAVIGATION_BROWSE_MODE: NavigationBrowseMode = "inbox";
 
 /**
+ * One kind of Attention member: the rows of the Attention card, which an
+ * operator can pick to narrow the lens to that kind alone. Each is the exact
+ * predicate its count uses (`NavigationCounts`), so a narrowed list holds the
+ * number its row showed:
+ *
+ * - `active`: a live turn, sub-agent or background task anywhere.
+ * - `active-local` / `active-remote`: the same, split by whether the thread
+ *   is a peer's (`federation.ref.target.scope === "remote"`). The card
+ *   offers the split only while peer work is running.
+ * - `review`: unread and idle. An unread thread that is still running
+ *   counts as in progress, not as to review, here as in the counts.
+ */
+export type NavigationAttentionScope = "active" | "active-local" | "active-remote" | "review";
+
+export const NAVIGATION_ATTENTION_SCOPES = [
+  "active",
+  "active-local",
+  "active-remote",
+  "review",
+] as const satisfies readonly NavigationAttentionScope[];
+
+/**
  * The one allowlist for a persisted / bridged lens value. Lives here rather
  * than in the desktop app because three processes decode it independently —
  * main (sqlite), preload (the pre-paint `additionalArguments` hint), and the
@@ -2470,6 +2492,12 @@ export type NavigationQuery =
        * viewer then filters by each root's own pin.
        */
       roots?: "pinned" | "unpinned";
+      /**
+       * Attention only: list just one kind of member. Ranks still come from
+       * the whole queue, so narrowing never moves a thread. An older owner
+       * ignores the field and answers with the whole queue.
+       */
+      attention?: NavigationAttentionScope;
     }
   | {
       kind: "directory";

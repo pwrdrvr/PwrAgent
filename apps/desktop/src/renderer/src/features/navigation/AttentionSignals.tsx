@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import type { NavigationAttentionScope } from "@pwragent/shared/contracts/navigation";
 import { SignalCount } from "../../components/SignalCount";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
@@ -123,12 +124,17 @@ function AttentionCardRow(props: {
   label: string;
   /** What quitting does to this row's work. Omitted when nothing is at stake. */
   note?: string;
+  /**
+   * Narrows the surface to this row's kind. A row with nothing in it (or an
+   * unknown count) stays a label: picking it could only show an empty list.
+   */
+  onPick?: () => void;
+  /** This row's kind is the one the surface is narrowed to. */
+  selected?: boolean;
 }) {
-  return (
-    <div
-      className="attention-card__row"
-      data-zero={props.unknown || props.count === 0 ? "true" : undefined}
-    >
+  const zero = props.unknown || props.count === 0;
+  const content = (
+    <>
       <span
         aria-hidden="true"
         className={`signal-count signal-count--${
@@ -153,6 +159,29 @@ function AttentionCardRow(props: {
         ) : null}
       </span>
       <span className="attention-card__row-value">{props.unknown ? "Unavailable" : props.count}</span>
+    </>
+  );
+  if (props.onPick && !zero) {
+    // Out of the Tab order like every enterable card's controls: the scope
+    // strip's Show all and the tab itself are the keyboard's way back.
+    return (
+      <button
+        type="button"
+        tabIndex={-1}
+        className={`attention-card__row attention-card__row--pick${props.selected ? " is-selected" : ""}`}
+        aria-current={props.selected ? "true" : undefined}
+        onClick={props.onPick}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div
+      className={`attention-card__row${props.onPick ? " attention-card__row--pick" : ""}`}
+      data-zero={zero ? "true" : undefined}
+    >
+      {content}
     </div>
   );
 }
@@ -187,7 +216,24 @@ export type AttentionCardOptions = {
    * has only the chip's fill to learn it is a filter.
    */
   footer?: string;
+  /**
+   * Makes each counted row a way to narrow the surface to that kind of
+   * thread, and the footer a way back to all of them. The sidebar's tab
+   * passes it; the map's chip does not, and its card stays a readout.
+   */
+  scopes?: {
+    selected?: NavigationAttentionScope;
+    onSelect: (scope: NavigationAttentionScope | undefined) => void;
+  };
 };
+
+/**
+ * The scope a turn row narrows to. "In progress" without the split is every
+ * turn; with it, the first row is this machine's alone.
+ */
+function turnRowScope(split: boolean): NavigationAttentionScope {
+  return split ? "active-local" : "active";
+}
 
 /**
  * The hover card's content. A card, not a text tooltip: every other lens tab
@@ -199,14 +245,24 @@ export type AttentionCardOptions = {
  */
 function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
   const activeRemote = props.activeRemote;
+  const scopes = props.scopes;
+  const split = activeRemote !== undefined;
+  const localScope = turnRowScope(split);
+  const pick = (scope: NavigationAttentionScope) => scopes ? () => scopes.onSelect(scope) : undefined;
+  // "Here" and "everything" are one list once no peer work is running, so a
+  // lens narrowed to either marks the one turn row the card still has.
+  const isSelected = (scope: NavigationAttentionScope) => scopes?.selected === scope
+    || (scope === "active" && scopes?.selected === "active-local");
   return (
     <>
       <div className="attention-card__eyebrow">{props.title}</div>
       <div className="attention-card__caption">{props.caption}</div>
-      <div className="attention-card__section">
+      <div className={`attention-card__section${scopes ? " attention-card__section--pick" : ""}`}>
         <AttentionCardRow
           count={props.activeLocal}
           unknown={props.unknownLocal}
+          onPick={pick(localScope)}
+          selected={isSelected(localScope)}
           indicator="turn"
           // Only qualify the row once there is something to tell it apart
           // from.
@@ -219,6 +275,8 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
           <AttentionCardRow
             count={activeRemote}
             unknown={props.unknownRemote}
+            onPick={pick("active-remote")}
+            selected={isSelected("active-remote")}
             indicator="remote-turn"
             label="In progress elsewhere"
             note="Quitting leaves these running"
@@ -227,11 +285,24 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
         <AttentionCardRow
           count={props.review}
           unknown={props.unknownReview}
+          onPick={pick("review")}
+          selected={isSelected("review")}
           indicator="review"
           label={props.reviewLabel}
         />
       </div>
-      {props.footer ? (
+      {props.footer && scopes ? (
+        <div className="attention-card__footer attention-card__footer--pick">
+          <button
+            type="button"
+            tabIndex={-1}
+            className="attention-card__show-all"
+            onClick={() => scopes.onSelect(undefined)}
+          >
+            {props.footer}
+          </button>
+        </div>
+      ) : props.footer ? (
         <div className="attention-card__footer">{props.footer}</div>
       ) : null}
     </>
@@ -290,6 +361,8 @@ export function useAttentionHoverCard(
      * its thread-card tooltips use.
      */
     className?: string;
+    /** An enterable card: see `useViewportTooltip`'s `interactive`. */
+    interactive?: Parameters<typeof useViewportTooltip>[0]["interactive"];
   },
 ): {
   card: ReactNode;
@@ -297,9 +370,16 @@ export function useAttentionHoverCard(
 } {
   const tooltip = useViewportTooltip({
     className: props.className ?? "attention-card",
+    interactive: props.interactive,
   });
   const { activeLocal, activeRemote, review, unknownLocal, unknownRemote, unknownReview, title, caption, reviewLabel, footer } =
     props;
+  const selectedScope = props.scopes?.selected;
+  // Held by ref so a host that passes a fresh callback each render does not
+  // rebuild the card (and push it into an open portal) on every render.
+  const onSelectScopeRef = useRef(props.scopes?.onSelect);
+  onSelectScopeRef.current = props.scopes?.onSelect;
+  const pickable = props.scopes !== undefined;
   // Built only when its data moves, not on every render of a host that
   // re-renders per streamed item (the tab) or per pan frame (the map chip):
   // the element is inert until hover, and the memo key below is also what
@@ -317,9 +397,14 @@ export function useAttentionHoverCard(
         caption={caption}
         reviewLabel={reviewLabel}
         footer={footer}
+        scopes={pickable ? {
+          selected: selectedScope,
+          onSelect: (scope) => onSelectScopeRef.current?.(scope),
+        } : undefined}
       />
     ),
-    [activeLocal, activeRemote, review, unknownLocal, unknownRemote, unknownReview, title, caption, reviewLabel, footer],
+    [activeLocal, activeRemote, review, unknownLocal, unknownRemote, unknownReview, title, caption, reviewLabel, footer,
+      pickable, selectedScope],
   );
   const pushedCardRef = useRef<ReactNode>(undefined);
   const tooltipVisible = tooltip.visible;
