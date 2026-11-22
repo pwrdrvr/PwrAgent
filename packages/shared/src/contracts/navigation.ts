@@ -484,6 +484,8 @@ export type ThreadSubAgentSummary = {
    * own usage line carries the helper's turn, not the parent's.
    */
   parentTurnId?: ThreadIdentifier;
+  /** The monitor delivery that prompted this monitor's setup, when known. */
+  triggeringMonitorId?: string;
   lastMessage?: string;
   outcome?: "success" | "failure" | "cancelled";
   completedAt?: number;

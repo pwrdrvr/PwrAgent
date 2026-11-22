@@ -195,7 +195,15 @@ export type ThreadPendingWakesList = {
   incomplete?: true;
 };
 
+export type JobMonitorWakeAlert = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  generation: number;
+  trippedAt: number;
+};
+
 export type ThreadPendingWakesRequest =
+  | { action: "list_monitor_wake_alerts"; federationTarget?: never }
   | {
       action: "list";
       backend: AppServerBackendKind;
@@ -218,10 +226,11 @@ export type ThreadPendingWakesRequest =
        * Clears a tripped automatic wake guard. Only the local operator
        * of the owning instance may; a peer or an agent is refused.
        */
-      action: "rearm_follow_ups" | "rearm_monitor_wakes";
+      action: "rearm_follow_ups" | "rearm_monitor_wakes" | "acknowledge_monitor_wake_alert";
       backend: AppServerBackendKind;
       threadId: string;
       federationTarget?: FederationTarget;
+      generation?: number;
     };
 
 export type ThreadPendingWakesErrorCode =
@@ -231,7 +240,7 @@ export type ThreadPendingWakesErrorCode =
   | "failed";
 
 export type ThreadPendingWakesResponse =
-  | ({ ok: true } & Partial<ThreadPendingWakesList> & { stopped?: boolean; rearmed?: boolean })
+  | ({ ok: true } & Partial<ThreadPendingWakesList> & { stopped?: boolean; rearmed?: boolean; monitorWakeAlerts?: JobMonitorWakeAlert[] })
   | { ok: false; error: { code: ThreadPendingWakesErrorCode; message: string } };
 
 /**

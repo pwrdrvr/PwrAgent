@@ -771,6 +771,7 @@ export type TaskMonitorDelegationRecord = {
   parentThreadId: string;
   parentTurnId: string;
   wakeGeneration?: number;
+  triggeringMonitorId?: string;
   rootTurnId?: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
@@ -783,6 +784,7 @@ export type TaskMonitorDelegationRecord = {
   cancellation?: TaskMonitorCancellationState;
   finalizationStarted?: boolean;
   recoveryAttempted?: boolean;
+  recoveredAfter?: "completed" | "failed" | "cancelled";
   staleInterruptAttempted?: boolean;
   /**
    * A Claude monitor ended its turn while a background watcher ran. The

@@ -1306,6 +1306,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     isAdmissionHeld: () => ports.restartGate.phase === "quieting",
     startTurn: async (entry) => await ports.startTurnNow(entry),
     prepareDispatch: (entry) => subAgentMonitorService.prepareTaskMonitorWakeDispatch(entry),
+    needsFreshDispatchSlot: (entry) => subAgentMonitorService.taskMonitorDispatchSpendsSlot(entry),
+    reviewQueuedDispatch: (entry) => subAgentMonitorService.reviewQueuedTaskMonitorDispatch(entry),
     onSteerNotSent: (entries) => subAgentMonitorService.releaseUnsentTaskMonitorWakes(entries),
     canSteerThread: (entry) => !ports.stoppingRunningTurnsForShutdown
       && !ports.threadHasBlockingWorkspaceMove(entry)
@@ -1452,6 +1454,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         listThreadSubAgentsByMonitorIdPrefix: (...args) => overlayStore.listThreadSubAgentsByMonitorIdPrefix(...args),
         upsertThreadSubAgent: (...args) => overlayStore.upsertThreadSubAgent(...args),
         listActiveThreadSubAgents: (...args) => overlayStore.listActiveThreadSubAgents(...args),
+        get listEndedThreadTaskMonitors() { return overlayStore.listEndedThreadTaskMonitors?.bind(overlayStore); },
         listArchiveActiveSubAgentThreadIds: (...args) => overlayStore.listArchiveActiveSubAgentThreadIds(...args),
       },
       workspaces: {

@@ -9783,6 +9783,8 @@ export class DesktopBackendRegistry {
           results.push({ entryId: resolution.entryId, status: cancelled ? "discarded" : "not_found" });
           continue;
         }
+        const review = this.subAgentMonitorService.reviewQueuedTaskMonitorDispatch(entry);
+        if (review) await review;
         const resumed = await this.setQueuedTurnPaused({
           queueEntryId: resolution.entryId,
           paused: false,
@@ -12200,8 +12202,16 @@ export class DesktopBackendRegistry {
     return this.subAgentMonitorService.taskMonitorWakesTripped(thread);
   }
 
-  rearmTaskMonitorWakes(thread: { backend: AppServerBackendKind; threadId: string }): boolean {
-    if (!this.subAgentMonitorService.rearmTaskMonitorWakes(thread)) return false;
+  listTaskMonitorWakeAlerts() {
+    return this.subAgentMonitorService.listTaskMonitorWakeAlerts();
+  }
+
+  acknowledgeTaskMonitorWakeAlert(thread: { backend: AppServerBackendKind; threadId: string }, generation: number): boolean {
+    return this.subAgentMonitorService.acknowledgeTaskMonitorWakeAlert(thread, generation);
+  }
+
+  rearmTaskMonitorWakes(thread: { backend: AppServerBackendKind; threadId: string }, generation?: number): boolean {
+    if (!this.subAgentMonitorService.rearmTaskMonitorWakes(thread, generation)) return false;
     for (const entry of this.threadTurnQueue.getQueuedEntries(thread)) {
       if (isOnlyTaskMonitorWake(entry)) {
         this.cancelQueuedTurn(entry.id, "Job Monitor wakes were rearmed for future monitors.");

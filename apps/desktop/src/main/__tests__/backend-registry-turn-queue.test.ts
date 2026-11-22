@@ -470,7 +470,10 @@ describe("DesktopBackendRegistry", () => {
           input: agentMessages.flatMap((message) => message.input), messageOrigin: agentMessages[0]!.origin,
           queued: { origin: "manual", delivery: "queued-steer", agentMessages, agentMessageOrigins: agentMessages.map((message) => message.origin), paused: true },
         }]);
-        for (const monitorId of ["1", "2", "3", "4"]) guard.reserve({ ...parent, monitorId }, 0);
+        for (const monitorId of ["1", "2", "3"]) guard.reserve({ ...parent, monitorId }, 0);
+        const review = guard.claimReview(parent);
+        if (typeof review === "string") throw new Error(`Expected a claimed review, received ${review}`);
+        guard.settleReview(parent, review, "loop");
         const { registry, codexClient } = launch(store, "after", ["after"], {}, false, guard);
         try {
           if (rearm) expect(registry.rearmTaskMonitorWakes(parent)).toBe(true);

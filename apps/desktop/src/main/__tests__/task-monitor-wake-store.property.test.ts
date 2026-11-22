@@ -69,13 +69,19 @@ describe("Job Monitor wake admission", () => {
               if (dispatch) report.deliveryOwner = owner;
               decision = "admitted";
             } else {
-              parent.tripped = true;
-              decision = "tripped";
+              decision = "review";
             }
           }
           const actual = dispatch ? store.dispatch(report.wake, owner, false) : store.reserve(report.wake, report.generation);
           expect(actual, `${report.wake.monitorId} reported ${report.outcome}`).toBe(decision);
           expect(store.read(report.wake)).toEqual(parent);
+          if (decision === "review") {
+            const review = store.claimReview(report.wake);
+            if (typeof review === "string") throw new Error(`Expected a claimed review, received ${review}`);
+            expect(connections[1 - connection]!.store.claimReview(report.wake)).toBe("pending");
+            expect(store.settleReview(report.wake, review, "loop")).toBe(true);
+            parent.tripped = true;
+          }
           return actual;
         }
 
@@ -104,7 +110,7 @@ describe("Job Monitor wake admission", () => {
           await scheduler.waitIdle();
           const decisions = await Promise.all(batch);
           expect(decisions.filter((decision) => decision === "admitted")).toHaveLength(3);
-          expect(decisions.filter((decision) => decision === "tripped")).toHaveLength(1);
+          expect(decisions.filter((decision) => decision === "review")).toHaveLength(1);
 
           restart();
           expect(connections[0]!.store.read(PARENT).tripped).toBe(true);
@@ -153,7 +159,10 @@ describe("Job Monitor wake admission", () => {
       time += 1;
       expect(store.reserve(wake("fresh-1"), 0)).toBe("admitted");
       expect(store.reserve(wake("fresh-2"), 0)).toBe("admitted");
-      expect(store.dispatch(wake("old-hold"), "owner", false)).toBe("tripped");
+      expect(store.dispatch(wake("old-hold"), "owner", false)).toBe("review");
+      const review = store.claimReview(PARENT);
+      if (typeof review === "string") throw new Error(`Expected a claimed review, received ${review}`);
+      expect(store.settleReview(PARENT, review, "loop")).toBe(true);
 
       expect(store.rearm(PARENT)).toBe(true);
       expect(store.dispatch(wake("legacy"), "owner", true)).toBe("suppressed");
@@ -163,10 +172,54 @@ describe("Job Monitor wake admission", () => {
       time += 1;
       expect(store.reserve(wake("fresh-3"), 1)).toBe("admitted");
       expect(store.reserve(wake("fresh-4"), 1)).toBe("admitted");
-      expect(store.reserve(wake("fresh-5"), 1)).toBe("tripped");
+      expect(store.reserve(wake("fresh-5"), 1)).toBe("review");
     } finally {
       db.close();
     }
+  });
+
+  it("recovers expired reviews across owners and opens the operator latch only for a current loop verdict", () => {
+    fc.assert(fc.property(fc.constantFrom("loop", "continue", "unavailable"), fc.nat(30), (verdict, tail) => {
+      const temp = createTempStateDb("pwragent-monitor-review-lease-");
+      let now = THIRTY_MINUTES;
+      const first = StateDb.open(temp.dbPath);
+      const second = StateDb.open(temp.dbPath);
+      const a = new TaskMonitorWakeStore(first.raw, () => now);
+      const b = new TaskMonitorWakeStore(second.raw, () => now);
+      const wake = (id: number) => ({ ...PARENT, monitorId: String(id) });
+      try {
+        for (let index = 0; index < 3; index++) expect(a.reserve(wake(index), 0)).toBe("admitted");
+        expect(a.reserve(wake(3), 0)).toBe("review");
+        const previous = a.claimReview(PARENT);
+        if (typeof previous === "string") throw new Error(`Expected a claimed review, received ${previous}`);
+        expect(b.claimReview(PARENT)).toBe("pending");
+        now += 60_000 + tail;
+        const current = b.claimReview(PARENT);
+        if (typeof current === "string") throw new Error(`Expected a recovered review, received ${current}`);
+        expect(a.settleReview(PARENT, previous, "loop")).toBe(false);
+        expect(b.settleReview(PARENT, current, verdict)).toBe(true);
+        expect(a.read(PARENT).tripped).toBe(verdict === "loop");
+        expect(a.reserve(wake(3), 0)).toBe(verdict === "continue" ? "admitted" : "suppressed");
+        expect(a.listAlerts()).toHaveLength(verdict === "loop" ? 1 : 0);
+        if (verdict === "loop") {
+          expect(b.acknowledge(PARENT, 0)).toBe(true);
+          expect(a.listAlerts()).toEqual([]);
+          expect(a.read(PARENT).tripped).toBe(true);
+          expect(a.rearm(PARENT, 1)).toBe(false);
+          expect(b.rearm(PARENT, 0)).toBe(true);
+          expect(a.reserve(wake(3), 0)).toBe("suppressed");
+          expect(a.reserve(wake(4), 1)).toBe("admitted");
+        } else if (verdict === "unavailable") {
+          expect(a.claimReview(PARENT)).toBe("settled");
+          now += THIRTY_MINUTES;
+          expect(a.reserve(wake(4), 0)).toBe("admitted");
+        }
+      } finally {
+        first.close();
+        second.close();
+        removeTempStateDbDir(temp.tempDir);
+      }
+    }), { numRuns: 15, examples: [["loop", 0], ["continue", 0], ["unavailable", 0]] });
   });
 
   it("records SQLite commits for pending, admitted, tripped and rearmed wakes", async () => {
@@ -196,10 +249,26 @@ describe("Job Monitor wake admission", () => {
       expect(store.dispatch(wake("first"), "new-owner", false)).toBe("admitted");
       expect(store.reserve(wake("second"), 0)).toBe("admitted");
       expect(store.reserve(wake("third"), 0)).toBe("admitted");
-      await measure("job-monitor-wake-tripped", "trip once, then suppress 100 independent terminal reports and a held dispatch", () => {
-        expect(store.reserve(wake("fourth"), 0)).toBe("tripped");
+      const claim = () => {
+        const review = store.claimReview(PARENT);
+        if (typeof review === "string") throw new Error(`Expected a claimed review, received ${review}`);
+        return review;
+      };
+      await measure("job-monitor-wake-reviewed", "claim one review and allow another tranche after differentiated work", () => {
+        expect(store.reserve(wake("fourth"), 0)).toBe("review");
+        expect(store.settleReview(PARENT, claim(), "continue")).toBe(true);
+      });
+      for (const id of ["fourth", "fifth", "sixth"]) expect(store.reserve(wake(id), 0)).toBe("admitted");
+      await measure("job-monitor-wake-tripped", "claim a review and trip once on its verdict, then suppress 100 reports and a held dispatch", () => {
+        expect(store.reserve(wake("seventh"), 0)).toBe("review");
+        expect(store.settleReview(PARENT, claim(), "loop")).toBe(true);
         for (let index = 0; index < 100; index += 1) expect(store.reserve(wake(`blocked-${index}`), 0)).toBe("suppressed");
         expect(store.dispatch(wake("third"), "owner", false)).toBe("suppressed");
+      });
+      await measure("job-monitor-wake-acknowledged", "acknowledge a loop alert once without rearming", () => {
+        expect(store.acknowledge(PARENT, 0)).toBe(true);
+        expect(store.acknowledge(PARENT, 0)).toBe(false);
+        expect(store.read(PARENT).tripped).toBe(true);
       });
       await measure("job-monitor-wake-rearmed", "rearm once and attempt to rearm again", () => {
         expect(store.rearm(PARENT)).toBe(true);

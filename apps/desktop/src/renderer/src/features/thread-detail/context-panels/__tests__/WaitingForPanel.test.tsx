@@ -247,7 +247,7 @@ describe("WaitingForPanel", () => {
       status: "ready", wakes: [], ended: [], incomplete: false, peer, monitorWakesSuspended: true,
     }, undefined, undefined, undefined, rearm)} />);
     const card = screen.getByRole("note");
-    expect(within(card).getByText("Job Monitor wakes suspended")).toBeInTheDocument();
+    expect(within(card).getByText("Job Monitors suspended")).toBeInTheDocument();
     const button = within(card).queryByRole("button", { name: "Rearm monitor wakes" });
     if (peer) {
       expect(button).not.toBeInTheDocument();

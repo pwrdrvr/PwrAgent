@@ -1,6 +1,5 @@
 import { memo, useState, type ReactNode } from "react";
 import { AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW } from "@pwragent/shared/contracts/scheduled-thread-actions";
-import { JOB_MONITOR_WAKE_LIMIT, JOB_MONITOR_WAKE_WINDOW_MINUTES } from "@pwragent/shared/contracts/task-monitor-tools";
 import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
 import {
   buildPullRequestStatusKey,
@@ -215,9 +214,9 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
           <div className="waiting-for-panel__hold" role="note">
             <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
             <span className="waiting-for-panel__hold-text">
-              <span className="waiting-for-panel__hold-title">Job Monitor wakes suspended</span>
+              <span className="waiting-for-panel__hold-title">Job Monitors suspended</span>
               <span className="pr-watch-list__sub">
-                {`This thread reached ${JOB_MONITOR_WAKE_LIMIT} automatic Job Monitor wakes in ${JOB_MONITOR_WAKE_WINDOW_MINUTES} minutes. Results are in Sub-agents. Rearm to allow wakes from new monitors.`}
+                A lightweight review detected a repeated monitoring loop. Results are in Sub-agents. Rearm to allow new Job Monitors.
                 {peer ? ` Rearm on ${props.ownerLabel ?? "the thread's own machine"}.` : null}
               </span>
             </span>

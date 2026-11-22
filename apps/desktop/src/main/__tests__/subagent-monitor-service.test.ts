@@ -149,7 +149,10 @@ describe("SubAgentMonitorService", () => {
           internals.taskMonitorDelegations.set(`old-${index}`, monitorRecord({ monitorId: `old-${index}`, wakeGeneration: 0 }));
         }
         expect(service.listPendingTaskMonitorWakes(parent)).toHaveLength(count);
-        for (let index = 0; index < 4; index++) store.reserve({ ...parent, monitorId: `finished-${index}` }, 0);
+        for (let index = 0; index < 3; index++) store.reserve({ ...parent, monitorId: `finished-${index}` }, 0);
+        const claim = store.claimReview(parent);
+        if (typeof claim === "string") throw new Error(`Expected a claimed review, received ${claim}`);
+        expect(store.settleReview(parent, claim, "loop")).toBe(true);
         expect(service.listPendingTaskMonitorWakes(parent)).toMatchObject(Array(count).fill({ wakeSuppressed: true }));
         expect(service.rearmTaskMonitorWakes(parent)).toBe(true);
         internals.taskMonitorDelegations.set("new", monitorRecord({ monitorId: "new", wakeGeneration: 1 }));
@@ -748,7 +751,7 @@ describe("SubAgentMonitorService task monitor lifecycle", () => {
           interruptTurn: interrupt as never,
           liveProfileRuntimeInstanceIds: () => ["runtime-fixture"],
           persistStartingTurnOrigin: async () => {},
-          readCausalMessagingContext: (async () => undefined) as never,
+          readTurnCausalMessagingOrigin: async () => undefined,
           readDelegatedTurnAncestry: async () => ({}),
           readThreadLock: async () => undefined,
           resolvePausedThreadProject: () => undefined,

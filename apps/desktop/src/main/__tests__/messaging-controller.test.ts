@@ -927,6 +927,21 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("posts Job Monitor suspension to bound messaging without posting acknowledgement or rearm", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    for (const trippedGeneration of [0, undefined, undefined]) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: { method: "thread/taskMonitorWakeGuard/updated", params: { threadId: "thread-1", trippedGeneration } },
+      });
+    }
+    expect(harness.delivered).toEqual([expect.objectContaining({
+      kind: "error", title: "Job Monitors suspended", body: expect.stringContaining("Waiting for"),
+    })]);
+  });
+
   it("routes scheduled message management to the bound federation peer", async () => {
     const harness = await createHarness();
     const event = buildCommandEvent("/schedule 2h Follow up");

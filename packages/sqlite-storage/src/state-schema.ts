@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS thread_automatic_wake_admissions (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_thread_automatic_wake_window
   ON thread_automatic_wake_admissions (backend, thread_id, kind, generation, admitted_at);
+CREATE TABLE IF NOT EXISTS thread_automatic_wake_reviews (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  claim_id TEXT,
+  claim_until INTEGER NOT NULL DEFAULT 0,
+  allowance INTEGER NOT NULL DEFAULT 0,
+  allowance_until INTEGER NOT NULL DEFAULT 0,
+  retry_after INTEGER NOT NULL DEFAULT 0,
+  acknowledged_at INTEGER,
+  PRIMARY KEY (backend, thread_id, kind)
+) WITHOUT ROWID;
 `;
 
 export const PROJECT_HELD_WAKEUP_SCHEMA = `

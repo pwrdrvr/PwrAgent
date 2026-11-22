@@ -27,6 +27,7 @@ export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
   | "getThreadSubAgent" | "getThreadSubAgents" | "listThreadSubAgents"
   | "listThreadSubAgentsByMonitorIdPrefix" | "upsertThreadSubAgent" | "listActiveThreadSubAgents"
   | "listArchiveActiveSubAgentThreadIds"
+  | "listEndedThreadTaskMonitors"
 >;
 
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,

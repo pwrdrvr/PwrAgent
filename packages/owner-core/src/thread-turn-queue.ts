@@ -231,6 +231,10 @@ export type ThreadTurnQueueOptions = {
   isDispatchHeld?: (entry: ThreadTurnQueueDispatchCandidate) => boolean;
   /** Prepare a delivery, or return a permanent refusal, before start/steer or batching. */
   prepareDispatch?: (entry: ThreadTurnQueueEntry) => ThreadTurnQueueEntry | string;
+  /** A restored delivery may need a fresh budget slot. Recheck it before batching. */
+  needsFreshDispatchSlot?: (entry: ThreadTurnQueueEntry) => boolean;
+  /** An optional budget assessment runs while the entry is still in the FIFO. */
+  reviewQueuedDispatch?: (entry: ThreadTurnQueueEntry) => Promise<void> | undefined;
   onLifecycle?: (event: ThreadTurnQueueLifecycleEvent) => void | Promise<void>;
   now?: () => number;
 };
@@ -1396,7 +1400,12 @@ export class ThreadTurnQueue {
     }
   }
 
-  private async startNext(key: string, preflight?: { entryId: string; send?: ThreadTurnQueueSteer }): Promise<StartNextResult> {
+  private async startNext(key: string, preflight?: {
+    entryId: string;
+    send?: ThreadTurnQueueSteer;
+    steerPrepared?: boolean;
+    budgetReviewed?: boolean;
+  }): Promise<StartNextResult> {
     if (this.closed || this.admissions.has(key) || this.dispatchSuspensions.has(key) || this.steerPreflights.has(key)) return "none";
     const queue = this.queueFor(key);
     const index = nextWaitingIndex(queue);
@@ -1406,7 +1415,8 @@ export class ThreadTurnQueue {
     if (!head || head.manualReleaseRequired) return "none";
     if (this.isDispatchHeld(head)) return "none";
     const steer = head.delivery === "queued-steer" && this.options.canSteerThread?.(head);
-    if (steer && this.options.prepareSteer && preflight?.entryId !== head.id) {
+    const currentPreflight = preflight?.entryId === head.id ? preflight : undefined;
+    if (steer && this.options.prepareSteer && !currentPreflight?.steerPrepared) {
       // Capability discovery cannot remove the wake from a concurrent
       // checkpoint. Re-read the live FIFO and dispatch gates afterwards.
       this.steerPreflights.add(key);
@@ -1426,16 +1436,33 @@ export class ThreadTurnQueue {
       } finally {
         this.steerPreflights.delete(key);
       }
-      return await this.startNext(key, { entryId: head.id, send });
+      return await this.startNext(key, { ...currentPreflight, entryId: head.id, send, steerPrepared: true });
     }
-    const send = steer ? (this.options.prepareSteer ? preflight?.send : this.options.steerTurn) : undefined;
+    const send = steer ? (this.options.prepareSteer ? currentPreflight?.send : this.options.steerTurn) : undefined;
     if (!send && ((steer && this.options.prepareSteer) || this.runningEntries.has(key)
       || (this.options.isThreadActive?.(head) ?? false))) return "none";
+    if (!currentPreflight?.budgetReviewed) {
+      const review = this.options.reviewQueuedDispatch?.(head);
+      if (review) {
+        this.steerPreflights.add(key);
+        try {
+          await review;
+        } finally {
+          this.steerPreflights.delete(key);
+        }
+        // The native turn may have changed while the model was answering.
+        return await this.startNext(key, { entryId: head.id, budgetReviewed: true });
+      }
+    }
     const previousId = queue[index - 1]?.id;
     // The head and the agent messages waiting right behind it that can share
     // its delivery. The head starts its own group: everything before it is
     // paused, and a paused row ends a run.
-    const size = planQueuedDeliveries(queue.slice(index), { maxGroups: 1 })[0]?.entryIds.length ?? 1;
+    const plannedSize = planQueuedDeliveries(queue.slice(index), { maxGroups: 1 })[0]?.entryIds.length ?? 1;
+    const freshSlotIndex = this.options.needsFreshDispatchSlot
+      ? queue.slice(index, index + plannedSize).findIndex(this.options.needsFreshDispatchSlot)
+      : -1;
+    const size = freshSlotIndex < 0 ? plannedSize : Math.max(1, freshSlotIndex);
     const members = queue.splice(index, size).flatMap((entry) => {
       const prepared = this.prepareDispatch(entry);
       return typeof prepared === "string" ? [] : [prepared];

@@ -133,6 +133,22 @@ export class MessagingBackendEventRouter {
     if (!threadId) {
       return;
     }
+    if (event.notification.method === "thread/taskMonitorWakeGuard/updated"
+      && event.notification.params.trippedGeneration !== undefined) {
+      const bindings = this.context.host().filterBindingsForChannel(
+        await this.context.store.findActiveBindingsForThread({ backend: event.backend, threadId }),
+      ).filter((binding) => bindingMatchesFederationTarget(binding, event.federationTarget));
+      for (const binding of bindings) {
+        await this.context.host().deliver(buildErrorIntent({
+          id: this.context.host().newIntentId("job-monitor-loop"),
+          createdAt: this.context.now(),
+          title: "Job Monitors suspended",
+          body: "A lightweight review found repeated monitoring of the same work without a terminal result. Results are in Sub-agents. Use Waiting for on the owning instance to rearm Job Monitors.",
+          recoverable: true,
+        }), binding);
+      }
+      return;
+    }
     if (
       event.notification.method === "item/transientMessage/updated"
       || event.notification.method === "thread/subAgents/updated"

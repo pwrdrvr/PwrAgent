@@ -3014,7 +3014,7 @@ export type AppServerNotification =
     }
   | {
       method: "thread/taskMonitorWakeGuard/updated";
-      params: { threadId: string };
+      params: { threadId: string; trippedGeneration?: number };
     }
   | {
       method: "thread/subAgents/updated";

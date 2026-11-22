@@ -3429,21 +3429,29 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("stops fresh Job Monitors from repeatedly waking the parent of a pending release", async () => {
+  it.each([true, false])("uses one lightweight verdict to distinguish a release loop from real work (loop: %s)", async (loop) => {
     const parent = "thread-1";
-    const outcomes = ["failure", "cancelled", "success", "failure", "fallback"] as const;
+    const outcomes = loop ? ["failure", "cancelled", "success", "fallback"] as const
+      : ["success", "failure", "success", "success", "success", "success", "success"] as const;
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
       startTurnResults: outcomes.flatMap((outcome, index) => [
         { threadId: `observer-${index}`, turnId: `watch-${index}` },
-        ...(index < 3 ? [{ threadId: parent, turnId: `follow-up-${index}` }] : []),
+        ...(!loop || index < 3 ? [{ threadId: parent, turnId: `follow-up-${index}` }] : []),
         ...(outcome === "fallback" ? [{ threadId: `observer-${index}`, turnId: `recover-${index}` }] : []),
       ]),
     });
+    const assess = vi.fn(async (_request: { prompt: string }) => ({ status: "ok" as const, object: { loop } }));
+    Object.assign(codexClient, { generateStructuredObject: assess });
     let observer = 0;
     vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({ threadId: `observer-${observer++}` }));
-    const overlayStore = createOverlayStoreMock();
+    const storeMock = createOverlayStoreMock();
+    const overlayStore = {
+      ...storeMock,
+      listEndedThreadTaskMonitors: async (request: Parameters<typeof storeMock.listThreadSubAgents>[0] & { limit: number }) =>
+        (await storeMock.listThreadSubAgents(request)).filter((row) => row.completedAt !== undefined).slice(0, request.limit),
+    };
     const db = openInMemoryStateDb();
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore, taskMonitorWakeStore: new TaskMonitorWakeStore(db.raw) });
     onTestFinished(async () => { await registry.close(); db.close(); });
@@ -3469,7 +3477,7 @@ describe("DesktopBackendRegistry", () => {
     for (const [index, outcome] of outcomes.entries()) {
       await emitStartedTurn(registry, "codex", parent, parentTurn);
       const created = await toolCall(parent, parentTurn, "create_monitor_delegation", {
-        task: "Observe the same pending release watcher.",
+        task: loop ? "Observe the same pending release watcher." : `Observe independent workflow ${index}.`,
       });
       monitorIds.add(created.monitorId);
       await emitCompletedTurn(registry, "codex", parent, parentTurn);
@@ -3485,21 +3493,41 @@ describe("DesktopBackendRegistry", () => {
         outcome,
         summary: outcome === "success" ? "The release finished." : "The observer stopped while the release was pending.",
       });
-      // Even a success claim consumes the same allowance. Neither a new
-      // monitor ID nor different wording buys another paid parent wake.
-      expect(report.parentTurn?.status).toBe(index < 3 ? "started" : undefined);
-      expect(report.parentWakeSuppressed).toBe(index < 3 ? undefined : true);
+      expect(report.parentTurn?.status).toBe("started");
+      expect(report.parentWakeSuppressed).toBeUndefined();
       expect(await overlayStore.getThreadSubAgent({ backend: "codex", threadId: parent, monitorId: created.monitorId }))
         .toMatchObject({ outcome });
-      parentTurn = index < 3 ? `follow-up-${index}` : `human-${index}`;
+      parentTurn = `follow-up-${index}`;
     }
     expect(monitorIds.size).toBe(outcomes.length);
-    expect(codexClient.startTurnCalls.filter((call) => call.threadId === parent)).toHaveLength(3);
-    expect(registry.taskMonitorWakesTripped({ backend: "codex", threadId: parent })).toBe(true);
-    expect(guardChanges).toHaveBeenCalledTimes(1);
+    expect(assess).toHaveBeenCalledTimes(loop ? 1 : 2);
+    const evidence = JSON.parse(assess.mock.calls.at(-1)![0].prompt) as Array<{ monitorId: string; outcome: string }>;
+    expect(evidence).toHaveLength(loop ? 4 : 5);
+    expect(new Set(evidence.map((attempt) => attempt.monitorId)).size).toBe(evidence.length);
+    expect(evidence.map((attempt) => attempt.outcome)).toEqual(expect.arrayContaining(loop ? ["failure", "cancelled", "success"] : ["success"]));
+    expect(assess).toHaveBeenCalledWith(expect.objectContaining({ disableExecution: true, model: "gpt-5.6-luna", reasoningEffort: "low" }));
+    expect(codexClient.startTurnCalls.filter((call) => call.threadId === parent)).toHaveLength(loop ? 3 : 7);
+    const owner = { backend: "codex", threadId: parent } as const;
+    expect(registry.taskMonitorWakesTripped(owner)).toBe(loop);
+    expect(guardChanges).toHaveBeenCalledTimes(loop ? 1 : 0);
+    if (loop) {
+      expect(registry.listTaskMonitorWakeAlerts()).toEqual([expect.objectContaining(owner)]);
+      expect(registry.acknowledgeTaskMonitorWakeAlert(owner, 0)).toBe(true);
+      expect(registry.listTaskMonitorWakeAlerts()).toEqual([]);
+      expect(registry.taskMonitorWakesTripped(owner)).toBe(true);
+      await emitStartedTurn(registry, "codex", parent, "operator-turn");
+      const rejected = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: parent, turnId: "operator-turn", callId: "blocked-monitor", requestId: "blocked-monitor",
+        namespace: "pwragent_task_monitors", tool: "create_monitor_delegation", arguments: { task: "Start another observer" },
+      } } as AppServerPendingRequestNotification);
+      expect(rejected).toMatchObject({ success: false });
+      await emitCompletedTurn(registry, "codex", parent, "operator-turn");
+    } else {
+      await emitCompletedTurn(registry, "codex", parent, parentTurn);
+    }
     await expect(registry.submitTurn({ backend: "codex", threadId: parent, input: [{ type: "text", text: "Verify the release." }] }))
       .resolves.toMatchObject({ status: "started" });
-    expect(registry.taskMonitorWakesTripped({ backend: "codex", threadId: parent })).toBe(true);
+    expect(registry.taskMonitorWakesTripped(owner)).toBe(loop);
   });
 
   it("holds a task monitor's result for a locked parent and delivers it on unlock", async () => {

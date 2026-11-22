@@ -24,6 +24,7 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.tbl_name !== "thread_compaction_recovery_guards"
     && row.tbl_name !== "thread_automatic_wake_guards"
     && row.tbl_name !== "thread_automatic_wake_admissions"
+    && row.tbl_name !== "thread_automatic_wake_reviews"
     && row.tbl_name !== "thread_search_fts_rows"
     && row.tbl_name !== "research_runs"
     && row.tbl_name !== "research_events"
@@ -88,7 +89,7 @@ const upgrades = [
   { version: 76, sql: "DROP TABLE thread_dependencies" },
   { version: 77, sql: "DROP INDEX idx_thread_todos_dependency; ALTER TABLE thread_todos DROP COLUMN dependency_id" },
   { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
-  { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing; DROP TABLE thread_automatic_wake_guards; DROP TABLE thread_automatic_wake_admissions" },
+  { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing; DROP TABLE thread_automatic_wake_guards; DROP TABLE thread_automatic_wake_admissions; DROP TABLE thread_automatic_wake_reviews" },
 ] as const;
 
 describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {

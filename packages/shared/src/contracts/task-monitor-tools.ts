@@ -83,6 +83,7 @@ export type TaskMonitorUsageSnapshot = {
 export type TaskMonitorCompletionSource =
   | {
       type: "monitor_tool";
+      recoveredAfter?: "completed" | "failed" | "cancelled";
     }
   | {
       type: "parent_cancel";
