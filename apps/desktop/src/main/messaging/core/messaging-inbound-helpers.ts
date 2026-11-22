@@ -2,7 +2,7 @@ import { type NewThreadOptionsSummary, type MessagingFullAccessControls } from "
 import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import { type MessagingLaunchpadDirectory, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
-import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey, redactLaunchpadAgentDraft } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerBackendKind,
   LinkedDirectorySummary,
@@ -442,10 +442,9 @@ export function launchpadForMessagingProject(params: {
   };
 
   return {
-    ...base,
     // A one-off desktop preset belongs to that draft, even if the messenger
     // chooses the same project while the draft is still open.
-    ...(base.agentPresetId || base.agent ? { agent: undefined, agentPresetId: undefined, mcpConnectionIds: undefined } : {}),
+    ...redactLaunchpadAgentDraft(base),
     backend: params.backend,
     acpRuntime: params.acpRuntime ?? params.options.acpRuntime,
     codexEnvironmentId:

@@ -15672,6 +15672,10 @@ a.button {
   overflow: auto;
 }
 
+.settings-confirm-dialog[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .agent-preset-dialog .select-trigger.settings-select {
   padding-inline: 10px;
   background-image: none;

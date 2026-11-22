@@ -12,7 +12,11 @@ export type AgentPresetDefaults = {
 
 export type AgentPreset = AgentPresetDefaults & { id: string };
 
-export type SaveAgentPresetRequest = AgentPresetDefaults & { id?: string };
+export type SaveAgentPresetRequest = AgentPresetDefaults & {
+  id?: string;
+  /** Content-only edits keep the sharing choice currently saved on the owner. */
+  preserveMessagingAvailability?: true;
+};
 
 export type ManageAgentPresetsRequest =
   | { action: "list" }

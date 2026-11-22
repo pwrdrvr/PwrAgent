@@ -77,4 +77,43 @@ describe("Agent preset store", () => {
       }
     }), { numRuns: 12 });
   });
+
+  it("preserves the current sharing choice when a stale editor saves content", () => {
+    const db = openInMemoryStateDb();
+    try {
+      fc.assert(fc.property(fc.boolean(), (shared) => {
+        const preset = saveAgentPreset(db, { name: "Release reviewer", mcpConnectionIds: [],
+          availableInMessaging: !shared ? true : undefined });
+        saveAgentPreset(db, { ...preset, availableInMessaging: shared ? true : undefined });
+        const staleEdit = { ...preset, instructions: "Updated instructions", preserveMessagingAvailability: true as const };
+        const edited = saveAgentPreset(db, staleEdit);
+        expect(edited.availableInMessaging === true).toBe(shared);
+        expect(edited.instructions).toBe(staleEdit.instructions);
+        deleteAgentPreset(db, preset.id);
+      }));
+    } finally {
+      db.close();
+    }
+  });
+
+  it("consumes custom Agent selections even without a saved preset", async () => {
+    const db = openInMemoryStateDb();
+    try {
+      const overlay = new SqliteOverlayStore(db);
+      await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("docs", "triage"), { maxLength: 2 }), async (ids) => {
+        const launchpad = { backend: "codex" as const, executionMode: "auto" as const, workMode: "local" as const,
+          directoryKey: "directory:fixture", directoryKind: "directory" as const, directoryLabel: "Fixture",
+          prompt: "Review this", updatedAt: 1, createdAt: 1, registeredAt: 1, agent: { name: "Custom Agent" },
+          agentDraftMcpSelection: true as const, mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: false };
+        await overlay.upsertDirectoryLaunchpad(launchpad);
+        await resetLaunchpadAfterMaterialize({ defaultPrAutoDispatchEnabled: false, defaults: launchpad, launchpad, overlayStore: overlay });
+        const reset = await overlay.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey });
+        expect(reset?.mcpConnectionIds).toBeUndefined();
+        expect(reset?.mcpConnectionIdsFromDefaults).toBeUndefined();
+        expect(reset?.agent).toBeUndefined();
+      }));
+    } finally {
+      db.close();
+    }
+  });
 });

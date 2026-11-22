@@ -43,7 +43,7 @@ function SaveAgentPresetDialog(props: { thread: NavigationThreadSummary; desktop
   };
   return createPortal(
     <div className="settings-confirm-modal" role="presentation">
-      <div className="settings-confirm-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={headingId}>
+      <div className="settings-confirm-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1}>
         <h2 id={headingId}>Save Agent preset</h2>
         <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
           <label className="agent-preset-name-field">Name

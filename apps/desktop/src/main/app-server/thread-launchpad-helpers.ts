@@ -1,4 +1,4 @@
-import { parseRemoteLaunchpadStorageKey } from "@pwragent/shared/contracts/navigation";
+import { hasAgentDraftMcpSelection, parseRemoteLaunchpadStorageKey } from "@pwragent/shared/contracts/navigation";
 import path from "node:path";
 import { createCodexEnvironmentHydrationStorage } from "../storage/desktop-runtime-storage";
 import type { OverlayStoreLike } from "../storage/desktop-overlay-store";
@@ -117,8 +117,9 @@ export async function resetLaunchpadAfterMaterialize(params: {
       fileAttachments: [],
       editorDocument: undefined,
       agent: undefined,
-      ...(launchpad.agentPresetId ? {
+      ...(hasAgentDraftMcpSelection(launchpad) ? {
         agentPresetId: undefined,
+        agentDraftMcpSelection: undefined,
         mcpConnectionIds: undefined,
         mcpConnectionIdsFromDefaults: undefined,
       } : {}),

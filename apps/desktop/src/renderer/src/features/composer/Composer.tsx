@@ -648,6 +648,7 @@ export type ComposerProps = {
         | "fileAttachments"
         | "agent"
         | "agentPresetId"
+        | "agentDraftMcpSelection"
         | "mcpConnectionIds"
         | "mcpConnectionIdsFromDefaults"
       >
@@ -16135,6 +16136,7 @@ function useComposerController(props: ComposerProps) {
                 await props.onUpdateLaunchpad?.(localPresetLaunchpad.directoryKey, {
                   agent: { name: values.name, instructions: values.instructions },
                   agentPresetId,
+                  agentDraftMcpSelection: true,
                   mcpConnectionIds: values.mcpConnectionIds,
                   mcpConnectionIdsFromDefaults: false,
                 }, { owner: { scope: "local" } });

@@ -2,6 +2,7 @@ import { resolveAgentPresetConnections } from "@pwragent/shared/contracts/agent-
 import type { MessagingBrowseSessionRecord } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import { isNewAgentThreadLaunchAction } from "./messaging-resume-browser";
+import { readNewThreadMcpInventory } from "../../mcp-connections/new-thread-mcp-inventory";
 
 export function listMessagingAgentPresets(
   backend: Pick<MessagingBackendBridge, "listAgentPresets">,
@@ -19,7 +20,9 @@ export async function resolveMessagingAgentPreset(
   if (!session.agentPresetId) return undefined;
   const preset = listMessagingAgentPresets(backend, session).find((item) => item.id === session.agentPresetId);
   if (!preset) return undefined;
-  const connections = await backend.listAgentPresetConnections?.() ?? [];
+  const connections = preset.mcpConnectionIds.length && backend.listAgentPresetConnections
+    ? await readNewThreadMcpInventory(async () => await backend.listAgentPresetConnections?.() ?? []).catch(() => [])
+    : [];
   const { selected, skipped } = resolveAgentPresetConnections(preset.mcpConnectionIds, connections);
   const names = new Map(connections.map(({ id, displayName }) => [id, displayName]));
   return {

@@ -27,7 +27,12 @@ export function saveAgentPreset(stateDb: StateDb, request: SaveAgentPresetReques
       throw new Error("An Agent preset already has this name.");
     }
 
-    const saved = { id: request.id ?? randomUUID(), ...defaults };
+    const saved = {
+      id: request.id ?? randomUUID(),
+      ...defaults,
+      ...(request.preserveMessagingAvailability === true
+        ? { availableInMessaging: presets[index]?.availableInMessaging } : {}),
+    };
     if (index < 0) {
       if (presets.length >= MAX_PRESETS) throw new Error(`You can save up to ${MAX_PRESETS} Agent presets.`);
       presets.push(saved);

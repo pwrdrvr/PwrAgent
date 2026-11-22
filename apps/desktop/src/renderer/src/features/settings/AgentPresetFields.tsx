@@ -4,13 +4,14 @@ import { SettingsSwitch } from "./SettingsSwitch";
 
 export function AgentPresetFields(props: {
   value: AgentPresetDefaults;
-  connections: readonly McpConnectionStatus[];
+  connections?: readonly McpConnectionStatus[];
+  connectionError?: boolean;
   disabled?: boolean;
   onChange: (value: AgentPresetDefaults) => void;
 }) {
   const { value, connections, onChange, disabled } = props;
   const selected = new Set(value.mcpConnectionIds);
-  const choices = connections.filter((entry) => selected.has(entry.id) || canSeedNewThreadMcpConnection(entry));
+  const choices = (connections ?? []).filter((entry) => selected.has(entry.id) || canSeedNewThreadMcpConnection(entry));
   const known = new Set(choices.map(({ id }) => id));
   const missing = value.mcpConnectionIds.filter((id) => !known.has(id));
   const changeConnection = (id: string, enabled: boolean) => onChange({
@@ -32,7 +33,9 @@ export function AgentPresetFields(props: {
       <div className="settings-field">
         <span>PwrAgent MCPs</span>
         <div className="settings-fields">
-          {choices.length === 0 && missing.length === 0 ? <span>No available connections</span> : null}
+          {connections && choices.length === 0 && missing.length === 0 ? <span>No available connections</span> : null}
+          {!connections && !props.connectionError ? <span role="status">Checking connections…</span> : null}
+          {props.connectionError ? <span role="status">Connection status is unavailable. Saved selections are kept.</span> : null}
           {choices.map((entry) => (
             <div className="settings-field" key={entry.id}>
               <span>{entry.displayName}{canSeedNewThreadMcpConnection(entry) ? "" : " · Unavailable"}</span>
@@ -42,8 +45,8 @@ export function AgentPresetFields(props: {
           ))}
           {missing.map((id) => (
             <div className="settings-field" key={id}>
-              <span>{id} · Unavailable</span>
-              <SettingsSwitch checked disabled={disabled} label={`Keep connection ${id}`}
+              <span>{id}{connections ? " · Unavailable" : ""}</span>
+              <SettingsSwitch checked disabled={disabled || !connections} label={`Keep connection ${id}`}
                 onChange={() => changeConnection(id, false)} />
             </div>
           ))}

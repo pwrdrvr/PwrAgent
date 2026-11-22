@@ -237,7 +237,6 @@ export const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 1_800_000;
  * is sized for a ten-minute tool call; a wedged owner must cost the thread
  * its defaults, not block creation for that long.
  */
-export const MCP_DEFAULTS_READ_BUDGET_MS = 2_000;
 
 export const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 

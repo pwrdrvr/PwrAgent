@@ -2133,7 +2133,7 @@ class DesktopAppServerService {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request, options);
           }
-          return getDesktopNavigationDetailService().readLaunchpadConfig(request);
+          return getDesktopNavigationDetailService().readLaunchpadConfig(request, { includeLocalAgentDraft: true });
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }

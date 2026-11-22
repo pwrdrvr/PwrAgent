@@ -29,6 +29,7 @@ import { getOwnerHostServices } from "../owner-host";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
+import { redactLaunchpadAgentDraft } from "@pwragent/shared/contracts/navigation";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import { normalizeWorktreePathForComparison } from "./linked-directory-identity";
 import { readMergedSubAgentPage } from "./thread-display";
@@ -194,6 +195,7 @@ export class NavigationDetailService {
 
   async readLaunchpadConfig(
     request: NavigationLaunchpadConfigRequest,
+    options?: { includeLocalAgentDraft?: boolean },
   ): Promise<NavigationLaunchpadConfigResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION
       || (request.directoryKey !== undefined
@@ -207,7 +209,9 @@ export class NavigationDetailService {
     ]);
     const useProxyModels = getOwnerHostServices().runtimePolicy?.codexOpenAiProviderEnabled === false;
     const defaults = useProxyModels ? this.registry.projectOutpostLaunchpadSettings(storedDefaults) : storedDefaults;
-    const storedLaunchpad = useProxyModels && rawLaunchpad ? this.registry.projectOutpostLaunchpadSettings(rawLaunchpad) : rawLaunchpad;
+    const projectedLaunchpad = useProxyModels && rawLaunchpad ? this.registry.projectOutpostLaunchpadSettings(rawLaunchpad) : rawLaunchpad;
+    const storedLaunchpad = projectedLaunchpad && !options?.includeLocalAgentDraft
+      ? redactLaunchpadAgentDraft(projectedLaunchpad) : projectedLaunchpad;
     const inspectPath = storedLaunchpad?.federationTarget?.scope === "remote" ? undefined : storedLaunchpad?.directoryPath;
     const [environmentOptions, directoryGitStatus] = inspectPath ? await Promise.all([
       listCodexEnvironmentOptions(inspectPath),
@@ -230,6 +234,7 @@ export class NavigationDetailService {
       directoryPath: storedLaunchpad.directoryPath,
       agent: storedLaunchpad.agent,
       agentPresetId: storedLaunchpad.agentPresetId,
+      agentDraftMcpSelection: storedLaunchpad.agentDraftMcpSelection,
       mcpConnectionIds: storedLaunchpad.mcpConnectionIds,
       registeredAt: storedLaunchpad.registeredAt,
       settingsTouchedAt: storedLaunchpad.settingsTouchedAt,

@@ -1161,6 +1161,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "directoryPath"
       | "agent"
       | "agentPresetId"
+      | "agentDraftMcpSelection"
     >
   >;
   stickySettingsChanged?: boolean;
