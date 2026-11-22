@@ -1,6 +1,8 @@
 import {
   DECISION_JEV_ENDPOINT,
   resolveDecisionModelSettings,
+  type DecisionModelInfo,
+  type DecisionModelListing,
   type DecisionProviderCheck,
   type DecisionProviderId,
   type DesktopDecisionModelSettings,
@@ -9,6 +11,9 @@ import { postSystemOne, systemOneErrorDetail, systemOneHeaders } from "./system-
 
 const LOCAL_CHECK_TIMEOUT_MS = 3000;
 const JEV_CHECK_TIMEOUT_MS = 15_000;
+const JEV_LIST_TIMEOUT_MS = 8000;
+/** More than any provider lists; a longer answer is cut, not trusted. */
+const MAX_LISTED_MODELS = 100;
 
 export type DecisionProviderCheckDeps = {
   settings: DesktopDecisionModelSettings;
@@ -20,12 +25,60 @@ function record(body: unknown): Record<string, unknown> {
   return body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
 }
 
-/** The model ids a System One server lists at `GET /v1/models`. */
-function listedModels(body: unknown): string[] {
-  const models = record(body).models;
-  return Array.isArray(models)
-    ? models.map((model) => record(model).name).filter((name): name is string => typeof name === "string")
-    : [];
+/**
+ * The models a System One server lists at `GET /v1/models`: `{ models: [{
+ * name, description }] }`. TypeSafe's examples also read a bare array, so
+ * that is accepted too. Ids longer than a model id may be are dropped.
+ */
+export function listedModels(body: unknown): DecisionModelInfo[] {
+  const models = Array.isArray(body) ? body : record(body).models;
+  if (!Array.isArray(models)) return [];
+  const listed: DecisionModelInfo[] = [];
+  for (const entry of models.slice(0, MAX_LISTED_MODELS)) {
+    const name = record(entry).name;
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 200) continue;
+    const description = record(entry).description;
+    listed.push({
+      id: name.trim(),
+      ...(typeof description === "string" && description.trim() ? { description: description.trim().slice(0, 200) } : {}),
+    });
+  }
+  return listed;
+}
+
+/**
+ * Settings' Model picker: the models a provider offers, read from its
+ * `GET /v1/models` with the saved key. TypeSafe lists what the account can
+ * send; a local server lists what it serves. Runs no decision.
+ */
+export async function listDecisionModels(
+  provider: DecisionProviderId,
+  deps: DecisionProviderCheckDeps,
+): Promise<DecisionModelListing> {
+  const resolved = resolveDecisionModelSettings(deps.settings);
+  const fetch = deps.fetch ?? globalThis.fetch;
+  if (provider === "jev" && !deps.apiKey) {
+    return { ok: false, detail: "Add a TypeSafe API key to list the models your account can use." };
+  }
+  const endpoint = provider === "local" ? resolved.localEndpoint : DECISION_JEV_ENDPOINT;
+  let response: Response;
+  try {
+    response = await fetch(`${endpoint}/v1/models`, {
+      headers: systemOneHeaders(deps.apiKey),
+      redirect: "error",
+      signal: AbortSignal.timeout(provider === "local" ? LOCAL_CHECK_TIMEOUT_MS : JEV_LIST_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, detail: provider === "local" ? `Nothing answered at ${endpoint}.` : "TypeSafe did not answer." };
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, detail: provider === "local" ? "The server refused the API key." : "TypeSafe rejected the API key." };
+    }
+    return { ok: false, detail: `${provider === "local" ? endpoint : "TypeSafe"} returned HTTP ${response.status} for its model list.` };
+  }
+  return { ok: true, models: listedModels(await response.json().catch(() => undefined)) };
 }
 
 /**
@@ -61,7 +114,7 @@ export async function checkDecisionProvider(
       await response.body?.cancel();
       return { ok: false, detail: `${endpoint} has no System One API. PwrAgent sends decisions to /v1/systemone.` };
     }
-    const models = listedModels(await response.json().catch(() => undefined));
+    const models = listedModels(await response.json().catch(() => undefined)).map((model) => model.id);
     if (!models.includes(resolved.localModel)) {
       return {
         ok: false,

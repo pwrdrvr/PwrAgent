@@ -650,6 +650,13 @@ export const SETTINGS_LINE_RICH_MENU_CHANNEL = "settings:line-rich-menu";
  */
 export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
   "settings:last-credential-test";
+/**
+ * Lists the models a decision provider offers (`GET /v1/models`), with the
+ * saved key, for Settings' Model picker. Request: `{ provider }`. Response:
+ * `DecisionModelListing`. Runs no decision; the key stays in main.
+ */
+export const SETTINGS_LIST_DECISION_MODELS_CHANNEL =
+  "settings:list-decision-models";
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
 /**

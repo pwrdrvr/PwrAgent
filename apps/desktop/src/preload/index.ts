@@ -36,6 +36,7 @@ import type {
   DecisionsRailSnapshot,
   DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ResearchHarnessCheck,
   ResearchHarnessReconcileRequest,
@@ -1346,6 +1347,7 @@ import {
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_LINE_RICH_MENU_CHANNEL,
+  SETTINGS_LIST_DECISION_MODELS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
@@ -2387,6 +2389,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
   lineRichMenuSetup: async (request: LineRichMenuSetupRequest): Promise<LineRichMenuSetupResponse> =>
     await ipcRenderer.invoke(SETTINGS_LINE_RICH_MENU_CHANNEL, request),
+  listDecisionModels: async (request: { provider: DecisionProviderId }): Promise<DecisionModelListing> =>
+    await ipcRenderer.invoke(SETTINGS_LIST_DECISION_MODELS_CHANNEL, request),
   openSlackCreateApp: async (
     request?: SlackCreateAppRequest,
   ): Promise<SlackCreateAppResponse> =>
