@@ -80,7 +80,7 @@ import {
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { authorizeLocalFile, LocalFilePoller, readLocalFile } from "./thread-dependency-local-files";
-import { CI_RUN_URL_FORMS, ciApprovalSettled, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
+import { CI_RUN_URL_FORMS, ciApprovalSettled, parseCiRunUrl, readCiRun, readGithubRunGates, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
 import { approveGithubCiDeployment, CiDeploymentReviewRefusal } from "../thread-todos/ci-deployment-review";
 import { FORGE_AGENT_TOOL_GROUP_LABELS, resolveForgeAgentToolAccess } from "@pwragent/shared/contracts/forge-agent-tools";
 import type { ReviewThreadTodoCiDeploymentRequest } from "@pwragent/shared/contracts/thread-todos";
@@ -8873,7 +8873,7 @@ class DesktopAppServerService {
         for (const url of this.ciApprovalRuns.keys()) if (!urls.includes(url)) this.ciApprovalRuns.delete(url);
         return urls;
       },
-      read: async (url) => await this.readDependencyCiRun(url),
+      read: async (url) => await this.readCiApprovalRun(url),
       observe: async (url, observation) => this.observeCiApprovalRun(url, observation),
     });
     return this.ciApprovalPoller;
@@ -8883,11 +8883,19 @@ class DesktopAppServerService {
     // A failed check keeps the last good one: it shows nothing settled.
     if (observation.error) return;
     this.ciApprovalRuns.set(url, observation);
-    const settled = getThreadTodoService().settleCiApprovals((approval) => {
+    // The poll syncs its runs when it ends, so a settled card drops out then.
+    getThreadTodoService().settleCiApprovals((approval) => {
       const run = this.ciApprovalRuns.get(approval.url);
       return run ? ciApprovalSettled(approval, run) : undefined;
     });
-    if (settled.length > 0) this.ciApprovalPoller?.sync();
+  }
+
+  /** The run and its gates only: an approval card needs no job counts. */
+  private async readCiApprovalRun(url: string): Promise<ThreadDependencyCiRunObservation> {
+    const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
+    if (!ref || ref.repository.provider !== "github") throw new Error(`Not a GitHub Actions run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
+    const client = this.getForgeCiClient();
+    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
   }
 
   /** Lets CI approval cards approve their gates on this owner's GitHub sign-in. */

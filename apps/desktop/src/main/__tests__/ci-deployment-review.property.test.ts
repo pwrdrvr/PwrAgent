@@ -6,7 +6,7 @@ import type {
   ThreadTodoCiApproval,
 } from "@pwragent/shared/contracts/thread-todos";
 import { threadTodoCiDeploymentReviewRequest } from "@pwragent/shared/contracts/thread-todos";
-import { ciApprovalSettled } from "../app-server/thread-dependency-ci-runs";
+import { ciApprovalSettled, parseCiRunUrl, readGithubRunGates } from "../app-server/thread-dependency-ci-runs";
 import {
   approveGithubCiDeployment,
   CI_DEPLOYMENT_APPROVAL_COMMENT,
@@ -154,7 +154,9 @@ describe("settling an approval card from what the owner observes", () => {
     error: fc.constantFrom(undefined, undefined, "GitHub returned HTTP 502."),
   });
 
-  it("settles exactly when GitHub no longer holds any of the card's gates on the reviewed attempt", () => {
+  // A rerun that stops at the same gate still needs a reviewer, so it must
+  // not close the card: only an approval observed or a finished run does.
+  it("settles exactly when the run finished or GitHub no longer holds any of the card's gates, on any attempt", () => {
     fc.assert(fc.property(fc.subarray(ENVIRONMENTS.map((entry) => entry.name), { minLength: 1 }), observationArb, (environments, seen) => {
       const observation: ThreadDependencyCiRunObservation = {
         runId: 88, status: seen.status, attempt: seen.attempt, checkedAt: 1,
@@ -163,9 +165,26 @@ describe("settling an approval card from what the owner observes", () => {
         gates: seen.pending.map((environment) => ({ environment, reviewers: ["release-team"] })),
       };
       const stillHeld = seen.status === "waiting" && environments.some((name) => seen.pending.includes(name));
-      const expected = !seen.error && (seen.status === "completed" || seen.attempt !== 2 || !stillHeld);
-      expect(ciApprovalSettled({ environments, attempt: 2 }, observation) !== undefined).toBe(expected);
+      const expected = !seen.error && (seen.status === "completed" || !stillHeld);
+      // The card carries the attempt it reviewed, as a real one does.
+      const card: Pick<ThreadTodoCiApproval, "environments" | "attempt"> = { environments, attempt: 2 };
+      expect(ciApprovalSettled(card, observation) !== undefined).toBe(expected);
     }));
+  });
+});
+
+describe("reading an approval card's run", () => {
+  it("reads the run and, only while it waits, its gates with their ids, never its jobs", async () => {
+    const get = vi.fn(async (_repository: unknown, path: string): Promise<unknown> => path.endsWith("/pending_deployments")
+      ? [{ environment: { id: 301, name: "windows-signing" }, wait_timer: 0, reviewers: [{ type: "Team", reviewer: { slug: "release-team" } }] }]
+      : { id: 88, status: "waiting", run_attempt: 2, head_sha: SHA });
+    const ref = parseCiRunUrl(URL)!;
+    expect(await readGithubRunGates(get, ref, 5)).toEqual({ runId: 88, status: "waiting", attempt: 2, checkedAt: 5,
+      gates: [{ environment: "windows-signing", environmentId: 301, reviewers: ["release-team"] }] });
+    get.mockClear();
+    get.mockImplementation(async () => ({ id: 88, status: "completed", conclusion: "success", run_attempt: 2 }));
+    expect(await readGithubRunGates(get, ref, 6)).toMatchObject({ status: "completed", conclusion: "success" });
+    expect(get.mock.calls.map(([, path]) => path)).toEqual(["repos/example/app/actions/runs/88"]);
   });
 });
 

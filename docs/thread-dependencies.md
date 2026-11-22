@@ -428,9 +428,11 @@ endpoint only for a required-reviewer gate.
   tries again. A request that no longer matches the card is refused before
   GitHub is asked, and the surface that sent it says so.
 - **Reconciliation.** While an approval card is open, its owner keeps reading
-  the run on the CI-wait schedule and gate. The card is marked done when the
-  run finishes, is rerun, or none of its environments is still pending,
-  however that happened: from PwrAgent, on GitHub, or by another reviewer.
+  the run and its gates (no jobs) on the CI-wait schedule and gate. The card
+  is marked done when the run finishes or none of its environments is still
+  pending, however that happened: from PwrAgent, on GitHub, or by another
+  reviewer. A rerun that stops at the same gate keeps the card open; its
+  Approve then refuses the new attempt, and Review on GitHub shows it.
   A card that waits on two runs closes when both have settled. A check that
   still waits writes nothing; settling commits once.
 

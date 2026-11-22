@@ -283,17 +283,19 @@ export function useApprovalNotices(
   } = input;
   const [confirmingKey, setConfirmingKey] = useState<string>();
   const [ciErrors, setCiErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const ciApprovals = useMemo(() => ciApprovalTodos.flatMap((todo) => threadTodoCiApprovals(todo)
+      .map((approval) => ({ key: `${operatorTodoItemKey(todo.id)}:${approval.url}`, todo, approval }))), [ciApprovalTodos]);
+  const ciKeys = useMemo(() => new Set(ciApprovals.map((entry) => entry.key)), [ciApprovals]);
+  // Each change also drops keys for cards that are gone, as answers do.
   const setCiError = useCallback((key: string, error: string | undefined): void => {
     setCiErrors((current) => {
-      if (current.get(key) === error) return current;
-      const next = new Map(current);
+      if (current.get(key) === error && [...current.keys()].every((entry) => ciKeys.has(entry))) return current;
+      const next = new Map([...current].filter(([entry]) => ciKeys.has(entry)));
       if (error === undefined) next.delete(key);
       else next.set(key, error);
       return next;
     });
-  }, []);
-  const ciApprovals = useMemo(() => ciApprovalTodos.flatMap((todo) => threadTodoCiApprovals(todo)
-      .map((approval) => ({ key: `${operatorTodoItemKey(todo.id)}:${approval.url}`, todo, approval }))), [ciApprovalTodos]);
+  }, [ciKeys]);
   const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [answers, setAnswers] = useState<ReadonlyMap<string, ApprovalNoticeAnswer>>(
     () => new Map(),

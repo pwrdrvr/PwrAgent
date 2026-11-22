@@ -276,7 +276,8 @@ function parseCiDeploymentReview(value: unknown): ReviewThreadTodoCiDeploymentRe
     || !positive(runId) || !positive(attempt) || typeof headSha !== "string" || !/^[0-9a-fA-F]{40,64}$/.test(headSha)
     || !Array.isArray(environments) || !environments.every((name) => typeof name === "string" && name.length > 0)
     || !Array.isArray(environmentIds) || !environmentIds.every(positive)
-    || environments.length === 0 || environments.length !== environmentIds.length || environments.length > 8) {
+    // A card can merge several conditions' gates on one run; 64 bounds the copy, not the card.
+    || environments.length === 0 || environments.length !== environmentIds.length || environments.length > 64) {
     throw new Error("A deployment review needs the run, attempt, commit and environments the card showed.");
   }
   return {
