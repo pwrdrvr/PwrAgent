@@ -7,8 +7,10 @@ import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normaliz
 import type {
   DiscoverRecentProjectsResponse,
   RecentProjectAgent,
+  RecentProjectDiscoveryPart,
   RecentProjectObservation,
 } from "@pwragent/shared/contracts/settings";
+import { mergeRecentProjectDiscoveries } from "@pwragent/shared/recent-project-discovery";
 import { registerDirectoryFromDisk, resolveDirectoryRegistrationRoot, type DirectoryRegistrationDeps } from "../app-server/directory-registration-service";
 import { readRecentClaudeCodeDirectories } from "../claude/claude-recent-projects";
 import { discoverRecentProjects, type RecentProjectDiscoveryDeps } from "../onboarding/recent-project-discovery";
@@ -389,5 +391,134 @@ describe("Claude Code recent projects", () => {
         expect(sorted(result.observations)).toEqual(sorted(expected));
       },
     ));
+  });
+});
+
+/*
+ * Rule: Get started asks for the agents part and the Claude Code history
+ * part separately, so a slow history read never holds back the rest. The
+ * parts together must say what one request running every read says: the
+ * same report per agent and the same newest time per project and agent.
+ *
+ * Oracle: `discoverRecentProjects` without a part, against the same reads.
+ * Below the folder and project budgets, so neither answer drops a folder.
+ */
+describe("recent project discovery parts", () => {
+  type ReadOutcome = "complete" | "partial" | "failed" | "unavailable";
+  const arbActivity = fc.array(fc.record({
+    project: fc.integer({ min: 0, max: 5 }),
+    updatedAt: fc.option(fc.integer({ min: 0, max: 20 }), { nil: undefined }),
+  }), { maxLength: 8 });
+  const arbAgentActivity = fc.array(fc.record({
+    project: fc.integer({ min: 0, max: 5 }),
+    agent: fc.constantFrom<RecentProjectAgent>("claude", "acp:gemini"),
+    updatedAt: fc.option(fc.integer({ min: 0, max: 20 }), { nil: undefined }),
+  }), { maxLength: 8 });
+  const arbOutcome = fc.constantFrom<ReadOutcome>("complete", "partial", "failed", "unavailable");
+
+  function reads(input: {
+    includeCodex: boolean;
+    codex: ReadOutcome;
+    codexActivity: Array<{ project: number; updatedAt?: number }>;
+    history: ReadOutcome;
+    historyActivity: Array<{ project: number; updatedAt?: number }>;
+    threads: "listed" | "failed" | "bootstrap";
+    threadActivity: Array<{ project: number; agent: RecentProjectAgent; updatedAt?: number }>;
+  }, part?: RecentProjectDiscoveryPart): RecentProjectDiscoveryDeps {
+    const folder = (project: number) => `/home/dev/project-${project}`;
+    const dated = (updatedAt: number | undefined) => (updatedAt === undefined ? {} : { updatedAt });
+    return {
+      ...(part ? { part } : {}),
+      includeCodex: input.includeCodex,
+      platform: "linux",
+      readCodexDirectories: input.codex === "unavailable" ? undefined : async () => {
+        if (input.codex === "failed") throw new Error("Codex read failed");
+        return {
+          complete: input.codex === "complete",
+          directories: input.codexActivity.map(({ project, updatedAt }) => ({ cwd: folder(project), ...dated(updatedAt) })),
+        };
+      },
+      readClaudeCodeDirectories: async () => {
+        if (input.history === "failed") throw new Error("Claude Code read failed");
+        if (input.history === "unavailable") return undefined;
+        return {
+          complete: input.history === "complete",
+          directories: input.historyActivity.map(({ project, updatedAt }) => ({ cwd: folder(project), updatedAt: updatedAt ?? 0 })),
+        };
+      },
+      listPwrAgentThreads: input.threads === "bootstrap" ? undefined : async () => {
+        if (input.threads === "failed") throw new Error("PwrAgent read failed");
+        return input.threadActivity.map(({ project, agent, updatedAt }, index) => thread({
+          cwd: folder(project), agent, ...(updatedAt === undefined ? {} : { lastActiveAt: updatedAt }),
+        }, index));
+      },
+      labelFor: (agent) => agent,
+      resolveProjectRoot: async (cwd) => cwd,
+    };
+  }
+
+  /** The newest time per (project, agent): what the renderer's merge keeps. */
+  function newestPerProject(observations: readonly RecentProjectObservation[]): Map<string, number | undefined> {
+    const newest = new Map<string, number | undefined>();
+    for (const { path, agent, lastActiveAt } of observations) {
+      const key = `${agent} ${path}`;
+      const existing = newest.get(key);
+      newest.set(key, existing === undefined ? lastActiveAt : Math.max(existing, lastActiveAt ?? existing));
+    }
+    return newest;
+  }
+
+  it("says together what one request running every read says", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.record({
+        includeCodex: fc.boolean(),
+        codex: arbOutcome,
+        codexActivity: arbActivity,
+        history: arbOutcome,
+        historyActivity: arbActivity,
+        threads: fc.constantFrom("listed" as const, "failed" as const, "bootstrap" as const),
+        threadActivity: arbAgentActivity,
+      }),
+      async (input) => {
+        const whole = await discoverRecentProjects(reads(input));
+        // The history answer first, as Get started passes it.
+        const parts = mergeRecentProjectDiscoveries([
+          await discoverRecentProjects(reads(input, "claude-history")),
+          await discoverRecentProjects(reads(input, "agents")),
+        ]);
+        const byAgent = (answer: DiscoverRecentProjectsResponse) =>
+          [...answer.sources].sort((left, right) => left.agent.localeCompare(right.agent));
+        expect(byAgent(parts)).toEqual(byAgent(whole));
+        expect(newestPerProject(parts.observations)).toEqual(newestPerProject(whole.observations));
+      },
+    ));
+  });
+
+  it("runs only its own reads", async () => {
+    const asked: string[] = [];
+    const deps = (part: RecentProjectDiscoveryPart): RecentProjectDiscoveryDeps => ({
+      part,
+      includeCodex: true,
+      platform: "linux",
+      readCodexDirectories: async () => {
+        asked.push(`${part}:codex`);
+        return { complete: true, directories: [] };
+      },
+      readClaudeCodeDirectories: async () => {
+        asked.push(`${part}:claude-history`);
+        return { complete: true, directories: [] };
+      },
+      listPwrAgentThreads: async () => {
+        asked.push(`${part}:threads`);
+        return [];
+      },
+      labelFor: (agent) => agent,
+      resolveProjectRoot: async (cwd) => cwd,
+    });
+    const agents = await discoverRecentProjects(deps("agents"));
+    const history = await discoverRecentProjects(deps("claude-history"));
+    expect(asked).toEqual(["agents:codex", "agents:threads", "claude-history:claude-history"]);
+    expect(agents.sources.map(({ agent, status }) => [agent, status])).toEqual([["codex", "complete"], ["claude", "skipped"]]);
+    expect(history.sources.map(({ agent, status }) => [agent, status])).toEqual([["claude", "complete"]]);
   });
 });

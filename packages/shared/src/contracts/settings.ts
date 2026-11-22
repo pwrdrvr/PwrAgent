@@ -2313,13 +2313,26 @@ export type CheckDesktopCodexAuthProfileStatusResponse = {
 /** Agents Get started reads recent projects from. */
 export type RecentProjectAgent = AppServerBackendKind;
 
-export type DiscoverRecentProjectsRequest = {
-  /**
-   * Read this computer's Codex threads. False when the profile being set up
-   * signs in to Codex on its own: that login's threads are not these.
-   */
-  includeCodex: boolean;
-};
+/**
+ * Get started asks for each part on its own, at the same time, so a slow
+ * Claude Code history read never holds back the projects the other reads
+ * found. `agents` reads Codex and PwrAgent's own thread lists;
+ * `claude-history` reads Claude Code's session history. A request without a
+ * part runs every read and answers once. A window's newer request for a part
+ * replaces only its older request for that part.
+ */
+export type RecentProjectDiscoveryPart = "agents" | "claude-history";
+
+export type DiscoverRecentProjectsRequest =
+  | {
+    /**
+     * Read this computer's Codex threads. False when the profile being set up
+     * signs in to Codex on its own: that login's threads are not these.
+     */
+    includeCodex: boolean;
+    part?: "agents";
+  }
+  | { part: "claude-history" };
 
 /**
  * How one agent's discovery went. `complete` finished the work; `partial`

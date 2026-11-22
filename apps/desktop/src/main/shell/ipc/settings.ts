@@ -1176,17 +1176,21 @@ async function discoverRecentProjectsForOnboarding(
   signal: AbortSignal,
 ): Promise<DiscoverRecentProjectsResponse> {
   const bootstrap = isBootstrapProfile();
-  const command = request.includeCodex
+  // The Claude Code history part reads nothing else, so it waits on nothing else.
+  const readsAgents = request.part !== "claude-history";
+  const includeCodex = request.part !== "claude-history" && request.includeCodex;
+  const command = includeCodex
     ? await resolveCodexCommandForProfileWorkflow(service).catch(() => undefined)
     : undefined;
   const codexHome = bootstrap
     ? resolveDefaultCodexHome()
     : service.readCodexProfiles().effectiveCodexHome;
   const deadlineAt = Date.now() + RECENT_PROJECT_DISCOVERY_TIMEOUT_MS;
-  const registry = bootstrap ? undefined : getDesktopBackendRegistry();
+  const registry = bootstrap || !readsAgents ? undefined : getDesktopBackendRegistry();
   const acpLabels = new Map<string, string>();
   const response = await discoverRecentProjects({
-    includeCodex: request.includeCodex,
+    part: request.part,
+    includeCodex,
     platform: process.platform,
     signal,
     readCodexDirectories: command
@@ -2157,6 +2161,7 @@ export function registerSettingsIpcHandlers(
       try {
         return await recentProjectDiscoveryRuns.run(
           owner,
+          request.part ?? "all",
           async (signal) => await discoverRecentProjectsForOnboarding(getService(service), request, signal),
         );
       } finally {

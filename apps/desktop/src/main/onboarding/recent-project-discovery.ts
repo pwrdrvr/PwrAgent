@@ -3,6 +3,7 @@ import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normaliz
 import type {
   DiscoverRecentProjectsResponse,
   RecentProjectAgent,
+  RecentProjectDiscoveryPart,
   RecentProjectObservation,
   RecentProjectSourceReport,
 } from "@pwragent/shared/contracts/settings";
@@ -29,6 +30,11 @@ export type RecentCodexDirectories = {
 };
 
 export type RecentProjectDiscoveryDeps = {
+  /**
+   * Which reads to run. `agents` is Codex and PwrAgent's thread lists,
+   * `claude-history` is Claude Code's session history, and undefined is both.
+   */
+  part?: RecentProjectDiscoveryPart;
   /** False when the profile being set up has its own Codex login. */
   includeCodex: boolean;
   platform: NodeJS.Platform;
@@ -102,29 +108,37 @@ export async function readRecentCodexDirectories(
 }
 
 /**
- * One discovery per window. A newer request from the same window aborts the
- * one before it: React runs Get started's effect twice on mount in
- * development, and changing the Codex login choice asks again, and the
- * renderer keeps only the newest answer. A window that closes cancels its
- * search.
+ * One discovery per window and part. A newer request from the same window
+ * for the same part aborts the one before it: React runs Get started's
+ * effect twice on mount in development, changing the Codex login choice
+ * asks for the agents part again, a Claude Code sign-in asks for its history
+ * again, and the renderer keeps only the newest answer for each part. The
+ * other part keeps running. A window that closes cancels every part.
  */
 export class RecentProjectDiscoveryRuns {
-  private readonly current = new Map<number, AbortController>();
+  private readonly current = new Map<number, Map<string, AbortController>>();
 
-  /** Aborts `owner`'s search, if one is running. */
+  /** Aborts every part of `owner`'s search that is running. */
   cancel(owner: number, reason = "The window that asked for recent projects closed."): void {
-    this.current.get(owner)?.abort(new Error(reason));
+    const parts = this.current.get(owner);
     this.current.delete(owner);
+    for (const controller of parts?.values() ?? []) controller.abort(new Error(reason));
   }
 
-  async run<T>(owner: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    this.cancel(owner, "A newer search for recent projects replaced this one.");
+  /** `part` names the reads; a request without one runs every read, as `all`. */
+  async run<T>(owner: number, part: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    let parts = this.current.get(owner);
+    parts?.get(part)?.abort(new Error("A newer search for recent projects replaced this one."));
     const controller = new AbortController();
-    this.current.set(owner, controller);
+    if (!parts) this.current.set(owner, parts = new Map());
+    parts.set(part, controller);
     try {
       return await work(controller.signal);
     } finally {
-      if (this.current.get(owner) === controller) this.current.delete(owner);
+      if (this.current.get(owner)?.get(part) === controller) {
+        parts.delete(part);
+        if (parts.size === 0) this.current.delete(owner);
+      }
     }
   }
 }
@@ -132,6 +146,8 @@ export class RecentProjectDiscoveryRuns {
 /**
  * Recent project folders for Get started, with how each agent's read went.
  * Codex answers through its protocol and Claude Code through its Agent SDK.
+ * `deps.part` limits the reads; `mergeRecentProjectDiscoveries` in
+ * `@pwragent/shared` combines the parts' answers into this one's.
  * PwrAgent's thread lists also contribute Claude and ACP folders.
  * Main takes the spelling of the registered root from disk where case can
  * vary. Ranking, prechecking and merging the same folder from two agents
@@ -142,22 +158,28 @@ export async function discoverRecentProjects(
 ): Promise<DiscoverRecentProjectsResponse> {
   const sources: RecentProjectSourceReport[] = [];
   const raw: RawObservation[] = [];
+  const readsAgents = deps.part !== "claude-history";
+  const readsClaudeHistory = deps.part !== "agents";
 
   const [codexRead, claudeRead, pwrAgentRead] = await Promise.allSettled([
-    deps.includeCodex && deps.readCodexDirectories ? deps.readCodexDirectories() : undefined,
-    deps.readClaudeCodeDirectories ? readClaudeCodeWithTimeout(deps.readClaudeCodeDirectories, deps.signal) : undefined,
-    deps.listPwrAgentThreads?.(),
+    readsAgents && deps.includeCodex && deps.readCodexDirectories ? deps.readCodexDirectories() : undefined,
+    readsClaudeHistory && deps.readClaudeCodeDirectories
+      ? readClaudeCodeWithTimeout(deps.readClaudeCodeDirectories, deps.signal)
+      : undefined,
+    readsAgents ? deps.listPwrAgentThreads?.() : undefined,
   ]);
 
+  // Codex is the agents part's to report. Without that part, its read never
+  // ran and settled undefined, so nothing below reports it.
   const codexLabel = deps.labelFor("codex");
-  if (!deps.includeCodex) {
+  if (readsAgents && !deps.includeCodex) {
     sources.push({
       agent: "codex",
       label: codexLabel,
       status: "skipped",
       detail: "This profile signs in to Codex on its own.",
     });
-  } else if (!deps.readCodexDirectories) {
+  } else if (readsAgents && !deps.readCodexDirectories) {
     sources.push({ agent: "codex", label: codexLabel, status: "skipped" });
   } else if (codexRead.status === "rejected") {
     sources.push({ agent: "codex", label: codexLabel, status: "failed", detail: errorText(codexRead.reason) });
