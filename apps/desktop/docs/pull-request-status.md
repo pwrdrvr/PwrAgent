@@ -47,8 +47,9 @@ for a viewer means a disconnected window).
 Compact navigation rows carry a preview of up to 16 PRs and the full count
 when attachments exceed that preview. The preview retains the lead and the
 PRs whose readiness determines the two rollup indicators. The shared
-membership index projects stored statuses in memory. The owner validates
-automatic attachments for a page before calculating its preview, attachment
+membership index carries stored attachments. A status observation can refresh a
+page without rebuilding that index. The owner validates automatic attachments
+and applies canonical statuses before calculating the page's preview, attachment
 count, and wire bytes. Cursor backing keeps compact row references and observed
 previews. The owner reads full attachments only when the page demands them.
 Directory index and archive planning reads use membership alone. Federated pins

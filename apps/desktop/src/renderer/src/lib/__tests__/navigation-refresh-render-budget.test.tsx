@@ -296,16 +296,28 @@ it.each([4, 8, 16, 48, 128].flatMap((groups) => [0, 1, 2, 3].map((kind) => ({ gr
       });
       for (let i = 0; i < 200 && !idle(); i++) await act(async () => { replies.shift()?.(); });
       expect(idle()).toBe(true);
-      const childCalls = read.mock.calls.filter(([sent]) => sent.query.kind === "children").length;
-      console.info("mounted metadata budget", { groups, method: event.notification.method,
-        calls: read.mock.calls.length, childCalls, publications: publish.mock.calls.length, commits, rowRenders });
-      expect(childCalls).toBe(0);
-      expect(read.mock.calls.length).toBe(kind === 2 ? ownerPages : 0);
-      expect(read.mock.calls.every(([sent]) => sent.inventory === "owner")).toBe(true);
-      expect(publish).toHaveBeenCalledTimes(kind === 2 ? 2 * ownerPages + 1 : 0);
-      expect(commits).toBeLessThanOrEqual(kind === 2 ? 2 * ownerPages + 3 : 0);
+      const requests = read.mock.calls.map(([sent]) => sent);
+      const childCalls = requests.filter((sent) => sent.query.kind === "children");
+      const refreshedPins = navigation.pagedNavigation.resources.get(pins)!.state.page;
+      if (kind === 1) {
+        // A mounted preview can hide an attachment. Refresh each tray once,
+        // retain its rows, and leave the count-only directory index alone.
+        expect(childCalls.map(({ query }) => query.kind === "children" ? query.parent.threadId : "").sort())
+          .toEqual(threads.filter((thread) => !thread.parentThreadId).map(({ id }) => id).sort());
+        expect(requests.every(({ query }) => query.kind !== "directory-index")).toBe(true);
+        expect(requests.length).toBeLessThanOrEqual(groups + ownerPages + 2);
+        expect(publish.mock.calls.length).toBeLessThanOrEqual(requests.length + 2);
+        expect(commits).toBeLessThanOrEqual(2 * requests.length + 3);
+        expect(refreshedPins).toEqual(retainedPins);
+      } else {
+        expect(childCalls).toHaveLength(0);
+        expect(requests).toHaveLength(kind === 2 ? ownerPages : 0);
+        expect(requests.every((sent) => sent.inventory === "owner")).toBe(true);
+        expect(publish).toHaveBeenCalledTimes(kind === 2 ? ownerPages + 2 : 0);
+        expect(commits).toBeLessThanOrEqual(kind === 2 ? 2 * ownerPages + 3 : 0);
+        expect(refreshedPins).toBe(retainedPins);
+      }
       expect(rowRenders).toBe(0);
-      expect(navigation.pagedNavigation.resources.get(pins)!.state.page).toBe(retainedPins);
     }
   } finally { mounted.unmount(); rows.restore(); replies.splice(0).forEach((reply) => reply()); }
 }, 30_000);

@@ -2662,13 +2662,15 @@ export class ThreadArchiveCoordinator {
       // change this membership. Use cheap IDs and one shared paginated walk.
       const evidence = await this.archiveCleanupReads.read(params.backend, async () => {
         if (this.context.lifecycle.closed) throw new Error("Registry closed during archive cleanup.");
+        let incomplete = false;
         const threads = await this.host().getClient(params.backend).listThreads({
           archived: true,
           enrichDirectories: false,
         }, {
           callerReason: "archive-cleanup",
           ownerId: this.host().threadListCacheOwnerId,
-        });
+        }, () => { incomplete = true; });
+        if (incomplete) throw new Error("Archived thread discovery ended before the cursor was exhausted.");
         return new Set(threads.map((thread) => thread.id));
       });
       if (this.context.lifecycle.closed || !this.archiveCleanupReads.isCurrent(params.backend, evidence)) return;

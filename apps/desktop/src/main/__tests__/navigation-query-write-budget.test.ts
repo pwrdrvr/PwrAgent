@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({
   listThreads: async () => mocks.threads,
-  canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+  withNavigationPrimaryGitRepositories: (threads: NavigationThreadSummary[]) => threads,
   hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
   withNavigationSubAgentActivity: (threads: []) => threads,
   getNavigationInputRequestThreadKeys: () => new Set(["codex:thread-999"]),

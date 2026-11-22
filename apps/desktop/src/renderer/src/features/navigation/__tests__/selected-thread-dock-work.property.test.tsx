@@ -237,3 +237,18 @@ it("releases and restores the dock when a folder drag folds and unfolds the lane
     fixture.cleanup();
   }
 });
+
+it("performs no geometry reads on commits that leave the sidebar DOM unchanged", () => {
+  const fixture = mountDock(24);
+  try {
+    fixture.move(700);
+    expect(fixture.edge()).toBe("top");
+    fc.assert(fc.property(fc.integer({ min: 1, max: 6 }), (commits) => {
+      fixture.reset();
+      for (let index = 0; index < commits; index += 1) fixture.update(0);
+      expect(fixture.work).toEqual({ row: 0, sticky: 0, selectors: 0, reserveLifts: 0 });
+    }), { numRuns: 6 });
+  } finally {
+    fixture.cleanup();
+  }
+});

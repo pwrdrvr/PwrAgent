@@ -12853,7 +12853,7 @@ describe("useThreadNavigation", () => {
     }
     await act(async () => { await vi.advanceTimersByTimeAsync(250); });
     expect(result.current.selectedThreadConfigurationReady).toBe(true);
-    expect(readPopulation).toHaveBeenCalledTimes(2);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
   });
 
   it("patches the snapshot for thread/executionMode/queued and queueCleared", async () => {

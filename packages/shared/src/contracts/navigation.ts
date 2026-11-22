@@ -2638,8 +2638,9 @@ export type NavigationMetadataDependencies = {
   version: 1;
   /** JSON tuples [ownerInstanceId or null, backend, threadId]. */
   threadKeys: string[];
-  /** Viewer-side PR dependencies. Owner proofs leave this set empty. */
+  /** Viewer-local raw attachment keys. Owner proofs only certify an empty set. */
   prKeys: string[];
+  prKeysComplete?: true;
   /** Paths that can change projected rows, independent of count dependencies. */
   workingStatePaths?: string[];
 };

@@ -63,6 +63,25 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it("certifies raw PR keys only for locally owned viewer rows and never exposes them in owner pages", () => {
+    const requestFor = (inventory: "owner" | "viewer", ownerInstanceId?: string) => ({ ...request({
+      kind: "exact", identities: [{ backend: "codex", threadId: "root", ownerInstanceId }],
+    }), inventory });
+    const stored = thread("root", { prs: [{ provider: "github.com", org: "fixture", repo: "work", number: 3,
+      state: "pending", url: "https://github.com/fixture/work/pull/3" }] });
+    const project = (row: NavigationThreadSummary, inventory: "owner" | "viewer", ownerInstanceId?: string) =>
+      projectNavigationQuery({ index: { ...snapshot([row]), coverage: { state: "complete" } },
+        request: requestFor(inventory, ownerInstanceId), deferPullRequests: true }).metadataDependencies;
+
+    expect(project(stored, "viewer")).toMatchObject({ prKeys: ["github.com/fixture/work#3"], prKeysComplete: true });
+    expect(project(stored, "owner")).toMatchObject({ prKeys: [] });
+    expect(project(stored, "owner")?.prKeysComplete).toBeUndefined();
+    expect(project(thread("root"), "owner")).toMatchObject({ prKeys: [], prKeysComplete: true });
+    const target = { scope: "remote", instanceId: "fixture-owner" } as const;
+    const preview = thread("root", { federation: { instanceLabel: "Peer", ref: { backend: "codex", threadId: "root", target } } });
+    expect(project(preview, "viewer", target.instanceId)?.prKeysComplete).toBeUndefined();
+  });
+
   it("carries configured remote identities in the compact directory index", () => {
     const source = snapshot([]);
     source.directories[0]!.gitStatus = {

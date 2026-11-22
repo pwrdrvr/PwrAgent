@@ -1576,6 +1576,10 @@ export class DesktopBackendRegistry {
     return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand);
   }
 
+  withNavigationPrimaryGitRepositories(threads: NavigationSnapshot["threads"]): NavigationSnapshot["threads"] {
+    return this.forgeToolBridge.withNavigationPrimaryGitRepositories(threads);
+  }
+
   // Thread inspection members the registry's importers use. ThreadInspectionTools
   // owns the state; each member delegates to it.
   mutateThreadParentV1(
@@ -16336,11 +16340,9 @@ export class DesktopBackendRegistry {
       this.threadListCache.clear();
       return;
     }
-
     for (const key of this.threadListCache.keys()) {
-      if (key.includes(`"backend":"${backend}"`) || key.includes('"backend":"all"')) {
-        this.threadListCache.delete(key);
-      }
+      if (!key.includes(`"backend":"${backend}"`) && !key.includes('"backend":"all"')) continue;
+      this.threadListCache.delete(key);
     }
   }
 
@@ -20994,6 +20996,7 @@ export class DesktopBackendRegistry {
     }
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
+      // Reconciled turn status does not certify the provider's activity timestamp.
       this.invalidateThreadListCache(event.backend);
     }
 

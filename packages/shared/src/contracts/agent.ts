@@ -1560,6 +1560,8 @@ export type AgentEvent = {
    * or to membership changes. Owners omit the field when it exceeds bounds.
    */
   navigationDirectoryScope?: { version: 1; directoryKeys: string[] };
+  /** Forge-confirmed status key aliases for the local renderer. Never federated. */
+  navigationPullRequestKeyAliases?: string[];
   /** Navigable owner of a stream notice, captured before a private helper is finalized. */
   errorNoticeContext?: {
     backend: AppServerBackendKind;

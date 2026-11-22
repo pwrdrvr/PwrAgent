@@ -241,7 +241,8 @@ function observeDockLayout(
 ) {
   const elements: DockElements = {};
   let observedLane: HTMLElement | undefined;
-  let observedCard: HTMLButtonElement | null = null;
+  let observedCard: HTMLButtonElement | null;
+  let measured = false;
   let frame = 0;
   const containsMatch = (node: Element, selector: string): boolean =>
     node.matches(selector) || node.querySelector(selector) !== null;
@@ -275,30 +276,33 @@ function observeDockLayout(
     }
     return changed;
   };
-  const refresh = (): void => {
+  const refresh = (force = false): void => {
+    const queued = frame !== 0;
     if (frame !== 0) {
       window.cancelAnimationFrame(frame);
       frame = 0;
     }
     // Layout effects run before the mutation observer's delivery.
-    if (mutation) noteMutations(mutation.takeRecords());
+    const changed = !mutation || noteMutations(mutation.takeRecords());
+    if (measured && !force && !queued && !changed && observedCard === cardRef.current) return;
+    measured = true;
     sync(mutation ? elements : {});
     if (resize && observedLane !== elements.lane) {
       if (observedLane) resize.unobserve(observedLane);
       observedLane = elements.lane;
       if (observedLane) resize.observe(observedLane);
     }
-    if (resize && observedCard !== cardRef.current) {
-      if (observedCard) resize.unobserve(observedCard);
+    if (observedCard !== cardRef.current) {
+      if (observedCard) resize?.unobserve(observedCard);
       observedCard = cardRef.current;
-      if (observedCard) resize.observe(observedCard);
+      if (observedCard) resize?.observe(observedCard);
     }
   };
   const schedule = (): void => {
     if (frame !== 0) return;
     frame = window.requestAnimationFrame(() => {
       frame = 0;
-      refresh();
+      refresh(true);
     });
   };
   const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : undefined;
@@ -313,6 +317,8 @@ function observeDockLayout(
     attributes: true,
     attributeFilter: ["aria-expanded", "class", "data-directory-key", "data-thread-key", "style"],
   });
+  mutation?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-density"] });
+  document.fonts?.addEventListener("loadingdone", schedule);
   // Scroll events do not bubble; the lane inside the region scrolls.
   region.addEventListener("scroll", schedule, { capture: true, passive: true });
   return {
@@ -322,6 +328,7 @@ function observeDockLayout(
       region.removeEventListener("scroll", schedule, { capture: true });
       resize?.disconnect();
       mutation?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", schedule);
     },
   };
 }
@@ -446,7 +453,8 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
     else sync();
   };
 
-  // Every commit: layout changes must reach the dock before its first paint.
+  // Consume pending DOM changes before paint. Data-only commits with no
+  // sidebar mutations, size changes or scroll do not need a layout read.
   useLayoutEffect(refreshLayout);
   useEffect(() => {
     // On mount the enclosing host ref can attach after our layout effect.

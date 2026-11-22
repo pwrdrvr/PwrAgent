@@ -112,7 +112,7 @@ it.each([4, 8, 16])("bounds create, off-page select and submit reply work with %
       create: { calls: 1, publications: 3, commits: 7, rowRenders: 3 },
       select: { calls: 3, publications: 8, commits: 12, rowRenders: 1 },
       "submit-reply": { calls: 2, publications: 5, commits: 8, rowRenders: 5 },
-      "pr-discovery": { calls: 5, publications: 11, commits: 12, rowRenders: 0 },
+      "pr-discovery": { calls: 5, publications: 7, commits: 12, rowRenders: 0 },
     };
     expect({ calls: calls.length, publications: publish.mock.calls.length, commits, rowRenders }).toEqual(budgets[action]);
   };
