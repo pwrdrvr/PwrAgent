@@ -360,11 +360,13 @@ export function ciRunPollDelay(firstCheckedAt: number, now: number): number {
   return now - firstCheckedAt < 10 * 60_000 ? 30_000 : 120_000;
 }
 
-type PollerOptions = {
+type PollerOptions<T = ThreadDependencyCiRunObservation> = {
   /** The runs that waiting prerequisites still need checked now. */
   urls(): string[];
-  read(url: string): Promise<ThreadDependencyCiRunObservation>;
-  observe(url: string, observation: ThreadDependencyCiRunObservation): Promise<void>;
+  read(url: string): Promise<T>;
+  observe(url: string, observation: T): Promise<void>;
+  /** The observation a failed check reports. Defaults to a CI run's. */
+  failed?: (url: string, error: string, code: string | undefined, now: number) => T;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
@@ -374,14 +376,14 @@ type PollerOptions = {
  * One timer for every waiting run, armed only while a run is waiting. Checks
  * run one at a time, through the forge client's shared admission and budget.
  */
-export class ThreadDependencyCiRunPoller {
+export class ThreadDependencyCiRunPoller<T = ThreadDependencyCiRunObservation> {
   private readonly runs = new Map<string, { firstCheckedAt?: number; nextAt: number }>();
   private timer: unknown;
   private timerAt?: number;
   private polling = false;
   private disposed = false;
 
-  constructor(private readonly options: PollerOptions) {}
+  constructor(private readonly options: PollerOptions<T>) {}
 
   /** Recheck which runs are waiting and arm the timer for the next one. */
   sync(): void {
@@ -432,13 +434,16 @@ export class ThreadDependencyCiRunPoller {
         const now = this.now();
         if (entry.nextAt > now) continue;
         entry.firstCheckedAt ??= now;
-        let observation: ThreadDependencyCiRunObservation;
+        let observation: T;
         try {
           observation = await this.options.read(url);
         } catch (error) {
           const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
-          observation = { runId: Number(threadDependencyCiRunId(url) ?? 0), status: "unknown", error: error instanceof Error ? error.message.slice(0, 300) : "Check failed",
-            ...code ? { errorCode: code } : {}, checkedAt: now };
+          const message = error instanceof Error ? error.message.slice(0, 300) : "Check failed";
+          observation = this.options.failed
+            ? this.options.failed(url, message, code, now)
+            : { runId: Number(threadDependencyCiRunId(url) ?? 0), status: "unknown", error: message,
+              ...code ? { errorCode: code } : {}, checkedAt: now } as T;
         }
         entry.nextAt = this.now() + ciRunPollDelay(entry.firstCheckedAt, this.now());
         if (this.disposed) return;

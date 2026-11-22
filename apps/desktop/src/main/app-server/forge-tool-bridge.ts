@@ -1377,10 +1377,7 @@ export class ForgeToolBridge {
     demand?: PrMetadataDemand,
     verifyAttachments = true,
   ): Promise<NavigationSnapshot["threads"]> {
-    const primaryRepository = this.threadPrimaryGitRepositoryReader;
-    if (primaryRepository) threads = threads.map((thread) => ({
-      ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
-    }));
+    threads = this.withNavigationPrimaryGitRepositories(threads);
     const canonicalizer = this.threadPullRequestCanonicalizer;
     if (!canonicalizer) return threads;
     try {
@@ -1393,6 +1390,13 @@ export class ForgeToolBridge {
       this.logNavigationPrProjectionFailure(error);
       return threads;
     }
+  }
+
+  withNavigationPrimaryGitRepositories(threads: NavigationSnapshot["threads"]): NavigationSnapshot["threads"] {
+    const primaryRepository = this.threadPrimaryGitRepositoryReader;
+    return primaryRepository ? threads.map((thread) => ({
+      ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
+    })) : threads;
   }
 
   async canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,

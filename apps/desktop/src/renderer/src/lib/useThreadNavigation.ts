@@ -2126,7 +2126,7 @@ function applyThreadPullRequestsUpdate(
 
 function applyPullRequestStatusUpdate(
   snapshot: NavigationLoadedRows | undefined,
-  params: { prKey: string; pr: PrSummary; index?: PrChipLocationIndex }
+  params: { pr: PrSummary; index?: PrChipLocationIndex }
 ): { snapshot: NavigationLoadedRows | undefined; index: PrChipLocationIndex | undefined } {
   if (!snapshot) {
     return { snapshot, index: undefined };
@@ -2136,7 +2136,10 @@ function applyPullRequestStatusUpdate(
     params.index && (params.index.snapshot === snapshot || samePrChipMembership(params.index.snapshot, snapshot))
       ? params.index
       : buildPrChipLocationIndex(snapshot);
-  const locations = index.byPrKey.get(params.prKey);
+  // Older peers can label the event with a pre-normalized provider key.
+  // The PR observation itself identifies the same canonical forge as its row.
+  const prKey = buildPullRequestStatusKey(params.pr);
+  const locations = index.byPrKey.get(prKey);
   if (!locations?.length) {
     return { snapshot, index };
   }
@@ -2150,7 +2153,7 @@ function applyPullRequestStatusUpdate(
     if (!thread || !currentPr) {
       continue;
     }
-    if (buildPullRequestStatusKey(currentPr) !== params.prKey) {
+    if (buildPullRequestStatusKey(currentPr) !== prKey) {
       continue;
     }
     const updatedPr = { ...params.pr, explicitlyAttached: currentPr.explicitlyAttached };
@@ -4711,13 +4714,9 @@ export function useThreadNavigation(
       }
 
       if (method === "pullRequest/status/updated") {
-        const { prKey, pr } = event.notification.params as {
-          prKey: string;
-          pr: PrSummary;
-        };
+        const { pr } = event.notification.params as { pr: PrSummary };
         setState((current) => {
           const result = applyPullRequestStatusUpdate(current.rows, {
-            prKey,
             pr,
             index: prChipLocationIndexRef.current,
           });

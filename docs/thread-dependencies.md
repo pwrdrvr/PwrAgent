@@ -307,6 +307,7 @@ idle consumer, because it starts no turn.
 | `pr_merged` | The selected PR merged. Closure without merging reports failure. |
 | `marked_done` | Someone sent `mark_done` for this condition. Nothing else satisfies it. |
 | `ci_run` | The run reached a milestone in `ciRun.on`: `approval_gate`, `job_failed` or `finished` (all three when omitted). A finished run always ends the wait. See below. |
+| `merge_build` | The PR merged and every check on its merge commit, on the branch it merged into, finished. Any failed check fails it. May name the waiting thread itself. See [Merge builds](#merge-builds). |
 
 A prerequisite can be registered before its PR exists. Omitted `prUrl`
 selects the first unambiguous primary-workspace PR and retains that identity.
@@ -457,6 +458,59 @@ The renderer shows the wait in the Waiting For panel's **CI runs** group and
 in Continue After, with the run's link and a Cancel action. An agent
 registers these waits. The dialog does not offer a form for them.
 
+## Merge builds
+
+A PR that passes CI alone can still break its target branch once merged
+beside others. A `merge_build` condition waits for a thread's PR to merge,
+then for the build of the merge commit (the squash commit for a squash
+merge) on the branch it merged into. Until the merge it reads exactly as
+`pr_merged`. After it, the owner asks the forge once for the merge commit and
+base branch (`PullRequestTerminalDetails`, cached per merge) and reads every
+check on that commit from the main process, on the `ci_run` cadence: every
+30 s for ten minutes, then every 2 min. GitHub reads the latest check runs
+(up to 300) and the combined commit statuses; GitLab reads the pipelines for
+the commit on the target branch, one check each.
+
+The checks decide the outcome once none is queued or running:
+
+- Any failed check (failure, timed out, startup failure, action required,
+  error, or an unknown conclusion) fails the wait. The wake lists each failed
+  check with its link and asks the agent to investigate a combination with
+  earlier merges, fixing only in a new PR it was already authorized to make.
+- Cancelled checks with nothing failed count as a pass: a newer push to the
+  branch usually cancelled them, and that merge's own watch covers it.
+- A finished build is believed only a minute after the merge, because a slow
+  workflow can register its first check after a fast one finished. Without a
+  merge time from the forge, these windows run from the first check.
+- No check within 20 minutes of the merge, a closed PR, a merge commit the
+  forge answers without for three reads, or a day of unreadable checks fails
+  it. A merge details lookup that fails (a rate limit, a network error) is an
+  unreadable check, not a missing commit.
+
+Waiting evidence is constant (`PR merged; waiting for its merge build`), and
+the latest check lives in memory and decorates list responses, as `ci_run`
+does, so checks write nothing. A merge build never holds a merge
+(`holdMerge` is refused). A thread waiting on its own merge build adds no
+wait-cycle edge; a wait on another thread's merge build is an edge, and lists
+the waiting thread as that thread's dependent, as a merge wait does.
+
+`wakeOn: "failure"` ends a wait quietly, as delivered with no turn, when its
+prerequisites are met; only a failure wakes the thread. It applies to any
+agent-delivered wait.
+
+### Automatic merge build watches
+
+`[git] watch_merge_builds` (Settings → Git → Watch merge builds, default on)
+arms a failure-only `merge_build` wait on each local thread whose
+primary-workspace PR the owner sees go from open to merged, within 6 hours of
+the merge. A merge loaded from cache or rediscovered later has no transition
+and arms nothing. It is skipped when the thread already has any `merge_build`
+registration for that PR, including one the operator cancelled, so stopping a
+watch also opts that PR out. The project's PR-watch switch and background PR
+polling gate it like every PR wait. The composer's PR button opens a menu with
+Auto-fix PR and Watch merge build; choosing the latter registers an explicit
+wait that wakes on pass or fail, and unchecking it cancels the active one.
+
 ## Persistence and admission
 
 `thread_dependencies` stores the request, evidence, and lifecycle under the
@@ -546,3 +600,9 @@ A `ci_run` wait costs five commits and approximately 49 KB of WAL from
 registration through delivery, and zero commits per unchanged check
 (`thread-dependency-ci-run-lifecycle`, `thread-dependency-ci-run-unchanged-checks`).
 One release wait a day is about 0.05 MB/day.
+
+An automatic merge build watch costs three commits and approximately 33 KB of
+WAL from registration through a quiet pass, and zero commits per unchanged
+check (`thread-dependency-merge-build-lifecycle`,
+`thread-dependency-merge-build-unchanged-checks`). Twenty merges a day is
+about 0.7 MB/day.

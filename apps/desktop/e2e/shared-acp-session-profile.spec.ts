@@ -72,6 +72,14 @@ test("desktop writes ACP rename, archive and normalized commands through IPC wit
         sessions.upsertSession({ backendId: backend, sessionId: baselineId, title: "Portable baseline ACP", titleSource: "explicit",
           cwd: repositoryPath, createdAt: 0, updatedAt: 2, status: "idle", executionMode: "default" });
         const overlay = new SqliteOverlayStore(db);
+        // Check the repository cache before opening a thread can load provider commands.
+        overlay.setNavigationResumeState({
+          version: 1,
+          selection: null,
+          expandedByKey: {},
+          unpinnedExpandedByKey: {},
+          loadedRowsByQuery: {},
+        });
         overlay.initializeNavigationUnreadBaseline(overlay.readNavigationQueryIndex({ backend, threads: [{
           id: baselineId, source: backend, title: "Portable baseline ACP", titleSource: "explicit",
           createdAt: 0, updatedAt: 2, linkedDirectories: [],
@@ -82,7 +90,10 @@ test("desktop writes ACP rename, archive and normalized commands through IPC wit
     },
   });
   try {
-    await expect(app.window.getByRole("button", { name: /Portable ACP session/i })).toBeVisible();
+    const threadRow = app.window.getByRole("region", { name: "Thread browser" })
+      .getByRole("button", { name: "Portable ACP session", exact: true });
+    await expect(threadRow).toBeVisible();
+    await expect(threadRow).toHaveAttribute("aria-pressed", "false");
     const desktopBaseline = await app.window.evaluate(async ref => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       return (await api.getNavigationSelectedDetail!({ protocol: 2, ref })).thread;
@@ -94,7 +105,9 @@ test("desktop writes ACP rename, archive and normalized commands through IPC wit
     }, { backend, cwd: repositoryPath });
     expect(cached.data[0]?.commands).toEqual([{ name: "portable-cached", description: "Portable command",
       backend, scope: "session", source: "provider" }]);
-    await app.window.getByRole("button", { name: /Portable ACP session/i }).click();
+    await expect(threadRow).toHaveAttribute("aria-pressed", "false");
+    await threadRow.click();
+    await expect(threadRow).toHaveAttribute("aria-pressed", "true");
     await expect(app.window.getByText("Invented provider replay.")).toBeVisible();
     await expect(app.window.getByText("PRIVATE portable legacy history")).toHaveCount(0);
     const result = await app.window.evaluate(async ({ backend, threadId }) => {

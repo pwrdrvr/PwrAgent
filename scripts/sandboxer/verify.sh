@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Dormant Sandboxer verification helper (Ubuntu), retained pending a replacement provider.
-# Do not automatically invoke it for development checks; use local commands or CI.
+# Historical Sandboxer verification helper (Ubuntu), superseded by the Boat workflow.
+# Current procedure: .agents/skills/boat-verification/SKILL.md.
 # Preserved procedure: .agents/skills/sandboxer-verification/SKILL.md.
 #
 #   scripts/sandboxer/verify.sh setup        Node from .nvmrc, pnpm, E2E packages, pnpm install

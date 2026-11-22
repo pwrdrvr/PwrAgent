@@ -12,6 +12,7 @@ import {
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
+import { createQuitManager } from "../shell/quit-manager";
 import fc from "fast-check";
 import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
@@ -881,16 +882,18 @@ describe("DesktopBackendRegistry", () => {
       const [target] = registry.beginQuietRestart();
       expect(target).toBeDefined();
 
-      await expect(registry.steerTurn(
-        {
+      for (const origin of [
+        { kind: "messaging" },
+        { kind: "pwragent", systemReason: "app-restart" },
+      ] as const) {
+        await expect(registry.steerTurn({
           backend: "codex",
           threadId: "busy",
           expectedTurnId: target!.turnId,
-          requestId: "telegram-steer",
+          requestId: `external-steer:${origin.kind}`,
           input: text("From Telegram"),
-        },
-        { kind: "messaging" },
-      )).rejects.toThrow("this message was not accepted");
+        }, origin)).rejects.toThrow("this message was not accepted");
+      }
       expect(codexClient.lastSteerTurnParams).toBeUndefined();
       expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" }))
         .toEqual([]);
@@ -900,6 +903,81 @@ describe("DesktopBackendRegistry", () => {
         threadId: "busy",
         input: [{ type: "text", text: QUIET_RESTART_STEER_TEXT }],
       });
+    });
+
+    it("keeps a quiet restart authorized across its own notice and still rejects real changes in authority", async () => {
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom("unchanged", "turn-ended", "grant-revoked", "mixed-steer"),
+        async (change) => {
+          const { db, store, payloads } = durableStore();
+          const overlay = new SqliteOverlayStore(db);
+          const codexClient = new MockBackendClient({});
+          const registry = createDesktopBackendRegistry({ codexClient, overlayStore: overlay, restartContinuationStore: store });
+          const threadId = `manager-${change}`;
+          const identity = { backend: "codex" as const, threadId };
+          const source = { ownerId: "fixture-owner", requestId: "original-request", surfaceSelector: "fixture-topic" };
+          let granted = true;
+          const authorizeRetainedTool = vi.fn(async () => ({ allowed: granted }));
+          registry.setMessagingAgentToolService({
+            authorizeRetainedTool, handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission: vi.fn(),
+          });
+          const releaseSteer = createDeferred<{ threadId: string; turnId: string }>();
+          let mixedSteer: Promise<unknown> | undefined;
+          try {
+            await overlay.setThreadAgent({ ...identity, agent: { name: "Fixture Agent" } });
+            const started = await registry.submitTurn({
+              ...identity, input: text("Install the staged update"),
+              messageOrigin: { kind: "messaging", causalMessagingSource: source },
+            });
+            if (started.status !== "started") throw new Error("Expected a started turn");
+            const context = { ...identity, turnId: started.turnId };
+            await emitStartedTurn(registry, "codex", threadId, context.turnId);
+            const authorizeAgent = () => registry.canManagePwrAgent(context, false, true);
+            await expect(registry.canManagePwrAgent(context)).resolves.toBe(true);
+            await registry.prepareAgentRestartVerification(context, {
+              operationId: threadId, expectedVersion: "1.4.16", previousRuntimeId: registry.getAppManagementRuntimeId(),
+            });
+            if (change === "mixed-steer") {
+              const steer = vi.spyOn(codexClient, "steerTurn").mockImplementationOnce(() => releaseSteer.promise);
+              mixedSteer = registry.steerTurn({
+                ...identity, expectedTurnId: context.turnId, requestId: "external-steer", input: text("Other actor guidance"),
+              }, { kind: "messaging", causalMessagingSource: { ...source, requestId: "other-request", surfaceSelector: "other-topic" } });
+              await waitForCondition(() => steer.mock.calls.length === 1);
+            }
+            const performQuit = vi.fn();
+            const quit = createQuitManager({
+              getConfirmationEnabled: () => false,
+              getQuitBlockers: () => ({ count: 1, threadIds: [threadId], terminalSessionCount: 0, terminalThreadKeys: [], actionRunCount: 0, items: [] }),
+              quietForRestart: async () => {
+                const targets = registry.beginQuietRestart();
+                registry.saveRestartContinuations(targets, Date.now(), true);
+                await expect(registry.steerTurnsForQuietRestart(targets)).resolves.toBe(1);
+                const saved = payloads().filter((entry) => entry.threadId === threadId);
+                expect(saved.find((entry) => entry.upgradeVerification)?.messageOrigin?.causalMessagingSource).toEqual(source);
+                expect(saved.find((entry) => entry.kind === undefined)?.messageOrigin?.causalMessagingSource).toBeUndefined();
+                granted = change !== "grant-revoked";
+                if (change === "turn-ended") await emitCompletedTurn(registry, "codex", threadId, context.turnId);
+                releaseSteer.resolve({ threadId, turnId: context.turnId });
+                await mixedSteer;
+              },
+              performQuit,
+              log: {},
+            });
+            // Owner-generated notices are neutral. Only a genuine change to the
+            // bound actor or grant can invalidate this accepted operation here.
+            const expected = change === "unchanged" || change === "turn-ended";
+            await expect(quit.requestQuit({ source: "update-install", quietRestart: true, authorizeAgent })).resolves.toBe(expected);
+            expect(performQuit).toHaveBeenCalledTimes(expected ? 1 : 0);
+            if (change === "turn-ended") {
+              await expect(registry.canManagePwrAgent({ ...context }, false, true)).resolves.toBe(false);
+            }
+          } finally {
+            releaseSteer.resolve({ threadId, turnId: "aborted-fixture-turn" });
+            await mixedSteer?.catch(() => undefined);
+            await registry.close();
+          }
+        },
+      ), { numRuns: 8, examples: [["unchanged"], ["turn-ended"], ["grant-revoked"], ["mixed-steer"]] });
     });
 
     it("carries queued messages across a restart behind the continuation, in queue order, paused ones still paused", async () => {

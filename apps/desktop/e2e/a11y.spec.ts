@@ -51,6 +51,14 @@ import {
   PR_WATCH_AUDIT_WATCHED_PR,
   seedPrWatchAuditState,
 } from "./fixtures/pr-watch-state-seeding";
+import {
+  RESOURCES_AUDIT_POOL,
+  RESOURCES_AUDIT_UNREACHABLE,
+  RESOURCES_AUDIT_UNRESOLVED,
+  seedResourcesAuditRecovery,
+  seedResourcesAuditState,
+  type ResourcesAuditSeed,
+} from "./fixtures/resource-checkout-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
 import { buildAuditSubAgents } from "./fixtures/sub-agent-state-seeding";
 import {
@@ -779,48 +787,200 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       }
     });
 
-    // PR watches: the eye on a sidebar PR chip, the chip's hover card and
-    // menu, and the rail's "Wakes this thread" list with its history. Nothing
-    // else renders them: a watch exists only after an agent or Watch CI arms
-    // one, and no replay fixture carries PRs at all.
+    // Resources: the list with a row expanded, the inspector in each state the
+    // real authority reaches, and each dialog it can open. The state enters
+    // through the authorities file and the main-process checkout service on the
+    // app's own stores (fixtures/resource-checkout-seeding.ts): an agent holds
+    // a counted pool with another waiting, a Federation peer is unreachable,
+    // and a binding copied from another machine leaves ownership unresolved.
+    // Recovery is seeded after launch, once the operator's own hold is
+    // released, and the pending draft comes from the Register dialog itself.
     //
-    // The list carries controls nothing else has: Stop, Turn Off and Watch CI
-    // at 11px, a dashed hint box, a mono attempt aside in the menu, and a
-    // history toggle that sits 4px into the card's padding. The hover card
-    // adds a muted Auto-fix value.
+    // Not reachable, so not audited: Resolve ownership (the authority offers
+    // no `resolve_ownership` gate, so its control never renders; asserted
+    // below) and Needs interactive session (no authority reports readiness).
     test("Resources checkout surfaces have no violations", async () => {
-      const app = await launchAuditApp(appearance);
+      // Twelve unscoped scans plus a launch.
+      test.setTimeout(120_000);
+      let seed: ResourcesAuditSeed | undefined;
+      const app = await launchAuditApp({
+        ...appearance,
+        preLaunchHook: async (homeRoot) => {
+          seed = await seedResourcesAuditState(homeRoot);
+        },
+      });
       try {
-        const profile = app.window.getByRole("button", { name: /^Open PwrAgent profile menu:/ });
+        const mainWindow = app.window;
+        const profile = mainWindow.getByRole("button", { name: /^Open PwrAgent profile menu:/ });
         await profile.click();
         const opened = app.electronApp.waitForEvent("window");
-        await app.window.getByRole("menuitem", { name: /^Resources/ }).click();
-        const popout = await opened;
-        const resources = popout.getByRole("region", { name: "Resources", exact: true });
-        const inspector = resources.getByRole("complementary", { name: "This machine" });
-        await expect(inspector).toBeVisible();
-        await expect(inspector.getByText("Available", { exact: true })).toBeVisible();
-        await runAxe(popout, "Resources and machine checkout details");
+        await mainWindow.getByTestId("profile-menu-resources").click();
+        const window = await opened;
+        const resources = window.getByRole("region", { name: "Resources", exact: true });
+        const row = (resourceId: string) => resources.locator(`li[data-resource-id="${resourceId}"]`);
+        const chip = (resourceId: string, condition: string) =>
+          row(resourceId).locator(`.resources-chip[data-condition="${condition}"]`);
+        const inspectorFor = (displayName: string) =>
+          resources.getByRole("complementary", { name: displayName, exact: true });
+        // The row's select button starts with the name; its toggle reads
+        // "Show routes for …", and no other control starts with a name.
+        const select = async (displayName: string) => {
+          const escaped = displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          await resources.getByRole("button", { name: new RegExp(`^${escaped} `) }).click();
+          const inspector = inspectorFor(displayName);
+          await expect(inspector).toBeVisible();
+          return inspector;
+        };
+        // Focus enters the dialog, Escape closes it, and focus returns to
+        // the control that opened it. Behavior only, so one appearance.
+        const checkDialogKeyboard = async (opener: Locator, dialog: Locator) => {
+          await opener.click();
+          await expect(dialog).toBeVisible();
+          if (!runsFunctionalChecks) {
+            return;
+          }
+          await expect.poll(() => dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+          await window.keyboard.press("Escape");
+          await expect(dialog).toBeHidden();
+          await expect(opener).toBeFocused();
+          await opener.click();
+          await expect(dialog).toBeVisible();
+        };
+        const machineId = seed!.machineResourceId;
 
-        await inspector.getByTestId("resources-action-request").click();
-        const request = popout.getByRole("dialog", { name: "Request checkout: This machine" });
-        await expect(request).toBeVisible();
-        await request.getByLabel("Purpose").fill("Accessibility audit hold");
-        await runAxe(popout, "Request checkout dialog");
-        await request.getByRole("button", { name: "Request checkout", exact: true }).click();
-        await expect(inspector.getByText(/^Accessibility audit hold · /)).toBeVisible();
-        await expect(inspector.getByText("Busy", { exact: true })).toBeVisible();
+        await test.step("resource list with a row expanded", async () => {
+          // One assertion per seeded state, so a drifted seed cannot leave
+          // the scan auditing fewer rows than it claims.
+          await expect(chip(machineId, "available")).toBeVisible();
+          await expect(chip(RESOURCES_AUDIT_POOL.resourceId, "busy")).toHaveText("1 of 4 free");
+          await expect(chip(RESOURCES_AUDIT_UNREACHABLE.resourceId, "unreachable")).toBeVisible();
+          await expect(chip(RESOURCES_AUDIT_UNRESOLVED.resourceId, "ownership_unresolved")).toBeVisible();
+          const toggle = row(machineId).getByRole("button", { name: "Show routes for This machine", exact: true });
+          await toggle.click();
+          await expect(row(machineId).getByRole("button", { name: "Hide routes for This machine", exact: true }))
+            .toHaveAttribute("aria-expanded", "true");
+          await expect(row(machineId).getByText("Execution routes", { exact: true })).toBeVisible();
+          await expect(row(machineId).getByText("Local process", { exact: true })).toBeVisible();
+          await runAxe(window, "Resources list with a row expanded");
+        });
 
-        await inspector.getByTestId("resources-action-release").click();
-        const release = popout.getByRole("dialog", { name: "Release This machine?" });
-        await expect(release).toBeVisible();
-        await runAxe(popout, "Release checkout dialog");
-        await release.getByRole("button", { name: "Release", exact: true }).click();
-        await expect(inspector.getByText("Available", { exact: true })).toBeVisible();
+        await test.step("inspector: counted pool held by an agent with a queue", async () => {
+          const inspector = await select(RESOURCES_AUDIT_POOL.displayName);
+          await expect(inspector.getByRole("button", { name: "Agent thread", exact: true }).first()).toBeVisible();
+          await expect(inspector.locator(".resources-queue > li")).toHaveCount(1);
+          await expect(inspector.getByText("Render jobs only. Free slots before ending the turn.", { exact: true }))
+            .toBeVisible();
+          await runAxe(window, "Resources inspector, busy counted pool");
+        });
+
+        await test.step("Join queue dialog", async () => {
+          const inspector = inspectorFor(RESOURCES_AUDIT_POOL.displayName);
+          const opener = inspector.getByTestId("resources-action-request");
+          await expect(opener).toHaveText("Join queue");
+          const dialog = window.getByRole("dialog", { name: `Join queue: ${RESOURCES_AUDIT_POOL.displayName}`, exact: true });
+          await checkDialogKeyboard(opener, dialog);
+          await dialog.getByRole("textbox", { name: /^Purpose / }).fill("Accessibility audit render");
+          await expect(dialog.getByRole("spinbutton", { name: "Units", exact: true })).toBeVisible();
+          await runAxe(window, "Join queue dialog");
+          await dialog.getByRole("button", { name: "Join queue", exact: true }).click();
+          await expect(dialog).toBeHidden();
+        });
+
+        await test.step("inspector: your own queued request", async () => {
+          const inspector = inspectorFor(RESOURCES_AUDIT_POOL.displayName);
+          await expect(inspector.locator(".resources-queue > li.is-mine")).toHaveCount(1);
+          const cancel = inspector.getByTestId("resources-action-cancel_request");
+          await expect(cancel).toBeVisible();
+          await runAxe(window, "Resources inspector, queued request");
+          await cancel.click();
+          await expect(inspector.getByTestId("resources-action-request")).toBeVisible();
+          await expect(inspector.locator(".resources-queue > li")).toHaveCount(1);
+        });
+
+        await test.step("inspector: unreachable authority", async () => {
+          const inspector = await select(RESOURCES_AUDIT_UNREACHABLE.displayName);
+          await expect(inspector.getByRole("note")).toContainText("unreachable");
+          await runAxe(window, "Resources inspector, unreachable authority");
+        });
+
+        await test.step("inspector: ownership unresolved", async () => {
+          const inspector = await select(RESOURCES_AUDIT_UNRESOLVED.displayName);
+          await expect(inspector.getByRole("note")).toContainText("Ownership unresolved");
+          // The authority sends no resolve_ownership gate, so there is no
+          // dialog to audit. When it does, audit ResolveOwnershipDialog here.
+          await expect(inspector.getByTestId("resources-action-resolve")).toHaveCount(0);
+          await runAxe(window, "Resources inspector, ownership unresolved");
+        });
+
+        await test.step("Request checkout dialog", async () => {
+          const inspector = await select("This machine");
+          const opener = inspector.getByTestId("resources-action-request");
+          await expect(opener).toHaveText("Request checkout");
+          const dialog = window.getByRole("dialog", { name: "Request checkout: This machine", exact: true });
+          await checkDialogKeyboard(opener, dialog);
+          await dialog.getByRole("textbox", { name: /^Purpose / }).fill("Accessibility audit hold");
+          await runAxe(window, "Request checkout dialog");
+          await dialog.getByRole("button", { name: "Request checkout", exact: true }).click();
+          await expect(inspector.getByText(/^Accessibility audit hold · /)).toBeVisible();
+          await expect(chip(machineId, "busy")).toBeVisible();
+        });
+
+        await test.step("Release dialog", async () => {
+          const inspector = inspectorFor("This machine");
+          const dialog = window.getByRole("dialog", { name: "Release This machine?", exact: true });
+          await checkDialogKeyboard(inspector.getByTestId("resources-action-release"), dialog);
+          await runAxe(window, "Release checkout dialog");
+          await dialog.getByRole("button", { name: "Release", exact: true }).click();
+          await expect(chip(machineId, "available")).toBeVisible();
+        });
+
+        await test.step("Recovery dialog", async () => {
+          await seedResourcesAuditRecovery(seed!);
+          // The app reads the shared store on its next poll.
+          await expect(chip(machineId, "recovery_required")).toBeVisible({ timeout: 10_000 });
+          const inspector = inspectorFor("This machine");
+          const recover = inspector.getByTestId("resources-action-recover");
+          await expect(recover).toBeVisible();
+          await runAxe(window, "Resources inspector, recovery required");
+          const dialog = window.getByRole("dialog", { name: "Recover This machine", exact: true });
+          await checkDialogKeyboard(recover, dialog);
+          // Every recovery step renders: fence, verify cleanup, and the
+          // administrative release with its audit note.
+          await expect(dialog.getByRole("button", { name: "Fence old workload", exact: true })).toBeEnabled();
+          await expect(dialog.getByRole("button", { name: "Verify cleanup and release", exact: true })).toBeVisible();
+          await expect(dialog.getByRole("button", { name: "Administrative release", exact: true })).toBeVisible();
+          await expect(dialog.getByLabel("Audit note", { exact: true })).toBeVisible();
+          await runAxe(window, "Recovery dialog");
+          await dialog.getByRole("button", { name: "Close", exact: true }).click();
+          await expect(dialog).toBeHidden();
+        });
+
+        await test.step("Register resource dialog", async () => {
+          const opener = resources
+            .getByRole("navigation", { name: "Resource navigation", exact: true })
+            .getByRole("button", { name: "Register Resource", exact: true });
+          const dialog = window.getByRole("dialog", { name: "Register resource", exact: true });
+          await checkDialogKeyboard(opener, dialog);
+          await dialog.getByLabel("Name", { exact: true }).fill("Bench signal generator");
+          await dialog.getByRole("textbox", { name: /^Canonical identity / }).fill("external:fixture:audit:signal-generator");
+          // Counted adds the capacity field.
+          await dialog.getByRole("radio", { name: "Counted", exact: true }).click();
+          await expect(dialog.getByLabel("Capacity", { exact: true })).toBeVisible();
+          await runAxe(window, "Register resource dialog");
+          await dialog.getByRole("button", { name: "Save draft", exact: true }).click();
+          await expect(dialog).toBeHidden();
+        });
+
+        await test.step("inspector: pending registration", async () => {
+          const inspector = await select("Bench signal generator");
+          await expect(inspector.getByRole("note")).toContainText("Pending registration");
+          await runAxe(window, "Resources inspector, pending registration");
+        });
+
         await profile.click();
-        await app.window.getByRole("menuitem", { name: /^Resources/ }).click();
-        expect(app.electronApp.windows().filter((window) => window.url().endsWith("#resources"))).toEqual([popout]);
-        await expect(app.window.getByRole("region", { name: "Resources", exact: true })).toHaveCount(0);
+        await mainWindow.getByTestId("profile-menu-resources").click();
+        expect(app.electronApp.windows().filter((page) => page.url().endsWith("#resources"))).toEqual([window]);
+        await expect(mainWindow.getByRole("region", { name: "Resources", exact: true })).toHaveCount(0);
       } finally {
         await app.close();
       }
@@ -877,6 +1037,15 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       } finally { await app.close(); }
     });
 
+    // PR watches: the eye on a sidebar PR chip, the chip's hover card and
+    // menu, and the rail's "Wakes this thread" list with its history. Nothing
+    // else renders them: a watch exists only after an agent or Watch CI arms
+    // one, and no replay fixture carries PRs at all.
+    //
+    // The list carries controls nothing else has: Stop, Turn Off and Watch CI
+    // at 11px, a dashed hint box, a mono attempt aside in the menu, and a
+    // history toggle that sits 4px into the card's padding. The hover card
+    // adds a muted Auto-fix value.
     test("PR watch surfaces have no violations", async () => {
       // Five unscoped scans plus a launch, like the Directories block.
       test.setTimeout(75_000);

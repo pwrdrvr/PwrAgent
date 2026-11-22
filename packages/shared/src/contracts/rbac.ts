@@ -78,6 +78,7 @@ export type MessagingPermissionId =
   | "tools.thread_orchestration"
   | "tools.instance_management"
   | "tools.instance_lifecycle"
+  | "tools.messaging_profile_settings"
   // Publishes as the operator's GitHub or GitLab account: pull and merge requests, comments,
   // reviews, issues and merges through PwrAgent's own forge tools.
   | "tools.forge_write"
@@ -301,6 +302,14 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
       "Allow a designated Agent to check, download, install, restart or stop its local PwrAgent instance for an authenticated actor.",
     group: "tools",
     danger: "high",
+  },
+  {
+    id: "tools.messaging_profile_settings",
+    label: "Agent: change the Development Working Updates default",
+    description:
+      "Let the agent read and change the local profile's Working Updates default for bound Development threads.",
+    group: "tools",
+    danger: "med",
   },
   {
     id: "tools.forge_write",
@@ -823,6 +832,9 @@ export function permissionForDynamicTool(
     case "mcp_connections":
       return "tools.instance_management";
     case "messaging_context":
+      if (tool === "get_messaging_working_updates_default" || tool === "set_messaging_working_updates_default") {
+        return "tools.messaging_profile_settings";
+      }
       if (tool === "rename_current_messaging_conversation") {
         return "thread.settings.name";
       }

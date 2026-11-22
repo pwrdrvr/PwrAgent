@@ -95,6 +95,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  DEFAULT_WATCH_MERGE_BUILDS,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_DARK_THEME_DEFAULT,
   DESKTOP_LIGHT_THEME_DEFAULT,
@@ -1834,6 +1835,10 @@ export class DesktopSettingsService {
           config.git?.defaultPrAutoDispatchEnabled,
           DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
         ),
+        watchMergeBuilds: this.resolveConfigBoolean(
+          config.git?.watchMergeBuilds,
+          DEFAULT_WATCH_MERGE_BUILDS,
+        ),
         prAutoDispatchBudgetCapacity: this.resolvePrAutoDispatchBudgetNumber(
           config.git?.prAutoDispatchBudgetCapacity,
           DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
@@ -1887,6 +1892,17 @@ export class DesktopSettingsService {
 
   readMessagingSettings(): DesktopSettingsSnapshot["messaging"] {
     return resolveMessagingSettingsDomain(this.readMessagingConfig(), this.env);
+  }
+
+  async setDevelopmentWorkingUpdatesDefault(mode: MessagingToolUpdateMode) {
+    // Another instance can save this profile before the local watcher runs.
+    const current = this.resolveToolUpdateMode(this.configStore.readSavedDevelopmentWorkingUpdatesMode());
+    if (current.value === mode) return { ...current, changed: false };
+    const update = await this.writeConfigPatchTargeted({ messaging: { toolUpdateMode: mode } });
+    return {
+      ...resolveMessagingSettingsDomain(update.values.messaging, this.env).toolUpdateMode,
+      changed: true,
+    };
   }
 
   async readMessagingProjection(): Promise<DesktopMessagingSettingsProjection> {
@@ -2482,6 +2498,14 @@ export class DesktopSettingsService {
    */
   resolveGithubEnterpriseHosts(): string[] {
     return this.configStore.read("git")?.githubEnterpriseHosts ?? [];
+  }
+
+  /** `[git] watch_merge_builds`: arm a merge build watch when a thread's PR merges. */
+  resolveWatchMergeBuilds(): boolean {
+    return this.resolveConfigBoolean(
+      this.configStore.read("git")?.watchMergeBuilds,
+      DEFAULT_WATCH_MERGE_BUILDS,
+    ).value;
   }
 
   resolveDefaultPrAutoDispatchEnabled(): boolean {

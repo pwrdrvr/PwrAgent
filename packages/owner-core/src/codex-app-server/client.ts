@@ -10014,10 +10014,11 @@ export class CodexAppServerClient {
     if (notification && ["navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
       "thread/pin/reordered", "thread/subAgents/updated"].includes(notification.method)) return;
     this.activeThreadListingGeneration += 1;
-    // Turn/status and viewer overlay events do not change archived inventory.
+    // Starting a new thread, turns, status and viewer overlays leave archived
+    // inventory alone. Archive/restore/delete still fence both inventories.
     // Keep its in-flight owner joinable while active navigation advances.
     if (!notification || !["turn/started", "turn/completed", "turn/failed", "turn/cancelled",
-      "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/started", "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
       "thread/pin/reordered"].includes(notification.method)) {
       this.archivedThreadListingGeneration += 1;
     }

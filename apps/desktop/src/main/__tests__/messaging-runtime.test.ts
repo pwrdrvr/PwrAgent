@@ -284,6 +284,14 @@ describe("DesktopMessagingRuntime", () => {
       causalMessagingSource: vi.mocked(bridge.startTurn).mock.calls[0]![0].messageOrigin?.causalMessagingSource };
     expect(context.causalMessagingSource).toBeDefined();
     const { handleFederationMessagingDestination: handle } = await import("../federation/federation-messaging-tools");
+    const profileSettingsCheck = {
+      ...context, category: "messaging_context" as const, tool: "set_messaging_working_updates_default",
+    };
+    expect(await handle({ kind: "authorize", context, check: profileSettingsCheck }, "execution-owner"))
+      .toEqual({ allowed: false, permission: "tools.messaging_profile_settings" });
+    expect(await runtime.authorizeRetainedTool({
+      ...context, causalMessagingSource: { ...context.causalMessagingSource!, instanceId: "peer-profile" },
+    }, profileSettingsCheck)).toEqual({ allowed: false, permission: "tools.messaging_profile_settings" });
     const list = () => handle({ kind: "request", request: { operation: "list_messaging_attachments", context, args: {} } }, "execution-owner");
     // Owner oracle: admission into this exact remote binding is the grant,
     // independent of a colliding local ID, adapter order or process memory.

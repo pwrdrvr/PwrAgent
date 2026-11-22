@@ -106,7 +106,7 @@ async function fixture(n: number) {
   current.registry = {
     listThreads: provider,
     onEvent: (listener: (event: AgentEvent) => void) => { listeners.add(listener); return () => listeners.delete(listener); },
-    canonicalizeNavigationThreadPullRequests: async (value: NavigationThreadSummary[]) => value,
+    withNavigationPrimaryGitRepositories: (value: NavigationThreadSummary[]) => value,
     hydrateThreadGitWorkingStates: async (value: NavigationThreadSummary[]) => value,
     withNavigationSubAgentActivity: (value: NavigationThreadSummary[]) => value,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),

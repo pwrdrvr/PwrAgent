@@ -57,6 +57,7 @@ code side).
 | `tools.thread_orchestration` | tools (danger: med) | Let the agent inject messages into other threads, hand off tasks, attach directories, and attach PRs. |
 | `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
 | `tools.instance_lifecycle` | tools (danger: high) | Additional explicit grant for `manage_pwragent`, including status. Requires a designated Agent thread and a retained actor whose current provider access is verified. Admin is the only built-in role granting it. Power User + Tools does not. |
+| `tools.messaging_profile_settings` | tools (danger: med) | Read and change the profile default for Development-thread Working Updates. Requires an attributed, active local messaging turn and current provider and RBAC admission. Admin is the only built-in role granting it. |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
 | `federation.remote_control` | danger (danger: high) | Browse and drive threads that live on federated peers, not just this machine. Required *in addition to* the action's own permission — see "Federation scope" below. |
 
@@ -156,6 +157,18 @@ handoff threads. An actor or custom role named “owner” confers no authority 
 name; a custom role needs explicit grants. The local provider transport supplies
 thread/turn identity. Discovery and execution re-resolve the persisted Agent
 designation and retained actor, including after response acknowledgement.
+
+`get_messaging_working_updates_default` and
+`set_messaging_working_updates_default` use the current messaging request on
+the owner serving the profile. An explicitly granted actor can use an active
+bound conversation or a current default Agent route. Legacy implicit Admin,
+unattributed desktop and completion turns, and federation calls cannot use
+these tools. The profile default affects Development bindings that inherit
+it. Existing binding selections and project launch settings keep precedence.
+New Development threads launched from messaging retain the resolved selection
+they start with, as before. The Agent-thread default and default route
+settings have their own controls. For example, ask an authorized messaging
+Agent “Set the default Working Updates for bound Development threads to None.”
 
 Action enforcement funnels through `MessagingAccessControl.requirePermission` in
 [`messaging-access-control.ts`](../apps/desktop/src/main/messaging/core/messaging-access-control.ts).

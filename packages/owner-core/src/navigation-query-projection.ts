@@ -1365,8 +1365,8 @@ function projectionMetadataDependencies(params: {
   if (index.coverage?.state !== "complete") return undefined;
   const viewer = request.inventory === "viewer";
   const ownerSidebar = !viewer && request.consumer === "main-sidebar";
-  if (kind !== "directory" && kind !== "exact"
-    && !(viewer && kind === "directory-index") && !(ownerSidebar && kind === "children")) return undefined;
+  if (kind !== "directory" && kind !== "exact" && kind !== "children"
+    && !(viewer && kind === "directory-index")) return undefined;
   if (!viewer && !ownerSidebar) return undefined;
 
   // Count dependencies include off-page members and selection descriptors.
@@ -1380,13 +1380,19 @@ function projectionMetadataDependencies(params: {
   for (const thread of dependencies) {
     const ref = navigationIdentity(thread);
     threadKeys.add(JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]));
-    if (viewer) for (const pr of thread.prs ?? []) prKeys.add(buildPullRequestStatusKey(pr));
+  }
+  // Count descriptors do not display PRs, and peer previews cannot prove
+  // raw attachment absence. Only local viewer proofs can name raw keys.
+  const prKeysComplete = selectedThreads.every((thread) => !thread.federation && (viewer || !thread.prs?.length));
+  if (viewer && prKeysComplete) {
+    for (const thread of selectedThreads) for (const pr of thread.prs ?? []) prKeys.add(buildPullRequestStatusKey(pr));
   }
   if (ownerSidebar) for (const thread of selectedThreads) {
     const path = navigationWorkingStatePath(thread);
     if (path) workingStatePaths.add(path);
   }
   return readNavigationMetadataDependencies({ version: 1, threadKeys: [...threadKeys].sort(), prKeys: [...prKeys].sort(),
+    ...(prKeysComplete ? { prKeysComplete: true } : {}),
     ...(ownerSidebar ? { workingStatePaths: [...workingStatePaths].sort() } : {}) });
 }
 

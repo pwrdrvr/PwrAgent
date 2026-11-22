@@ -4,6 +4,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
@@ -51,7 +52,7 @@ it("includes an off-page relayed descendant in a selected local project's count 
   expect(page.metadataDependencies?.threadKeys).not.toContain(JSON.stringify(["nested", "codex", "row-1-3"]));
 });
 
-it("refreshes exactly the viewer directories and selected counts whose full population contains the changed row or PR", async () => {
+it("refreshes viewer counts for row changes and uses raw row attachments to bound PR status reads", async () => {
   // Oracle: actual owner projection after viewer regrouping, before pagination.
   // IDs collide across owners/providers; a grandchild is off every loaded page.
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 6 }), fc.nat(5), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), async (groups, choice, remote, status, filtered, shared) => {
@@ -79,6 +80,14 @@ it("refreshes exactly the viewer directories and selected counts whose full popu
       const changed = data.threads.find((thread) => thread.id === `row-${group}-3` && thread.source === "codex"
         && thread.federation?.ref.target.scope === "remote" && thread.federation.ref.target.instanceId === "nested")!;
       const number = changed.prs![0]!.number;
+      const index = data.index();
+      const affected = [...requests].filter(([id, request]) => {
+        if (!status) return id.startsWith(`${group}-`);
+        const { entries } = projectNavigationQuery({ index, request });
+        // A count-only dependency cannot display a PR. A mounted row can
+        // hide a stored attachment, so its displayed PRs cannot exclude it.
+        return entries.some(({ row }) => row.ref.ownerInstanceId || row.prs?.some((attached) => attached.number === number));
+      }).map(([id]) => id);
       if (status) {
         for (const thread of data.threads.filter((thread) => thread.prs?.some((attached) => attached.number === number))) {
           thread.prs = thread.prs!.map((attached) => ({ ...attached, state: "pending" }));
@@ -89,10 +98,8 @@ it("refreshes exactly the viewer directories and selected counts whose full popu
         : { backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", rowChanges: [ref(changed) as ReturnType<typeof ref> & { ownerInstanceId: string }] } } };
       queries.invalidate(undefined, undefined, event);
       await queries.refresh(undefined, undefined, true);
-      const affected = data.directories.filter((_, i) => status && shared ? i % 2 === group % 2 : i === group);
-      expect(read.mock.calls.map(([request]) => request.query.kind === "directory" ? request.query.directoryKey
-        : request.query.kind === "exact" ? `directory:/viewer/project-${request.query.identities[0]!.threadId.split("-")[1]}` : "unexpected").sort())
-        .toEqual(affected.flatMap((directory) => Array(3).fill(directory.key)).sort());
+      expect(read.mock.calls.map(([request]) => JSON.stringify(request.query)).sort())
+        .toEqual(affected.map((id) => JSON.stringify(requests.get(id)!.query)).sort());
       for (const [id, resource] of queries.getSnapshot().resources) {
         const oracle = await store.readPage({ request: requests.get(id)!, scopeKey: "oracle", loadIndex: async () => data.index() });
         expect(resource.state.page?.selectionDirectory).toEqual(oracle.selectionDirectory);
@@ -149,7 +156,8 @@ it("keeps membership and attachment fences until overlapping viewer observations
         if ([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)) break;
       }
       await refreshing;
-      expect(read).toHaveBeenCalledTimes(6);
+      expect(read).toHaveBeenCalledTimes(membership ? 6 : 5);
+      expect(read.mock.calls.filter(([request]) => request.query.kind === "directory-index")).toHaveLength(membership ? 2 : 1);
       for (const [id, resource] of queries.getSnapshot().resources) {
         const oracle = await store.readPage({ request: requests.get(id)!, scopeKey: "oracle", loadIndex: async () => data.index() });
         expect(resource.state.page?.counts).toEqual(oracle.counts);
@@ -161,7 +169,7 @@ it("keeps membership and attachment fences until overlapping viewer observations
   }), { numRuns: 25 });
 });
 
-it("withdraws viewer dependencies for incomplete coverage, old pages and excessive complete populations", async () => {
+it("keeps count reads conservative without dependencies and excludes PR status from the directory index", async () => {
   const data = population(24);
   const store = new NavigationQueryStore();
   const request: NavigationQueryRequest = { protocol: 2, inventory: "viewer", consumer: "main-sidebar", pageSize: 1,
@@ -179,6 +187,10 @@ it("withdraws viewer dependencies for incomplete coverage, old pages and excessi
       await settle(); read.mockClear();
       queries.invalidate(undefined, undefined, { backend: "codex", notification: { method: "pullRequest/status/updated",
         params: { prKey: buildPullRequestStatusKey(pr(99)), pr: pr(99) } } });
+      await queries.refresh(undefined, undefined, true);
+      expect(read).not.toHaveBeenCalled();
+      queries.invalidate(undefined, undefined, { backend: "codex", notification: { method: "navigation/thread/seen",
+        params: { threadId: "row-0-0", seenUpdatedAt: 200 } } });
       await queries.refresh(undefined, undefined, true);
       expect(read).toHaveBeenCalledOnce();
     } finally { queries.dispose(); }

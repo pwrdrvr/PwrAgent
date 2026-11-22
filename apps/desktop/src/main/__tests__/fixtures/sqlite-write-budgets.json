@@ -1,4 +1,6 @@
 {
+  "agent-working-updates-default-read-noop-invalid": {"commits": 0, "note": "Profile Working Updates read, identical update and invalid attempts commit nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "agent-working-updates-default-change": {"commits": 1, "note": "One existing config snapshot commit per changed Working Updates default. No per-turn, idle or streaming writes.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-provider-recovery-cleanup": {"commits": 1, "note": "Verified provider recovery writes one boundary commit for proof, release, and FIFO promotion.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-provider-unchanged-recovery": {"commits": 0, "note": "Ten explicit recovery retries with unverified provider effects produce zero commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "resource-checkout-handoff": {"commits": 1, "note": "Delegation and its receipt commit once; retry costs zero. At 100 handoffs a day this is about 0.82 MB of WAL.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
@@ -20,6 +22,8 @@
   "resource-checkout-replay": {"commits": 0, "note": "Duplicate delivery returns the durable original receipt without writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "resource-checkout-acquire": {"commits": 1, "note": "One acquire and its replay receipt in one commit", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "resource-checkout-idle": {"commits": 0, "note": "100 empty reconciliation passes and reads, zero idle commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-dependency-merge-build-lifecycle": {"commits": 3, "note": "One automatic merge build watch: registration, the merged evaluation and the quiet pass; checks in between write nothing. About 33 KB WAL per merge, so twenty merges a day is ~0.7 MB/day.", "observedWalBytes": 32960, "rowsChanged": 3, "statements": 3},
+  "thread-dependency-merge-build-unchanged-checks": {"commits": 0, "note": "100 checks of a running merge build, with changing counts and failed reads: zero commits and 0 MB/day while it waits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "navigation-remove-project-retain-unregistered-worktree-draft": {"commits": 1, "note": "Removing an empty project leaves its hidden worktree draft recoverable in one commit. At 100 removals/day and 8 KiB/commit, this is about 0.8 MB/day.", "observedWalBytes": 0, "rowsChanged": 2, "statements": 2},
   "navigation-remove-project-retain-registered-worktree-draft": {"commits": 1, "note": "Removing an empty project leaves its hidden worktree draft recoverable in one commit. At 100 removals/day and 8 KiB/commit, this is about 0.8 MB/day.", "observedWalBytes": 0, "rowsChanged": 3, "statements": 3},
   "navigation-remove-project-worktree-registration": {"commits": 1, "note": "Removing an empty project also removes its legacy worktree registration in the same commit. At 100 removals/day and 8 KiB/commit, this is about 0.8 MB/day.", "observedWalBytes": 0, "rowsChanged": 3, "statements": 3},
@@ -564,6 +568,8 @@
     "statements": 30
   },
   "live-thread-token-usage-timer-windows": {"commits": 10, "note": "10 cumulative live-usage observations separated by full one-second timer windows", "observedWalBytes": 589192, "rowsChanged": 21, "statements": 21},
+  "todo-managed-membership-legacy-move": {"commits": 1, "note": "Move one padded legacy child into the card table and read membership. Both indexes change in the existing migration commit. At 100 qualifying legacy moves/day, the measured 24,720 bytes per move is about 2.5 MB/day. The reads commit nothing.", "observedWalBytes": 24720, "rowsChanged": 1, "statements": 1},
+  "todo-managed-membership-reclaim-empty-search": {"commits": 1, "note": "Expiry sweep clears retired search postings once the last legacy parent migrates. The 10,000-child fixture costs about 0.033 MB on that cleanup day, with no repeated clear. Parent deletion and incremental vacuum are outside the measured transaction.", "observedWalBytes": 32992, "rowsChanged": 1, "statements": 17},
   "managed-relationship-delete-parent": {
     "commits": 1,
     "note": "1 thread deletions; autocommit; page frames separately bounded including trigger writes",

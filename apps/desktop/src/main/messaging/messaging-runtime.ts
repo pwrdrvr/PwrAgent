@@ -1,6 +1,7 @@
 import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
+import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
@@ -568,6 +569,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         ) => void;
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
+      readDevelopmentWorkingUpdatesDefault?: () => MessagingToolUpdateMode;
       automationInboundHandler?: MessagingAutomationInboundHandler;
       automationInboundMatches?: MessagingAutomationInboundMatcher;
       /**
@@ -687,6 +689,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<DynamicToolPermissionResult> {
     if (context.causalMessagingAmbiguous) return { allowed: false, permission: "message.reply" };
     const sourceOwner = context.causalMessagingSource?.instanceId;
+    if (permissionForDynamicTool(check.category, check.tool) === "tools.messaging_profile_settings"
+      && (context.requestingInstanceId || !sourceOwner
+        || sourceOwner !== getDesktopFederationRuntime().knownLocalInstanceId())) {
+      return { allowed: false, permission: "tools.messaging_profile_settings" };
+    }
     if (sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
       try {
         const result = await getDesktopFederationRuntime().requestMessagingDestination(sourceOwner, { kind: "authorize", context, check });
@@ -1649,7 +1656,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       toolUpdateDefaultMode: (targetKind) =>
         targetKind === "agent_thread"
           ? this.messagingAdmissionPolicySnapshot.managerToolUpdateDefaultMode
-          : this.messagingAdmissionPolicySnapshot.toolUpdateDefaultMode,
+          : (this.options.readDevelopmentWorkingUpdatesDefault?.()
+            ?? this.messagingAdmissionPolicySnapshot.toolUpdateDefaultMode),
       fullAccessControls: () => this.fullAccessPolicySnapshot.controls,
       fullAccessControlsSource: "runtime-snapshot",
       fullAccessPolicyRevision: () => this.fullAccessPolicySnapshot.revision,
@@ -3527,6 +3535,7 @@ let runtime: DesktopMessagingRuntime | null = null;
 
 export function initializeDesktopMessagingRuntime(
   config?: DesktopMessagingConfig | DesktopMessagingConfigLoader,
+  readDevelopmentWorkingUpdatesDefault?: () => MessagingToolUpdateMode,
 ): DesktopMessagingRuntime {
   if (!runtime) {
     runtime = new DesktopMessagingRuntime({
@@ -3536,6 +3545,7 @@ export function initializeDesktopMessagingRuntime(
         getDesktopFederationRuntime(),
       ),
       config: config ?? (() => loadDesktopMessagingConfig()),
+      readDevelopmentWorkingUpdatesDefault,
       automationInboundHandler: (event) =>
         getDesktopAutomationService().handleMessagingInboundEvent(event),
       automationInboundMatches: (event) =>

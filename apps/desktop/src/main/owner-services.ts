@@ -37,6 +37,7 @@ import { initializeDesktopBackendRegistry } from "./app-server/backend-registry"
 import { initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
+import { DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE } from "@pwragent/shared/contracts/messaging";
 import { initializeRuntimeLeaseManager } from "./runtime-lease-manager";
 import { initializeRuntimeFederationLeaseCoordinator } from "./runtime-federation-lease";
 import { initializeRuntimeMessagingLeaseCoordinator } from "./runtime-messaging-lease";
@@ -631,12 +632,13 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
 
 wireAppServerOwnerServices();
 wireOwnerRendererEvents();
-  const messagingRuntime = initializeDesktopMessagingRuntime((options) =>
-    loadDesktopMessagingConfigFromSettings(
+  const messagingRuntime = initializeDesktopMessagingRuntime(
+    (options) => loadDesktopMessagingConfigFromSettings(
       getDesktopSettingsService(),
       process.env,
       options,
     ),
+    () => config.read("messaging").toolUpdateMode ?? DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE,
   );
 
   getDesktopBackendRegistry().setMessagingArchiveCleaner({
@@ -644,6 +646,7 @@ wireOwnerRendererEvents();
       messagingRuntime.requestBindingRevokeAllForThread(request),
   });
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
+  if (bootMode === "active-profile") registry.setMessagingWorkingUpdatesSettings(settings);
   wireOwnerMessagingServices(messagingRuntime);
 
 
@@ -730,21 +733,19 @@ wireOwnerRendererEvents();
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  let messagingConfigFingerprint = JSON.stringify({
-    messaging: getDesktopConfigStore().read("messaging"),
-    pdfAnalysisEnabled:
-      getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
-      ?? true,
-  });
+  const fingerprintMessagingLifecycleConfig = () => {
+    // Controllers read this default from the current config snapshot.
+    const { toolUpdateMode: _toolUpdateMode, ...messaging } = config.read("messaging");
+    return JSON.stringify({
+      messaging,
+      pdfAnalysisEnabled: config.read("general").settings.pdfAnalysisEnabled ?? true,
+    });
+  };
+  let messagingConfigFingerprint = fingerprintMessagingLifecycleConfig();
   ownerSubscriptions.add(getDesktopConfigStore().subscribe(
     ["general", "messaging"],
     () => {
-      const nextFingerprint = JSON.stringify({
-        messaging: getDesktopConfigStore().read("messaging"),
-        pdfAnalysisEnabled:
-          getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
-          ?? true,
-      });
+      const nextFingerprint = fingerprintMessagingLifecycleConfig();
       if (nextFingerprint === messagingConfigFingerprint) {
         return;
       }

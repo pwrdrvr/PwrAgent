@@ -16,7 +16,6 @@ it.each([
   ["remote_thread_pins", "INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload) VALUES ('peer', 'codex', 'fixture', 1, '{}')"],
   ["directory_git_status", "INSERT INTO directory_git_status(directory_key, fetched_at, payload) VALUES ('fixture', 1, '{}')"],
   ["thread_git_working_state", "INSERT INTO thread_git_working_state(worktree_path, fetched_at, payload) VALUES ('fixture', 1, '{}')"],
-  ["pr_status_cache", "INSERT INTO pr_status_cache(pr_key, org, repo, number, fetched_at, payload) VALUES ('fixture', 'fixture', 'fixture', 1, 1, '{}')"],
   // Sidebar rows carry each thread's messaging bindings, so a bind or unbind
   // must not be answered from an index retained before it.
   ["bindings", "INSERT INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, payload) VALUES ('fixture', 'telegram', 'fixture', 'fixture', 'active', 1, 1, '{}')"],
@@ -35,12 +34,14 @@ it.each([
   } finally { db.close(); }
 });
 
-it("ignores PR election and unrelated meta writes while fencing the unread baseline", async () => {
+it("ignores PR status, election, and unrelated meta writes while fencing the unread baseline", async () => {
   const db = openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);
   try {
     await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId: "fixture", enabled: true });
     const version = store.readNavigationSourceVersion();
+    db.raw.prepare(`INSERT INTO pr_status_cache(pr_key, org, repo, number, fetched_at, payload)
+      VALUES (?, ?, ?, ?, ?, ?)`).run("fixture", "fixture", "fixture", 1, 1, "{}");
     await store.syncThreadPrAutoDispatchCandidatesBatch({ threads: [{ backend: "codex", threadId: "fixture", prKeys: ["pr"] }], now: 1 });
     db.setMeta("unrelated", "fixture");
     expect(store.readNavigationSourceVersion()).toBe(version);

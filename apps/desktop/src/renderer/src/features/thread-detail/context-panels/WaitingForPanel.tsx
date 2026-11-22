@@ -9,6 +9,7 @@ import { graphemePrefix } from "@pwragent/shared/text-graphemes";
 import {
   isThreadDependencyThreadCondition,
   summarizeThreadDependencyCiRun,
+  summarizeThreadDependencyMergeBuild,
   threadDependencyConditionName,
   threadDependencyConditionPhrase,
 } from "@pwragent/shared/contracts/thread-dependencies";
@@ -676,13 +677,15 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
             const name = threadDependencyConditionName(condition) || "Another thread";
             // A waiting CI run carries its owner's latest check, in memory.
             const run = evidence?.state === "waiting" ? evidence.ciRun : undefined;
+            const build = evidence?.state === "waiting" ? evidence.mergeBuild : undefined;
             return (
               <span className={`waiting-for-panel__cond${met ? " is-met" : ""}${failed ? " is-failed" : ""}`} key={`${condition.threadId}:${condition.when}:${index}`}>
                 <span className="waiting-for-panel__cond-dot" aria-hidden="true" />
                 {`${name} ${threadDependencyConditionPhrase(condition)}`}
                 {condition.ciRun?.environments?.length ? ` · ${condition.ciRun.environments.join(", ")} only` : ""}
-                {met ? ` · ${condition.ciRun ? `${evidence!.reason} · ` : ""}${formatWatchTime(evidence!.observedAt, now)}` : failed ? ` · ${evidence!.reason}` : ""}
+                {met ? ` · ${condition.ciRun || condition.when === "merge_build" ? `${evidence!.reason} · ` : ""}${formatWatchTime(evidence!.observedAt, now)}` : failed ? ` · ${evidence!.reason}` : ""}
                 {run ? ` · ${summarizeThreadDependencyCiRun(run)} · checked ${formatWatchTime(run.checkedAt, now)}` : ""}
+                {build ? ` · ${summarizeThreadDependencyMergeBuild(build)} · checked ${formatWatchTime(build.checkedAt, now)}` : ""}
               </span>
             );
           })}

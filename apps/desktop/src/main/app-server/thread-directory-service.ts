@@ -1913,10 +1913,12 @@ export class ThreadDirectoryService {
       );
       this.host().pendingEnvironmentLaunchStore.put({ ...pendingLaunch, request: { ...request, input: retainedInput } });
     }
-    await options?.onThreadMaterialized?.(materializedThread);
+    const origin = await options?.onThreadMaterialized?.(materializedThread);
     operation?.commit();
     if (!codexEnvironmentStartupFailure) {
-      continuation = await this.startMaterializedLaunchpadRequest(pendingLaunch);
+      continuation = await this.startMaterializedLaunchpadRequest(
+        origin ? { ...pendingLaunch, messageOrigin: origin } : pendingLaunch,
+      );
     }
 
     if (!request.releaseLaunchpadOnSubmit) {

@@ -2749,6 +2749,121 @@ describe("DesktopBackendRegistry", () => {
     expect(worktreeArchive).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("uses one replacement archive walk after observing an active addition (provider notice: %s)", async (notice) => {
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.activeIds = ["active"];
+    transport.archivedIds = Array.from({ length: 43 }, (_, index) => `archived-${index}`);
+    const held = createDeferred<void>();
+    const returned = createDeferred<void>();
+    let holdActive = false;
+    const listThreads = vi.fn(async (...args: Parameters<CodexAppServerClient["listThreads"]>) => {
+      const rows = await provider.listThreads(...args);
+      if (holdActive && !args[0]?.archived) {
+        returned.resolve();
+        await held.promise;
+      }
+      return rows;
+    });
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads, invalidateThreadListings: (notification?: AppServerNotification) => provider.invalidateThreadListings(notification),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({ bindings: [{ id: "gone", threadId: "archived-42" }] });
+    const findBindings = messagingStore.findActiveBindingsForBackend.bind(messagingStore);
+    let bindingsVisible = false;
+    vi.spyOn(messagingStore, "findActiveBindingsForBackend")
+      .mockImplementation(async (params) => bindingsVisible ? await findBindings(params) : []);
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { held.resolve(); transport.releaseListings(); await registry.close(); await provider.close(); });
+    const request = { backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: true } as const;
+    await registry.listThreads({ ...request, skipArchivedMetadataRefresh: true });
+    transport.holdNextListing(true);
+    await registry.listThreads(request);
+    await transport.whenListing(true);
+    transport.activeIds.push("created");
+    if (notice) transport.emitNotification({ method: "thread/started", params: {
+      thread: { id: "created", source: "codex", title: "Created", titleSource: "explicit", linkedDirectories: [] },
+    } });
+    await codexClient.emit({ method: "turn/started", params: {
+      threadId: "active", turn: { id: "turn", status: "inProgress", output: [] },
+    } });
+    holdActive = true;
+    const refreshed = registry.listThreads(request);
+    await returned.promise;
+    // The second active listing has scheduled metadata observation but has
+    // yet to report its new active row to the registry's cleanup coordinator.
+    await flushAsync();
+    bindingsVisible = true;
+    held.resolve();
+    await expect(refreshed).resolves.toMatchObject([{ id: "active" }, { id: "created" }]);
+    await waitForCondition(() => listThreads.mock.calls.some(([, diagnostics]) => diagnostics?.callerReason === "archive-cleanup"));
+    await flushAsync();
+    transport.releaseListings();
+    await waitForCondition(() => messagingStore.revokedBindingIds.includes("gone"));
+    await flushAsync();
+    const archived = transport.listings.filter((listing) => listing.archived);
+    expect({ walks: archived.filter(({ cursor }) => cursor === undefined).length, pages: archived.length })
+      .toEqual({ walks: 2, pages: 86 });
+  });
+
+  it("fences held cleanup evidence on a new active observation even if a restore event was dropped", async () => {
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.activeIds = ["active"];
+    transport.archivedIds = ["restored"];
+    transport.holdNextListing(true);
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: (...args: Parameters<CodexAppServerClient["listThreads"]>) => provider.listThreads(...args),
+      invalidateThreadListings: (notification?: AppServerNotification) => provider.invalidateThreadListings(notification),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "restored-binding", threadId: "restored" }], pendingIntentIds: ["restored-intent"],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
+    const request = { backend: "codex", callerReason: "renderer-navigation-query" } as const;
+    await registry.listThreads(request);
+    await transport.whenListing(true);
+
+    transport.activeIds.push("created");
+    await codexClient.emit({ method: "turn/started", params: { threadId: "active", turn: { id: "turn", status: "inProgress", output: [] } } });
+    await registry.listThreads(request);
+    // Restore after the active snapshot. The held archived response still
+    // contains the thread, and the provider delivered no restore notice.
+    transport.archivedIds = [];
+    transport.activeIds.push("restored");
+    transport.releaseListings(true);
+    await flushAsync();
+    expect({ revoked: messagingStore.revokedBindingIds, deleted: messagingStore.deletedPendingThreads })
+      .toEqual({ revoked: [], deleted: [] });
+    expect(transport.listings.filter(({ archived }) => archived).length).toBeGreaterThan(1);
+  });
+
+  it("requires an exhausted cursor before shared archived pages authorize messaging cleanup", async () => {
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.repeatArchivedCursor = true;
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: (...args: Parameters<CodexAppServerClient["listThreads"]>) => provider.listThreads(...args),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({ bindings: [{ id: "gone", threadId: "archive-one" }] });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); await provider.close(); });
+    const request = { backend: "codex", callerReason: "renderer-navigation-query" } as const;
+    await registry.listThreads(request);
+    await waitForCondition(() => transport.listings.filter(({ archived }) => archived).length >= 2);
+    await flushAsync();
+    expect(messagingStore.revokedBindingIds).toEqual([]);
+    transport.repeatArchivedCursor = false;
+    await codexClient.emit({ method: "thread/status/changed", params: { threadId: "active", status: { type: "idle" } } });
+    await registry.listThreads(request);
+    await waitForCondition(() => messagingStore.revokedBindingIds.includes("gone"));
+    expect(messagingStore.revokedBindingIds).toEqual(["gone"]);
+  });
+
   it("bounds archive cleanup scans across related navigation refreshes", async () => {
     const budget = navigationListingBudgets["archive-cleanup-related-refreshes"];
     const provider = new CodexAppServerClient({ directoryResolver: async () => [] });

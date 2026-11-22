@@ -4,6 +4,7 @@ import { FederationAccountingStream } from "../federation/federation-event-strea
 import {
   eventMatchesThreadSelection,
   navigationInvalidationForLocalEvent,
+  projectLocalEventForFederation,
   unsequencedFederationEventPayload,
 } from "../federation/federation-runtime";
 
@@ -19,6 +20,19 @@ describe("federation error notice selection", () => {
     expect(new FederationAccountingStream().decode(JSON.parse(JSON.stringify(encoded)))?.navigationDirectoryScope)
       .toEqual(event.navigationDirectoryScope);
     expect(unsequencedFederationEventPayload(invalidation).navigationDirectoryScope).toEqual(event.navigationDirectoryScope);
+  });
+
+  it("keeps local PR aliases off compact, sequenced and legacy peer events", () => {
+    const event: AgentEvent = { backend: "codex", navigationPullRequestKeyAliases: ["github.com/fixture/old#42"],
+      notification: { method: "pullRequest/status/updated", params: { prKey: "github.com/fixture/new#42",
+        pr: { provider: "github.com", org: "fixture", repo: "new", number: 42, state: "passing", url: "https://github.com/fixture/new/pull/42" } } },
+    };
+    const federated = projectLocalEventForFederation(event, "owner");
+    const sequenced = new FederationAccountingStream().encode(federated, { epoch: "scope", sequence: 1 });
+    for (const payload of [navigationInvalidationForLocalEvent(event), sequenced, unsequencedFederationEventPayload(federated)]) {
+      expect(payload).toBeDefined();
+      expect(JSON.stringify(payload)).not.toContain("github.com/fixture/old#42");
+    }
   });
 
   it("delivers a headless failure to subscribers of its visible owner thread", () => {

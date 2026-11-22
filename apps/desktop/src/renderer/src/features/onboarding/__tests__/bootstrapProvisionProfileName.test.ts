@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DesktopBootInfo } from "@pwragent/shared/contracts/settings";
-import { bootstrapProvisionProfileName } from "../OnboardingWizard";
+import { bootstrapProvisionProfileName } from "../GetStarted";
 
 /**
  * Regression guard for the "wizard re-fires forever under PWRAGENT_PROFILE=test"
- * bug. The single-profile bootstrap finish paths (Shared mode + "Skip and use
- * default") used to hardcode `default` as the provisioned profile name. But
+ * bug. The single-profile bootstrap Start paths (Start, and "Continue without
+ * an agent") used to hardcode `default` as the provisioned profile name. But
  * boot resolves the pinned env/CLI name FIRST (before the registry default), so
  * provisioning `default` meant the next boot looked for `test`, didn't find it,
  * and showed the wizard again — every launch. The provisioned name must equal

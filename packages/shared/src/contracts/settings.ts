@@ -86,6 +86,11 @@ export const DEFAULT_PR_AUTO_DISPATCH_ALLOWED = true;
  * default. Existing threads retain their saved per-thread preference.
  */
 export const DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS = true;
+/**
+ * When a thread's PR merges, watch its merge build on the target branch and
+ * wake the thread only if it fails. A pass ends the watch quietly.
+ */
+export const DEFAULT_WATCH_MERGE_BUILDS = true;
 export const DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY = 30;
 export const DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE = 1;
 export const DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY = true;
@@ -1784,6 +1789,11 @@ export type DesktopSettingsSnapshot = {
     prAutoDispatchAllowed: DesktopSettingsValue<boolean>;
     /** Default Auto-fix PR preference seeded only onto newly created threads. */
     defaultPrAutoDispatchEnabled: DesktopSettingsValue<boolean>;
+    /**
+     * `[git] watch_merge_builds`: when a thread's PR merges, watch the build of
+     * its merge commit on the target branch and wake the thread if it fails.
+     */
+    watchMergeBuilds?: DesktopSettingsValue<boolean>;
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
@@ -2092,6 +2102,7 @@ export type DesktopSettingsConfigPatch = {
     backgroundPrPolling?: boolean;
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
+    watchMergeBuilds?: boolean;
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;

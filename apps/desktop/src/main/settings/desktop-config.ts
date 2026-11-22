@@ -409,6 +409,7 @@ export type DesktopSettingsConfig = {
     backgroundPrPolling?: boolean;
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
+    watchMergeBuilds?: boolean;
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
@@ -2257,6 +2258,9 @@ export function desktopSettingsPatchToEdits(
       patch.git.defaultPrAutoDispatchEnabled,
     );
   }
+  if (patch.git?.watchMergeBuilds !== undefined) {
+    set(["git", "watch_merge_builds"], patch.git.watchMergeBuilds);
+  }
   if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
     set(
       ["git", "pr_auto_dispatch_budget_capacity"],
@@ -2908,6 +2912,7 @@ function normalizeDesktopConfig(
       defaultPrAutoDispatchEnabled: readBoolean(
         git?.default_pr_auto_dispatch_enabled,
       ),
+      watchMergeBuilds: readBoolean(git?.watch_merge_builds),
       prAutoDispatchBudgetCapacity: readNumber(
         git?.pr_auto_dispatch_budget_capacity,
       ),
