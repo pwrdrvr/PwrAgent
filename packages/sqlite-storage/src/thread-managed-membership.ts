@@ -104,6 +104,19 @@ export function ensureThreadManagedMembershipSchema(db: Database.Database): void
   }).immediate();
 }
 
+/** Run inside storage maintenance's write transaction, after parent deletion. */
+export function reclaimEmptyLegacyMembershipIndex(db: Database.Database): void {
+  // Partial profiles can omit the relationship schema. The segment index
+  // has rows only after postings have been written, even after documents
+  // were retired. Clearing it leaves pages for the existing vacuum to reclaim.
+  if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'thread_managed_legacy_search_idx'").get()) return;
+  const retired = db.prepare(`SELECT 1 WHERE EXISTS (SELECT 1 FROM thread_managed_legacy_search_idx)
+    AND NOT EXISTS (SELECT 1 FROM thread_managed_legacy_search)`).get();
+  if (retired) {
+    db.prepare("INSERT INTO thread_managed_legacy_search(thread_managed_legacy_search) VALUES ('delete-all')").run();
+  }
+}
+
 /** Read the valid prefix of a legacy array, stopping at a malformed entry. */
 export function managedKeysFromLegacyProjection(projection: string): Set<string> {
   const keys = new Set<string>();
@@ -154,8 +167,16 @@ const REPLACEMENT_PROBES = `, replacement_probes AS (
     CAST(unhex(json_extract(value, '$.upper')) AS TEXT) AS upper_bound,
     json_extract(value, '$.legacyMatch') AS legacy_match
   FROM json_each(@replacementProbes)
+), grouped_replacement_probes AS (
+  SELECT CAST(unhex(json_extract(value, '$.lower')) AS TEXT) AS lower_bound,
+    CAST(unhex(json_extract(value, '$.upper')) AS TEXT) AS upper_bound
+  FROM json_each(@groupedReplacementProbes)
 )`;
 const REPLACEMENT_CANDIDATES = `
+UNION ALL
+SELECT thread_id, grouped_subthread, NULL, NULL, NULL
+  FROM grouped_replacement_probes CROSS JOIN thread_navigation_relationships
+  WHERE grouped_subthread = 1 AND thread_id >= lower_bound AND thread_id < upper_bound
 UNION ALL
 SELECT thread_id, 0, managed_children, NULL, NULL
   FROM thread_navigation_relationships
@@ -175,22 +196,27 @@ SELECT thread_id, 0, NULL, backend, monitor_thread_id
   WHERE ` + PADDED_CARD_CHILD + " AND " + TRIMMED_CARD_CHILD + " >= lower_bound"
   + " AND " + TRIMMED_CARD_CHILD + " < upper_bound";
 
-type ReplacementProbe = { lower: string; upper: string; legacyMatch: string };
+type ReplacementRange = { lower: string; upper: string };
+type ReplacementProbe = ReplacementRange & { legacyMatch: string };
 
-function replacementProbe(id: string, replacementIndex: number): ReplacementProbe {
-  const prefix = Buffer.from(id.slice(0, replacementIndex));
+function replacementRange(id: string, prefix: Buffer): ReplacementRange {
   const lower = prefix.toString("hex") + "80";
-  const token = "x" + prefix.subarray(0, LEGACY_CHILD_TOKEN_BYTES).toString("hex");
-  const legacyMatch = prefix.length >= LEGACY_CHILD_TOKEN_BYTES ? token
-    : [..."89abcdef"].map((nibble) => token + nibble + "*").join(" OR ");
   if (prefix.length === 0) {
     // An invalid sequence consumes at most as many bytes as the UTF-8
     // encoding of its replacement character. One more byte bounds the seek.
-    return { lower, upper: "ff".repeat(Buffer.byteLength(id) + 1), legacyMatch };
+    return { lower, upper: "ff".repeat(Buffer.byteLength(id) + 1) };
   }
   const last = prefix.length - 1;
   prefix.writeUInt8(prefix.readUInt8(last) + 1, last);
-  return { lower, upper: prefix.toString("hex"), legacyMatch };
+  return { lower, upper: prefix.toString("hex") };
+}
+
+function replacementProbe(id: string, replacementIndex: number): ReplacementProbe {
+  const prefix = Buffer.from(id.slice(0, replacementIndex));
+  const token = "x" + prefix.subarray(0, LEGACY_CHILD_TOKEN_BYTES).toString("hex");
+  const legacyMatch = prefix.length >= LEGACY_CHILD_TOKEN_BYTES ? token
+    : [..."89abcdef"].map((nibble) => token + nibble + "*").join(" OR ");
+  return { ...replacementRange(id, prefix), legacyMatch };
 }
 
 type MembershipRow = {
@@ -202,23 +228,26 @@ type MembershipRow = {
 };
 
 type MembershipBindings = { childIds: string; storageKeys: string };
+type ReplacementBindings = MembershipBindings & { replacementProbes: string; groupedReplacementProbes: string };
 
 /** One SQLite snapshot of only the candidate relationships and group flags. */
 export function prepareScopedManagedMembership(db: Database.Database) {
   const statement = db.prepare<MembershipBindings, MembershipRow>(REQUESTED_CHILD_IDS + SCOPED_MANAGED_MEMBERSHIP);
-  let replacementStatement: Database.Statement<MembershipBindings & { replacementProbes: string }, MembershipRow> | undefined;
-  const readRows = (bindings: MembershipBindings, probes: ReplacementProbe[]): MembershipRow[] => {
-    if (probes.length === 0) return statement.all(bindings);
+  let replacementStatement: Database.Statement<ReplacementBindings, MembershipRow> | undefined;
+  const readRows = (bindings: MembershipBindings, probes: ReplacementProbe[], groupedProbes: ReplacementRange[]): MembershipRow[] => {
+    if (probes.length === 0 && groupedProbes.length === 0) return statement.all(bindings);
     replacementStatement ??= db.prepare(
       REQUESTED_CHILD_IDS + REPLACEMENT_PROBES + SCOPED_MANAGED_MEMBERSHIP + REPLACEMENT_CANDIDATES,
     );
-    return replacementStatement.all({ ...bindings, replacementProbes: JSON.stringify(probes) });
+    return replacementStatement.all({
+      ...bindings, replacementProbes: JSON.stringify(probes), groupedReplacementProbes: JSON.stringify(groupedProbes),
+    });
   };
   return (keys: readonly string[]) => readScopedManagedMembership(readRows, keys);
 }
 
 function readScopedManagedMembership(
-  readRows: (bindings: MembershipBindings, probes: ReplacementProbe[]) => MembershipRow[],
+  readRows: (bindings: MembershipBindings, probes: ReplacementProbe[], groupedProbes: ReplacementRange[]) => MembershipRow[],
   keys: readonly string[],
 ): Set<string> {
   if (keys.length === 0) return new Set();
@@ -241,7 +270,12 @@ function readScopedManagedMembership(
     const replacement = id.indexOf("\ufffd");
     if (replacement !== -1) probes.push(replacementProbe(id, replacement));
   }
-  const rows = readRows({ childIds: JSON.stringify([...childIds]), storageKeys: JSON.stringify([...storageKeys]) }, probes);
+  const groupedProbes: ReplacementRange[] = [];
+  for (const key of storageKeys) {
+    const replacement = key.indexOf("\ufffd");
+    if (replacement !== -1) groupedProbes.push(replacementRange(key, Buffer.from(key.slice(0, replacement))));
+  }
+  const rows = readRows({ childIds: JSON.stringify([...childIds]), storageKeys: JSON.stringify([...storageKeys]) }, probes, groupedProbes);
   const grouped = new Set<string>();
   for (const row of rows) {
     if (row.child !== null) {
@@ -251,7 +285,7 @@ function readScopedManagedMembership(
       for (const key of managedKeysFromLegacyProjection(row.projection)) {
         if (wanted.has(key)) managed.add(key);
       }
-    } else if (row.grouped_subthread === 1) {
+    } else if (row.grouped_subthread === 1 && storageKeys.has(row.thread_id)) {
       grouped.add(row.thread_id);
     }
   }
