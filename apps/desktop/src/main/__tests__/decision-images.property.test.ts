@@ -265,6 +265,7 @@ describe("decision image capability", () => {
       expect(raw).not.toContain(redUrl);
       const fresh = setup("openai", "gpt-6-luna", directory).service;
       const page = await fresh.railBatchPage(caller, { batchId: result.batchId, status: "all", limit: 5, from: 0 });
+      expect(page.definition?.questions).toEqual([question]);
       expect(page.items.map((item) => item.ok)).toEqual([false, true]);
       for (const item of page.items) {
         expect(item.inputPreview).toBe(JSON.stringify(evidence));

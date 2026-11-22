@@ -15,6 +15,7 @@ afterEach(cleanup);
 
 const NOW = new Date(2026, 10, 19, 14, 4, 41).getTime();
 const THREAD = { backend: "codex", threadId: "thread-1" };
+const THUMBNAIL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/2Q==";
 
 const running: DecisionsRailBatch = {
   batchId: "batch_run-1",
@@ -94,6 +95,7 @@ function page(request: DecisionsRailBatchRequest): DecisionsRailBatchPage {
       index: 0,
       ok: true,
       inputPreview: "{\"title\":\"Sidebar flickers when a thread finishes\"}",
+      inputImages: [{ mimeType: "image/jpeg", width: 1, height: 1, thumbnail: THUMBNAIL }],
       durationMs: 402,
       answers: [
         { type: "predicate", name: "relevant", value: "yes", probability: 0.93 },
@@ -238,6 +240,7 @@ it("opens a batch for review: its prompt, its items as fields, answers with prob
   const options = within(list).getAllByRole("option");
   expect(options).toHaveLength(2);
   expect(within(options[0]!).getByText("Sidebar flickers when a thread finishes")).toBeInTheDocument();
+  expect(within(options[0]!).getByAltText("Image 1 · JPEG · 1 × 1")).toHaveAttribute("src", THUMBNAIL);
   expect(within(options[0]!).getByText("yes · 0.93")).toBeInTheDocument();
   expect(within(options[1]!).getByText("rate_limited")).toBeInTheDocument();
   expect(within(dialog).queryByText(/\{"title"/)).not.toBeInTheDocument();
