@@ -14,6 +14,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
 import { getOwnerHostServices } from "../owner-host";
 import { assertOwnerCodexModelSelection } from "../owner-runtime-policy";
+import { assertAgentCapabilityAdmission } from "./agent-capability-admission";
 import {
   navigationLaunchpadProviderKey,
   isRemoteLaunchpadStorageKey,
@@ -1622,6 +1623,9 @@ export class ThreadDirectoryService {
     proxyLaunchpad?: NavigationLaunchpadDraft,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     let launchpad = proxyLaunchpad ?? await this.resolveMaterializedLaunchpad(request, options?.sourceInstanceId);
+    const identity = { backend: launchpad.backend };
+    assertAgentCapabilityAdmission(launchpad.agent?.capabilityPolicy, identity, "interactive");
+    assertAgentCapabilityAdmission(request.agent?.capabilityPolicy, identity, "interactive");
     operation?.update({ backend: launchpad.backend, projectPath: launchpad.directoryPath, title: request.input?.find((item) => item.type === "text")?.text ?? launchpad.prompt });
     operation?.check();
     if (

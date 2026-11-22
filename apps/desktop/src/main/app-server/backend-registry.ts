@@ -64,6 +64,7 @@ import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import { lowerThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
+import { assertAgentCapabilityAdmission } from "./agent-capability-admission";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { TASK_MONITOR_TOOL_NAMESPACE } from "@pwragent/shared/contracts/task-monitor-tools";
 import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
@@ -4260,14 +4261,17 @@ export class DesktopBackendRegistry {
     agent: NavigationLaunchpadAgent | null;
   }): Promise<ThreadOverlayState> {
     this.assertNotBootstrap("setThreadAgent");
+    assertAgentCapabilityAdmission(params.agent?.capabilityPolicy, params, "interactive");
     if (params.backend !== "codex") {
       return await this.applyThreadAgentChange(params);
     }
     const result = await this.serializeCodexAgentChange(params.threadId, async () => {
       const current = await this.overlayStore.getThreadOverlayState(params);
+      assertAgentCapabilityAdmission(current?.agent?.capabilityPolicy, params, "interactive");
       const sameAgent = (agent: typeof params.agent | undefined) =>
         (agent?.name ?? null) === (params.agent?.name ?? null)
-        && (agent?.instructions ?? "") === (params.agent?.instructions ?? "");
+        && (agent?.instructions ?? "") === (params.agent?.instructions ?? "")
+        && (params.agent?.capabilityPolicy === undefined || agent?.capabilityPolicy?.mode === "legacy");
       if (current?.queuedAgentChange && Boolean(current.agent) === Boolean(params.agent)) {
         // Selecting the applied designation cancels a pending change.
         const overlay = await this.overlayStore.setQueuedThreadAgentChange({ ...params, change: undefined });
@@ -4321,6 +4325,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     agent: NavigationLaunchpadAgent | null;
   }, ownsStartReservation = false): Promise<ThreadOverlayState> {
+    assertAgentCapabilityAdmission(params.agent?.capabilityPolicy, params, "interactive");
+    await this.assertStoredAgentCapabilityAdmission(params, "interactive");
     const codex = params.backend === "codex";
     let agentReservation: object | undefined;
     if (codex) {
@@ -8156,7 +8162,22 @@ export class DesktopBackendRegistry {
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    assertAgentCapabilityAdmission(params.agent?.capabilityPolicy, params, params.parentThreadId ? "child" : "interactive");
+    if (params.parentThreadId && !params.parentThreadInstanceId) {
+      await this.assertStoredAgentCapabilityAdmission({
+        backend: params.parentThreadBackend ?? params.backend,
+        threadId: params.parentThreadId,
+      }, "child");
+    }
     return await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params));
+  }
+
+  private async assertStoredAgentCapabilityAdmission(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    path: Parameters<typeof assertAgentCapabilityAdmission>[2],
+  ): Promise<void> {
+    const overlay = await this.overlayStore.getThreadOverlayState(identity);
+    assertAgentCapabilityAdmission(overlay?.agent?.capabilityPolicy, identity, path);
   }
 
   private async startThreadPrepared(params: Parameters<DesktopBackendRegistry["startThread"]>[0]): Promise<StartThreadResponse> {
@@ -8678,6 +8699,9 @@ export class DesktopBackendRegistry {
     if (backend !== "codex" && backend !== "claude") {
       throw new Error("Thread forking is supported by the Codex and Claude backends.");
     }
+    const sourceIdentity = { backend, threadId: request.sourceThreadId };
+    const sourceOverlay = await this.overlayStore.getThreadOverlayState(sourceIdentity);
+    assertAgentCapabilityAdmission(sourceOverlay?.agent?.capabilityPolicy, sourceIdentity, "child");
 
     const executionMode = request.executionMode ?? "default";
     const modeSettings = executionModeSettings(executionMode);
@@ -8688,10 +8712,6 @@ export class DesktopBackendRegistry {
       request.directoryLabel?.trim() ||
       (request.directoryPath ? path.basename(request.directoryPath) : undefined) ||
       "Forked thread";
-    const sourceOverlay = await this.overlayStore.getThreadOverlayState({
-      backend,
-      threadId: request.sourceThreadId,
-    });
     // Imported worktrees already contain verified index and working-file state.
     // Their caller owns cleanup after retiring any partially created thread.
     const preparedWorkspace = request.importedWorktree
@@ -10939,6 +10959,7 @@ export class DesktopBackendRegistry {
     if (this.closed) {
       throw new Error("Desktop backend registry is closed");
     }
+    await this.assertStoredAgentCapabilityAdmission(params, "interactive");
     if (params.backend === "codex" && !params.invalidIdRecoveryAttempted) {
       await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
       if (this.closed) {
@@ -12384,6 +12405,7 @@ export class DesktopBackendRegistry {
     turnId: string;
     itemId?: string;
   }> {
+    await this.assertStoredAgentCapabilityAdmission(params, "interactive");
     if (isAcpBackendId(params.backend)) {
       throw new Error(
         "ACP backend " + params.backend + " does not support thread compaction",
@@ -12517,6 +12539,7 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    await this.assertStoredAgentCapabilityAdmission(params, "interactive");
     return await this.threadSteering.steerTurn(params, messageOrigin);
   }
 
@@ -13010,6 +13033,7 @@ export class DesktopBackendRegistry {
   private async setThreadExecutionModeOnce(
     params: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> {
+    await this.assertStoredAgentCapabilityAdmission(params, "interactive");
     if (params.backend === "claude") {
       if (await this.claudeBackend.executionMode(params.threadId) === params.executionMode) return params;
       await this.claudeBackend.setExecutionMode(params.threadId, params.executionMode);
@@ -14684,6 +14708,7 @@ export class DesktopBackendRegistry {
     params: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> {
     this.assertNotBootstrap("submitServerRequest");
+    await this.assertStoredAgentCapabilityAdmission(params, "interactive");
     const key = buildPendingRequestKey(params);
     const pending = this.pendingServerRequests.get(key);
     if (!pending) {

@@ -342,6 +342,22 @@ describe("ManagedReviewService", () => {
     ), { numRuns: 40 });
   });
 
+  it("retains a review terminal delivered during the capability policy lookup", async () => {
+    let delivered = false;
+    const harness = createReviewHarness({
+      onStep: async (name) => {
+        if (name !== "getThreadOverlayState" || delivered) return;
+        delivered = true;
+        await harness.service.completeReviewSubAgent(reviewTerminal);
+      },
+    });
+    await harness.service.startReview(REVIEW_REQUEST);
+
+    expect(harness.cards.get(reviewSubAgentId(REVIEW_TURN))?.status).toBe("success");
+    expect(harness.service.findReviewForParentTurn({ backend: "codex", parentThreadId: THREAD })).toBeUndefined();
+    expect(harness.host.threadTurnQueue.releaseThread).toHaveBeenCalledTimes(1);
+  });
+
   it("never moves a review card off its terminal status once the terminal is applied", async () => {
     await fc.assert(fc.asyncProperty(
       fc.scheduler(),
@@ -433,10 +449,10 @@ describe("ManagedReviewService pending review starts", () => {
         getPendingTurnForThread: () => undefined,
         submitTurn,
       } as unknown as ManagedReviewServiceHost;
-      const context = {
-      ...registryContextStandIn(),
+      const context = registryContextStandIn({
+        overlayStore: { getThreadOverlayState: async () => undefined },
         emit: async (event: AgentEvent) => { events.push(event); },
-      } as unknown as RegistryContext;
+      });
       const service = new ManagedReviewService(context, () => host);
       const startReview = vi.spyOn(service, "startReview").mockImplementation(async () => {
         if (!startsSucceed) throw new Error("fixture start refused");

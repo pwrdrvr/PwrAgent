@@ -26,6 +26,7 @@ export type {
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { agentCapabilityRuntimeSupport } from "@pwragent/shared/contracts/agent-capability-policy";
 import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import {
   parseUsageLimitObservation,
@@ -5455,9 +5456,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const existingPolicy = current.agent?.capabilityPolicy;
+    const requestedPolicy = params.agent?.capabilityPolicy;
+    if (agentCapabilityRuntimeSupport(existingPolicy, params.backend, "interactive").status !== "legacy"
+      || agentCapabilityRuntimeSupport(requestedPolicy, params.backend, "interactive").status !== "legacy") {
+      throw new Error("A restricted or invalid Agent capability policy cannot be installed or replaced on an active Agent record.");
+    }
     const nextState: ThreadOverlayState = {
       ...current,
-      agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
+      agent: params.agent
+        ? {
+            ...current.agent,
+            ...normalizeThreadAgent({ ...params.agent, capabilityPolicy: requestedPolicy ?? existingPolicy }, params.now),
+          }
+        : undefined,
       queuedAgentChange: undefined,
     };
     this.putThread(threadKey, nextState);
@@ -11603,9 +11615,8 @@ function normalizeThreadAgent(
   return {
     name,
     instructions: instructions || undefined,
-    ...(input.instructionsDelivery === "workspace-file"
-      ? { instructionsDelivery: "workspace-file" as const }
-      : {}),
+    instructionsDelivery: input.instructionsDelivery === "workspace-file" ? "workspace-file" : undefined,
+    ...(input.capabilityPolicy !== undefined ? { capabilityPolicy: input.capabilityPolicy } : {}),
     instructionLineCount,
     instructionsTooLong:
       instructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
@@ -11696,6 +11707,7 @@ function normalizeThreadOverlayState(
   }
   if (
     state.agent?.instructions === LEGACY_HANDOFF_AGENT_INSTRUCTIONS &&
+    state.agent.capabilityPolicy === undefined &&
     state.handoffOrigin &&
     (
       !state.handoffOrigin.taskTitle ||

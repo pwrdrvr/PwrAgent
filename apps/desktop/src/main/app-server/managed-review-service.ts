@@ -2,6 +2,7 @@ import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer
 import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } from "./backend-registry-notifications";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
+import { assertAgentCapabilityAdmission } from "./agent-capability-admission";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
   buildThreadIdentityKey,
@@ -396,13 +397,18 @@ export class ManagedReviewService {
     return { ...params, cwd, target };
   }
 
+  private async assertCapabilityAdmission(params: StartReviewRequest): Promise<void> {
+    const overlay = await this.context.stores.threads.getThreadOverlayState(params);
+    assertAgentCapabilityAdmission(overlay?.agent?.capabilityPolicy, params, "child");
+  }
+
   async startReview(
     params: StartReviewRequest,
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse> {
     this.host().assertThreadOwnership();
-    // Retain terminal evidence only for the lifetime of this start request.
+    // Retain terminal evidence from the first await in this start request.
     const terminals = this.context.turnState.beginReviewStart(params);
     // Armed before the start, so a review that lands at once still fixes.
     // Claude Code fixes with its own `--fix` in the review's turn, so a
@@ -412,6 +418,7 @@ export class ManagedReviewService {
       params.messagingSource || params.runMode === "claude-code-review" ? "wait" : params.afterReview,
     );
     try {
+      await this.assertCapabilityAdmission(params);
       const response = params.runMode === "claude-code-review"
         ? await this.startClaudeCodeReview(params)
         : await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
@@ -1133,6 +1140,7 @@ export class ManagedReviewService {
       }
   > {
     const { idempotencyKey, ...incoming } = params;
+    await this.assertCapabilityAdmission(incoming);
     await this.host().assertThreadNotLocked(incoming.backend, incoming.threadId);
     const request = await this.prepareReviewRequest(incoming, trustedSnapshot);
     const activeTurn = this.host().getActiveTurnForThread({
