@@ -2,7 +2,7 @@ import type { DirectorySummaryKind } from "@pwragent/shared/contracts/navigation
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ProjectRepositoryIdentity } from "@pwragent/shared/federation-project-match";
 import type { ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
-import { canonicalizeNavigationPath, classifyDirectory } from "@pwragent/shared/directory-navigation";
+import { canonicalizeNavigationPath, classifyDirectory, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 
 /** One row of the Directories lens, as the directory-index query lists it. */
@@ -106,13 +106,8 @@ function looksLikePath(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
 
-function comparablePath(path: string, ignoreCase: boolean): string {
-  const canonical = canonicalizeNavigationPath(path);
-  return ignoreCase ? canonical.toLowerCase() : canonical;
-}
-
 function samePath(projectPath: string, path: string, ignoreCase: boolean): boolean {
-  return comparablePath(projectPath, ignoreCase) === comparablePath(path, ignoreCase);
+  return navigationPathIdentity(projectPath, ignoreCase) === navigationPathIdentity(path, ignoreCase);
 }
 
 /** The deepest project whose root holds `path`; nested clones are rare. */
@@ -121,11 +116,11 @@ function containingProjects(
   projects: readonly ThreadTodoProject[],
   ignoreCase: boolean,
 ): ThreadTodoProject[] {
-  const target = comparablePath(path, ignoreCase);
+  const target = navigationPathIdentity(path, ignoreCase);
   let best: ThreadTodoProject[] = [];
   let bestLength = 0;
   for (const project of projects) {
-    const root = comparablePath(project.path, ignoreCase);
+    const root = navigationPathIdentity(project.path, ignoreCase);
     if (!root || !target.startsWith(`${root}/`)) continue;
     if (root.length > bestLength) {
       best = [project];
