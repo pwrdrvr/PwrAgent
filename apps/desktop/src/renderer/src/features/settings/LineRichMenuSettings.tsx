@@ -6,15 +6,16 @@ import { SettingsField } from "./SettingsLayout";
 type Action = LineRichMenuSetupRequest["action"];
 type MenuStatus = Extract<LineRichMenuSetupResponse, { accountId: string }>;
 
-export function LineRichMenuSettings({ configured, setup }: {
+export function LineRichMenuSettings({ configured, disabled = false, setup }: {
   configured: boolean;
+  disabled?: boolean;
   setup: DesktopApi["lineRichMenuSetup"];
 }) {
   const [menu, setMenu] = useState<MenuStatus>();
   const [error, setError] = useState<Extract<LineRichMenuSetupResponse, { kind: "error" }>>();
   const [pending, setPending] = useState<Action>();
   const [failed, setFailed] = useState<LineRichMenuSetupRequest>();
-  const [confirmation, setConfirmation] = useState(false);
+  const [removalAccountId, setRemovalAccountId] = useState<string>();
   const requestSequence = useRef(0);
   const keepButton = useRef<HTMLButtonElement>(null);
   const removeButton = useRef<HTMLButtonElement>(null);
@@ -22,6 +23,7 @@ export function LineRichMenuSettings({ configured, setup }: {
   const run = useCallback(async (request: LineRichMenuSetupRequest) => {
     if (!setup) return;
     const sequence = ++requestSequence.current;
+    setRemovalAccountId(undefined);
     setPending(request.action);
     setError(undefined);
     setFailed(undefined);
@@ -41,17 +43,19 @@ export function LineRichMenuSettings({ configured, setup }: {
     return () => { requestSequence.current += 1; };
   }, [configured, run]);
 
-  useEffect(() => {
-    if (confirmation) keepButton.current?.focus();
-  }, [confirmation]);
-
   const check = () => { void run({ action: "check" }); };
   const available = menu?.kind === "available" && !menu.cleanupRequired;
   const updating = menu?.kind === "installed" && menu.updateAvailable;
   const installLabel = updating ? "Update rich menu" : "Install rich menu";
   const canRetrySetup = menu?.kind === "installed" && menu.cleanupRequired;
   const canRemove = menu?.kind === "installed" || menu?.cleanupRequired;
+  const controlsDisabled = disabled || pending !== undefined;
+  const confirmationAccountId = !controlsDisabled && removalAccountId === menu?.accountId ? removalAccountId : undefined;
   const status = pending ? pendingText(pending, updating) : menu ? menuStatusText(menu) : undefined;
+
+  useEffect(() => {
+    if (confirmationAccountId) keepButton.current?.focus();
+  }, [confirmationAccountId]);
 
   if (!setup) return null;
   return (
@@ -77,7 +81,7 @@ export function LineRichMenuSettings({ configured, setup }: {
           {menu?.kind === "installed" && !pending && !error ? (
             <p className="settings-row__description">Existing per-user menus take precedence. Reopen the LINE mobile chat to see changes.</p>
           ) : null}
-          {confirmation && menu ? (
+          {confirmationAccountId ? (
             <div className="settings-action-confirmation" aria-live="polite">
               <div className="settings-action-confirmation__copy">
                 <strong>Remove the PwrAgent rich menu?</strong>
@@ -85,33 +89,33 @@ export function LineRichMenuSettings({ configured, setup }: {
               </div>
               <div className="settings-inline-actions">
                 <button className="button button--secondary" type="button" ref={keepButton} onClick={() => {
-                  setConfirmation(false);
+                  setRemovalAccountId(undefined);
                   requestAnimationFrame(() => removeButton.current?.focus());
                 }}>Keep menu</button>
                 <button className="button button--secondary" type="button" onClick={() => {
-                  setConfirmation(false);
-                  void run({ action: "remove", accountId: menu.accountId });
+                  void run({ action: "remove", accountId: confirmationAccountId });
                 }}>Remove rich menu</button>
               </div>
             </div>
           ) : (
             <div className="settings-inline-actions" aria-busy={pending !== undefined}>
               {error && failed?.action === "install" && error.reason !== "changed" ? (
-                <button className="button button--secondary" type="button" onClick={() => { void run(failed); }}>Retry</button>
+                <button className="button button--secondary" type="button" disabled={controlsDisabled}
+                  onClick={() => { void run(failed); }}>Retry</button>
               ) : null}
               {!error && menu && (available || updating || canRetrySetup) ? (
-                <button className="button button--secondary" type="button" disabled={pending !== undefined}
+                <button className="button button--secondary" type="button" disabled={controlsDisabled}
                   onClick={() => { void run({ action: "install", accountId: menu.accountId }); }}>
                   {canRetrySetup && !updating ? "Finish setup" : installLabel}
                 </button>
               ) : null}
               {canRemove && (!error || (failed?.action === "remove" && error.reason !== "changed")) ? (
-                <button className="button button--ghost" type="button" disabled={pending !== undefined}
-                  ref={removeButton} onClick={() => setConfirmation(true)}>
+                <button className="button button--ghost" type="button" disabled={controlsDisabled}
+                  ref={removeButton} onClick={() => setRemovalAccountId(menu.accountId)}>
                   {menu.kind === "installed" ? "Remove rich menu" : "Delete unused menu"}
                 </button>
               ) : null}
-              <button className="button button--ghost" type="button" disabled={pending !== undefined} onClick={check}>Check again</button>
+              <button className="button button--ghost" type="button" disabled={controlsDisabled} onClick={check}>Check again</button>
             </div>
           )}
         </div>

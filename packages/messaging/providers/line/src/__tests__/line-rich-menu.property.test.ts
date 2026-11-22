@@ -12,7 +12,7 @@ import {
   type LineRichMenuOwnership,
 } from "../line-rich-menu.ts";
 
-type Mutation = "create" | "upload" | "setDefault" | "clearDefault" | "delete";
+type Mutation = "create" | "upload" | "setDefault" | "delete";
 
 function fixture() {
   const menus = new Map<string, { name: string; image: boolean }>();
@@ -23,6 +23,7 @@ function fixture() {
   let serial = 0;
   let fault: { type: Mutation; afterCommit: boolean } | undefined;
   let afterUpload: (() => void) | undefined;
+  let afterDefaultRead: (() => void) | undefined;
   let accountId = "account-a";
   const store: MessagingProviderSetupStore<LineRichMenuOwnership> = {
     async withAccount(id, run) {
@@ -40,7 +41,13 @@ function fixture() {
   }
   const api: LineRichMenuApi = {
     async accountId() { return accountId; },
-    async getDefault() { return current; },
+    async getDefault() {
+      const observed = current;
+      const callback = afterDefaultRead;
+      afterDefaultRead = undefined;
+      callback?.();
+      return observed;
+    },
     async list() { return [...menus].map(([id, { name }]) => ({ id, name })); },
     async create(menu) {
       return mutate("create", () => {
@@ -61,13 +68,10 @@ function fixture() {
         current = { kind: "api", id };
       });
     },
-    async clearDefault() {
-      mutate("clearDefault", () => { current = empty; });
-    },
     async delete(id) {
       mutate("delete", () => {
-        if (current.kind === "api" && current.id === id) throw new Error("Deleting a visible menu");
         menus.delete(id);
+        if (current.kind === "api" && current.id === id) current = empty;
       });
     },
   };
@@ -85,6 +89,10 @@ function fixture() {
     setAccount: (next: string) => { accountId = next; },
     fail: (type: Mutation, afterCommit: boolean) => { fault = { type, afterCommit }; },
     onUpload: (callback: () => void) => { afterUpload = callback; },
+    onDefaultRead: (callback: () => void) => { afterDefaultRead = callback; },
+    seedStaged: (name: string) => {
+      state.set(accountId, { ...state.get(accountId), staged: { name, revision: "v2" } });
+    },
     current: () => current,
     state: () => state.get(accountId),
     menus,
@@ -93,6 +101,41 @@ function fixture() {
 }
 
 describe("LINE rich-menu ownership", () => {
+  it("preserves a foreign default that replaces the owned menu after the initial read", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1 }), async (ordinal) => {
+      const line = fixture();
+      const setup = line.setup();
+      await setup.install();
+      const external = { kind: "api", id: `external-${ordinal}` } as const;
+      line.onDefaultRead(() => line.setCurrent(external));
+      await setup.remove();
+      expect(line.current()).toEqual(external);
+      expect(line.menus.size).toBe(0);
+    }));
+  });
+
+  it("resumes install or cleanup after a restart before LINE created the staged menu", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("install", "remove"), fc.boolean(), async (action, updating) => {
+      const line = fixture();
+      if (updating) await line.setup().install();
+      line.seedStaged("PwrAgent setup interrupted");
+      await line.setup("v2")[action]();
+      expect(line.state()?.staged).toBeUndefined();
+      expect(line.menus.size).toBe(action === "install" ? 1 : 0);
+    }));
+  });
+
+  it("keeps the journal and stops when the staged name matches multiple menus", async () => {
+    const line = fixture();
+    const name = "PwrAgent setup ambiguous";
+    line.seedStaged(name);
+    line.menus.set("candidate-a", { name, image: false });
+    line.menus.set("candidate-b", { name, image: false });
+    await expect(line.setup().remove()).rejects.toMatchObject({ code: "recovery-required" });
+    expect(line.mutations).toEqual([]);
+    expect(line.state()?.staged?.name).toBe(name);
+  });
+
   it("uses the approved image and maps its whole surface to the five existing commands", () => {
     const image = readFileSync(new URL("../../assets/pwragent-line-rich-menu.png", import.meta.url));
     expect(image.length).toBeLessThan(1_000_000);
@@ -244,27 +287,19 @@ describe("LINE rich-menu ownership", () => {
     }));
   });
 
-  it("resumes removal after a failed clear or delete and preserves the ID until deletion is confirmed", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("clearDefault", "delete"), fc.boolean(),
-      async (failingCall, afterCommit) => {
-        const line = fixture();
-        await line.setup().install();
-        const original = line.state()?.active;
-        line.fail(failingCall, afterCommit);
-        const remove = line.setup().remove();
-        if (failingCall === "clearDefault" && afterCommit) {
-          await remove;
-        } else {
-          await expect(remove).rejects.toThrow();
-          expect(line.state()?.active).toEqual(original);
-        }
-        await line.setup().remove();
-        expect(line.current()).toEqual({ kind: "empty" });
-        expect(line.menus.size).toBe(0);
-        expect(line.state()).toEqual({});
-      },
-    ));
+  it("preserves ownership until a retry confirms the ID-scoped deletion", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (afterCommit) => {
+      const line = fixture();
+      await line.setup().install();
+      const original = line.state()?.active;
+      line.fail("delete", afterCommit);
+      await expect(line.setup().remove()).rejects.toThrow();
+      expect(line.state()?.active).toEqual(original);
+      await line.setup().remove();
+      expect(line.current()).toEqual({ kind: "empty" });
+      expect(line.menus.size).toBe(0);
+      expect(line.state()).toEqual({});
+    }));
   });
 });
 
@@ -303,6 +338,17 @@ describe("LINE rich-menu SDK transport", () => {
     expect(fetch).toHaveBeenNthCalledWith(2,
       expect.objectContaining({ href: `https://api.line.me/v2/bot/user/all/richmenu/${id}` }),
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("targets the owned menu ID on deletion and treats a missing menu as already deleted", async () => {
+    const id = `richmenu-${"c".repeat(32)}`;
+    const fetch = vi.fn().mockResolvedValue(Response.json({}, { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(createLineRichMenuApi("contrived-access-token").delete(id)).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ href: `https://api.line.me/v2/bot/richmenu/${id}` }),
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });

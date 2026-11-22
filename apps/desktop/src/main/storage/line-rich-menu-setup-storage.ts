@@ -7,18 +7,18 @@ import {
   validateLineUserId,
   type LineRichMenuOwnership,
 } from "@pwragent/messaging-provider-line";
-import { resolveActiveProfilePath } from "../profile";
+import { resolvePwragentRoot } from "../profile";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 
-/** This lock protects one LINE setup operation across app instances sharing the profile. */
+/** LINE's default is account-wide, while each profile keeps its own ownership journal. */
 export function createLineRichMenuSetupStorage(): MessagingProviderSetupStore<LineRichMenuOwnership> {
   if (getAppStateMode() !== "active-profile") throw new LineRichMenuSetupError("request-failed");
   const stateDb = getAppStateDb();
-  const profileStateDir = resolveActiveProfilePath("state");
+  const pwragentRoot = resolvePwragentRoot();
   return {
     async withAccount(accountId, run) {
       if (!validateLineUserId(accountId).ok) throw new LineRichMenuSetupError("request-failed");
-      const file = path.join(profileStateDir, `line-rich-menu-${accountId}`);
+      const file = path.join(pwragentRoot, `line-rich-menu-${accountId}`);
       const key = `line_rich_menu:${accountId}`;
       let compromised = false;
       const release = await lock(file, {

@@ -226,6 +226,7 @@ export function MessagingSettings(props: {
   }, [slack.inboundMode.source, slack.inboundMode.value]);
   const feishu = props.snapshot.messaging.feishu;
   const line = props.snapshot.messaging.line;
+  const [lineTokenVersion, setLineTokenVersion] = useState(0);
   const messagingEnabled = props.snapshot.messaging.enabled;
   const allowFullAccessEscalation =
     props.snapshot.messaging.allowFullAccessEscalation;
@@ -2117,8 +2118,16 @@ export function MessagingSettings(props: {
             sub="Stored in the system keychain. Create or issue this from the LINE Developers console."
             secret="lineChannelAccessToken"
             state={line.channelAccessToken}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
+            onClearSecret={async (secret) => {
+              const saved = await props.onClearSecret(secret);
+              if (saved) setLineTokenVersion((version) => version + 1);
+              return saved;
+            }}
+            onReplaceSecret={async (secret, value) => {
+              const saved = await props.onReplaceSecret(secret, value);
+              if (saved) setLineTokenVersion((version) => version + 1);
+              return saved;
+            }}
           />
           <SecretField
             disabled={props.saving || !line.channelSecret.writable}
@@ -2143,7 +2152,9 @@ export function MessagingSettings(props: {
             }
           />
           <LineRichMenuSettings
+            key={lineTokenVersion}
             configured={line.channelAccessToken.configured}
+            disabled={props.saving}
             setup={props.desktopApi?.lineRichMenuSetup}
           />
           <PairingTokenField

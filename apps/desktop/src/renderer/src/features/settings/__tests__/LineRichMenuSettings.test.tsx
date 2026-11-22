@@ -43,4 +43,25 @@ describe("LINE rich menu settings", () => {
     expect(screen.queryByRole("button", { name: "Install rich menu" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove rich menu" })).toBeNull();
   });
+
+  it("requires a fresh removal confirmation after the token is cleared and a different account is checked", async () => {
+    const nextAccountId = `U${"b".repeat(32)}`;
+    const installed = { ...details, kind: "installed", revision: "v1", updateAvailable: false } as const;
+    const setup = vi.fn<(request: LineRichMenuSetupRequest) => Promise<LineRichMenuSetupResponse>>()
+      .mockResolvedValueOnce(installed)
+      .mockResolvedValue({ ...installed, accountId: nextAccountId });
+    const { rerender } = render(<LineRichMenuSettings configured setup={setup} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove rich menu" }));
+    expect(screen.getByRole("button", { name: "Keep menu" })).toBeTruthy();
+
+    rerender(<LineRichMenuSettings configured={false} setup={setup} />);
+    rerender(<LineRichMenuSettings configured setup={setup} />);
+    await waitFor(() => expect(setup).toHaveBeenCalledTimes(2));
+    await screen.findByText("Rich menu installed (v1).");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove rich menu" }));
+    expect(setup.mock.calls.map(([request]) => request)).toEqual([{ action: "check" }, { action: "check" }]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove rich menu" }));
+    await waitFor(() => expect(setup).toHaveBeenLastCalledWith({ action: "remove", accountId: nextAccountId }));
+  });
 });

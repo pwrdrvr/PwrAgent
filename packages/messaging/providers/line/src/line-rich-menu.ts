@@ -15,7 +15,6 @@ export type LineRichMenuApi = {
   create(menu: messagingApi.RichMenuRequest): Promise<string>;
   upload(id: string, image: Blob): Promise<void>;
   setDefault(id: string): Promise<void>;
-  clearDefault(): Promise<void>;
   delete(id: string): Promise<void>;
 };
 
@@ -100,18 +99,9 @@ export class LineRichMenuSetup {
   async remove(expectedAccountId: string): Promise<void> {
     const accountId = await this.verifyAccount(expectedAccountId);
     await this.store.withAccount(accountId, async (record, save, assertCurrent) => {
-      const { current, state } = await this.prepare(record, { save, assertCurrent }, "remove");
+      const { state } = await this.prepare(record, { save, assertCurrent }, "remove");
       if (!state.active) return;
-      if (current.kind === "api" && current.id === state.active.id) {
-        assertCurrent();
-        try {
-          await this.api.clearDefault();
-        } catch {
-          // Read back below to distinguish a lost response from a failed clear.
-        }
-        const observed = await this.api.getDefault();
-        if (sameDefault(current, observed)) throw new LineRichMenuSetupError("request-failed");
-      }
+      // The account-wide clear endpoint could clear a different menu after our read.
       assertCurrent();
       await this.api.delete(state.active.id);
       await save({});
@@ -143,6 +133,10 @@ export class LineRichMenuSetup {
       // Create lacks a retry key. The durable, random name identifies its result
       // if the response was lost before LINE returned the assigned ID.
       const id = staged.id ?? await this.findStagedId(staged.name);
+      if (id === undefined) {
+        await save({ active: state.active });
+        return undefined;
+      }
       const current = await this.api.getDefault();
       assertCurrent();
       if (current.kind === "api" && current.id === id) {
@@ -159,10 +153,10 @@ export class LineRichMenuSetup {
     }
   }
 
-  private async findStagedId(name: string): Promise<string> {
+  private async findStagedId(name: string): Promise<string | undefined> {
     const matches = (await this.api.list()).filter((menu) => menu.name === name);
-    if (matches.length !== 1) throw new LineRichMenuSetupError("recovery-required");
-    return matches[0].id;
+    if (matches.length > 1) throw new LineRichMenuSetupError("recovery-required");
+    return matches[0]?.id;
   }
 
   private assertManageable(current: LineRichMenuDefault, state: LineRichMenuOwnership): void {
@@ -260,7 +254,6 @@ export function createLineRichMenuApi(channelAccessToken: string): LineRichMenuA
     },
     async upload(id, image) { await blobClient.setRichMenuImage(checkedRichMenuId(id), image); },
     async setDefault(id) { await client.setDefaultRichMenu(checkedRichMenuId(id)); },
-    async clearDefault() { await client.cancelDefaultRichMenu(); },
     async delete(id) {
       try {
         await client.deleteRichMenu(checkedRichMenuId(id));
