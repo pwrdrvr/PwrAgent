@@ -7,7 +7,7 @@ import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-request
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { THREAD_TODO_LAUNCH_DISMISS_MS } from "../ThreadTodoLaunchTray";
 import { resetThreadTodoLaunchesForTests } from "../thread-todo-launches";
-import type { ThreadTodosView } from "../thread-todos-view";
+import type { ThreadTodoRunHooks, ThreadTodoRunOptions, ThreadTodosView } from "../thread-todos-view";
 
 afterEach(() => {
   cleanup();
@@ -56,6 +56,14 @@ function createView(open: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}
     threadTitleForKey: () => "Alpha",
     threadProjectForKey: () => undefined,
     ...overrides,
+  };
+}
+
+/** A run that goes to the owner at once, as App's does without a Full Access prompt. */
+function begun(result: (entry: ThreadTodo) => Promise<ThreadTodo | undefined>) {
+  return (entry: ThreadTodo, _options?: ThreadTodoRunOptions, hooks?: ThreadTodoRunHooks) => {
+    hooks?.onBegin?.();
+    return result(entry);
   };
 }
 
@@ -128,8 +136,8 @@ describe("ThreadTodoStack launches", () => {
     const pending = deferred<ThreadTodo | undefined>();
     const view = createView(cards, {
       run: vi.fn()
-        .mockImplementationOnce(() => pending.promise)
-        .mockImplementationOnce(() => new Promise<ThreadTodo | undefined>(() => {})),
+        .mockImplementationOnce(begun(() => pending.promise))
+        .mockImplementationOnce(begun(() => new Promise<ThreadTodo | undefined>(() => {}))),
     });
     const { container, rerender } = render(
       <ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />,
@@ -238,7 +246,7 @@ describe("ThreadTodoStack launches", () => {
 
   it("keeps a thread's rows across a switch to another thread", () => {
     const cards = [card("1")];
-    const view = createView(cards, { run: vi.fn(() => new Promise<ThreadTodo | undefined>(() => {})) });
+    const view = createView(cards, { run: vi.fn(begun(() => new Promise<ThreadTodo | undefined>(() => {}))) });
     const { rerender } = render(
       <ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />,
     );
@@ -250,5 +258,64 @@ describe("ThreadTodoStack launches", () => {
     cleanup();
     render(<ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />);
     expect(tray().textContent).toContain("Starting…");
+  });
+
+  it("keeps a card in the deck while its start waits on the Full Access prompt, and after a cancel", () => {
+    // App's gate holds the run behind the risk dialog and never settles a
+    // cancelled one, so nothing may leave the deck until the run begins.
+    const cards = [card("1"), card("2")];
+    const view = createView(cards, { run: vi.fn(() => new Promise<ThreadTodo | undefined>(() => {})) });
+    const { container } = render(
+      <ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(view.run).toHaveBeenCalledTimes(1);
+    expect(shownCard(container)).toEqual({ title: "Card 1", position: "1/2" });
+    expect(screen.queryByRole("region", { name: "Started to-dos" })).toBeNull();
+  });
+
+  it("reports a run that throws before it returns, so the card is not stranded", async () => {
+    const cards = [card("1"), card("2")];
+    const view = createView(cards, { run: vi.fn(() => { throw new Error("The owner is gone."); }) });
+    const { container } = render(
+      <ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    const row = within(tray()).getByRole("listitem");
+    expect(row.textContent).toContain("Could not start");
+    expect(row.textContent).toContain("The owner is gone.");
+    fireEvent.click(within(row).getByRole("button", { name: "Review card: Card 1" }));
+    expect(shownCard(container)?.title).toBe("Card 1");
+  });
+
+  it("resumes countdowns after the focused row is closed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    const cards = [card("1"), card("2")];
+    const view = createView(cards, {
+      run: vi.fn(begun(async (entry: ThreadTodo) => ({ ...entry, status: "done" as const,
+        startedThread: { backend: "codex" as const, threadId: `child-${entry.id}` } }))),
+    });
+    const { rerender } = render(
+      <ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    rerender(<ThreadTodoStack threadKey={THREAD_KEY} todos={[cards[1]!]} view={view} onStartReview={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    rerender(<ThreadTodoStack threadKey={THREAD_KEY} todos={[]} view={view} onStartReview={vi.fn()} />);
+    expect(within(tray()).getAllByRole("listitem")).toHaveLength(2);
+
+    // Keyboard: focus the first row's Close and press it.
+    const close = within(tray()).getByRole("button", { name: "Close: Card 1" });
+    act(() => { close.focus(); });
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(document.body);
+    act(() => { vi.advanceTimersByTime(THREAD_TODO_LAUNCH_DISMISS_MS); });
+    expect(screen.queryByRole("region", { name: "Started to-dos" })).toBeNull();
   });
 });

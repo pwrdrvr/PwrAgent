@@ -37,6 +37,9 @@ afterEach(() => {
   vi.mocked(copyTextWithHtml).mockClear();
 });
 
+/** A stack start reports its begin, so the card leaves the deck only then. */
+const START_HOOKS = { onBegin: expect.any(Function) };
+
 const AGENT: ThreadTodoProject = { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" };
 const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
 const GIT: ThreadTodoProject = { key: "directory:/src/pwrgit", label: "PwrGit", path: "/src/pwrgit" };
@@ -458,7 +461,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" });
+    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" }, START_HOOKS);
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     await act(async () => {
@@ -835,7 +838,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true, modelSettings: { backend: "codex" } });
+    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true, modelSettings: { backend: "codex" } }, START_HOOKS);
   });
 
   it("starts a thread at once when only the new thread's steps are open", async () => {
@@ -862,7 +865,7 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(screen.queryByText(/still open/)).toBeNull();
-    expect(view.run).toHaveBeenCalledWith(handoff, { modelSettings: { backend: "codex" } });
+    expect(view.run).toHaveBeenCalledWith(handoff, { modelSettings: { backend: "codex" } }, START_HOOKS);
     cleanup();
 
     // A peer's card may live on an older owner, which blocks on every open
@@ -879,7 +882,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } });
+    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } }, START_HOOKS);
   });
 
   it("drops the question once the last open step is checked", () => {

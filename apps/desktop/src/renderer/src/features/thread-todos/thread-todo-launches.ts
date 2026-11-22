@@ -96,30 +96,49 @@ function snapshot(): readonly ThreadTodoLaunch[] {
   return launches;
 }
 
-/** Puts a card in the tray as starting, then reports how its run ended. */
+/**
+ * Puts a card in the tray as starting once its run begins, then reports how
+ * the run ended. The run calls `begin` when it goes to the owner: at once,
+ * or after the operator confirms Full Access. A start cancelled at that
+ * prompt never begins, so its card stays in the deck.
+ */
 export function launchThreadTodo(
-  params: { todo: ThreadTodo; threadKey: string; now?: number },
-  run: () => Promise<ThreadTodo | undefined>,
+  params: { todo: ThreadTodo; threadKey: string },
+  run: (begin: () => void) => Promise<ThreadTodo | undefined>,
 ): Promise<void> {
-  const launch: ThreadTodoLaunch = {
-    id: params.todo.id,
-    threadKey: params.threadKey,
-    title: params.todo.title,
-    phase: "starting",
-    startedAt: params.now ?? Date.now(),
-    todo: params.todo,
+  const id = params.todo.id;
+  let begun = false;
+  const begin = (): void => {
+    if (begun) return;
+    begun = true;
+    publish([...launches.filter((entry) => entry.id !== id), {
+      id,
+      threadKey: params.threadKey,
+      title: params.todo.title,
+      phase: "starting",
+      startedAt: Date.now(),
+      todo: params.todo,
+    }]);
   };
-  publish([...launches.filter((entry) => entry.id !== launch.id), launch]);
   const settle = (outcome: Parameters<typeof settleThreadTodoLaunch>[1]): void => {
+    // A run that ended without reporting its start still reports how it ended.
+    begin();
     // A row the operator closed meanwhile stays closed.
-    const current = launches.find((entry) => entry.id === launch.id);
+    const current = launches.find((entry) => entry.id === id);
     if (!current || current.phase !== "starting") return;
     const settled = settleThreadTodoLaunch(current, outcome);
     publish(settled
-      ? launches.map((entry) => (entry.id === launch.id ? settled : entry))
-      : launches.filter((entry) => entry.id !== launch.id));
+      ? launches.map((entry) => (entry.id === id ? settled : entry))
+      : launches.filter((entry) => entry.id !== id));
   };
-  return run().then(
+  let pending: Promise<ThreadTodo | undefined>;
+  try {
+    pending = run(begin);
+  } catch (error) {
+    // A throw before the run's promise exists must not strand the row.
+    pending = Promise.reject(error);
+  }
+  return pending.then(
     (ended) => settle({ ended }),
     (error: unknown) => settle({ error }),
   );

@@ -28895,6 +28895,7 @@ a.button {
 }
 
 .thread-todo-stack__notice-button,
+.thread-todo-launches__button,
 .thread-todos-panel__row-link {
   min-height: 24px;
   padding: 0 6px;
@@ -28909,11 +28910,13 @@ a.button {
 }
 
 .thread-todo-stack__notice-button:hover,
+.thread-todo-launches__button:hover,
 .thread-todos-panel__row-link:hover {
   background: var(--accent-soft);
 }
 
 .thread-todo-stack__notice-button:focus-visible,
+.thread-todo-launches__button:focus-visible,
 .thread-todos-panel__row-link:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
@@ -29025,17 +29028,7 @@ a.button {
 }
 
 .thread-todo-launches__button {
-  min-height: 24px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--accent-bright);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .thread-todo-launches__close {
@@ -29051,16 +29044,11 @@ a.button {
   cursor: pointer;
 }
 
-.thread-todo-launches__button:hover {
-  background: var(--accent-soft);
-}
-
 .thread-todo-launches__close:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
 
-.thread-todo-launches__button:focus-visible,
 .thread-todo-launches__close:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
@@ -29128,7 +29116,7 @@ a.button {
   }
 
   /* The row a card landed in, so the eye finds where it went. */
-  .thread-todo-launches__row {
+  .thread-todo-launches__row.is-arriving {
     animation: thread-todo-launch-arrive 600ms ease-out;
   }
 }

@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, type FocusEvent } from "react";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { BanIcon, CheckIcon, CloseIcon, InfoIcon } from "../../icons";
 import { PendingSpinner } from "../../components/PendingSpinner";
+import { useNowWhileActive } from "../thread-detail/context-panels/RailCardTiming";
 import { dismissThreadTodoLaunch, type ThreadTodoLaunch } from "./thread-todo-launches";
 
 /** How long a successful start stays in the tray, while nothing pauses it. */
 export const THREAD_TODO_LAUNCH_DISMISS_MS = 6_000;
+/** The arrival wash's length; a row older than this is not new on mount. */
+const ARRIVE_MS = 600;
 
 export type ThreadTodoLaunchTrayProps = {
   launches: readonly ThreadTodoLaunch[];
@@ -22,19 +25,28 @@ export type ThreadTodoLaunchTrayProps = {
  * operator closes it or reviews the card.
  */
 export function ThreadTodoLaunchTray(props: ThreadTodoLaunchTrayProps) {
-  const [paused, setPaused] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  // A focused row that leaves takes focus to the body without a blur here,
+  // which would hold every countdown paused.
+  useEffect(() => {
+    if (focused && !sectionRef.current?.contains(document.activeElement)) setFocused(false);
+  }, [focused, props.launches]);
   if (props.launches.length === 0) return null;
+  const paused = hovered || focused;
   const leave = (event: FocusEvent<HTMLElement>): void => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPaused(false);
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
   };
   return (
     <section
+      ref={sectionRef}
       className="thread-todo-launches"
       aria-label="Started to-dos"
       data-paused={paused || undefined}
-      onPointerEnter={() => setPaused(true)}
-      onPointerLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
       onBlur={leave}
     >
       <ul className="thread-todo-launches__list" aria-live="polite">
@@ -61,7 +73,11 @@ function ThreadTodoLaunchRow(props: {
   onReview: (id: string) => void;
 }) {
   const { launch } = props;
-  const elapsed = useElapsedSeconds(launch.phase === "starting" ? launch.startedAt : undefined);
+  const now = useNowWhileActive(launch.phase === "starting");
+  const elapsed = Math.max(0, Math.floor((now - launch.startedAt) / 1_000));
+  // Only a row that just arrived washes in; one shown again after a thread
+  // switch does not.
+  const [arriving] = useState(() => Date.now() - launch.startedAt < ARRIVE_MS);
   useDismissCountdown(launch.id, launch.phase === "started", props.paused);
   const started = launch.todo.startedThread;
   const state = launch.phase === "starting" ? "Starting…"
@@ -70,7 +86,8 @@ function ThreadTodoLaunchRow(props: {
     : "Could not start";
   return (
     <li
-      className={`thread-todo-launches__row is-${launch.phase.replace("_", "-")}${props.landing ? " is-landing" : ""}`}
+      className={`thread-todo-launches__row is-${launch.phase.replace("_", "-")}${
+        arriving ? " is-arriving" : ""}${props.landing ? " is-landing" : ""}`}
       data-launch-id={launch.id}
     >
       <span className="thread-todo-launches__glyph" aria-hidden="true">
@@ -128,18 +145,6 @@ function ThreadTodoLaunchRow(props: {
       ) : null}
     </li>
   );
-}
-
-/** Whole seconds since `since`, ticking once a second while it is set. */
-function useElapsedSeconds(since: number | undefined): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (since === undefined) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [since]);
-  return since === undefined ? 0 : Math.max(0, Math.floor((now - since) / 1_000));
 }
 
 /** Closes a successful row once its time is up, keeping what is left across pauses. */

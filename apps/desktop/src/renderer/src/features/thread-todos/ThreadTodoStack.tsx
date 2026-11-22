@@ -190,13 +190,21 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     // A start leaves the deck at once and reports in the tray, so the
     // operator can go on to the card under it while setup runs.
     if (target.action?.type === "start_thread" && !options?.messageTarget) {
-      const remaining = deckIds.filter((id) => id !== target.id);
-      const next = followDeckSelection(deckIds, remaining, target.id);
-      setSelectedId(next);
-      setRisingId(next);
-      const from = deckRef.current?.getBoundingClientRect();
-      setFlight(from && !prefersReducedMotion() ? { id: target.id, title: target.title, from } : undefined);
-      void launchThreadTodo({ todo: target, threadKey }, () => view.run(target, options));
+      void launchThreadTodo({ todo: target, threadKey }, (begin) => view.run(target, options, {
+        // After a Full Access prompt this runs later, so it reads the deck
+        // as committed then, not as it was at the click.
+        onBegin: () => {
+          const shown = previousDeckRef.current;
+          if (shown.includes(target.id)) {
+            const next = followDeckSelection(shown, shown.filter((id) => id !== target.id), target.id);
+            setSelectedId(next);
+            setRisingId(next);
+            const from = deckRef.current?.getBoundingClientRect();
+            setFlight(from && !prefersReducedMotion() ? { id: target.id, title: target.title, from } : undefined);
+          }
+          begin();
+        },
+      }));
       return;
     }
     void view.run(target, options).then((ended) => {
