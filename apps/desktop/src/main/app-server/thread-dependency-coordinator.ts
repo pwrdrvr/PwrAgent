@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
   AppServerNotification,
@@ -87,6 +87,7 @@ type Options = {
   store: ThreadDependencyStorage;
   authorizeLocalFile?(thread: Pick<ThreadDependency, "backend" | "threadId">, file: ThreadDependencyLocalFile): Promise<ThreadDependencyLocalFile>;
   canClaimLocalFileWake?: () => boolean;
+  observeResourceCheckout?: (dependency: ThreadDependency) => Promise<LocalFileObservation | undefined>;
   readLocalFile?: (file: ThreadDependencyLocalFile) => Promise<"result" | "exited" | undefined>;
   /** Without it, operator registrations are refused. */
   operatorTodos?: OperatorTodoDelivery;
@@ -235,6 +236,8 @@ export class ThreadDependencyCoordinator {
         return response;
       }
       validateDependencyCreate(request, this.options.ciRunUrlOptions);
+      const checkout = request.conditions?.[0]?.resourceCheckout;
+      if (checkout && actor !== "owner:resource-checkout") throw new Error("Register checkout continuations from the resource wait tool.");
       const deliver = request.deliver ?? "agent";
       if (deliver === "operator" && !this.options.operatorTodos) throw new Error("Operator reminders are not available on this instance.");
       // Validate the consumer too: a mistyped id must never become a durable wake target.
@@ -275,7 +278,8 @@ export class ThreadDependencyCoordinator {
       const compactionHook = conditions[0]?.when === "compaction_completed";
       const candidate: ThreadDependency = {
         ...provenance,
-        id: randomUUID(), backend: request.backend, threadId: request.threadId,
+        id: checkout ? "checkout:" + createHash("sha256").update(JSON.stringify([request.backend, request.threadId, checkout.resourceId, checkout.requestKey])).digest("hex")
+          : randomUUID(), backend: request.backend, threadId: request.threadId,
         conditions, mode: compactionHook ? "all" : request.mode ?? "all", onFailure: compactionHook ? "notify" : request.onFailure ?? "notify",
         ...(request.continuation?.trim() ? { continuation: request.continuation.trim() } : {}),
         deliver, ...(request.handoff ? { handoff: true } : {}),
@@ -291,7 +295,8 @@ export class ThreadDependencyCoordinator {
       const { dependency: item, superseded } = this.options.store.registerReplacing(
         candidate, (existing) => supersedesRegistration(existing, candidate, turnOrder));
       for (const replaced of superseded) await this.options.changed(replaced);
-      if (item.conditions[0]?.localFile && item.id !== candidate.id) return this.response(request);
+      if ((item.conditions[0]?.localFile && item.id !== candidate.id)
+        || (checkout && item.status !== "waiting" && item.status !== "ready")) return this.response(request);
       const registered = JSON.stringify(item);
       await this.evaluate(item);
       // Evaluation publishes whatever it saved; announce the registration only
@@ -440,6 +445,38 @@ export class ThreadDependencyCoordinator {
 
   hasPendingLocalFiles(): boolean {
     return this.options.store.active().some(isPendingLocalFileWait);
+  }
+
+  hasPendingResourceCheckouts(): boolean {
+    return this.options.store.active().some(isPendingResourceCheckout);
+  }
+
+  async resourceCheckoutDeliveryText(target: Pick<ThreadDependency, "backend" | "threadId">, id: string): Promise<string | undefined> {
+    const item = this.options.store.get(target.backend, target.threadId, id);
+    const condition = item?.conditions[0];
+    if (!item || !condition?.resourceCheckout) return "The resource checkout is unavailable. Do not start the dependent work.";
+    const observation = await this.options.observeResourceCheckout?.(item);
+    if (observation?.state === "satisfied" && (item.status === "dispatching" || item.status === "delivered")) return undefined;
+    return buildDependencyPrompt({
+      ...item, outcome: "failure", continuation: undefined,
+      evidence: [{
+        condition, observedAt: this.now(), state: "failed",
+        reason: observation?.state === "failed" ? observation.reason : "The authority could not verify a current checkout grant.",
+      }],
+    });
+  }
+
+  async checkResourceCheckouts(): Promise<void> {
+    const observe = this.options.observeResourceCheckout;
+    if (!observe) return;
+    await Promise.all(this.options.store.active().filter(isPendingResourceCheckout).map(async (item) => {
+      const observation = await observe(item);
+      if (!observation) return;
+      await this.serialize(async () => {
+        const current = this.options.store.get(item.backend, item.threadId, item.id);
+        if (current && isPendingResourceCheckout(current)) await this.evaluate(current, undefined, observation);
+      });
+    }));
   }
 
   /** A single inspection per marker and attempt, even when multiple threads wait on it. */
@@ -668,6 +705,13 @@ export class ThreadDependencyCoordinator {
     for (const [conditionIndex, stored] of item.conditions.entries()) {
       let condition = stored;
       const previous = evidenceFor(item, condition);
+      if (condition.resourceCheckout) {
+        // Only a fresh authority observation can admit the wake. Cached
+        // evidence can outlive the grant during restart or a partition.
+        if (!localFileObservation) return;
+        evidence.push({ condition, ...localFileObservation, observedAt: this.now() });
+        continue;
+      }
       if (condition.localFile) {
         evidence.push(previous && previous.state !== "waiting" ? previous : {
           condition,
@@ -765,7 +809,7 @@ export class ThreadDependencyCoordinator {
     // another saved plan until that uncertain delivery has been reviewed.
     if (this.options.store.active().some((other) => identity(other) === identity(current)
       && other.status === "dispatching" && other.error)) return;
-    if (current.conditions[0]?.localFile && this.options.canClaimLocalFileWake?.() === false) return;
+    if ((current.conditions[0]?.localFile || current.conditions[0]?.resourceCheckout) && this.options.canClaimLocalFileWake?.() === false) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
@@ -909,6 +953,10 @@ class LostDependencyClaim extends Error {}
 /** The slowest steady check cadence: an unchanged check is announced no more often. */
 const CI_RUN_ANNOUNCE_MS = 120_000;
 
+function isPendingResourceCheckout(item: ThreadDependency): boolean {
+  return (item.status === "waiting" || item.status === "ready") && item.conditions[0]?.resourceCheckout !== undefined;
+}
+
 function isPendingLocalFileWait(item: ThreadDependency): boolean {
   return (item.status === "waiting" || item.status === "ready") && item.conditions[0]?.localFile !== undefined;
 }
@@ -958,7 +1006,18 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (!condition || typeof condition.backend !== "string" || !condition.backend.trim()
       || typeof condition.threadId !== "string"
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
-    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun", "localFile"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun", "localFile", "resourceCheckout"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (condition.when === "resource_checkout" || condition.resourceCheckout !== undefined) {
+      const checkout = condition.resourceCheckout;
+      if (condition.when !== "resource_checkout" || request.conditions.length !== 1 || condition.threadId !== ""
+        || request.deliver === "operator" || request.holdMerge || request.repeat
+        || Object.keys(condition).some((field) => !["backend", "threadId", "when", "resourceCheckout"].includes(field))
+        || !checkout || Object.keys(checkout).some((field) => !["resourceId", "requestKey"].includes(field))
+        || ![checkout.resourceId, checkout.requestKey].every((value) => typeof value === "string" && value.length > 0 && value.length <= 160)) {
+        throw new Error("A resource_checkout prerequisite requires one resource and its request key.");
+      }
+      continue;
+    }
     if (condition.when === "local_file" || condition.localFile !== undefined) {
       const file = condition.localFile;
       if (condition.when !== "local_file" || request.conditions.length !== 1 || condition.threadId !== ""
@@ -1046,7 +1105,7 @@ export function supersedesRegistration(existing: ThreadDependency, candidate: Th
   if (shape(existing) !== shape(candidate) || existing.conditions.length !== candidate.conditions.length) return false;
   const key = (condition: ThreadDependencyCondition) => JSON.stringify([condition.backend, condition.threadId, condition.when,
     condition.prUrl ?? "", condition.headSha ?? "", condition.subject ?? "", condition.target?.instanceId ?? "",
-    ...condition.ciRun ? [condition.ciRun] : []]);
+    condition.ciRun, condition.resourceCheckout]);
   const remaining = [...candidate.conditions];
   let later = false;
   for (const condition of existing.conditions) {
@@ -1122,6 +1181,9 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       : ["Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
         ...item.continuation ? ["", THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD, item.continuation] : []],
     "Do not poll this dependency or start a Job Monitor for it.",
+    ...item.conditions.flatMap(({ resourceCheckout }) => resourceCheckout
+      ? [`Before using the resource, verify the current grant with resource_checkout_status for resource ${JSON.stringify(resourceCheckout.resourceId)} and request key ${JSON.stringify(resourceCheckout.requestKey)}.`]
+      : []),
     ...item.conditions.some((condition) => condition.localFile)
       ? ["The marker is only a signal to inspect the watcher. Verify its actual result before reporting a conclusion."]
       : [],
@@ -1146,6 +1208,7 @@ const MET_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
   compaction_completed: "finished compaction",
   ci_run: "reached its milestone",
   local_file: "reported a result",
+  resource_checkout: "was promoted",
 };
 
 export function buildCompactionRecoveryPrompt(item: ThreadDependency): string {

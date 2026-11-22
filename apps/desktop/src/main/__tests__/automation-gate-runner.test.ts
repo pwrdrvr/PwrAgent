@@ -1,7 +1,82 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
+import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
+import * as checkoutRuntime from "../resource-checkouts/checkout-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { resolveWindowsBashShell } from "../windows-shell";
 import { ShellAutomationGateRunner } from "../automations/automation-gate-runner";
 
 describe("ShellAutomationGateRunner", () => {
+  it("refuses a local gate while an operator holds machine capacity", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-gate-admission-"));
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "local", instanceLabel: "Local", profile: "test", machineId: "host" },
+      machineStore: openResourceCheckoutStore(path.join(root, "checkout.db"), "host"),
+      bindings: [], requestPeer: async () => { throw new Error("No peers"); }, warn: () => {},
+    });
+    const runtime = vi.spyOn(checkoutRuntime, "getResourceCheckoutService").mockReturnValue(service);
+    try {
+      const [{ resourceId }] = service.read().resources;
+      await expect(service.perform({
+        kind: "request", resourceId, idempotencyKey: "quiet", purpose: "Quiet time", expectedDurationMs: 60_000,
+      })).resolves.toMatchObject({ outcome: "granted" });
+      await expect(new ShellAutomationGateRunner().runGate({ command: "printf forbidden" })).resolves.toMatchObject({
+        status: "failed", output: "", errorMessage: expect.stringContaining("capacity is reserved"),
+      });
+    } finally {
+      runtime.mockRestore();
+      await service.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("keeps the checkout while a POSIX gate descendant outlives its shell", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-gate-drain-"));
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "local", instanceLabel: "Local", profile: "test", machineId: "host" },
+      machineStore: openResourceCheckoutStore(path.join(root, "checkout.db"), "host"),
+      bindings: [], requestPeer: async () => { throw new Error("No peers"); }, warn: () => {},
+    });
+    const runtime = vi.spyOn(checkoutRuntime, "getResourceCheckoutService").mockReturnValue(service);
+    try {
+      const [{ resourceId }] = service.read().resources;
+      await expect(new ShellAutomationGateRunner().runGate({
+        cwd: root, command: '(remaining=120; while [ ! -f release ] && [ "$remaining" -gt 0 ]; do remaining=$((remaining - 1)); sleep .05; done) </dev/null >/dev/null 2>&1 & exit 0',
+      })).resolves.toMatchObject({ status: "proceed" });
+      await expect(service.perform({
+        kind: "request", resourceId, idempotencyKey: "next", purpose: "Next job", expectedDurationMs: 60_000,
+      })).resolves.toMatchObject({ outcome: "queued" });
+      writeFileSync(path.join(root, "release"), "");
+      await expect.poll(() => service.read().resources[0]).toMatchObject({
+        cleanup: { state: "verified" }, queue: [], allocations: [{ taskLabel: "Next job" }],
+      });
+    } finally {
+      writeFileSync(path.join(root, "release"), "");
+      runtime.mockRestore();
+      await service.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")("lets Windows Bash finish descendants that own the gate's work", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-gate-bash-"));
+    const shell = resolveWindowsBashShell();
+    const launcher = shell.replace(/\\usr\\bin\\bash\.exe$/i, "\\bin\\bash.exe");
+    vi.stubEnv("SHELL", existsSync(launcher) ? launcher : shell);
+    try {
+      const result = await new ShellAutomationGateRunner().runGate({
+        cwd: root, command: '(sleep .2; printf done > result) </dev/null >/dev/null 2>&1 & exit 10',
+      });
+      expect(result).toMatchObject({ status: "skip", exitCode: 10 });
+      expect(existsSync(path.join(root, "result"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("maps exit 0 to proceed with capped output", async () => {
     const result = await new ShellAutomationGateRunner().runGate({
       command: "printf 'ready'",

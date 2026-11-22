@@ -44,7 +44,15 @@ export type CheckoutGrant = CheckoutWaiter & {
   deadlineAt: number;
   renewals: number;
   state: ResourceAllocationState;
-  job?: { id: string; executor: string; machineBootId?: string; processGroupId?: number };
+  executor?: CheckoutActor;
+  job?: {
+    id: string;
+    executor: string;
+    machineBootId?: string;
+    processGroupId?: number;
+    retainGrant?: boolean;
+    provider?: { deadlineAt: number; maxCostMinorUnits: number; finalState: string; adapterScope?: string };
+  };
   recoverySince?: number;
   fencingVerifiedAt?: number;
 };
@@ -55,6 +63,7 @@ export type CheckoutDomainRecord = {
   grants: CheckoutGrant[];
   queue: CheckoutWaiter[];
   cleanupVerifiedAt?: number;
+  cleanupReceipt?: string;
 };
 
 export type CheckoutReceipt = {

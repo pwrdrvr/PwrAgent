@@ -7,7 +7,7 @@ export const THREAD_DEPENDENCIES_CHANNEL = "thread:dependencies";
  * only when the prerequisite thread, the operator, or an agent marks it done.
  */
 export const THREAD_DEPENDENCY_CONDITIONS = [
-  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed", "ci_run", "local_file",
+  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed", "ci_run", "local_file", "resource_checkout",
 ] as const;
 
 /**
@@ -110,10 +110,11 @@ export function threadDependencyConditionPhrase(condition: Pick<ThreadDependency
 }
 
 /** A prerequisite's display name: its subject, its saved title, or its CI run. */
-export function threadDependencyConditionName(condition: Pick<ThreadDependencyCondition, "subject" | "title" | "ciRun" | "localFile">): string | undefined {
+export function threadDependencyConditionName(condition: Pick<ThreadDependencyCondition, "subject" | "title" | "ciRun" | "localFile" | "resourceCheckout">): string | undefined {
   const label = condition.subject?.trim() || condition.title?.trim();
   if (label) return label;
   if (condition.localFile) return "Local watcher";
+  if (condition.resourceCheckout) return "Resource checkout";
   if (!condition.ciRun) return undefined;
   const id = threadDependencyCiRunId(condition.ciRun.url);
   return id ? `Run ${id}` : "CI run";
@@ -154,6 +155,7 @@ export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD
   compaction_completed: "finishes compaction",
   ci_run: "reaches an approval gate, has a failed job, or finishes",
   local_file: "writes its result marker",
+  resource_checkout: "is promoted",
 };
 
 /**
@@ -201,16 +203,18 @@ export type ThreadDependencyCondition = {
   ciRun?: ThreadDependencyCiRun;
   /** `local_file` only, with an empty `threadId`. */
   localFile?: ThreadDependencyLocalFile;
+  /** Owner tool registration for an actor-scoped checkout receipt. */
+  resourceCheckout?: { resourceId: string; requestKey: string };
 };
 
 /** True for a prerequisite that names a thread, on any machine. */
-export function isThreadDependencyThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "ciRun" | "localFile">): boolean {
-  return condition.subject === undefined && condition.ciRun === undefined && condition.localFile === undefined;
+export function isThreadDependencyThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "ciRun" | "localFile" | "resourceCheckout">): boolean {
+  return condition.subject === undefined && condition.ciRun === undefined && condition.localFile === undefined && condition.resourceCheckout === undefined;
 }
 
 /** True for a thread prerequisite on the waiting thread's own machine. */
-export function isThreadDependencyLocalThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "target" | "ciRun" | "localFile">): boolean {
-  return condition.subject === undefined && condition.target === undefined && condition.ciRun === undefined && condition.localFile === undefined;
+export function isThreadDependencyLocalThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "target" | "ciRun" | "localFile" | "resourceCheckout">): boolean {
+  return condition.subject === undefined && condition.target === undefined && condition.ciRun === undefined && condition.localFile === undefined && condition.resourceCheckout === undefined;
 }
 
 export type ThreadDependencyEvidence = {

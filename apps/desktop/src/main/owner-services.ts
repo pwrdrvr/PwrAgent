@@ -1,3 +1,4 @@
+import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
 import { disposeResourceCheckouts, initializeResourceCheckouts } from "./resource-checkouts/checkout-runtime";
 import { createDesktopBackendRegistry } from "./app-server/backend-registry-wiring";
@@ -110,6 +111,7 @@ export interface OwnerStartOptions {
     closeAppServerIpc?: () => Promise<void>;
     observer?: Parameters<typeof createShutdownBarrier>[0]["observer"];
   };
+  approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
   onStateInitialized?: (state: ReturnType<typeof initializeDesktopState>) => void;
 }
 
@@ -439,9 +441,18 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   }
   const federationRuntime = initializeDesktopFederationRuntime();
   const resourceCheckouts = bootMode === "active-profile"
-    ? await initializeResourceCheckouts(federationRuntime)
+    ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts, host.application.isPackaged)
     : undefined;
-  if (resourceCheckouts) registry.setResourceCheckoutHandler(createResourceCheckoutToolHandler(resourceCheckouts));
+  if (resourceCheckouts) registry.setResourceCheckoutHandler(
+    createResourceCheckoutToolHandler(
+      resourceCheckouts,
+      (context, resourceId, key, continuation) => service.registerResourceCheckoutContinuation(context, resourceId, key, continuation),
+      (context, { instanceId, ...target }, prompt, bind) => registry.sendResourceCheckoutHandoff(context, {
+        ...target, ...(instanceId === resourceCheckouts.handoffInstanceId() ? {} : { instanceId }),
+      }, prompt, bind),
+    ),
+    (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+  );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({
       authorize: (context, phase) => registry.canManagePwrAgent(context, false, phase === "accepted"),

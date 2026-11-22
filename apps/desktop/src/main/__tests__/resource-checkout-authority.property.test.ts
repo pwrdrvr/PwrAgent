@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -9,6 +9,8 @@ import { executeResourceCheckout, type CheckoutProviderAdapter } from "@pwragent
 import type { CheckoutActor, CheckoutDefinition } from "@pwragent/owner-core/resource-checkout-storage";
 import type { ResourceCheckoutActionRequest } from "@pwragent/shared/contracts/resource-checkouts";
 import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
+import { createResourceCheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
+import { checkoutRootCanHostMachine } from "../resource-checkouts/checkout-runtime";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 import type { ExternalBinding } from "../resource-checkouts/checkout-configuration";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
@@ -54,6 +56,40 @@ function granted(authority: ResourceCheckoutAuthority, key: string): CheckoutTok
 }
 
 describe("the persisted resource checkout authority", () => {
+  it("keeps an unenrolled root unresolved and out of managed admission", async () => {
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "alternate", instanceLabel: "Alternate root", profile: "default", machineId: "host" },
+      bindings: [], requestPeer: async () => { throw new Error("No peers"); }, warn: () => {},
+    });
+    try {
+      const [machine] = service.read().resources;
+      expect(machine).toMatchObject({
+        condition: "ownership_unresolved", definition: { publication: "pending_registration" }, actions: {}, advertisements: [],
+      });
+      expect(() => service.admitMachineJob("setup", "Environment setup")).toThrow(/unavailable/);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("allows production roots only when they open the primary store", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-root-enrollment-"));
+    try {
+      const primary = path.join(root, "primary");
+      const alternate = path.join(root, "alternate");
+      const alias = path.join(root, "same-store");
+      mkdirSync(primary);
+      mkdirSync(alternate);
+      symlinkSync(primary, alias, process.platform === "win32" ? "junction" : "dir");
+      await expect(checkoutRootCanHostMachine(primary, primary, true)).resolves.toBe(true);
+      await expect(checkoutRootCanHostMachine(alias, primary, true)).resolves.toBe(true);
+      await expect(checkoutRootCanHostMachine(alternate, primary, true)).resolves.toBe(false);
+      await expect(checkoutRootCanHostMachine(alternate, primary, false)).resolves.toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["default", "dev"])("keeps unpublished drafts private to the %s instance", async (owner) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-draft-"));
     const services = ["default", "dev"].map((instanceId) => new DesktopResourceCheckoutService({
@@ -91,7 +127,7 @@ describe("the persisted resource checkout authority", () => {
     });
     const observer = openResourceCheckoutStore(database, "host");
     try {
-      const checkout = service.admitEnvironmentAction("job", "Job");
+      const checkout = service.admitMachineJob("job", "Job");
       checkout.active();
       checkout.watch(() => { if (verified) setImmediate(() => checkout.finish(true)); });
       const { writes } = await measureSqliteWrites(() => service.close(verified ? 2_000 : 0));
@@ -199,7 +235,7 @@ describe("the persisted resource checkout authority", () => {
       const dev = service("dev", "boot-a");
       const resource = local.read().resources[0];
       expect(dev.read().resources[0].resourceId).toBe(resource.resourceId);
-      const running = local.admitEnvironmentAction("job", "Managed action", "worker");
+      const running = local.admitMachineJob("job", "Managed action", { thread: { backend: "codex", threadId: "worker" } });
       running.active();
       expect(dev.read().resources[0].allocations[0].state).toBe("active");
       await expect(dev.perform(request("waiter", { resourceId: resource.resourceId }))).resolves.toMatchObject({ outcome: "queued" });
@@ -231,7 +267,7 @@ describe("the persisted resource checkout authority", () => {
         const { resourceId } = service.read().resources[0];
         const hold = await service.perform(request(randomUUID(), { resourceId, expectedDurationMs }));
         if (hold.outcome !== "granted") throw new Error("Expected a manual hold.");
-        expect(() => service.admitEnvironmentAction("automatic", "Launchpad action")).toThrow(/capacity is reserved/);
+        expect(() => service.admitMachineJob("automatic", "Launchpad action")).toThrow(/capacity is reserved/);
         await expect(service.perform(change("release", {
           resourceId, allocationId: hold.allocationId, generation: hold.generation, epoch: 1,
         }, randomUUID()))).resolves.toMatchObject({ outcome: "accepted" });
@@ -286,6 +322,23 @@ describe("the persisted resource checkout authority", () => {
       expect(() => authority!.receivePeer("intruder", { operation: "read", resourceId, epoch: 3 })).toThrow();
       expect(() => authority!.receivePeer("viewer", { operation: "perform", resourceId, epoch: 2, action: request("stale") })).toThrow();
       expect(client.read().revision).toBeGreaterThan(initialRevision);
+      const handedOff: string[] = [];
+      const route = createResourceCheckoutToolHandler(client, undefined, async (_context, target, _prompt, bind) => {
+        expect(target).toEqual({ instanceId: "owner", backend: "codex", threadId: "executor" });
+        await bind();
+        expect(authority!.read().resources.find((item) => item.resourceId === resourceId)?.allocations[0]).toMatchObject({
+          allocationId: replay.allocationId, generation: replay.generation, delegatedExecutor: { threadId: "executor", instanceId: "owner" },
+        });
+        handedOff.push(target.threadId);
+        return { ok: true };
+      });
+      const handoff = () => route("resource_checkout_handoff", {
+        resourceId, idempotencyKey: "route-handoff", allocationId: replay.allocationId,
+        generation: replay.generation, authorityEpoch: definition.epoch, instanceId: "owner",
+        backend: "codex", threadId: "executor", prompt: "Run the fixture.",
+      }, { backend: "acp:registry.worker", threadId: "worker", turnId: "turn", callId: "call", transport: "mcp" });
+      await expect(handoff()).resolves.toEqual({ ok: true });
+      expect(handedOff).toEqual(["executor"]);
       const authoritative = authority.read().resources.find((item) => item.resourceId === resourceId);
 
       for (let i = 0; i < 3; i++) {
@@ -302,6 +355,10 @@ describe("the persisted resource checkout authority", () => {
         expect(authority.read().resources.find((item) => item.resourceId === resourceId)).toEqual(authoritative);
       }
       await expect(client.status(worker, resourceId, "acquire")).resolves.toMatchObject({ state: "granted", generation: 1 });
+      await expect(client.perform(change("release", { ...replay, resourceId, epoch: 3 }, "release"), worker))
+        .resolves.toMatchObject({ outcome: "accepted" });
+      await expect(handoff()).rejects.toThrow(/no longer has an idle grant/);
+      expect(handedOff).toEqual(["executor"]);
     } finally {
       client?.close();
       authority?.close();
@@ -455,6 +512,93 @@ describe("the persisted resource checkout authority", () => {
       harness.close();
       if (old === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
       else process.env[SQLITE_WRITE_METRICS_ENV] = old;
+    }
+  });
+});
+
+describe("delegated checkout execution", () => {
+  const thread = (id: string): CheckoutActor => ({
+    key: id, holder: { kind: "thread", thread: { backend: "codex", threadId: id, title: id } }, manage: false,
+  });
+  const requester = thread("requester");
+  const executor = thread("executor");
+  const stranger = thread("stranger");
+
+  it("preserves allocation, generation, deadline and FIFO across retry, reopen and delegated setup", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 200, max: 9_000 }), fc.array(fc.constantFrom("replay", "stale", "foreign", "reopen"), {
+      minLength: 1, maxLength: 12,
+    }), async (expectedDurationMs, operations) => {
+      const harness = createHarness();
+      try {
+        let owner = harness.open();
+        const initial = owner.authority.perform(requester, request("requester", { expectedDurationMs }));
+        if (initial.outcome !== "granted") throw new Error("Expected initial grant.");
+        const next = owner.authority.perform(stranger, request("next"));
+        if (next.outcome !== "queued") throw new Error("Expected FIFO waiter.");
+        const authorityEpoch = definition.epoch;
+        const action = {
+          kind: "delegate_execution" as const, idempotencyKey: "handoff", resourceId,
+          generation: initial.generation, allocationId: initial.allocationId, authorityEpoch,
+          executor: { instanceId: "execution-host", backend: "codex" as const, threadId: "executor" },
+        };
+        const token = { resourceId, allocationId: initial.allocationId, generation: initial.generation, epoch: authorityEpoch };
+        expect(owner.authority.perform(requester, action, { executor })).toMatchObject({ outcome: "accepted" });
+        for (const op of operations) {
+          if (op === "reopen") { owner.close(); owner = harness.open(); }
+          if (op === "replay") expect(owner.authority.perform(requester, action, { executor })).toMatchObject({ outcome: "accepted" });
+          if (op === "stale") expect(owner.authority.perform(requester, {
+            ...action, idempotencyKey: "stale", authorityEpoch: authorityEpoch - 1,
+          }, { executor })).toMatchObject({ outcome: "rejected" });
+          if (op === "foreign") expect(owner.authority.perform(stranger, action, { executor })).toMatchObject({ outcome: "rejected" });
+          expect(owner.authority.records()[0]).toMatchObject({
+            grants: [{ id: token.allocationId, generation: token.generation, deadlineAt: 1 + expectedDurationMs, actor: requester, executor }],
+            queue: [{ id: next.queueEntryId }],
+          });
+        }
+        const job = { id: "setup", executor: "local" };
+        expect(owner.authority.admitLocalJob(resourceId, requester, "setup", job, true)).toBeUndefined();
+        expect(owner.authority.admitLocalJob(resourceId, stranger, "setup", job, true)).toBeUndefined();
+        expect(owner.authority.admitLocalJob(resourceId, executor, "setup", job, true)).toEqual(token);
+        expect(owner.authority.finishJob(token, job.id)).toBe(true);
+        expect(owner.authority.records()[0]).toMatchObject({
+          grants: [{ id: token.allocationId, state: "granted", deadlineAt: 1 + expectedDurationMs }],
+          queue: [{ id: next.queueEntryId }],
+        });
+        expect(owner.authority.bindJob(executor, token, { id: "work", executor: "local" })).toBe(true);
+        expect(owner.authority.finishJob(token, "work")).toBe(true);
+        expect(owner.authority.records()[0].grants[0]).toMatchObject({ id: next.queueEntryId, generation: token.generation + 1 });
+      } finally {
+        harness.close();
+      }
+    }), { numRuns: 25 });
+  });
+
+  it("persists delegation and its retry receipt in one boundary commit", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const harness = createHarness();
+    try {
+      const { authority } = harness.open();
+      const initial = authority.perform(requester, request("requester"));
+      if (initial.outcome !== "granted") throw new Error("Expected initial grant.");
+      const action = {
+        kind: "delegate_execution" as const, idempotencyKey: "handoff", resourceId,
+        generation: initial.generation, allocationId: initial.allocationId, authorityEpoch: definition.epoch,
+        executor: { instanceId: "execution-host", backend: "codex" as const, threadId: "executor" },
+      };
+      const { writes } = await measureSqliteWrites(() => {
+        expect(authority.perform(requester, action, { executor })).toMatchObject({ outcome: "accepted" });
+        expect(authority.perform(requester, action, { executor })).toMatchObject({ outcome: "accepted" });
+      });
+      expectSqliteWriteBudget({
+        scenario: "resource-checkout-handoff",
+        note: "Delegation and its receipt commit once; retry costs zero. At 100 handoffs a day this is about 0.82 MB of WAL.",
+        writes,
+      });
+    } finally {
+      harness.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
     }
   });
 });

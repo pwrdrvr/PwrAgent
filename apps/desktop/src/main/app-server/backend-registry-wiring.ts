@@ -1317,6 +1317,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const threadTurnQueue = new ThreadTurnQueue({
     isAdmissionHeld: () => ports.restartGate.phase === "quieting",
     startTurn: async (entry) => await ports.startTurnNow(entry),
+    prepareInput: (entry) => ports.prepareQueuedTurnInput(entry),
     canSteerThread: (entry) => !ports.stoppingRunningTurnsForShutdown
       && !ports.threadHasBlockingWorkspaceMove(entry)
       && ports.getActiveTurnForThread(entry) !== undefined

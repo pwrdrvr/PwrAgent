@@ -14,6 +14,7 @@ import {
   WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS,
   WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS,
   WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS,
+  windowsJobCleanupVerified,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
 import { runGitCommand } from "../app-server/git-executable";
@@ -64,6 +65,39 @@ async function runWrappedCommand(params: {
 }
 
 describe("wrapCommandInWindowsJob", () => {
+  it.each([
+    [[], false],
+    [["failed"], false],
+    [["helper-ready", "target-not-created", "failed"], true],
+    [["target-created-suspended", "failed"], false],
+    [["target-created-suspended", "target-not-created", "failed"], false],
+    [["target-created-suspended", "job-drained"], true],
+  ] as const)("requires positive cleanup evidence for journal %j", (phases, verified) => {
+    const wrapper = wrapCommandInWindowsJob({ command: "fixture.exe", args: [], env: {} });
+    try {
+      writeFileSync(wrapper.startupStatusFilePath, phases.map((phase, i) => `${i}\t${phase}\t\n`).join(""));
+      expect(windowsJobCleanupVerified(wrapper)).toBe(verified);
+    } finally {
+      wrapper.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")("journals that a failed native launch created no target", async () => {
+    const wrapper = wrapCommandInWindowsJob({ command: "pwragent-absent-fixture.exe", args: [], env: process.env });
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(wrapper.command, wrapper.args, { env: wrapper.env, stdio: "ignore", windowsHide: true });
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      expect(code).toBe(127);
+      expect(readWindowsJobStartupTelemetry(wrapper).phases.map(({ phase }) => phase)).toContain("target-not-created");
+      expect(windowsJobCleanupVerified(wrapper)).toBe(true);
+    } finally {
+      wrapper.cleanup();
+    }
+  }, 30_000);
+
   it("retires descendants after driver exit only when the finite-build caller requests it", () => {
     for (const enabled of [undefined, true]) {
       const wrapped = wrapCommandInWindowsJob({
