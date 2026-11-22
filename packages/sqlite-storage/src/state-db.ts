@@ -5,6 +5,7 @@ import {
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
+import { SUBTHREAD_GROUP_INDEXES } from "./subthread-group-sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -46,7 +47,7 @@ import {
 import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
-export const CURRENT_STATE_DB_USER_VERSION = 86;
+export const CURRENT_STATE_DB_USER_VERSION = 87;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2281,6 +2282,14 @@ export class StateDb {
         db.transaction(() => {
           if (!hasScheduledActionProjectionSchema(db)) db.exec(SCHEDULED_ACTION_PROJECTION_SCHEMA);
           if ((db.pragma("user_version", { simple: true }) as number) < 86) db.pragma("user_version = 86");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 87) {
+        db.transaction(() => {
+          // The expression indexes backfill from existing payloads, including
+          // legacy links, in the same commit as the version change.
+          if (tableExists(db, "threads")) db.exec(SUBTHREAD_GROUP_INDEXES);
+          if ((db.pragma("user_version", { simple: true }) as number) < 87) db.pragma("user_version = 87");
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);

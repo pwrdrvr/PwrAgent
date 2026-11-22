@@ -1,18 +1,33 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { resolveThreadParentKey, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const mocks = vi.hoisted(() => ({
-  loadIndex: vi.fn(),
+  readProvider: vi.fn(),
+  listeners: new Set<(event: AgentEvent) => void>(),
   publish: vi.fn(),
   store: undefined as SqliteOverlayStore | undefined,
 }));
-vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: mocks.loadIndex }));
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../app-server/backend-registry", () => ({
-  getDesktopBackendRegistry: () => ({ publishLocalEvent: mocks.publish }),
+  getDesktopBackendRegistry: () => ({
+    publishLocalEvent: mocks.publish,
+    getStartupProviderRefreshStatus: () => undefined,
+    onEvent: (listener: (event: AgentEvent) => void) => {
+      mocks.listeners.add(listener);
+      return () => mocks.listeners.delete(listener);
+    },
+    readSubthreadOrderProviderRows: async (backend: string, ids: ReadonlySet<string>) => {
+      const result = await mocks.readProvider({ backend, ids });
+      if (result.coverage && result.coverage.state !== "complete") throw new Error("Wait for complete owner discovery before moving a child.");
+      return result.threads;
+    },
+  }),
 }));
 import { type PeerChildSource, peerSubthreadChildren, updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { peerSubthreadKey } from "../app-server/thread-archive-sweeper";
@@ -31,6 +46,7 @@ beforeEach(() => {
   db = openInMemoryStateDb();
   mocks.store = new SqliteOverlayStore(db);
   mocks.publish.mockReset();
+  mocks.readProvider.mockReset();
 });
 afterEach(() => db.close());
 
@@ -39,7 +55,7 @@ it("moves a Claude sub-thread under a Codex parent", async () => {
   await mocks.store!.setThreadParent({ backend: "claude", threadId: "design", parentThreadId: "root", parentThreadBackend: "codex" });
   // A legacy cross-provider link: only the parent id, resolved by unique id.
   await writeLegacyParentLink(mocks.store!, "claude", "legacy", "root");
-  mocks.loadIndex.mockResolvedValue({ threads: [
+  mocks.readProvider.mockResolvedValue({ threads: [
     summary("codex", "root"),
     summary("codex", "gondola", { parentThreadId: "root", createdAt: 3 }),
     summary("claude", "design", { parentThreadId: "root", parentThreadBackend: "codex", createdAt: 2 }),
@@ -53,8 +69,8 @@ it("moves a Claude sub-thread under a Codex parent", async () => {
 
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["legacy", "gondola", "design"]);
-  // The index is read for every provider in the group, not only the parent's.
-  expect(mocks.loadIndex.mock.calls.map(([params]) => params.backend).sort()).toEqual(["claude", "codex"]);
+  // Each provider in the group contributes its own candidate identities.
+  expect(mocks.readProvider.mock.calls.map(([params]) => params.backend).sort()).toEqual(["claude", "codex"]);
   expect(mocks.publish).toHaveBeenCalledWith({ backend: "codex", notification: {
     method: "thread/subthreadOrder/updated", params: { parentThreadId: "root" } } });
 });
@@ -62,7 +78,7 @@ it("moves a Claude sub-thread under a Codex parent", async () => {
 it("refuses a legacy link whose parent id also names a thread on the child's own provider", async () => {
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await writeLegacyParentLink(mocks.store!, "claude", "design", "root");
-  mocks.loadIndex.mockResolvedValue({ threads: [
+  mocks.readProvider.mockResolvedValue({ threads: [
     summary("codex", "root"),
     summary("claude", "root"),
     summary("codex", "gondola", { parentThreadId: "root" }),
@@ -79,7 +95,7 @@ it("lists only the providers in the group, so an unrelated failing provider cann
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
   // A Grok thread with its own unrelated group.
   await mocks.store!.setThreadParent({ backend: "acp:grok", threadId: "probe", parentThreadId: "elsewhere" });
-  mocks.loadIndex.mockImplementation(async ({ backend }: { backend?: string }) => backend === "codex"
+  mocks.readProvider.mockImplementation(async ({ backend }: { backend?: string }) => backend === "codex"
     ? { coverage: { state: "complete" }, threads: [
       summary("codex", "root"),
       summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
@@ -90,7 +106,7 @@ it("lists only the providers in the group, so an unrelated failing provider cann
   await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
     move: { threadId: "steam", anchorThreadId: "gondola", placement: "before" } });
 
-  expect(mocks.loadIndex.mock.calls.map(([params]) => params.backend)).toEqual(["codex"]);
+  expect(mocks.readProvider.mock.calls.map(([params]) => params.backend)).toEqual(["codex"]);
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["steam", "gondola"]);
 });
@@ -98,7 +114,7 @@ it("lists only the providers in the group, so an unrelated failing provider cann
 it("refuses a move while a provider with a child in the group is incompletely listed", async () => {
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await mocks.store!.setThreadParent({ backend: "claude", threadId: "design", parentThreadId: "root", parentThreadBackend: "codex" });
-  mocks.loadIndex.mockImplementation(async ({ backend }: { backend?: string }) => backend === "codex"
+  mocks.readProvider.mockImplementation(async ({ backend }: { backend?: string }) => backend === "codex"
     ? { coverage: { state: "complete" }, threads: [summary("codex", "root"),
       summary("codex", "gondola", { parentThreadId: "root" })] }
     : { coverage: { state: "degraded", failedProviders: 1 }, threads: [] });
@@ -112,7 +128,7 @@ it("places a new Claude child below its Codex source before the owner lists it",
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
   await mocks.store!.setThreadParent({ backend: "claude", threadId: "fresh", parentThreadId: "root", parentThreadBackend: "codex" });
-  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+  mocks.readProvider.mockResolvedValue({ coverage: { state: "complete" }, threads: [
     summary("codex", "root"),
     summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
     summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
@@ -171,7 +187,7 @@ it("moves a peer's sub-thread among this machine's children of a local parent", 
   // Another parent's peer child and one linked to a different machine stay out.
   await pinPeerChild("elsewhere", { parentThreadId: "other" });
   await pinPeerChild("foreign", { parentThreadInstanceId: "pwr_third" });
-  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+  mocks.readProvider.mockResolvedValue({ coverage: { state: "complete" }, threads: [
     summary("codex", "root"),
     summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
     summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
@@ -194,7 +210,7 @@ it("moves a peer's sub-thread among this machine's children of a local parent", 
 it("refuses a peer's sub-thread when this machine has no federation identity", async () => {
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await pinPeerChild("windows-e2e");
-  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+  mocks.readProvider.mockResolvedValue({ coverage: { state: "complete" }, threads: [
     summary("codex", "root"),
     summary("codex", "gondola", { parentThreadId: "root" }),
   ] });
@@ -207,7 +223,7 @@ it("trusts the peer over a stale pin snapshot that still names this parent", asy
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
   await pinPeerChild("windows-e2e");
-  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+  mocks.readProvider.mockResolvedValue({ coverage: { state: "complete" }, threads: [
     summary("codex", "root"),
     summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
     summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
@@ -229,7 +245,7 @@ it("trusts the peer over a stale pin snapshot that still names this parent", asy
 it("places a peer's fresh sub-thread below its source once its pin is written", async () => {
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
-  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+  mocks.readProvider.mockResolvedValue({ coverage: { state: "complete" }, threads: [
     summary("codex", "root"),
     summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
     summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
@@ -271,4 +287,137 @@ it("counts a peer thread as a sub-thread of this machine's thread only when it n
     [buildThreadIdentityKey("claude", "parent"), [peerSubthreadKey("pwr_peer", "codex", "claude-parent")]],
   ]));
   expect(peerSubthreadChildren([pin("pwr_peer", "child", parent)], undefined)).toEqual(new Map());
+});
+
+it("matches the complete navigation index for colliding IDs, legacy links, and mixed providers", async () => {
+  const parentThreadId = "root";
+  const target = { backend: "codex", parentThreadId } as const;
+  const providers = ["codex", "claude", "acp:grok"] as const;
+  const candidates = fc.array(fc.record({
+    source: fc.constantFrom(...providers),
+    explicitBackend: fc.option(fc.constantFrom(...providers), { nil: undefined }),
+    isRemote: fc.boolean(),
+    native: fc.boolean(),
+    createdAt: fc.integer({ min: 1, max: 3 }),
+  }), { maxLength: 18 });
+  await fc.assert(fc.asyncProperty(candidates, fc.boolean(), fc.boolean(), async (rows, claudeCollision, acpCollision) => {
+    const state = openInMemoryStateDb();
+    try {
+      const store = mocks.store = new SqliteOverlayStore(state);
+      const put = state.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
+      const listing = [
+        summary("codex", "root"), summary("codex", "anchor", { createdAt: 2 }),
+        summary("codex", "moved", { createdAt: 3 }),
+      ];
+      if (claudeCollision) listing.push(summary("claude", "root"));
+      if (acpCollision) listing.push(summary("acp:grok", "root"));
+      const write = (source: NavigationThreadSummary["source"], id: string, fields: Record<string, unknown>) => {
+        put.run(`${encodeURIComponent(source)}:${id}`, JSON.stringify({
+          threadId: id, backend: source, executionMode: "default", extraLinkedDirectories: [], ...fields,
+        }));
+      };
+      write("codex", "anchor", { parentThreadId });
+      write("codex", "moved", { parentThreadId });
+      // One native handoff lost its remote parent instance, and another
+      // inherited through that handoff in the old navigation projection.
+      for (const [index, id] of ["origin", "handoff", "handoff-of-handoff"].entries()) {
+        listing.push(summary("claude", id, { createdAt: index + 1 }));
+        write("claude", id, { parentThreadId, parentThreadBackend: "codex",
+          ...(index === 0 ? { parentThreadInstanceId: PEER } : { handoffOrigin: { groupingMode: "subthread",
+            sourceBackend: "claude", sourceThreadId: index === 1 ? "origin" : "handoff" } }) });
+      }
+      for (const [index, row] of rows.entries()) {
+        const id = `candidate-${index}`;
+        write(row.source, id, {
+          parentThreadId,
+          parentThreadBackend: row.explicitBackend,
+          parentThreadInstanceId: row.isRemote ? PEER : undefined,
+        });
+        listing.push(summary(row.source, id, {
+          createdAt: row.createdAt,
+          ...(row.native ? { codexNativeSubAgent: {} as NonNullable<NavigationThreadSummary["codexNativeSubAgent"]> } : {}),
+        }));
+      }
+      const orderHints = ["anchor", "candidate-1"];
+      await store.updateSubthreadOrder({ ...target, threadIds: orderHints });
+      const scopes = [...new Set(["codex" as const, "claude" as const, ...rows.map((row) => row.source)])];
+      const full = scopes.flatMap((backend) => store.readNavigationQueryIndex({
+        backend, threads: listing.filter((row) => row.source === backend),
+      }).threads);
+      const byKey = new Map(full.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
+      const expected = sortSubthreadSummaries({ subthreadOrder: orderHints }, full.filter((thread) =>
+        thread.parentThreadId === parentThreadId && !thread.archivedAt && !thread.parentThreadInstanceId
+        && !thread.codexNativeSubAgent && resolveThreadParentKey(thread, byKey) === "codex:root"))
+        .map((thread) => thread.id).filter((id) => id !== "moved");
+      expected.splice(expected.indexOf("anchor") + 1, 0, "moved");
+
+      mocks.readProvider.mockImplementation(async ({ backend, ids }: {
+        backend: NavigationThreadSummary["source"]; ids: ReadonlySet<string>;
+      }) => ({ threads: listing.filter((row) => row.source === backend && ids.has(row.id)) }));
+      await updateLocalSubthreadOrder({ ...target, move: { threadId: "moved", anchorThreadId: "anchor", placement: "after" } });
+      expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(expected);
+    } finally {
+      state.close();
+    }
+  }), { numRuns: 45 });
+});
+
+it("refuses a relative move when an unseen sibling joins during provider discovery", async () => {
+  const store = mocks.store!;
+  const target = { backend: "codex", parentThreadId: "root" } as const;
+  for (const threadId of ["anchor", "child"]) await store.setThreadParent({ ...target, threadId });
+  const original = (await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder;
+  const read = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  mocks.readProvider.mockImplementation(async () => {
+    read.resolve();
+    await finish.promise;
+    return { threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) };
+  });
+
+  const pending = updateLocalSubthreadOrder({ ...target,
+    move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } });
+  await read.promise;
+  // An external writer can commit the durable edge without delivering an
+  // event to this owner. The transaction must recheck candidate membership.
+  const insert = db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
+  insert.run("claude:joined", JSON.stringify({ backend: "claude", threadId: "joined", parentThreadId: "root" }));
+  finish.resolve();
+  await expect(pending).rejects.toThrow("owning group changed");
+  expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(original);
+  expect(mocks.publish).not.toHaveBeenCalled();
+  expect(mocks.listeners.size).toBe(0);
+});
+
+it("fences relevant provider archive and restore events and re-reads intervening order hints", async () => {
+  const store = mocks.store!;
+  const target = { backend: "codex", parentThreadId: "root" } as const;
+  for (const threadId of ["anchor", "child", "sibling"]) await store.setThreadParent({ ...target, threadId });
+  const initial = ["anchor", "child", "sibling"];
+  await store.updateSubthreadOrder({ ...target, threadIds: initial });
+  const request = { ...target, move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } } as const;
+
+  for (const method of ["thread/archived", "thread/unarchived"] as const) {
+    mocks.readProvider.mockImplementation(async () => {
+      for (const listener of mocks.listeners) {
+        const params = { threadId: "sibling" };
+        listener({ backend: "codex", notification: method === "thread/archived"
+          ? { method: "thread/archived", params } : { method: "thread/unarchived", params } });
+      }
+      return { threads: ["root", ...initial].map((id) => summary("codex", id)) };
+    });
+    await expect(updateLocalSubthreadOrder(request)).rejects.toThrow("owning group changed");
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(initial);
+  }
+
+  mocks.readProvider.mockImplementation(async () => {
+    await store.updateSubthreadOrder({ ...target, threadIds: ["sibling", "anchor", "child"] });
+    for (const listener of mocks.listeners) {
+      listener({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "outside" } } });
+    }
+    return { threads: ["root", ...initial].map((id) => summary("codex", id)) };
+  });
+  await updateLocalSubthreadOrder(request);
+  expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+    .toEqual(["sibling", "child", "anchor"]);
 });

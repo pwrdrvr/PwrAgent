@@ -1350,6 +1350,34 @@ describe("DesktopBackendRegistry", () => {
     expect(withTokenMiserBridgeDescriptorEnv(source, undefined)).toBe(source);
   });
 
+  it("reads candidate ACP sessions for reorder without discovering or enriching other sessions", async () => {
+    const backendId = "acp:kimi";
+    const records: AcpSessionMetadata[] = [
+      { backendId, sessionId: "first", title: "First", cwd: "/fixture", createdAt: 2, updatedAt: 4, executionMode: "default", status: "idle" },
+      { backendId, sessionId: "second", title: "Second", cwd: "/fixture", createdAt: 1, updatedAt: 3, executionMode: "default", status: "idle" },
+      { backendId, sessionId: "hidden", title: "Hidden", cwd: "/fixture", createdAt: 1, updatedAt: 3, executionMode: "default", status: "idle", hidden: true },
+      { backendId, sessionId: "archived", title: "Archived", cwd: "/fixture", createdAt: 1, updatedAt: 3, executionMode: "default", status: "idle", archivedAt: 3 },
+    ];
+    const sessions = createAcpSessionStoreMock(records);
+    const getSession = vi.spyOn(sessions, "getSession");
+    const list = vi.spyOn(sessions, "listSessions");
+    const launch = vi.fn(() => { throw new Error("unexpected ACP launch"); });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock(),
+      acpSessionStore: sessions, createAcpClient: launch,
+    });
+    try {
+      const ids = new Set(["second", "first", "hidden", "archived", "missing"]);
+      const rows = await registry.readSubthreadOrderProviderRows(backendId, ids);
+      expect(rows.map((row) => row.id)).toEqual(["first", "second"]);
+      expect(getSession.mock.calls).toEqual([...ids].map((id) => [backendId, id]));
+      expect(list).not.toHaveBeenCalled();
+      expect(launch).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("does not regress completed provider coverage during late durable hydration", async () => {
     const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],

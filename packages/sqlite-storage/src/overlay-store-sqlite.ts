@@ -56,6 +56,7 @@ import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
 import { managedKeysFromLegacyProjection, prepareScopedManagedMembership } from "./thread-managed-membership";
 import { ThreadDependencyStore } from "./thread-dependency-store";
+import { prepareSubthreadGroup } from "./subthread-group-sqlite";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
@@ -817,6 +818,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private scopedManagedMembership?: ReturnType<typeof prepareScopedManagedMembership>;
+  private subthreadGroup?: ReturnType<typeof prepareSubthreadGroup>;
   private navigationOverlayCache?: {
     dataVersion: number;
     threadChanges: number;
@@ -5815,6 +5817,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     parentThreadId: string;
     threadIds?: string[];
+    /** Durable relationships read before awaiting provider membership. */
+    groupFingerprint?: string;
     insertAfter?: { threadId: string; sourceThreadId: string };
     move?: NavigationRelativeChildMove;
     /**
@@ -5831,13 +5835,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ownerInstanceId?: string;
     }[];
   }): Promise<string[]> {
-    return this.stateDb.raw.transaction(() => {
+    const apply = this.stateDb.raw.transaction(() => {
+      if (params.groupFingerprint !== undefined
+        && this.readSubthreadGroup(params.backend, params.parentThreadId).fingerprint !== params.groupFingerprint) {
+        throw new Error("The owning group changed while discovering its children. Try the move again.");
+      }
       const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
       // Resolve a child id to its own provider's overlay row. Ids are unique
       // per provider only, so an id two providers share is refused rather
       // than guessed. An unlisted id (a just-created child the owner's index
       // has not read yet) falls back to the parent's provider.
-      const ownersOf = (id: string) => params.children?.filter((entry) => entry.id === id) ?? [];
+      const owners = new Map<string, NonNullable<typeof params.children>>();
+      for (const entry of params.children ?? []) {
+        const list = owners.get(entry.id);
+        if (list) list.push(entry);
+        else owners.set(entry.id, [entry]);
+      }
+      const ownersOf = (id: string) => owners.get(id) ?? [];
       const childKey = (id: string, listed: boolean): string | undefined => {
         const owners = ownersOf(id);
         if (owners.length > 1 || (listed && owners.length === 0)) return undefined;
@@ -5889,7 +5903,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           // A just-created child is often missing from the owner's listing,
           // and it may run on another provider than its parent. Its own link
           // names both, so find it by that.
-          const unlisted = !params.children?.some((entry) => entry.id === id);
+          const unlisted = !owners.has(id);
           const child = (unlisted ? this.findLinkedSubthread(id, params.parentThreadId, params.backend) : undefined)
             ?? (key ? this.getThread(key) : undefined);
           if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
@@ -5917,50 +5931,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         this.putThread(parentKey, { ...parent, subthreadOrder: threadIds });
       }
       return threadIds;
-    })();
+    });
+    return params.groupFingerprint === undefined ? apply() : apply.immediate();
   }
 
-  /**
-   * Every provider with a row in a parent's group: each thread that names the
-   * parent id as its parent, and each thread that shares the parent's id (a
-   * legacy link resolves against those). The owner lists only these
-   * providers before a relative move, so a provider with no stake in the
-   * group cannot block it.
-   */
-  readSubthreadGroupBackends(parentThreadId: string): ThreadOverlayState["backend"][] {
-    const rows = this.stateDb.raw
-      .prepare(
-        `SELECT DISTINCT json_extract(payload, '$.backend') AS backend FROM threads
-         WHERE CASE WHEN json_valid(payload)
-           THEN json_extract(payload, '$.parentThreadId') = ? OR json_extract(payload, '$.threadId') = ? END`,
-      )
-      .all(parentThreadId, parentThreadId) as { backend: unknown }[];
-    return rows.flatMap(({ backend }) =>
-      typeof backend === "string" && backend ? [backend as ThreadOverlayState["backend"]] : []);
+  /** Sparse provider candidates and durable facts for validating a relative reorder. */
+  readSubthreadGroup(backend: AppServerBackendKind, parentThreadId: string) {
+    this.subthreadGroup ??= prepareSubthreadGroup(this.stateDb.raw);
+    const group = this.subthreadGroup.read(backend, parentThreadId);
+    const keys = [...group.scopes].flatMap(([scope, ids]) =>
+      [...ids].map((id) => buildThreadIdentityKey(scope, id)));
+    const managed = this.readManagedSubAgentThreadKeysForOwners(keys);
+    const overlays = new Map(group.rows.flatMap((row) => {
+      const key = normalizeThreadIdentityKey(row.storageKey);
+      return key && encodeThreadIdentityKeyForStorage(key) === row.storageKey ? [[key, row] as const] : [];
+    }));
+    return { scopes: group.scopes, overlays, managed, fingerprint: JSON.stringify([group.fingerprint, [...managed].sort()]) };
   }
 
-  /**
-   * The one stored child that names this parent and its provider explicitly,
-   * on any provider. Undefined when none or several do.
-   */
   private findLinkedSubthread(
     threadId: string,
     parentThreadId: string,
     parentBackend: ThreadOverlayState["backend"],
   ): ThreadOverlayState | undefined {
-    const rows = this.stateDb.raw
-      .prepare(
-        `SELECT payload FROM threads
-         WHERE CASE WHEN json_valid(payload)
-           THEN json_extract(payload, '$.threadId') = ?
-             AND json_extract(payload, '$.parentThreadId') = ?
-             AND json_extract(payload, '$.parentThreadBackend') = ? END
-         LIMIT 2`,
-      )
-      .all(threadId, parentThreadId, parentBackend) as { payload: string }[];
-    return rows.length === 1
-      ? normalizeThreadOverlayState(JSON.parse(rows[0]!.payload) as ThreadOverlayState)
-      : undefined;
+    this.subthreadGroup ??= prepareSubthreadGroup(this.stateDb.raw);
+    const payload = this.subthreadGroup.linkedChild(threadId, parentThreadId, parentBackend);
+    return payload === undefined
+      ? undefined
+      : normalizeThreadOverlayState(JSON.parse(payload) as ThreadOverlayState);
   }
 
   /**

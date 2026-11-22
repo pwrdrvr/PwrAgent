@@ -935,6 +935,26 @@ export class ClaudeBackend {
         && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }
 
+  async readSubthreadOrderSummaries(ids: ReadonlySet<string>): Promise<AppServerThreadSummary[]> {
+    const sessions = await Promise.all([...ids].map((id) => this.store.readListedSession(id)));
+    const summaries = sessions.flatMap((session) =>
+      session && !session.thread.archivedAt ? [this.threadSummary(session)] : []);
+    // With equal creation times, stable tray sort uses the provider's listing
+    // order. Use its canonical order only when the requested rows can tie.
+    if (new Set(summaries.map((thread) => thread.createdAt ?? 0)).size < summaries.length) {
+      const byId = new Map(summaries.map((thread) => [thread.id, thread]));
+      const ordered = (await this.listThreads()).flatMap(({ id }) => {
+        const thread = byId.get(id);
+        return thread ? [thread] : [];
+      });
+      if (ordered.length !== summaries.length) {
+        throw new Error("The owning group changed while discovering its children. Try the move again.");
+      }
+      return ordered;
+    }
+    return summaries;
+  }
+
   /** One stored thread, as listThreads reports it, or undefined when its
    * metadata is gone or unreadable. */
   async readThreadSummary(threadId: string, options?: { requireComplete?: boolean }): Promise<AppServerThreadSummary | undefined> {

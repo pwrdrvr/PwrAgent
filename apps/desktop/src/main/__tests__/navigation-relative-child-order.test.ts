@@ -3,13 +3,15 @@ import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { StateDb } from "../state/state-db";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 afterEach(() => vi.unstubAllEnvs());
 
 it("moves against the complete owner order including unranked unloaded siblings", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const db = openInMemoryStateDb();
+  const { dbPath, tempDir } = createTempStateDb("pwragent-relative-order-");
+  const db = StateDb.open(dbPath);
   const store = new SqliteOverlayStore(db);
   try {
     const children = Array.from({ length: 100 }, (_, i) => ({ id: `child-${i}`, createdAt: i }));
@@ -20,19 +22,24 @@ it("moves against the complete owner order including unranked unloaded siblings"
       move: { threadId: "child-0", anchorThreadId: "child-50", placement: "after" as const } };
     const expected = [...children.slice(50).reverse().map((child) => child.id), "child-0",
       ...children.slice(1, 50).reverse().map((child) => child.id)];
+    const { fingerprint: groupFingerprint } = store.readSubthreadGroup("codex", "root");
     const { writes } = await measureSqliteWrites(async () => {
-      expect(await store.updateSubthreadOrder(request)).toEqual(expected);
+      expect(await store.updateSubthreadOrder({ ...request, groupFingerprint })).toEqual(expected);
     });
     expectSqliteWriteBudget({ scenario: "navigation-relative-child-move", writes,
-      note: "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes" });
+      note: "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~16 KiB/commit, ~1.6 MB/day; no idle writes" });
     await store.setThreadParent({ backend: "codex", threadId: "child-50", parentThreadId: "another-root" });
     await expect(store.updateSubthreadOrder(request)).rejects.toThrow("no longer places");
-  } finally { db.close(); }
+  } finally {
+    db.close();
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 it("inserts relative to the current owner order and preserves every unloaded sibling", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const db = openInMemoryStateDb();
+  const { dbPath, tempDir } = createTempStateDb("pwragent-relative-order-");
+  const db = StateDb.open(dbPath);
   const store = new SqliteOverlayStore(db);
   try {
     const siblings = Array.from({ length: 100 }, (_, index) => `child-${index}`);
@@ -45,7 +52,7 @@ it("inserts relative to the current owner order and preserves every unloaded sib
       expect(await store.updateSubthreadOrder(request)).toEqual(expected);
     });
     expectSqliteWriteBudget({ scenario: "navigation-relative-child-insertion", writes,
-      note: "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes" });
+      note: "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~16 KiB/commit, ~1.6 MB/day; no idle writes" });
     const repeated = await measureSqliteWrites(async () => {
       expect(await store.updateSubthreadOrder(request)).toEqual(expected);
     });
@@ -57,7 +64,10 @@ it("inserts relative to the current owner order and preserves every unloaded sib
     // The refused move changed nothing; the child that left took its rank along.
     expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
       .toEqual(expected.filter((id) => id !== "child-50"));
-  } finally { db.close(); }
+  } finally {
+    db.close();
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 it("rejects a same-id child owned by another parent instance", async () => {
