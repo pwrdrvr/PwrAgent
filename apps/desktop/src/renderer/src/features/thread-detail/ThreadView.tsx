@@ -1742,6 +1742,11 @@ export function ThreadView(props: ThreadViewProps) {
   }, [launchpadConnectionsDock]);
   const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
   const [waitingHeadingThreadId, setWaitingHeadingThreadId] = useState<string>();
+  const showRunningMonitors = useEventCallback(() => {
+    setWaitingHeadingThreadId(selectedThread?.id);
+    onActiveContextTabChange("waiting");
+    onContextRailPinnedChange(true);
+  });
   // Closing the panel is the cheap, reliable signal that the selection may
   // have changed; re-reading then keeps the composer badge honest without
   // subscribing to every write.
@@ -3156,11 +3161,7 @@ export function ThreadView(props: ThreadViewProps) {
           onCreateSubthread: props.onCreateSubthread,
           readThreadWorktreeAvailability: props.readThreadWorktreeAvailability,
           onShowMcpInventory: showMcpInventory,
-          onShowRunningMonitors: () => {
-            setWaitingHeadingThreadId(selectedThread?.id);
-            onActiveContextTabChange("waiting");
-            onContextRailPinnedChange(true);
-          },
+          onShowRunningMonitors: showRunningMonitors,
           onLockThread: lockThreadFromComposer,
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,

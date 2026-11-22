@@ -15619,9 +15619,12 @@ export class DesktopBackendRegistry {
     return (await this.overlayStore.getThreadOverlayState(context))?.jobMonitorCreationEnabled !== false;
   }
 
-  private async handleAgentTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse> {
-    if (request.operation === "create_monitor_delegation"
-      && !await this.isJobMonitorCreationEnabled(request.context)) {
+  private handleAgentTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse> {
+    if (request.operation !== "create_monitor_delegation") {
+      return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
+    }
+    return this.isJobMonitorCreationEnabled(request.context).then<TaskMonitorResponse>((enabled) => {
+      if (enabled) return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
       return {
         ok: false,
         operation: request.operation,
@@ -15630,8 +15633,7 @@ export class DesktopBackendRegistry {
           message: "Job Monitors are off for this thread. The operator turned them off. Use Continue After or ask for a sub-agent instead. Existing monitors still report back.",
         },
       };
-    }
-    return await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
+    });
   }
 
   private async buildCodexParentDynamicTools(
