@@ -8659,6 +8659,7 @@ function localBackendOperations(): FederationBackendOperations {
           {
             ensureDirectoryLaunchpad: (ensureRequest) =>
               bridge.ensureDirectoryLaunchpad(ensureRequest),
+            listDirectoryLaunchpads: () => getDesktopOverlayStore().listDirectoryLaunchpads(),
           },
         );
         if (!registered.ok) {

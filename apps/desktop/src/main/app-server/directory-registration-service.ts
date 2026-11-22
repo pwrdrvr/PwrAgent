@@ -1,4 +1,4 @@
-import { stat as fsStat } from "node:fs/promises";
+import { realpath, stat as fsStat } from "node:fs/promises";
 import path from "node:path";
 import type { AppServerBackendKind, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
@@ -6,7 +6,7 @@ import type {
   RegisterDirectoryFromDiskFailureReason,
   RegisterDirectoryFromDiskResponse,
 } from "@pwragent/shared/contracts/agent";
-import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { canonicalizeNavigationPath, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { parseWorktreeListPaths } from "@pwragent/shared/nested-worktree-pathspec";
 import { runGitCommand } from "./git-executable";
 import { buildWorktreeLinkedDirectory, toDirectoryId } from "./linked-directory-identity";
@@ -42,11 +42,45 @@ export type DirectoryRegistrationDeps = {
     preferredBackend?: AppServerBackendKind;
     registeredAt?: number;
   }) => Promise<EnsureDirectoryLaunchpadResponse>;
+  listDirectoryLaunchpads?: ListDirectoryLaunchpads;
   /** Test seam — defaults to a real `git` execFile invocation. */
   runGit?: (cwd: string, args: string[]) => Promise<string>;
   /** Test seam — defaults to `node:fs` `stat`. */
   statPath?: (target: string) => Promise<{ isDirectory: () => boolean }>;
 };
+
+type ListDirectoryLaunchpads = () => Promise<readonly { directoryKey: string }[]>;
+
+/** Keep a mapped drive, junction or link when realpath resolves a different path. */
+async function folderInRealCase(folder: string): Promise<string> {
+  const real = await realpath(folder).then(toDirectoryId, () => undefined);
+  return real && navigationPathIdentity(real, true) === navigationPathIdentity(folder, true) ? real : folder;
+}
+
+/** Keep the key of an existing draft or registration so its metadata stays linked. */
+export async function resolveDirectoryRegistrationKey(
+  directoryPath: string,
+  listDirectoryLaunchpads?: ListDirectoryLaunchpads,
+): Promise<string> {
+  const key = `directory:${directoryPath}`;
+  if (process.platform !== "win32" || !listDirectoryLaunchpads) return key;
+
+  const keys = (await listDirectoryLaunchpads()).map(({ directoryKey }) => directoryKey);
+  if (keys.includes(key)) return key;
+  const identity = navigationPathIdentity(key, true);
+  const variants = keys.filter((existing) => navigationPathIdentity(existing, true) === identity).sort();
+  if (variants.length === 0) return key;
+
+  // Windows also supports case-sensitive directories. Confirm that the
+  // legacy key still resolves to the same folder before reusing it.
+  const real = await realpath(directoryPath).catch(() => undefined);
+  if (!real) return key;
+  for (const variant of variants) {
+    const existing = await realpath(variant.slice("directory:".length)).catch(() => undefined);
+    if (existing === real) return variant;
+  }
+  return key;
+}
 
 async function defaultRunGit(cwd: string, args: string[]): Promise<string> {
   return (await runGitCommand(cwd, args)).stdout.trim();
@@ -143,6 +177,15 @@ export async function resolveDirectoryRegistrationRoot(
     // not prevent registration after filesystem validation succeeds.
   }
 
+  if (process.platform === "win32") {
+    directoryPath = await folderInRealCase(directoryPath);
+    if (repoRoot) repoRoot = directoryPath;
+    if (checkoutPath) {
+      checkoutPath = await folderInRealCase(checkoutPath);
+      if (checkoutPath === directoryPath) checkoutPath = undefined;
+    }
+  }
+
   return {
     ok: true,
     directoryPath,
@@ -177,7 +220,7 @@ export async function registerDirectoryFromDisk(
     }
   }
 
-  const directoryKey = `directory:${directoryPath}`;
+  const directoryKey = await resolveDirectoryRegistrationKey(directoryPath, deps.listDirectoryLaunchpads);
   const directoryLabel = path.basename(directoryPath) || directoryPath;
   const ensured = await deps.ensureDirectoryLaunchpad({
     directoryKey,

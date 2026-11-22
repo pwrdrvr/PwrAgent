@@ -8250,6 +8250,7 @@ class DesktopAppServerService {
   ): Promise<RegisterDirectoryFromDiskResponse> {
     const response = await registerDirectoryFromDisk(request, {
       ensureDirectoryLaunchpad: (req) => this.ensureDirectoryLaunchpad(req),
+      listDirectoryLaunchpads: () => this.getOverlayStore().listDirectoryLaunchpads(),
     });
     if (response.ok) {
       this.lastDirectoriesByKey.set(response.directoryKey, {

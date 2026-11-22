@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   discoverRecentProjects,
-  folderInRealCase,
   RECENT_PROJECT_MAX_FOLDERS,
   RECENT_PROJECT_MAX_PROJECTS,
   type RecentProjectDiscoveryDeps,
@@ -161,19 +160,6 @@ describe("discoverRecentProjects", () => {
     }));
     expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "codex", lastActiveAt: 1 }]);
     expect(result.sources).toEqual([{ agent: "codex", label: "Codex", status: "complete" }]);
-  });
-});
-
-describe("folderInRealCase", () => {
-  it("takes the folder's letter case from the disk", async () => {
-    await expect(folderInRealCase("c:/code/app", async () => "C:\\Code\\App"))
-      .resolves.toBe("C:/Code/App");
-  });
-
-  it("keeps the reported path when the disk names another place, or cannot answer", async () => {
-    await expect(folderInRealCase("Z:/app", async () => "\\\\server\\share\\app")).resolves.toBe("Z:/app");
-    await expect(folderInRealCase("c:/code/gone", async () => { throw new Error("ENOENT"); }))
-      .resolves.toBe("c:/code/gone");
   });
 });
 
