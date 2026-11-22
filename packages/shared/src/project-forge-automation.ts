@@ -38,6 +38,13 @@ export type ProjectForgeAutomation = {
    * as an older owner leaves it.
    */
   mergeBuildWatches?: ProjectMergeBuildWatches;
+  /**
+   * PwrAgent raises "Review #N" and "Merge #N" to-do cards as a PR's CI turns
+   * green (docs/pr-review-readiness.md). Off, it raises neither, does not
+   * gate merge cards on review, and gives no readiness guidance. An older
+   * owner never stored it; reads fill it as on.
+   */
+  prOffers: boolean;
   /** While paused, refuse agent messages from other threads. */
   refuseThreadMessages: boolean;
   /**
@@ -56,6 +63,7 @@ export const DEFAULT_PROJECT_FORGE_AUTOMATION: Readonly<ProjectForgeAutomation> 
   autoFixMergeConflicts: true,
   autoFixCiFailures: true,
   prWatches: true,
+  prOffers: true,
   refuseThreadMessages: true,
   wakeupPolicy: "hold",
 };
@@ -71,7 +79,7 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
   const record = value && typeof value === "object"
     ? value as Record<string, unknown>
     : {};
-  const flag = (key: "paused" | "autoFixMergeConflicts" | "autoFixCiFailures" | "prWatches" | "refuseThreadMessages"): boolean => {
+  const flag = (key: "paused" | "autoFixMergeConflicts" | "autoFixCiFailures" | "prWatches" | "prOffers" | "refuseThreadMessages"): boolean => {
     const raw = record[key];
     return typeof raw === "boolean"
       ? raw
@@ -92,6 +100,7 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
     ...(record.mergeBuildWatches === "on" || record.mergeBuildWatches === "off"
       ? { mergeBuildWatches: record.mergeBuildWatches }
       : {}),
+    prOffers: flag("prOffers"),
     refuseThreadMessages: flag("refuseThreadMessages"),
     wakeupPolicy: record.wakeupPolicy === "discard" ? "discard" : "hold",
   };
@@ -104,6 +113,7 @@ export function isDefaultProjectForgeAutomation(value: ProjectForgeAutomation): 
     && value.autoFixCiFailures === DEFAULT_PROJECT_FORGE_AUTOMATION.autoFixCiFailures
     && value.prWatches === DEFAULT_PROJECT_FORGE_AUTOMATION.prWatches
     && (value.mergeBuildWatches ?? "default") === "default"
+    && value.prOffers !== false
     && value.refuseThreadMessages === DEFAULT_PROJECT_FORGE_AUTOMATION.refuseThreadMessages
     && value.wakeupPolicy === DEFAULT_PROJECT_FORGE_AUTOMATION.wakeupPolicy;
 }
@@ -134,6 +144,15 @@ export function projectWatchesMergeBuilds(value: ProjectForgeAutomation | undefi
   if (!projectAllowsPrWatches(value)) return false;
   const choice = value?.mergeBuildWatches ?? "default";
   return choice === "default" ? globalDefault : choice === "on";
+}
+
+/**
+ * Whether PwrAgent may raise review and merge offer cards for the project's
+ * pull requests. A paused project raises none. A value without the field,
+ * from an owner that predates it, counts as on.
+ */
+export function projectAllowsPrOffers(value: ProjectForgeAutomation | undefined): boolean {
+  return !value || (!value.paused && value.prOffers !== false);
 }
 
 /** Whether the project's pull requests should be polled at all. */

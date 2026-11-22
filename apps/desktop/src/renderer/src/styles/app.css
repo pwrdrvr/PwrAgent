@@ -11811,9 +11811,14 @@ a.button {
 }
 
 /* Forge Automation and its Resume step: the lock dialog's frame. The
-   eyebrow labels, hints and status row copy `.thread-lock-dialog`'s. */
+   eyebrow labels, hints and status row copy `.thread-lock-dialog`'s. The
+   shared backdrop is fixed and does not scroll, and the Active step is about
+   650px tall, past the 640px minimum window, so the dialog scrolls instead
+   of pushing Save out of reach (as `.archive-group-dialog` does). */
 .forge-automation-dialog {
   width: min(480px, 100%);
+  max-height: calc(100vh - 2 * var(--dialog-backdrop-inset));
+  overflow-y: auto;
 }
 
 .forge-automation-dialog--resume {

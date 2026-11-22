@@ -39,6 +39,7 @@ import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
+import { selectPrReviewOfferOwner, type PrReviewOfferCandidate } from "../pr-status/pr-review-offer-owner";
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
@@ -8603,25 +8604,29 @@ class DesktopAppServerService {
   }
 
   /**
-   * The one thread a PR's offers go to: the elected Auto-fix owner when it
-   * qualifies, else the first live primary thread. Archived threads and
-   * paused projects get none, and nothing happens while polling is off.
+   * The one thread a PR's offers go to (`selectPrReviewOfferOwner`): the
+   * elected Auto-fix owner when it qualifies, else the first live primary
+   * thread. Archived threads, paused projects, and projects with PR offers
+   * off get none, and nothing happens while polling is off. Every offer path
+   * asks here: cards, the merge-card gate, and readiness guidance.
    */
   private async prReviewOfferOwner(prKey: string): Promise<PrReviewOfferThread | undefined> {
     if (!this.backgroundPrPollingEnabled) return undefined;
-    const eligible: PrReviewOfferThread[] = [];
+    const candidates: PrReviewOfferCandidate[] = [];
     for (const threadKey of this.primaryPrThreadsByKey.get(prKey) ?? []) {
       const identity = parseThreadIdentityKey(threadKey);
       if (!identity) continue;
-      if (getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) continue;
-      if (!projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))) continue;
-      eligible.push({ backend: identity.backend, threadId: identity.threadId });
+      candidates.push({
+        backend: identity.backend,
+        threadId: identity.threadId,
+        archived: getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true,
+        automation: this.threadKeyForgeAutomation(threadKey),
+      });
     }
-    if (eligible.length <= 1) return eligible[0];
-    const winner = await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey });
-    return eligible.find((thread) =>
-      thread.backend === winner?.backend && thread.threadId === winner.threadId
-    ) ?? eligible[0];
+    return await selectPrReviewOfferOwner({
+      candidates,
+      readWinner: async () => await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey }),
+    });
   }
 
   private prReviewOfferDirectories(thread: PrReviewOfferThread, pr: PrSummary): string[] {

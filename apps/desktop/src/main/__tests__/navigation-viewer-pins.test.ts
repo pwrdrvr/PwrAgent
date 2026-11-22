@@ -429,7 +429,7 @@ it.each([
 });
 
 const PAUSED: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,
-  autoFixCiFailures: true, prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
+  autoFixCiFailures: true, prWatches: true, prOffers: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
 
 function ownerThread(id: string, path: string): NavigationThreadSummary {
   return { id, source: "codex", title: id, titleSource: "explicit", inbox: { inInbox: false },

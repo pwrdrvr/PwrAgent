@@ -99,6 +99,32 @@ describe("ForgeAutomationDialog", () => {
     expect(resolveProjectForgeAutomation(vi.mocked(back.props.onSubmit).mock.calls[0]![0])).toEqual(DEFAULT_PROJECT_FORGE_AUTOMATION);
   });
 
+  it("turns the project's review and merge offers off and back on", async () => {
+    const { props } = renderDialog();
+    const cards = screen.getByRole("group", { name: "To-do cards" });
+    const offers = within(cards).getByRole("checkbox", { name: "Review and merge offers" });
+    expect(offers).toBeChecked();
+    expect(offers).toHaveAccessibleDescription(
+      "A Review card when CI passes on unreviewed changes, then a Merge card once the review is settled.",
+    );
+    fireEvent.click(offers);
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, prOffers: false }));
+    cleanup();
+    const back = renderDialog({ automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, prOffers: false } });
+    const stored = screen.getByRole("checkbox", { name: "Review and merge offers" });
+    expect(stored).not.toBeChecked();
+    fireEvent.click(stored);
+    save();
+    await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
+  it("hides the offers switch while paused, since a paused project gets no offers", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: "Paused" }));
+    expect(screen.queryByRole("checkbox", { name: "Review and merge offers" })).not.toBeInTheDocument();
+  });
+
   it("explains that turning PR watches off stops merge build watches too", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("checkbox", { name: "PR watches" }));

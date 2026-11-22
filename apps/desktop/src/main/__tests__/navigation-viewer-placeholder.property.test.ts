@@ -6,7 +6,7 @@ import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-auto
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 
 const paused: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,
-  autoFixCiFailures: true, prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
+  autoFixCiFailures: true, prWatches: true, prOffers: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
 const member = fc.record({ owner: fc.constantFrom("peer-a", "peer-b"),
   project: fc.option(fc.constantFrom("directory:/owner/repo", "directory:/elsewhere/repo"), { nil: undefined }) });
 
