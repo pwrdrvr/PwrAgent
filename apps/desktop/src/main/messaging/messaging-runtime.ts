@@ -1711,6 +1711,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         });
       });
       unsubscribeInboundRejected = adapter.onInboundRejected?.(async (event) => {
+        if (event.channel?.connectionId !== undefined) return;
         await this.handleRejectedInbound(adapter.channel, event, store);
       });
       unsubscribeInboundChannelMetadata = adapter.onInboundChannelMetadata?.(async (update) => {
@@ -1718,6 +1719,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       });
       this.setPlatformHealth(adapter.channel, "unknown");
       await this.startAdapterWithDeadline(adapter, async (event) => {
+        // Only singleton routes are registered. Reject scoped events before
+        // pairing, observation, or the automation-only path sees them.
+        if (event.channel.connectionId !== undefined || event.channel.channel !== adapter.channel) return;
         assertMessagingInboundReceipt(event);
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);

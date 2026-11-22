@@ -215,6 +215,15 @@ export class MessagingOutboundDelivery {
     guard?: MessagingDeliveryGuard,
     receiptRequest?: MessagingReplyReceiptRequest,
   ): Promise<MessagingDeliveryResult> {
+    if (binding?.channel.connectionId !== undefined
+      || event?.channel.connectionId !== undefined
+      || intent.audit?.channel.connectionId !== undefined) {
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.context.now(),
+        outcome: "discarded",
+      };
+    }
     const receipt = binding && receiptRequest
       ? await this.openReceipt(intent, binding, receiptRequest)
       : undefined;

@@ -626,6 +626,7 @@ export class MessagingController {
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
+    if (!this.isChannelInScope(event.channel)) return;
     if (!this.accessControl.authorizeInboundAdmission(event)) {
       // In enforcing mode this fires for actors with no permission-granting
       // role (default-deny); record it so operators can see who was inert.
@@ -713,6 +714,7 @@ export class MessagingController {
   async handleInboundChannelMetadata(
     update: MessagingInboundChannelMetadataUpdate,
   ): Promise<void> {
+    if (!this.isChannelInScope(update.channel)) return;
     try {
       await this.bindingService.refreshBindingChannelMetadata(
         update.channel,
@@ -4747,14 +4749,12 @@ export class MessagingController {
   private filterBindingsForChannel(
     bindings: MessagingBindingRecord[],
   ): MessagingBindingRecord[] {
-    if (!this.options.channel) {
-      return bindings;
-    }
-    return bindings.filter((binding) => binding.channel.channel === this.options.channel);
+    return bindings.filter((binding) => this.isChannelInScope(binding.channel));
   }
 
   private isChannelInScope(channel: MessagingBindingRecord["channel"] | undefined): boolean {
-    return !this.options.channel || channel?.channel === this.options.channel;
+    return channel?.connectionId === undefined
+      && (!this.options.channel || channel?.channel === this.options.channel);
   }
 
   /**

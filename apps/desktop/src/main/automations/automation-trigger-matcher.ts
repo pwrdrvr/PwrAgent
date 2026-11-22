@@ -11,7 +11,7 @@ import type {
   AutomationTriggerDefinition,
 } from "@pwragent/shared/contracts/automations";
 import type { InboundPreviewMessage } from "@pwragent/shared/contracts/messaging";
-import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
+import { scopeMessagingRoutingKey, type MessagingInboundEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
 const MAX_SOURCE_TEXT_CHARS = 4_000;
@@ -274,13 +274,13 @@ export function buildSourceEventKey(event: MessagingInboundEvent): string {
     event.id;
   const threadRoot =
     stringValue(routing.threadTs) ?? event.channel.conversation.parentId ?? "";
-  return [
+  return scopeMessagingRoutingKey(event.channel.connectionId, [
     event.channel.channel,
     channelId,
     messageId,
     threadRoot,
     event.actor.platformUserId,
-  ].join(":");
+  ].join(":"));
 }
 
 function stringValue(value: unknown): string | undefined {

@@ -3204,6 +3204,7 @@ function mattermostCallbackRecordId(
         conversation.id,
         conversation.parentId ?? null,
         params.bindingId ?? null,
+        ...(params.channelRef.connectionId === undefined ? [] : [params.channelRef.connectionId]),
       ]),
     )
     .digest("base64url")

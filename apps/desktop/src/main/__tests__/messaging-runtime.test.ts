@@ -1174,6 +1174,29 @@ describe("DesktopMessagingRuntime", () => {
     text: "ERROR something happened",
   };
 
+  it("keeps an unregistered connection out of singleton admission, including automation-only traffic", async () => {
+    const automationInboundHandler = vi.fn(async () => true);
+    const automationInboundMatches = vi.fn(() => true);
+    const { adapter, bridge } = await startMentionOnlyRuntime({
+      automationInboundHandler,
+      automationInboundMatches,
+    });
+    for (const observedOnly of [false, true]) {
+      await adapter.listener?.({
+        ...ambientEvent,
+        observedOnly,
+        channel: { ...ambientEvent.channel, connectionId: "unknown-connection" },
+      });
+    }
+    expect(automationInboundMatches).not.toHaveBeenCalled();
+    expect(automationInboundHandler).not.toHaveBeenCalled();
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+    expect(adapter.delivered).toEqual([]);
+
+    await adapter.listener?.(ambientEvent);
+    expect(automationInboundHandler).toHaveBeenCalledOnce();
+  });
+
   it("delivers @mention-only messages an automation filter matches", async () => {
     const automationInboundHandler = vi.fn(async () => false);
     // The automation's own filter matches this ambient (non-@mention) message,

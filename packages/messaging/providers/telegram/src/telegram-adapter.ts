@@ -3469,6 +3469,7 @@ function telegramCallbackRecordId(
         conversation?.id ?? null,
         conversation?.parentId ?? null,
         intent.audit?.bindingId ?? intent.bindingId ?? null,
+        ...(intent.audit?.channel.connectionId === undefined ? [] : [intent.audit?.channel.connectionId]),
       ]),
     )
     .digest("base64url")
