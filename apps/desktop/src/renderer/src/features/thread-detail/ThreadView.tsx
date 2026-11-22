@@ -776,6 +776,7 @@ export type ThreadViewProps = {
   fullAccessRiskWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
   prAutoDispatchAllowed?: boolean;
+  watchMergeBuildsDefault?: boolean;
   /**
    * Project-directory picker (issue #223) — surfaced in the launchpad
    * composer when no thread is selected yet. Rendering happens inside
@@ -3192,6 +3193,7 @@ export function ThreadView(props: ThreadViewProps) {
           onSendThreadPrAutoDispatchNow: props.onSendThreadPrAutoDispatchNow,
           backgroundPrPollingEnabled: props.backgroundPrPollingEnabled,
           prAutoDispatchAllowed: props.prAutoDispatchAllowed,
+          watchMergeBuildsDefault: props.watchMergeBuildsDefault,
           onAttachDirectoryReferences: props.onAttachDirectoryReferences,
           pendingRequestActive: Boolean(props.pendingRequest),
           pendingUserInputActive: Boolean(

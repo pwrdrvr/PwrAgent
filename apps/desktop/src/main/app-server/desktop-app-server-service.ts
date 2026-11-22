@@ -52,6 +52,7 @@ import {
   type ManageThreadDependenciesRequest,
   type ManageThreadDependenciesResponse,
   type ThreadDependencyCondition,
+  type ThreadDependencyMergeBuildObservation,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import {
   type AppServerThreadTurnMetadata,
@@ -76,6 +77,7 @@ import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { authorizeLocalFile, LocalFilePoller, readLocalFile } from "./thread-dependency-local-files";
 import { CI_RUN_URL_FORMS, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
+import { readMergeBuild } from "../app-server/thread-dependency-merge-builds";
 import {
   getProjectForgeAutomationIndex,
   summarizeProjectHeldWakeup,
@@ -523,6 +525,8 @@ const RERUN_SETTLE_MS = 20_000;
 const RERUN_RECORD_MAX_AGE_MS = 24 * 60 * 60_000;
 /** How long a merge/close wake waits for sandbox cleanup to report. */
 const SANDBOX_CLEANUP_WAKE_WAIT_MS = 30_000;
+/** A merge seen later than this after it happened arms no merge build watch. */
+const MERGE_BUILD_ARM_MAX_AGE_MS = 6 * 60 * 60_000;
 /** How long a by-URL resolve the forge could not answer waits before asking again. */
 const PR_REFERENCE_RETRY_MS = 10 * 60_000;
 
@@ -1287,6 +1291,7 @@ class DesktopAppServerService {
   private resourceCheckoutPoller: LocalFilePoller | undefined;
   private unsubscribeResourceCheckouts?: () => void;
   private threadDependencyCiRunPoller: ThreadDependencyCiRunPoller | undefined;
+  private threadDependencyMergeBuildPoller: ThreadDependencyCiRunPoller<ThreadDependencyMergeBuildObservation> | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
   private unsubscribeRestartGate?: () => void;
@@ -4898,9 +4903,39 @@ class DesktopAppServerService {
     }
     if (transitions.length > 0) {
       this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
+      this.armMergeBuildWatches(transitions);
     }
     this.publishPrAutoFixPrEndedChanges(endedChanged);
     return changedPrs;
+  }
+
+  /**
+   * `[git] watch_merge_builds`: a PR this instance watched just merged, so
+   * each local thread it belongs to watches the build of its merge commit and
+   * wakes only if that build fails. Only a merge seen happening arms one: a
+   * merged PR loaded from cache or found later has no transition, and a
+   * merge older than a few hours is left alone.
+   */
+  private armMergeBuildWatches(transitions: readonly PrStatusTransition[]): void {
+    const merged = transitions.filter((transition) => transition.changed.lifecycleState?.to === "merged"
+      && (transition.pr.mergedAt === undefined || Date.now() - transition.pr.mergedAt < MERGE_BUILD_ARM_MAX_AGE_MS));
+    if (!merged.length || !getAppStateMode() || !this.ownerNavigationActive) return;
+    if (!getDesktopSettingsService().resolveWatchMergeBuilds()) return;
+    const coordinator = this.getThreadDependencyCoordinator();
+    for (const transition of merged) {
+      for (const threadKey of transition.threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (!identity || getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) continue;
+        if (!projectAllowsPrWatches(this.threadKeyForgeAutomation(threadKey))) continue;
+        void coordinator.armMergeBuild(identity, { url: transition.url, title: transition.title })
+          .then((armed) => {
+            if (armed) appServerLog.info("merge build watch armed", { prKey: transition.prKey, threadId: identity.threadId });
+          })
+          .catch((error) => appServerLog.warn("merge build watch could not be armed", {
+            prKey: transition.prKey, error: error instanceof Error ? error.message : String(error),
+          }));
+      }
+    }
   }
 
   private nextPrObservationTimestamp(): number {
@@ -5564,8 +5599,9 @@ class DesktopAppServerService {
       }
 
       this.backgroundPrPollingEnabled = backgroundPollingEnabled;
-      // CI run waits are checked under the same switch as PR polling.
+      // CI run and merge build waits are checked under the same switch as PR polling.
       this.threadDependencyCiRunPoller?.sync();
+      this.threadDependencyMergeBuildPoller?.sync();
       this.prAutoDispatchAllowed = prAutoDispatchAllowed;
       this.prAutoDispatchBudgetConfig = budgetConfig;
       if (budgetStatus?.paused) {
@@ -7806,7 +7842,10 @@ class DesktopAppServerService {
       });
     }
     // CI run waits are checked only while their project allows PR watches.
-    if (projectAllowsPrWatches(previous) !== projectAllowsPrWatches(next)) this.threadDependencyCiRunPoller?.sync();
+    if (projectAllowsPrWatches(previous) !== projectAllowsPrWatches(next)) {
+      this.threadDependencyCiRunPoller?.sync();
+      this.threadDependencyMergeBuildPoller?.sync();
+    }
     if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
       await this.getThreadDependencyCoordinator().handlePrEvent();
       // A merge or close seen while watches were held left its watch
@@ -8230,6 +8269,8 @@ class DesktopAppServerService {
     this.unsubscribeResourceCheckouts = undefined;
     this.threadDependencyCiRunPoller?.dispose();
     this.threadDependencyCiRunPoller = undefined;
+    this.threadDependencyMergeBuildPoller?.dispose();
+    this.threadDependencyMergeBuildPoller = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
     this.prPollingSettingsSyncGeneration += 1;
@@ -8431,6 +8472,7 @@ class DesktopAppServerService {
           // A wait that starts, fires or ends changes which runs need checks.
           // After close() the poller is gone; a late change must not rebuild it.
           if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
+          if (dependency.conditions.some((condition) => condition.when === "merge_build")) this.threadDependencyMergeBuildPoller?.sync();
           if (dependency.conditions.some((condition) => condition.localFile)) this.syncLocalFileChecks();
           if (dependency.conditions.some((condition) => condition.resourceCheckout)) {
             this.syncResourceCheckoutChecks(dependency.status === "waiting" ? 0 : undefined);
@@ -8511,6 +8553,41 @@ class DesktopAppServerService {
       observe: async (url, observation) => await this.getThreadDependencyCoordinator().handleCiRunObservation(url, observation),
     });
     return this.threadDependencyCiRunPoller;
+  }
+
+  /**
+   * A merged PR's build, for `merge_build` waits: the merge commit the forge
+   * reports, then every check on it. Read under the same gate as CI runs.
+   */
+  private getThreadDependencyMergeBuildPoller(): ThreadDependencyCiRunPoller<ThreadDependencyMergeBuildObservation> {
+    this.threadDependencyMergeBuildPoller ??= new ThreadDependencyCiRunPoller<ThreadDependencyMergeBuildObservation>({
+      urls: () => this.getThreadDependencyCoordinator().mergeBuildUrls((dependency) => this.backgroundPrPollingEnabled
+        && projectAllowsPrWatches(this.threadForgeAutomation(dependency))),
+      read: async (prUrl) => await this.readDependencyMergeBuild(prUrl),
+      failed: (_prUrl, error, code, now) => ({ status: "unknown", error, ...code ? { errorCode: code } : {}, checkedAt: now }),
+      observe: async (prUrl, observation) => await this.getThreadDependencyCoordinator().handleMergeBuildObservation(prUrl, observation),
+    });
+    return this.threadDependencyMergeBuildPoller;
+  }
+
+  private async readDependencyMergeBuild(prUrl: string): Promise<ThreadDependencyMergeBuildObservation> {
+    const pr = this.getThreadDependencyCoordinator().mergeBuildPullRequest(prUrl);
+    const repository = pr && repositoryFromPr(pr.url);
+    if (!pr || !repository) throw Object.assign(new Error("The merged PR is no longer known."), { code: "not_found" });
+    // Cached per merge, so the forge is asked for the merge commit once.
+    const details = await this.getPrStatusWatchCoordinator().resolveTerminalDetails(pr);
+    if (!details?.mergeCommitSha) {
+      throw Object.assign(new Error(details?.detailsUnavailableReason ?? "The forge has not reported the merge commit."), { code: "not_found" });
+    }
+    const mergedAt = details.mergedAt ? Date.parse(details.mergedAt) : pr.mergedAt ?? Number.NaN;
+    const client = this.getForgeCiClient();
+    return await readMergeBuild(async (target, path) => target.provider === "gitlab"
+      ? await client.readGitlab(target, path)
+      : await client.requestGithub(target, { path }), {
+      repository, mergeCommitSha: details.mergeCommitSha,
+      ...details.baseBranch ?? pr.baseRefName ? { baseBranch: details.baseBranch ?? pr.baseRefName } : {},
+      ...Number.isFinite(mergedAt) ? { mergedAt } : {},
+    }, Date.now());
   }
 
   private async readDependencyCiRun(url: string) {
@@ -8641,6 +8718,7 @@ class DesktopAppServerService {
     if (Object.keys(request).some((key) => ![
       "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
       "steps", "holdMerge", "dependencyId", "dependencyIds", "conditionIndex", "note", "pullRequest", "federationTarget", "repeat",
+      "wakeOn",
     ].includes(key))) throw new Error("Unknown dependency request field.");
     // Reviewed cleanup is the operator's: an agent dismisses one claim it was told about.
     if (request.dependencyIds !== undefined && actor.startsWith("agent:")) {
@@ -8760,6 +8838,7 @@ class DesktopAppServerService {
     if (!getAppStateMode()) return;
     await this.getThreadDependencyCoordinator().reconcile();
     this.getThreadDependencyCiRunPoller().sync();
+    this.getThreadDependencyMergeBuildPoller().sync();
     this.syncLocalFileChecks(0);
     this.syncResourceCheckoutChecks(0);
   }

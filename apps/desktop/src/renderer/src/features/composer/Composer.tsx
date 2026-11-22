@@ -161,7 +161,9 @@ import type {
   DesktopChatReplyComposer,
   DesktopProviderModelDefaults,
 } from "@pwragent/shared/contracts/settings";
+import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import { ComposerPrMenu } from "./ComposerPrMenu";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -432,6 +434,8 @@ export type ComposerProps = {
   codexFastAllowed?: boolean;
   backgroundPrPollingEnabled?: boolean;
   prAutoDispatchAllowed?: boolean;
+  /** `[git] watch_merge_builds`, for the PR menu's default. */
+  watchMergeBuildsDefault?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   composerCovered?: boolean;
@@ -15919,34 +15923,32 @@ function useComposerController(props: ComposerProps) {
           ) : null}
 
           {props.thread && showPrAutoDispatchToggle ? (
-            <button
-              type="button"
-              className={`composer__toggle tooltip-target${
+            <ComposerPrMenu
+              thread={props.thread}
+              desktopApi={props.desktopApi}
+              watchMergeBuildsDefault={props.watchMergeBuildsDefault ?? DEFAULT_WATCH_MERGE_BUILDS}
+              prUrl={newestOpenPrimaryPullRequestUrl(props.thread)}
+              className={`composer__toggle${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
               }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${
                 prAutoDispatchIdle ? " is-idle" : ""
               }`}
-              aria-label="Auto-fix PR"
-              aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
-              // aria-pressed keeps the thread's own value; this says what the
-              // project, or an ended PR, does to it, which the tooltip only
-              // shows on hover.
-              aria-description={!prAutoDispatchAvailable
+              // The lit button keeps the thread's own Auto-fix value; this
+              // says what the project, or an ended PR, does to it, which the
+              // tooltip only shows on hover.
+              ariaDescription={!prAutoDispatchAvailable
                 ? undefined
                 : prAutoDispatchIdle
                   ? prAutoDispatchIdleTooltip
                   : prAutoDispatchProjectOverride?.tooltip}
-              data-tooltip={prAutoDispatchTooltip}
-              disabled={!prAutoDispatchAvailable}
-              onClick={() => {
-                if (!prAutoDispatchAvailable) return;
-                void props.onSetThreadPrAutoDispatch?.(
-                  !props.thread?.prAutoDispatchEnabled,
-                );
+              tooltip={prAutoDispatchTooltip}
+              autoFix={{
+                checked: Boolean(props.thread.prAutoDispatchEnabled),
+                available: prAutoDispatchAvailable,
+                unavailableDetail: !backgroundPrPollingEnabled ? "PR polling is off" : "Not allowed in Git settings",
+                onToggle: (enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled); },
               }}
-            >
-              <PullRequestIcon size={15} aria-hidden="true" />
-            </button>
+            />
           ) : null}
 
           {props.onPickDirectoryForReference ||
@@ -18058,6 +18060,16 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   }
 
   return undefined;
+}
+
+/** The newest open PR on the primary workspace, for a new merge build watch to name. */
+function newestOpenPrimaryPullRequestUrl(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  const open = primaryWorkspacePullRequests(thread).filter((pr) =>
+    pr.lifecycleState !== "merged" && pr.lifecycleState !== "closed"
+    && pr.state !== "merged" && pr.state !== "closed");
+  return open.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))[0]?.url;
 }
 
 function hasPrimaryWorkspacePullRequest(

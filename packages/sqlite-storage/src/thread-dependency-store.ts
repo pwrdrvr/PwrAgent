@@ -6,6 +6,7 @@ import type {
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   isThreadDependencyLocalThreadCondition,
+  isThreadDependencyMergeBuildCondition,
   threadDependencyDeliveryKey,
   COMPACTION_RECOVERY_COOLDOWN_MS,
   COMPACTION_RECOVERY_WINDOW_MS,
@@ -29,6 +30,7 @@ function signature(dependency: ThreadDependency): string {
     dependency.deliver ?? "agent", dependency.handoff ?? false,
     dependency.steps ?? [], dependency.holdMerge ?? false,
     dependency.repeat ?? false,
+    dependency.wakeOn ?? "",
     dependency.conditions.map((condition) => JSON.stringify([
       condition.backend, condition.threadId, condition.when,
       condition.turnId ?? "", condition.prUrl ?? "", condition.headSha ?? "",
@@ -42,7 +44,10 @@ function signature(dependency: ThreadDependency): string {
 function localThreadKey(condition: ThreadDependency["conditions"][number]): string | undefined {
   // A compaction subscription observes the consumer itself; it never waits
   // for another thread to make progress and contributes no wait-cycle edge.
-  return condition.when !== "compaction_completed" && isThreadDependencyLocalThreadCondition(condition)
+  // A merge build waits on the forge (the merge and its checks), so it may
+  // name the consumer itself and adds no edge either.
+  return condition.when !== "compaction_completed" && !isThreadDependencyMergeBuildCondition(condition)
+    && isThreadDependencyLocalThreadCondition(condition)
     ? key(condition.backend, condition.threadId) : undefined;
 }
 

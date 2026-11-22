@@ -53,6 +53,7 @@ import {
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_WATCH_MERGE_BUILDS,
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   type DesktopBootInfo,
@@ -4334,6 +4335,8 @@ function DesktopAppShell(props: {
             ? settings.snapshot.git?.prAutoDispatchAllowed?.value
               ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED
             : false,
+        watchMergeBuildsDefault:
+          settings.snapshot?.git?.watchMergeBuilds?.value ?? DEFAULT_WATCH_MERGE_BUILDS,
         pickDirectoryError: navigation.pickDirectoryError,
         pickingDirectory: navigation.pickingDirectory,
         onSelectDirectoryFromPicker: handleSelectDirectoryFromPicker,
