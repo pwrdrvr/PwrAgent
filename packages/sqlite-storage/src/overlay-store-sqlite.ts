@@ -54,6 +54,7 @@ import {
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { managedKeysFromLegacyProjection, prepareScopedManagedMembership } from "./thread-managed-membership";
 import { ThreadDependencyStore } from "./thread-dependency-store";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
@@ -812,30 +813,10 @@ function stripFederationStamp(
 const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
 
-/** The identities navigation consumes, independent of worker status or history.
- * Preserve the legacy per-overlay malformed-entry boundary: keep the valid
- * prefix, then stop that parent's traversal if an entry cannot be read.
- */
-function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId"> & {
-  subAgents?: readonly ThreadSubAgentSummary[];
-}): Set<string> {
-  const keys = new Set<string>();
-  try {
-    for (const subAgent of overlay.subAgents ?? []) {
-      const threadId = subAgent.monitorThreadId?.trim();
-      const backend = subAgent.backend ?? overlay.backend;
-      if (!threadId || (backend === overlay.backend && threadId === overlay.threadId)) continue;
-      keys.add(buildThreadIdentityKey(backend, threadId));
-    }
-  } catch {
-    // A malformed unrelated overlay must not block navigation.
-  }
-  return keys;
-}
-
 export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadRegistry, PrAutoDispatchStorage, PrStatusWatchStorage {
   private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
+  private scopedManagedMembership?: ReturnType<typeof prepareScopedManagedMembership>;
   private navigationOverlayCache?: {
     dataVersion: number;
     threadChanges: number;
@@ -10602,6 +10583,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.listManagedSubAgentThreadKeys();
   }
 
+  /** Check private execution membership only for the named owner keys. */
+  readManagedSubAgentThreadKeysForOwners(keys: readonly string[]): ReadonlySet<string> {
+    this.scopedManagedMembership ??= prepareScopedManagedMembership(this.stateDb.raw);
+    return this.scopedManagedMembership(keys);
+  }
+
   private listManagedSubAgentThreadKeys(): Set<string> {
     // Transactions can reuse a generation after a savepoint rollback. Never
     // consume or publish the committed cache while reading such a snapshot.
@@ -10638,17 +10625,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         if (key) threadKeys.add(key);
         continue;
       }
-      try {
-        if (!row.projection) continue;
-        // A legacy payload array the one-time move has not reached yet.
-        const [backend, threadId, subAgents] = JSON.parse(row.projection) as [
-          ThreadOverlayState["backend"], string, ThreadSubAgentSummary[] | undefined,
-        ];
-        for (const key of managedSubAgentChildKeys({ backend, threadId, subAgents })) {
+      if (row.projection) {
+        for (const key of managedKeysFromLegacyProjection(row.projection)) {
           threadKeys.add(key);
         }
-      } catch {
-        // A malformed unrelated overlay must not block navigation.
       }
     }
     // Ordinary grouped handoffs stay visible even when an older writer

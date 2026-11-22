@@ -44,6 +44,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
+import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
 export const CURRENT_STATE_DB_USER_VERSION = 86;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
@@ -2286,6 +2287,7 @@ export class StateDb {
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
+      ensureThreadManagedMembershipSchema(db);
       ensureThreadUsageActivitySchema(db);
       removeUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
@@ -2566,6 +2568,7 @@ export class StateDb {
       this.db
         .prepare("DELETE FROM composer_draft_latest WHERE updated_at < ?")
         .run(now - COMPOSER_DRAFT_LATEST_RETENTION_MS);
+      reclaimEmptyLegacyMembershipIndex(this.db);
     });
     cleanup();
     if (reclaimPages !== 0) this.db.pragma(reclaimPages === undefined ? "incremental_vacuum" : `incremental_vacuum(${Math.max(0, Math.floor(reclaimPages))})`);
