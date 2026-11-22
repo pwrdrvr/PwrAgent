@@ -1,33 +1,60 @@
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { type NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
-import { parseForgeRemote, resolveGitHubRepoForDirectory } from "./git-remote";
+import { parseForgeRemote, readObservedGitOrigin, resolveGitHubRepoForDirectory } from "./git-remote";
 import { buildPrRepositoryKey } from "./pr-auto-dispatch";
 import type { PrMetadataDemand } from "./pr-metadata-process";
 
+type ThreadWorkspace = Pick<NavigationSnapshot["threads"][number], "gitOriginUrl" | "linkedDirectories">;
+
+function primaryCheckout(thread: ThreadWorkspace) {
+  const handoff = thread.linkedDirectories.findLast(isWorkspaceHandoffDirectory);
+  const directory = handoff ?? thread.linkedDirectories[0];
+  return {
+    path: directory && resolvePullRequestDirectoryPath(directory),
+    origin: handoff ? undefined : thread.gitOriginUrl,
+  };
+}
+
+export function primaryCheckoutKey(thread: ThreadWorkspace): string {
+  const checkout = primaryCheckout(thread);
+  return JSON.stringify([checkout.path, checkout.origin]);
+}
+
+/** Evidence for status polling. Checkout-dependent actions resolve the workspace themselves. */
+export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
+  key?: string;
+  observedOrigin?: boolean;
+  checkoutUnresolved?: boolean;
+} {
+  const { path, origin } = primaryCheckout(thread);
+  const observation = path ? readObservedGitOrigin(path) : undefined;
+  if (observation?.foundOrigin) {
+    const repo = observation.repo;
+    return { key: repo && buildPrRepositoryKey(repo.host, repo.owner, repo.repo), observedOrigin: true };
+  }
+  const repo = origin ? parseForgeRemote(origin) : undefined;
+  if (repo) return { key: buildPrRepositoryKey(repo.host, repo.owner, repo.repo) };
+  return { checkoutUnresolved: Boolean(path && !observation) };
+}
+
 export async function resolvePrimaryThreadRepoKey(
-  thread: Pick<
-    NavigationSnapshot["threads"][number],
-    "gitOriginUrl" | "linkedDirectories"
-  >,
+  thread: ThreadWorkspace,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
   demand?: PrMetadataDemand,
+  fresh = false,
 ): Promise<string | undefined> {
   demand?.signal?.throwIfAborted();
   // The owning checkout's current origin wins over session-start metadata:
   // a remote can change after a rename, fork, or workspace move. Resolve on
   // the owner so another machine's path never supplies repository identity.
-  const movedWorkspace = thread.linkedDirectories.findLast(
-    isWorkspaceHandoffDirectory,
-  );
-  const primaryDirectory = movedWorkspace ?? thread.linkedDirectories[0];
-  const primaryPath = primaryDirectory
-    ? resolvePullRequestDirectoryPath(primaryDirectory)
-    : undefined;
+  const { path: primaryPath, origin: originUrl } = primaryCheckout(thread);
   if (primaryPath) {
     let resolution = resolutionByPath.get(primaryPath);
     if (!resolution) {
-      resolution = (demand ? resolveGitHubRepoForDirectory(primaryPath, { demand }) : resolveGitHubRepoForDirectory(primaryPath))
+      resolution = (demand || fresh
+        ? resolveGitHubRepoForDirectory(primaryPath, { demand, ...(fresh ? { fresh } : {}) })
+        : resolveGitHubRepoForDirectory(primaryPath))
         .then((resolved) => resolved
           ? buildPrRepositoryKey(resolved.host, resolved.owner, resolved.repo)
           : undefined);
@@ -35,13 +62,12 @@ export async function resolvePrimaryThreadRepoKey(
     }
     const repositoryKey = await resolution;
     if (repositoryKey) return repositoryKey;
+    if (readObservedGitOrigin(primaryPath)?.foundOrigin) return undefined;
   }
 
   // A missing checkout can still use the provider's snapshot, except after
   // a workspace handoff: that snapshot may describe a different project.
-  const origin = !movedWorkspace && thread.gitOriginUrl
-    ? parseForgeRemote(thread.gitOriginUrl)
-    : undefined;
+  const origin = originUrl ? parseForgeRemote(originUrl) : undefined;
   return origin ? buildPrRepositoryKey(origin.host, origin.owner, origin.repo) : undefined;
 }
 

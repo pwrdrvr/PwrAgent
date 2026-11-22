@@ -280,7 +280,7 @@ const prAutomationSettings = vi.hoisted(() => {
 
 const resolveGitHubRepoForDirectory = vi.hoisted(() =>
   vi.fn(
-    async (_cwd?: string): Promise<
+    async (_cwd?: string, _options?: import("../pr-status/git-remote").ResolveGitHubRepoOptions): Promise<
       { host: string; owner: string; repo: string } | undefined
     > => undefined,
   ),
@@ -784,7 +784,8 @@ const setForgeToolRuleWriter = vi.fn();
 const setForgeProjectLabelResolver = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
-const canonicalizeNavigationThreadPullRequests = vi.fn(async (threads: NavigationThreadSummary[], _demand?: unknown, _verify?: boolean) => threads);
+const canonicalizeNavigationThreadPullRequests = vi.fn(async (threads: NavigationThreadSummary[],
+  _demand?: import("../pr-status/pr-metadata-process").PrMetadataDemand, _verify?: boolean) => threads);
 const canonicalizeNavigationPullRequests = vi.fn(async (prs: PrSummary[], _demand?: unknown) => prs);
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
@@ -2488,7 +2489,7 @@ describe("app server ipc", () => {
     expect(listThreads).toHaveBeenCalledTimes(2);
   });
 
-  it.each([20, 40])("validates only demanded PR rows from a mounted query over %i stored checkouts", async (size) => {
+  it.each([20, 40])("only validates demanded PR rows across owner inventory and page reads (%i checkouts)", async (size) => {
     onTestFinished(isolateProcessGitEnvironment());
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
@@ -2555,7 +2556,7 @@ describe("app server ipc", () => {
     expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads).toEqual(rows.map((row) => ({
       backend: row.source, threadId: row.id, prKeys: [buildPullRequestStatusKey(row.prs[0]!)],
     })));
-    expect(runner.mock.calls).toHaveLength(5 + 2 * (size - 2));
+    expect(runner.mock.calls).toHaveLength(5);
   });
 
   it.each([12, 24])("probes only PR-bearing checkouts when a thread starts in an inventory of %i worktrees", async (size) => {
@@ -2596,6 +2597,12 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
     await startAppServerOwnerNavigation();
 
+    // An attachment can arrive before its provider has listed the workspace.
+    emitRegistryEvent({ backend: "codex", notification: {
+      method: "thread/pullRequests/updated", params: { threadId: rows[0]!.id, prs: [pr] },
+    } });
+    await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalled());
+
     getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
     listThreads.mockResolvedValue(rows as never);
     emitRegistryEvent({ backend: "codex", notification: { method: "thread/started", params: { thread: rows.at(-1) } } });
@@ -2613,14 +2620,157 @@ describe("app server ipc", () => {
     const remoteCommands = runGit.mock.calls.filter(([, , options]) => options?.purpose === "pr-remotes");
     expect({ checkouts: resolveGitHubRepoForDirectory.mock.calls.length, gitCalls: remoteCommands.length })
       .toEqual({ checkouts: 2, gitCalls: 2 });
-    expect(resolveGitHubRepoForDirectory.mock.calls).toEqual([
-      [checkouts[0]], [checkouts[1]],
-    ]);
+    expect(resolveGitHubRepoForDirectory.mock.calls.map(([cwd]) => cwd)).toEqual(checkouts.slice(0, 2));
     for (const cwd of checkouts.slice(0, 2)) {
       expect(remoteCommands.filter(([path]) => path === cwd).map(([, args]) => args[0]))
         .toEqual(["config"]);
     }
   });
+
+  it("keeps dormant attachments polling by number across checkout-cache expiry and validates a selected checkout", async () => {
+    const measurementsPath = process.env.PWRAGENT_MEASURE_PR_INVENTORY;
+    const fleet = Boolean(measurementsPath);
+    const checkoutCount = fleet ? 256 : 16;
+    const unownedCount = fleet ? 128 : 8;
+    const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const { runGitCommand } = await import("../app-server/git-executable");
+    const { gitSubprocessDiagnostics } = await import("../diagnostics/git-subprocess-diagnostics");
+    const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+      await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-pr-fleet-"));
+    const restore = isolateProcessGitEnvironment(root);
+    let now = Date.now();
+    const realStart = gitSubprocessDiagnostics.startGit.bind(gitSubprocessDiagnostics);
+    const starts: { at: number; purpose: string; cwd: string }[] = [];
+    const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit").mockImplementation((cwd, args, purpose) => {
+      if (cwd.startsWith(root) && (purpose === "pr-remotes" || purpose === "pr-discovery")) {
+        starts.push({ at: performance.now(), purpose, cwd });
+      }
+      return realStart(cwd, args, purpose);
+    });
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    onTestFinished(async () => {
+      launches.mockRestore();
+      clock.mockRestore();
+      clearGitHubRemoteCache();
+      restore();
+      await rm(root, { recursive: true, force: true });
+    });
+    const repos = await Promise.all(Array.from({ length: fleet ? 8 : 2 }, async (_, index) => {
+      const cwd = path.join(root, `repo-${index}`);
+      await mkdir(cwd);
+      await runGitCommand(cwd, ["init", "-b", "main"]);
+      await runGitCommand(cwd, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]);
+      for (const remote of ["origin", "upstream"]) {
+        await runGitCommand(cwd, ["remote", "add", remote, `https://github.com/fixture/${remote}-${index}.git`]);
+        await runGitCommand(cwd, ["symbolic-ref", `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`]);
+      }
+      return cwd;
+    }));
+    await Promise.all(repos.map(async (repo, index) => {
+      for (let offset = index; offset < checkoutCount; offset += repos.length) {
+        await runGitCommand(repo, ["worktree", "add", "--detach", path.join(root, `checkout-${offset}`)]);
+      }
+    }));
+    const rows: (AppServerThreadSummary & { prs: PrSummary[] })[] = await Promise.all(Array.from({ length: checkoutCount + unownedCount }, async (_, index) => {
+      const directory = path.join(root, `checkout-${index}`);
+      const repo = `origin-${index % repos.length}`;
+      if (index >= checkoutCount && index % 2 === 0) await mkdir(directory);
+      return {
+        id: `fleet-${index}`, source: "codex", title: "Dormant thread", titleSource: "explicit",
+        updatedAt: now - 15 * 24 * 60 * 60_000,
+        ...(index < checkoutCount ? { gitOriginUrl: `https://github.com/fixture/${repo}.git` } : {}),
+        linkedDirectories: [{ id: directory, kind: "local", label: "Checkout", path: directory }],
+        prs: [githubPr({ number: index + 1, org: "fixture", repo, state: "pending",
+          lifecycleState: index < checkoutCount ? "open" : "merged", headRefName: "topic",
+          linkedDirectoryPaths: [directory], url: `https://github.com/fixture/${repo}/pull/${index + 1}` })],
+      };
+    }));
+    overlayStoreFixture.stable = getDesktopOverlayStore();
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+    listThreads.mockResolvedValue(rows as never);
+    resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+    registerAppServerIpcHandlers();
+    const canonicalizer = setThreadPullRequestCanonicalizer.mock.lastCall?.[0] as import("../app-server/backend-registry-types").ThreadPullRequestCanonicalizer;
+    canonicalizeNavigationThreadPullRequests.mockImplementation(async (threads, demand, verify) =>
+      await Promise.all(threads.map(async (thread) => ({ ...thread, prs: await canonicalizer(thread.prs ?? [], demand, verify) }))));
+    const measurements: { wave: string; total: number; remotes: number; discovery: number; peaks: number[] }[] = [];
+    const measure = async (wave: string, work: () => Promise<unknown>) => {
+      const offset = starts.length;
+      await work();
+      const sample = starts.slice(offset);
+      const peaks = [100, 1_000, 2_000].map((window) => {
+        let left = 0;
+        return sample.reduce((peak, { at }, right) => {
+          while (at - sample[left]!.at >= window) left++;
+          return Math.max(peak, right - left + 1);
+        }, 0);
+      });
+      measurements.push({ wave, total: sample.length, remotes: sample.filter(({ purpose }) => purpose === "pr-remotes").length,
+        discovery: sample.filter(({ purpose }) => purpose === "pr-discovery").length, peaks });
+    };
+    const refreshInventory = async () => {
+      const batches = syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length;
+      emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
+      await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length).toBeGreaterThan(batches), { timeout: 15_000 });
+    };
+
+    await measure("startup", startAppServerOwnerNavigation);
+    await measure("repeat warm inventory", refreshInventory);
+    now += 60_001;
+    await measure("repeat after default-ref expiry", refreshInventory);
+    now += 300_001;
+    await measure("repeat after remote metadata expiry", refreshInventory);
+    const selected = rows[checkoutCount - 1]!;
+    getCachedThreadSummary.mockReturnValue(selected);
+    getThreadOverlayState.mockResolvedValue({
+      backend: selected.source, threadId: selected.id, executionMode: "default", extraLinkedDirectories: [], prs: selected.prs,
+    });
+    await measure("select dormant thread", async () => {
+      const detail = await appServerService.getNavigationSelectedDetail({
+        protocol: 2, ref: { backend: selected.source, threadId: selected.id }, collection: { name: "prs" },
+      });
+      expect(detail.collectionPage?.values.prs).toEqual([expect.objectContaining({ number: checkoutCount })]);
+    });
+    if (measurementsPath) await writeFile(measurementsPath, JSON.stringify(measurements, null, 2));
+
+    // Inventory events only reconcile membership; local Git demand is for the
+    // selected checkout. Open PRs remain pollable while merged history stays attached.
+    const service = appServerService as unknown as {
+      collectPrPollTargets: () => { pr: PrSummary }[];
+      backgroundPrPollingEnabled: boolean;
+    };
+    service.backgroundPrPollingEnabled = true;
+    expect(service.collectPrPollTargets().map(({ pr }) => pr.number)).toEqual(
+      Array.from({ length: checkoutCount }, (_, index) => index + 1),
+    );
+    expect(measurements.slice(0, 4).map(({ total }) => total)).toEqual([0, 0, 0, 0]);
+    expect(starts.map(({ cwd }) => cwd)).toEqual(Array(measurements[4]!.total).fill(selected.linkedDirectories[0]!.path));
+    expect(measurements[4]!.total).toBeGreaterThan(0);
+    expect(measurements[4]!.total).toBeLessThanOrEqual(3);
+
+    // The selected read has warmed its Git metadata. A watch still has to
+    // resolve the origin after an external edit, without waiting for expiry.
+    const selectedPath = selected.linkedDirectories[0]!.path;
+    await runGitCommand(selectedPath, ["remote", "set-url", "origin", "https://github.com/fixture/repointed.git"]);
+    const watch = setThreadPullRequestWatchToolHandler.mock.lastCall?.[0];
+    await expect(watch?.({ backend: selected.source, threadId: selected.id, notifyOn: ["merged"] }))
+      .resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+
+    // A different primary path is positive demand for that checkout alone.
+    const moved = rows[0]!;
+    moved.linkedDirectories = rows[1]!.linkedDirectories;
+    const offset = starts.length;
+    const batches = syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length;
+    emitRegistryEvent({ backend: moved.source, notification: {
+      method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: [moved.id] },
+    } });
+    await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length).toBeGreaterThan(batches));
+    expect(starts.slice(offset).map(({ cwd }) => cwd)).toEqual([moved.linkedDirectories[0]!.path]);
+    expect(service.collectPrPollTargets().some(({ pr }) => pr.number === 1)).toBe(false);
+  }, 45_000);
 
   it("does not repopulate owner metadata when startup finishes after shutdown", async () => {
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
@@ -5042,7 +5192,7 @@ describe("app server ipc", () => {
       registerThreadPrStatusWatch.mockClear();
       const { service, watch, owner } = await startMovedThread();
 
-      expect(resolveGitHubRepoForDirectory).toHaveBeenCalledWith(newWorktree);
+      expect(resolveGitHubRepoForDirectory.mock.calls.map(([cwd]) => cwd)).toContain(newWorktree);
       expect(service.readPrimaryGitRepository("codex", "thread-1")).toBe("github.com/pwrdrvr/pwragent");
       await expect(watch?.({
         backend: "codex", threadId: "thread-1", url: newProjectPr.url, notifyOn: ["merged", "closed"],
@@ -10978,7 +11128,7 @@ describe("app server ipc", () => {
       prStatusWatchCoordinator?: unknown;
       setThreadPrAttachment: (
         threadKey: string,
-        attachment: { backend: "codex"; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
+        attachment: { backend: "codex"; primaryRepoKey?: string; workspace?: Pick<AppServerThreadSummary, "linkedDirectories" | "gitOriginUrl">; prs: PrSummary[] } | undefined,
       ) => void;
       resolveRenamedPrWatchRepositories: () => Promise<void>;
       syncPrStatusWatchKeys: () => Promise<void>;
@@ -11365,6 +11515,7 @@ describe("app server ipc", () => {
         });
         service.setThreadPrAttachment(buildThreadIdentityKey("codex", "prerequisite"), {
           backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [pr],
+          workspace: { gitOriginUrl: "https://github.com/pwrdrvr/PwrAgent.git", linkedDirectories: [] },
         });
       };
       try {
@@ -11429,6 +11580,7 @@ describe("app server ipc", () => {
         });
         service.setThreadPrAttachment(buildThreadIdentityKey("codex", "prerequisite"), {
           backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [openPr],
+          workspace: { gitOriginUrl: "https://github.com/pwrdrvr/PwrAgent.git", linkedDirectories: [] },
         });
         fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? openPr : undefined);
 
@@ -13262,7 +13414,7 @@ describe("app server ipc", () => {
       expect(resolveGitHubRepoForDirectory).not.toHaveBeenCalled();
       await expect(appServerService.resolvePrimaryGitRepository("claude", "claude-new"))
         .resolves.toBe("github.com/fixture/new-origin");
-      expect(resolveGitHubRepoForDirectory.mock.calls).toEqual([["/repo/PwrAgent"]]);
+      expect(resolveGitHubRepoForDirectory.mock.calls.map(([cwd]) => cwd)).toEqual(["/repo/PwrAgent"]);
     } finally {
       listThreads.mockReset();
     }

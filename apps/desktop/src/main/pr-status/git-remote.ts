@@ -128,6 +128,8 @@ export type ResolveGitHubRepoOptions = {
   resolveSshHostname?: (host: string) => Promise<string | undefined>;
   now?: () => number;
   demand?: PrMetadataDemand;
+  /** Re-observe the remote before an action that needs the current checkout. */
+  fresh?: boolean;
 };
 
 /**
@@ -144,6 +146,14 @@ export async function resolveGitHubRepoForDirectory(
 ): Promise<GitHubRepoRef | undefined> {
   const observation = await readParsedGitRemotes(cwd, options);
   return observation.value.find((remote) => remote.name === "origin")?.repo;
+}
+
+/** The last checkout observation can supply polling identity without launching Git. */
+export function readObservedGitOrigin(cwd: string): { repo?: GitHubRepoRef; foundOrigin: boolean } | undefined {
+  const observation = remoteCache.get(cwd);
+  if (!observation) return undefined;
+  const origin = observation.value.find((remote) => remote.name === "origin");
+  return { repo: origin?.repo, foundOrigin: Boolean(origin) };
 }
 
 /**
@@ -218,7 +228,7 @@ async function readParsedGitRemotes(
   options.demand?.signal?.throwIfAborted();
   const now = options.now ?? (() => Date.now());
   const cached = remoteCache.get(cwd);
-  if (cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS) {
+  if (!options.fresh && cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS) {
     return cached;
   }
 

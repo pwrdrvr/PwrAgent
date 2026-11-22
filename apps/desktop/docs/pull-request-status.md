@@ -56,10 +56,24 @@ Directory index and archive planning reads use membership alone. Federated pins
 and watched threads receive owner-validated previews. A continuation keeps the
 same row offsets and reuses PR projections it already observed. A fresh read
 reuses a cursor generation only if its baseline proves every retained PR
-observation within the page work budget. Owner polling and
-Auto-fix validate their complete attachment inventory independently. Star Map
-facets and filtering use validated PR membership across their inventory.
-Selected detail and bounded pages take priority over those inventory checks.
+observation within the page work budget. Star Map facets and filtering use
+validated PR membership across their inventory. Selected detail and bounded
+pages take priority over those inventory checks.
+
+Owner refresh seeds status polling from stored attachments and repository
+observations. A PR that already has a repository identity can poll by number
+without re-reading its checkout or default refs. The owner resolves an
+origin when a primary workspace changes or a live attachment has no saved
+repository identity. Branch discovery runs on turn completion and branch
+adoption, on selection, and in the existing slow rotation. That rotation
+considers up to 100 threads with access in the last seven days, runs at most
+three per tick, and excludes focused threads. Selection and the owner’s
+seen timestamp can put a thread in that pool. A background inventory event
+does not count as access.
+
+Watch creation and Auto-fix delivery check the attached PR against the current
+primary checkout. Forge project rules resolve the checkout on demand. Stored
+polling identity is used for status ownership and selection of poll targets.
 
 The sidebar's PR disclosure and row menu request the owner's complete list through the paged
 selected-detail collection, with one restart on an expired cursor. The owner
