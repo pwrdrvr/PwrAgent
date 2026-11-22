@@ -4998,25 +4998,26 @@ describe("ThreadContextPanel Decisions tab", () => {
     }],
   };
 
-  // Rule: the tab shows only once the thread can see a decision or has run
-  // a batch, sits right after Pricing, and a saved Decisions tab on a
-  // thread with neither falls back to Thread info.
-  it("shows only for a thread with a decision or a batch, after Pricing", async () => {
-    const readDecisionsRail = vi.fn(async () => railWithDecision);
+  // Rule: the tab shows on every thread this machine owns, whether or not
+  // it has used decisions: it is where the operator finds the feature and
+  // sets up a provider. It sits right after Pricing, and a closed tab
+  // reads nothing.
+  it("shows on a thread that has never used decisions, after Pricing, without reading while closed", async () => {
+    const readDecisionsRail = vi.fn(async () => emptyRail);
     renderPanel({ desktopApi: { readDecisionsRail } });
     const tab = await screen.findByRole("tab", { name: "Decisions" });
     const names = screen.getAllByRole("tab").map((element) => element.getAttribute("aria-label") ?? element.textContent);
     expect(names.indexOf("Decisions")).toBe(names.indexOf("Pricing") + 1);
     expect(tab).toBeInTheDocument();
-    expect(readDecisionsRail).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" });
+    expect(readDecisionsRail).not.toHaveBeenCalled();
   });
 
-  it("hides for a thread with neither, even when the saved tab is Decisions", async () => {
+  it("opens on a thread with no decisions and reads it", async () => {
     const readDecisionsRail = vi.fn(async () => emptyRail);
     renderPanel({ activeTab: "decisions", pinned: true, desktopApi: { readDecisionsRail } });
-    await waitFor(() => expect(readDecisionsRail).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "Decisions" })).not.toBeInTheDocument());
-    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
+    await waitFor(() => expect(readDecisionsRail).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" }));
+    expect(screen.getByRole("tab", { name: "Decisions" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Decisions" })).toBeInTheDocument();
   });
 
   // Rule: with no sub-agent card to watch, the tab learns a batch moved
@@ -5028,7 +5029,7 @@ describe("ThreadContextPanel Decisions tab", () => {
       listener = next;
       return () => { listener = undefined; };
     });
-    renderPanel({ desktopApi: { readDecisionsRail, onAgentEvent } as never });
+    renderPanel({ activeTab: "decisions", pinned: true, desktopApi: { readDecisionsRail, onAgentEvent } as never });
     await waitFor(() => expect(readDecisionsRail).toHaveBeenCalledTimes(1));
     const announce = (threadId: string) => act(() => listener?.({
       backend: "codex",

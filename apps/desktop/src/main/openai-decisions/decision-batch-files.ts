@@ -2,6 +2,7 @@ import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises
 import path from "node:path";
 import { isRegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
 import {
+  parseBatchDefinition,
   recordBatchItem,
   type DecisionBatchCaller,
   type DecisionBatchItem,
@@ -12,13 +13,16 @@ import {
 
 /**
  * Each decisions_invoke batch is also an append-only JSONL file in its
- * thread's storage: a `batch` header line, one `item` line per finished
- * input at full detail, and an `end` line. The agent can read the file
+ * thread's storage: a `batch` header line, which also holds the definition
+ * the batch ran (its questions with their instructions, and the prefix, up
+ * to 32 KB) so an ad hoc batch's prompt reads back, one `item` line per
+ * finished input at full detail, and an `end` line. The agent can read the file
  * with its own tools, and decisions_batch_results reads it after a
  * restart. Whole inputs are not written: the caller has them, and a batch's
  * can total 4 MB. Each item line keeps only a preview of its input, cut to
  * about 2 KB (decisionInputPreview), for the thread's Decisions tab.
- * Credentials never reach the file: validation refuses credential-named
+ * Credentials never reach the file: registration refuses a definition whose
+ * questions or prefix look like a key, validation refuses credential-named
  * input properties, an input whose text looks like a key keeps no preview,
  * and items otherwise hold only what the provider returned and redacted
  * errors.
@@ -113,6 +117,7 @@ export function batchHeaderEntry(record: DecisionBatchRecord): Record<string, un
     concurrency: record.concurrency,
     background: record.background,
     createdAt: record.createdAt,
+    ...(record.definition ? { definition: record.definition } : {}),
   };
 }
 
@@ -258,12 +263,17 @@ function headerRecord(
     state: "running",
     createdAt: entry.createdAt,
     resultsFile: file,
+    ...definitionField(parseBatchDefinition(entry.definition)),
     results: new Array<DecisionBatchItem | undefined>(count).fill(undefined),
     succeeded: 0,
     failed: 0,
     skipped: 0,
     controller: new AbortController(),
   };
+}
+
+function definitionField(definition: ReturnType<typeof parseBatchDefinition>) {
+  return definition ? { definition } : {};
 }
 
 function parseItem(entry: Record<string, unknown>, count: number): DecisionBatchItem | undefined {

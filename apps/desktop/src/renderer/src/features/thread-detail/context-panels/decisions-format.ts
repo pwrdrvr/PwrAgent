@@ -30,6 +30,31 @@ export function decisionProviderSettingsName(provider: DecisionsRailProvider): s
       : "Local decision model";
 }
 
+/**
+ * What a batch card and its dialog call the batch. An ad hoc definition is
+ * never stored, so its placeholder name and version mean nothing to the
+ * operator: it reads as "Ad hoc" and shows no version.
+ */
+export function decisionBatchTitle(batch: Pick<DecisionsRailBatch, "adHoc" | "name">): string {
+  return batch.adHoc ? "Ad hoc" : batch.name;
+}
+
+/** The version tag beside a batch's title, or undefined for an ad hoc batch. */
+export function decisionBatchVersionTag(batch: Pick<DecisionsRailBatch, "adHoc" | "version">): string | undefined {
+  return batch.adHoc ? undefined : `v${batch.version}`;
+}
+
+/** "Asks preferred_caption", "Asks kind, severity". Undefined when the batch did not keep its questions. */
+export function decisionBatchAsksLine(batch: Pick<DecisionsRailBatch, "questionNames">): string | undefined {
+  const names = batch.questionNames;
+  if (!names || names.length === 0) return undefined;
+  const shown = names.slice(0, 3).join(", ");
+  return names.length > 3 ? `Asks ${shown} and ${names.length - 3} more` : `Asks ${shown}`;
+}
+
+/** An answer under this probability is drawn as one to check first. */
+export const DECISION_LOW_CONFIDENCE = 0.7;
+
 /** 380 ms, 9.2 s, 2m 41s, 1h 4m. */
 export function formatDecisionDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "—";
@@ -184,9 +209,4 @@ export function decisionAnswerText(answer: DecisionsRailAnswer): string {
  */
 export function decisionsRailPollDelayMs(snapshot: DecisionsRailSnapshot | undefined): number {
   return snapshot?.batches.some(isDecisionBatchRunning) ? 2_000 : 10_000;
-}
-
-/** The tab shows once the thread has a decision it can see or a batch it ran. */
-export function decisionsRailHasContent(snapshot: DecisionsRailSnapshot | undefined): boolean {
-  return Boolean(snapshot && (snapshot.decisions.length > 0 || snapshot.batches.length > 0));
 }

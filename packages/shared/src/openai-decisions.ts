@@ -102,6 +102,13 @@ export type OpenAIDecisionDefinition = {
 export const REGISTERED_DECISION_PROVIDERS = ["openai", "jev", "local"] as const;
 export type RegisteredDecisionProvider = (typeof REGISTERED_DECISION_PROVIDERS)[number];
 
+/** Ad hoc definitions run under an id with this prefix and are never stored. */
+export const AD_HOC_DECISION_ID_PREFIX = "adhoc:";
+
+export function isAdHocDecisionId(decisionId: string): boolean {
+  return decisionId.startsWith(AD_HOC_DECISION_ID_PREFIX);
+}
+
 export function isRegisteredDecisionProvider(value: unknown): value is RegisteredDecisionProvider {
   return typeof value === "string" && (REGISTERED_DECISION_PROVIDERS as readonly string[]).includes(value);
 }

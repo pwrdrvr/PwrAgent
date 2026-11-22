@@ -75,8 +75,7 @@ import { WaitingForPanel } from "./context-panels/WaitingForPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
-import { DecisionsPanel } from "./context-panels/DecisionsPanel";
-import { decisionsRailHasContent } from "./context-panels/decisions-format";
+import { DecisionsPanel, type DecisionSetupSettings } from "./context-panels/DecisionsPanel";
 import { useDecisionsRail } from "./context-panels/useDecisionsRail";
 import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
 import { ConnectionsPanel } from "./context-panels/ConnectionsPanel";
@@ -113,7 +112,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "waiting", label: "Waiting for", hint: "wakes, watches, and follow-ups", Icon: HourglassIcon },
   { id: "edits", label: "Edits", hint: "files this thread changed", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", hint: "token usage and cost", Icon: PricingIcon },
-  { id: "decisions", label: "Decisions", hint: "decision batches this thread ran", Icon: DecisionsIcon },
+  { id: "decisions", label: "Decisions", hint: "typed questions agents run in bulk", Icon: DecisionsIcon },
   { id: "actions", label: "Actions", hint: "agent commands running in the background", Icon: TerminalIcon },
   { id: "subagents", label: "Sub-agents", hint: "agents this thread spawned", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", hint: "scheduled runs for this thread", Icon: AutomationsIcon },
@@ -166,6 +165,9 @@ type ThreadContextPanelProps = {
   desktopApi?: DesktopApi;
   initialLoadDurationMs?: number;
   onOpenAutomations?: () => void;
+  /** The profile's Settings, for the Decisions tab's provider setup. */
+  decisionSettings?: DecisionSetupSettings;
+  onOpenDecisionSettings?: (focus?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
   /** Backs Turn Off on the Pull requests tab's Auto-fix row. */
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
@@ -316,17 +318,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   // Research is for every local backend; a federated thread's runs live on its owning instance.
   const researchEnabled = props.researchEnabled === true && Boolean(props.thread) && !props.thread?.federation?.ref.target;
-  // The tab shows once the thread can see a decision or has run a batch.
-  // While the first read is in flight, a thread that already had the tab
-  // open keeps it, so switching threads does not flash Thread info.
+  // The tab shows on every thread this machine owns, set up or not: it is
+  // where the operator finds decisions and sets a provider up.
   const decisionsRail = useDecisionsRail({
     desktopApi: props.desktopApi,
     thread: props.thread,
     open: open && props.activeTab === "decisions",
   });
-  const decisionsVisible = decisionsRail.available
-    && (decisionsRailHasContent(decisionsRail.snapshot)
-      || (props.activeTab === "decisions" && decisionsRail.snapshot === undefined));
+  const decisionsVisible = decisionsRail.available;
 
   // The launchpad picks its own tab and never persists it: the stored tab
   // belongs to threads, and a launchpad visit should not reset it.
@@ -993,6 +992,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             snapshot={decisionsRail.snapshot}
             error={decisionsRail.error}
             onRefresh={decisionsRail.refresh}
+            settings={props.decisionSettings}
+            onOpenSettings={props.onOpenDecisionSettings}
             onDetailsModalOpenChange={handlePortaledInteractionChange}
           />
         );
