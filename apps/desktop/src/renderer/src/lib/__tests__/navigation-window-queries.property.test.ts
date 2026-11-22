@@ -5,6 +5,7 @@ import type {
   NavigationQueryRequest,
   NavigationRow,
 } from "@pwragent/shared/contracts/navigation";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 
@@ -13,6 +14,132 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+async function checkDirectoryMoveWithWorkingState(children: number, remote: boolean, proof: "complete" | "partial" | "truncated") {
+  const target = remote ? { scope: "remote" as const, instanceId: "peer" } : undefined;
+  const owners = [target ?? { scope: "local" as const }];
+  const request = (query: NavigationQueryRequest["query"]): NavigationQueryRequest => ({
+    protocol: 2, consumer: "main-sidebar", inventory: remote ? "owner" : "viewer", federationTarget: target, query,
+  });
+  const ref = (threadId: string) => ({ backend: "codex" as const, threadId, ownerInstanceId: target?.instanceId });
+  const oldDirectory = "directory:/old";
+  const newDirectory = "directory:/new";
+  const demand = new Map<string, NavigationQueryRequest>([
+    ["directory-index", request({ kind: "directory-index" })],
+    ["old", request({ kind: "directory", directoryKey: oldDirectory })],
+    ["new", request({ kind: "directory", directoryKey: newDirectory })],
+    ["selection", request({ kind: "exact", identities: [ref("moved")] })],
+  ]);
+  for (let i = 0; i < children; i++) {
+    demand.set(`tray-${i}`, request({ kind: "children", parent: ref(`parent-${i}`), directoryKey: `directory:/group-${i}` }));
+    demand.set(`group-${i}`, request({ kind: "directory", directoryKey: `directory:/group-${i}` }));
+  }
+  let moved = false;
+  let fetchedAt = 1;
+  let holdReads = false;
+  const calls = new Map<string, number>();
+  const dispatches: { first: boolean; trigger?: string }[] = [];
+  const pending: { release: () => void; first: boolean }[] = [];
+  const read = async (sent: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+    const { query } = sent;
+    const id = [...demand].find(([, candidate]) => JSON.stringify(candidate.query) === JSON.stringify(query))![0];
+    const moveDirectory = moved ? newDirectory : oldDirectory;
+    const carriesMove = id === "selection" || id === (moved ? "new" : "old");
+    const entries = carriesMove || id.startsWith("tray-") ? (() => {
+      const thread = ref(carriesMove ? "moved" : `child-${id}`);
+      const path = carriesMove ? (moved ? "/new" : "/old") : `/unrelated/${id}`;
+      const row: NavigationRow = { id: thread.threadId, source: thread.backend, ref: thread,
+        rowRevision: `${path}:${fetchedAt}`, title: thread.threadId, titleSource: "explicit",
+        linkedDirectories: [{ id: thread.threadId, kind: "local", path, label: thread.threadId,
+          ...(carriesMove ? { worktreePath: `/checkouts${path}` } : {}) }],
+        ...(carriesMove ? { gitWorkingStateFetchedAt: fetchedAt } : {}),
+        ...(proof === "truncated" && id === "tray-0" ? { linkedDirectoriesTruncated: true } : {}),
+        inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+      return [{ row, orderKey: id, placement: query.kind === "children" ? { kind: "child" as const, parent: query.parent } : { kind: "root" as const } }];
+    })() : [];
+    const directory = (key: string) => ({ key, kind: "directory" as const, label: key,
+      pinnedRootCount: 0, unpinnedRootCount: Number(key === moveDirectory), launchpadPresent: false,
+      counts: { total: Number(key === moveDirectory), active: 0, unread: 0, review: 0 } });
+    const page: NavigationQueryPage = { protocol: 2, queryKey: id, generation: id, ownerEpoch: "fixture", countsRevision: `${moved}:${fetchedAt}`,
+      counts: { total: entries.length, active: 0, unread: 0, review: 0 },
+      coverage: proof === "partial" && id === "tray-0" ? { state: "checking" } : { state: "complete" }, complete: true, entries,
+      ...(id === "directory-index" ? { directories: [directory(oldDirectory), directory(newDirectory)] } : {}),
+      ...(id === "selection" ? { selectionDirectory: directory(moveDirectory) } : {}) };
+    if (holdReads) {
+      const count = (calls.get(id) ?? 0) + 1;
+      calls.set(id, count);
+      dispatches.push({ first: count === 1, trigger: sent.diagnostic?.trigger });
+      const gate = deferred<void>();
+      pending.push({ release: () => gate.resolve(), first: count === 1 });
+      await gate.promise;
+    }
+    return page;
+  };
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(demand);
+    await queries.refresh();
+    holdReads = true;
+    moved = true;
+    const event = (kind: "directories" | "working", path = "/checkouts/new"): AgentEvent => ({
+      backend: "codex", federationTarget: target,
+      notification: kind === "directories" ? remote
+        ? { method: "navigation/invalidated", params: { sourceMethod: "navigation/threadDirectories/updated" } }
+        : { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["moved"] } }
+        : remote ? { method: "navigation/invalidated", params: { sourceMethod: "navigation/threadGitWorkingState/updated", ...{ worktreePath: path } } }
+        : { method: "navigation/threadGitWorkingState/updated", params: { worktreePath: path, fetchedAt, gitWorkingState: null } },
+    });
+    queries.invalidate(undefined, owners, event("directories"));
+    const refreshed = queries.refresh(undefined, owners, true);
+    // The first four resources have captured responses. Later waves contain
+    // child trays and directories that have no rows on either notified path.
+    for (let wave = 0; wave < demand.size; wave++) {
+      for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      if (pending.length === 0) break;
+      if (wave === 0) {
+        fetchedAt = 2;
+        queries.invalidate(undefined, owners, event("working"));
+      } else if (pending.some(({ first }) => first)) {
+        queries.invalidate(undefined, owners, event("working", "/absent"));
+      }
+      for (const { release } of pending.splice(0)) release();
+    }
+    await refreshed;
+    const pages = queries.getSnapshot().resources;
+    expect(pages.get("old")?.state.page?.counts.total).toBe(0);
+    expect(pages.get("new")?.state.page?.counts.total).toBe(1);
+    expect(pages.get("directory-index")?.state.page?.directories?.map((directory) => directory.counts.total)).toEqual([0, 1]);
+    expect(pages.get("selection")?.state.page?.selectionDirectory?.key).toBe(newDirectory);
+    for (const id of ["new", "selection"]) {
+      expect(pages.get(id)?.state.page?.entries[0]?.row).toMatchObject({ gitWorkingStateFetchedAt: 2,
+        linkedDirectories: [{ path: "/new", worktreePath: "/checkouts/new" }] });
+    }
+    for (let i = 0; i < children; i++) {
+      expect(pages.get(`tray-${i}`)?.state.page?.entries[0]?.placement).toEqual({ kind: "child", parent: ref(`parent-${i}`) });
+    }
+    const actualReads = [...calls.values()].reduce((sum, count) => sum + count, 0);
+    const expectedReads = demand.size + 2 + Number(proof !== "complete");
+    expect(actualReads, `${children} trays and ${children + 2} directories, ${remote ? "remote" : "local"}`).toBe(expectedReads);
+    expect(Object.fromEntries(calls)).toEqual(Object.fromEntries([...demand.keys()].map((id) => [id,
+      id === "new" || id === "selection" || (id === "tray-0" && proof !== "complete") ? 2 : 1])));
+    for (const { first, trigger } of dispatches) {
+      expect(trigger).toBe(first ? "navigation/threadDirectories/updated" : "navigation/threadGitWorkingState/updated");
+    }
+  } finally {
+    for (const { release } of pending) release();
+    queries.dispose();
+  }
+}
+
+it.each([[4, false], [12, false], [12, true]] as const)("keeps dispatched unaffected pages during a directory move with %i trays (remote: %s)",
+  async (size, remote) => {
+    await checkDirectoryMoveWithWorkingState(size, remote, "complete");
+});
+
+it("repeats a directory-move read only when the new page can contain a changed working state", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 4, max: 16 }), fc.boolean(), fc.constantFrom("complete", "partial", "truncated"),
+    checkDirectoryMoveWithWorkingState), { numRuns: 24 });
+});
 
 it("publishes one loading snapshot when a pin refresh queues the admitted directory sections", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom(6, 12), async (size) => {

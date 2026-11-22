@@ -45,6 +45,7 @@ const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
 const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
 const MAX_RECENT_PIN_PUBLICATIONS = 64;
+const MAX_WORKING_STATE_PATHS_PER_READ = 32;
 /** One click loads a block of rows. Demand page sizes pace a first paint; an
  * explicit continuation is the operator asking for the rest, and answering it
  * with one transport page costs a click and a scroll for every page. */
@@ -83,6 +84,8 @@ type Resource = {
   token: string;
   value: NavigationWindowResource;
   pending?: Promise<void>;
+  /** Working-state changes observed after dispatch and awaiting the returned rows. */
+  workingStateRead?: { paths: Set<string>; batch?: number; cause?: NavigationDiagnosticCause; trigger?: string };
   /** A correlated viewer pin publication is waiting for this resource. */
   pinPublicationPending?: boolean;
   refreshAfterPending: boolean;
@@ -208,6 +211,7 @@ export class NavigationWindowQueries {
     this.finishResume(resource);
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "cancel", logical: resource.diagnosticLogical, count: resource.pending ? 1 : 0 });
     resource.released = true;
+    resource.workingStateRead = undefined;
     // Every lifetime has its own token: a delayed release cannot cancel its successor.
     void this.api.releaseNavigationQuery?.(resource.token).catch(() => undefined);
     this.wakeReaders();
@@ -533,6 +537,9 @@ export class NavigationWindowQueries {
     const batch = ++this.nextDiagnosticBatch;
     const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
     const notification = event?.notification;
+    const params = notification?.params as { sourceMethod?: unknown; worktreePath?: unknown; rowChanges?: unknown } | undefined;
+    const method = notification?.method === "navigation/invalidated" ? params?.sourceMethod : notification?.method;
+    const workingState = method === "navigation/threadGitWorkingState/updated";
     const gitRevisions = notification?.method === "navigation/directoryGitStatus/updated"
       || (notification?.method === "navigation/invalidated" && notification.params?.sourceMethod === "navigation/directoryGitStatus/updated")
       ? readDirectoryGitRevisions(notification.params?.directoryGitRevisions) : undefined;
@@ -542,14 +549,28 @@ export class NavigationWindowQueries {
       if (event && !this.eventAffectsResource(resource, event, directoryScope, gitRevisions)) continue;
       if (correlatedPinPublication) resource.pinPublicationPending = true;
       count++;
+      if (workingState) {
+        // A queued read already includes this observation. A discarded read
+        // already owes a replacement, regardless of later Git notifications.
+        if (resource.invalidated) continue;
+        const read = resource.workingStateRead;
+        if (read && resource.membershipUncertain && typeof params?.worktreePath === "string" && params.worktreePath && params.worktreePath.length <= 1_024
+          && federationTargetsEqual(resource.value.state.request.federationTarget, event?.federationTarget)
+          && (read.paths.size < MAX_WORKING_STATE_PATHS_PER_READ || read.paths.has(params.worktreePath))) {
+          // A relationship refresh can discover rows or change their paths.
+          // The previous page cannot rule this out, but the returned page can.
+          read.paths.add(params.worktreePath);
+          read.batch = batch;
+          read.cause = navigationDiagnosticCause(event);
+          read.trigger = navigationDiagnosticTrigger(event);
+          continue;
+        }
+      }
       resource.diagnosticBatch = batch;
-      const method = event?.notification.method === "navigation/invalidated"
-        ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
-      const pinParams = event?.notification.params as { threadId?: unknown; rowChanges?: unknown } | undefined;
-      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges);
+      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(params?.rowChanges);
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
-          || (method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges)));
+          || metadataRowChange);
       // An instance-only summary notice can discover new mounted children.
       // Its pending replacement cannot use the old membership to exclude a
       // subsequent metadata change to one of those newly discovered rows.
@@ -578,6 +599,44 @@ export class NavigationWindowQueries {
       cause: navigationDiagnosticCause(event), trigger: navigationDiagnosticTrigger(event),
       source: event ? event.federationTarget?.scope === "remote" ? "remote" : "local" : undefined });
     if (changed) this.publish();
+  }
+
+  private needsWorkingStateReplacement(resource: Resource, candidate?: RetainableState): boolean {
+    const read = resource.workingStateRead;
+    if (!read?.paths.size || resource.invalidated) return false;
+    const { request } = resource.value.state;
+    const target = request.federationTarget;
+    const ownerId = target?.scope === "remote" ? target.instanceId : undefined;
+    const page = candidate?.state.page;
+    const ownerPaths = candidate?.ownerProof?.dependencies?.workingStatePaths;
+    if (page?.coverage.state === "complete" && (ownerPaths
+      ? !ownerPaths.some((path) => read.paths.has(path)) : this.excludesWorkingStatePaths(request, page, ownerId, read.paths))) {
+      read.paths.clear();
+      return false;
+    }
+    resource.diagnosticBatch = read.batch;
+    resource.diagnosticCause = read.cause;
+    resource.diagnosticTrigger = read.trigger;
+    resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + read.paths.size;
+    resource.invalidated = true;
+    resource.refreshAfterPending = true;
+    const { state } = resource.value;
+    resource.value = { ...resource.value, state: { ...state, stale: true, pendingSequence: state.pendingSequence + 1 } };
+    return true;
+  }
+
+  private excludesWorkingStatePaths(request: NavigationQueryRequest, page: NavigationQueryPage,
+    ownerId: string | undefined, changed: string | ReadonlySet<string>): boolean {
+    const { query } = request;
+    return page.coverage.state === "complete" && page.complete && (page.rangeStart ?? 0) === 0
+      && (query.kind !== "exact" || query.identities.every((ref) => page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref,
+        { ...ref, ownerInstanceId: ref.ownerInstanceId ?? ownerId }))))
+      && page.entries.every(({ row }) => {
+        if (row.ref.ownerInstanceId !== ownerId) return true;
+        if (row.linkedDirectoriesTruncated && !row.projectKey?.trim()) return false;
+        const path = navigationWorkingStatePath(row);
+        return !path || (typeof changed === "string" ? path !== changed : !changed.has(path));
+      });
   }
 
   private movePinAnchor(resource: Resource, event: AgentEvent): boolean {
@@ -616,6 +675,9 @@ export class NavigationWindowQueries {
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
+    const workingState = method === "navigation/threadGitWorkingState/updated";
+    // Working-state probes cannot change any directory descriptor or count.
+    if (workingState && request.query.kind === "directory-index") return false;
     // A navigation gap needs a new direct owner baseline. Viewer membership
     // arrives separately when the summary cache publishes its fenced read.
     if (method === "federation/eventStream/changed" && event.federationTarget?.scope === "remote"
@@ -683,13 +745,9 @@ export class NavigationWindowQueries {
           && request.query.parent.threadId === ref.threadId && request.query.parent.ownerInstanceId === sourceOwner);
     }
     if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
-      const workingState = method === "navigation/threadGitWorkingState/updated";
-      // The index holds directory Git status and counts. Working-state probes
-      // only change thread rows, even when the inventory is incomplete.
-      if (workingState && request.query.kind === "directory-index") return false;
       if (!resource.membershipUncertain && page?.coverage.state === "complete" && workingState) {
         const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
-        if (workingState && typeof params?.worktreePath === "string" && dependencies?.workingStatePaths) {
+        if (typeof params?.worktreePath === "string" && dependencies?.workingStatePaths) {
           return dependencies.workingStatePaths.includes(params.worktreePath);
         }
       }
@@ -724,6 +782,9 @@ export class NavigationWindowQueries {
       // A pending membership read retains its broad fence until accepted.
       return directoryScope.includes(request.query.directoryKey);
     }
+    if (workingState && typeof params?.worktreePath === "string" && !resource.membershipUncertain && page
+      && federationTargetsEqual(request.federationTarget, event.federationTarget)
+      && this.excludesWorkingStatePaths(request, page, sourceOwner, params.worktreePath)) return false;
     if (request.query.kind === "children" && !resource.membershipUncertain
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && (!navigationInvalidationMayChangeMembership(method)
@@ -751,8 +812,7 @@ export class NavigationWindowQueries {
           || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref));
       }
       if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string") {
-        return page.entries.some(({ row }) => (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
-          && navigationWorkingStatePath(row) === params.worktreePath);
+        return !this.excludesWorkingStatePaths(request, page, ownerInstanceId, params.worktreePath);
       }
     }
     // Viewer exact pages also carry directory-wide selection descriptors.
@@ -770,12 +830,6 @@ export class NavigationWindowQueries {
     const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
     if (typeof params?.threadId === "string") return refs.some((ref) => ref.backend === event.backend
       && ref.threadId === params.threadId && (ref.ownerInstanceId ?? undefined) === ownerInstanceId);
-    if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
-      && page?.coverage.state === "complete" && page.complete
-      && request.query.identities.every((ref) => page.entries.some(({ row }) => row.ref.backend === ref.backend && row.ref.threadId === ref.threadId))) {
-      return page.entries.some(({ row }) => (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
-        && navigationWorkingStatePath(row) === params.worktreePath);
-    }
     return true;
   }
 
@@ -930,6 +984,7 @@ export class NavigationWindowQueries {
         }
         resource.invalidated = false;
         resource.refreshAfterPending = false;
+        if (started.request.consumer === "main-sidebar" && resource.membershipUncertain) resource.workingStateRead = { paths: new Set() };
         const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
           cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
           invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger, caller: resource.diagnosticCaller };
@@ -1074,7 +1129,7 @@ export class NavigationWindowQueries {
             gitBytes: prior.gitBytes, bytes: (next.ownerProof?.bytes ?? 0) + prior.gitBytes };
         }
         assertRetained(next.state);
-        if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
+        if (resuming && !resource.workingStateRead?.paths.size && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
           && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
           // Saved expansion must not withhold the ordinary first page, nor
           // replace a longer cached range with it.
@@ -1105,11 +1160,12 @@ export class NavigationWindowQueries {
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
             if (!pageCursor && loadedRows(next.state.page) < restoring) throw error;
-            this.acceptState(resource, next);
+            if (!this.needsWorkingStateReplacement(resource, next)) this.acceptState(resource, next);
             throw error;
           }
           extensions += 1;
         }
+        if (this.needsWorkingStateReplacement(resource, next)) return;
         this.acceptState(resource, next);
         resource.pinPublicationPending = false;
         resource.membershipUncertain = false;
@@ -1118,6 +1174,8 @@ export class NavigationWindowQueries {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
       } finally {
+        if (this.isCurrent(resource)) this.needsWorkingStateReplacement(resource);
+        resource.workingStateRead = undefined;
         // An invalidation can discard the opening page before it is accepted.
         // Its coalesced replacement still owes the saved depth. Carry the same
         // budget into that read; a fenced response has not finished restoring.
