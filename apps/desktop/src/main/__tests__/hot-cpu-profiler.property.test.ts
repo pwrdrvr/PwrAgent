@@ -17,6 +17,7 @@ type Rotation = {
   blockedWithoutCpuMs: number;
   appCpuPercent: number;
   skipMetric: boolean;
+  stopCounterWraps?: boolean;
 };
 
 let workspace: Awaited<ReturnType<typeof createTemporaryTestDirectory>>;
@@ -47,12 +48,15 @@ async function exerciseRotation(input: Rotation): Promise<void> {
     createHeapSnapshotPath: () => "",
     registerArtifact: async () => {},
   };
-  const shouldTrigger = input.appCpuPercent > THRESHOLD_PERCENT;
   const rotationCpuMs = input.stopCpuMs + input.startCpuMs;
   const rotationWallMs = rotationCpuMs + input.blockedWithoutCpuMs;
   const elapsedMs = rotationWallMs + SAMPLE_MS * (input.skipMetric ? 2 : 1);
   const applicationCpuMs = elapsedMs * input.appCpuPercent / 100;
-  let observerCpuMs = 0;
+  const measuredRotationCpuMs = input.stopCounterWraps ? input.startCpuMs : rotationCpuMs;
+  const expectedPercent = 100 * (applicationCpuMs + rotationCpuMs - measuredRotationCpuMs) / elapsedMs;
+  const shouldTrigger = expectedPercent > THRESHOLD_PERCENT;
+  const threadCpuWrapMs = 24 * 60 * 60 * 1_000;
+  let observerCpuMs = input.stopCounterWraps ? threadCpuWrapMs - 1 : 0;
   let processCpuMs = 0;
   let elapsedDuringRotationMs = 0;
   let attached = false;
@@ -81,6 +85,7 @@ async function exerciseRotation(input: Rotation): Promise<void> {
           const endTime = (Date.now() + elapsedDuringRotationMs) * 1_000;
           if (starts === 1) {
             observerCpuMs += input.stopCpuMs;
+            if (input.stopCounterWraps) observerCpuMs %= threadCpuWrapMs;
             // The process counter also includes application work on other threads
             // while the main thread is blocked inside the inspector.
             processCpuMs += input.stopCpuMs + applicationCpuMs / 4;
@@ -133,8 +138,8 @@ async function exerciseRotation(input: Rotation): Promise<void> {
     expect(sample.cumulativeCpuDeltaSeconds).toBeCloseTo((applicationCpuMs + rotationCpuMs) / 1_000, 8);
     expect(sample.wallDeltaSeconds).toBeCloseTo(elapsedMs / 1_000, 8);
     expect(events.some((event) => event.type === "profile-started")).toBe(shouldTrigger);
-    expect(sample.cpuPercent).toBeCloseTo(input.appCpuPercent, 8);
-    expect(sample.recorderRotationCpuSeconds).toBeCloseTo(rotationCpuMs / 1_000, 8);
+    expect(sample.cpuPercent).toBeCloseTo(expectedPercent, 8);
+    expect(sample.recorderRotationCpuSeconds).toBeCloseTo(measuredRotationCpuMs / 1_000, 8);
 
     if (!shouldTrigger) {
       processCpuMs += 100;
@@ -150,6 +155,13 @@ async function exerciseRotation(input: Rotation): Promise<void> {
 
 it("keeps a cold application sample below the spike threshold after an expensive rotation", async () => {
   await exerciseRotation({ stopCpuMs: 300, startCpuMs: 20, blockedWithoutCpuMs: 25, appCpuPercent: 45, skipMetric: false });
+});
+
+it("uses the valid start measurement when the thread CPU counter wraps during stop", async () => {
+  await exerciseRotation({
+    stopCpuMs: 75, startCpuMs: 20, blockedWithoutCpuMs: 0, appCpuPercent: 10,
+    skipMetric: false, stopCounterWraps: true,
+  });
 });
 
 it("uses application CPU over the actual sample interval across recorder rotations", async () => {

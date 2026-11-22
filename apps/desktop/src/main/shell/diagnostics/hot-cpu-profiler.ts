@@ -506,7 +506,8 @@ export class HotCpuProfiler {
     try {
       return this.target.debugger.sendCommand(method);
     } finally {
-      this.recorderRotationCpuMicros += readCpuMicros() - before;
+      // Windows libuv's thread CPU counter can wrap at 24 CPU-hours.
+      this.recorderRotationCpuMicros += Math.max(0, readCpuMicros() - before);
     }
   }
 
