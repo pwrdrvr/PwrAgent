@@ -3,6 +3,7 @@ import {
   SCHEDULED_ACTION_PROJECTION_SCHEMA,
 } from "./scheduled-thread-action-projection-schema";
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
+import { APP_UPDATE_NOTICE_SCHEMA } from "./app-update-notice-store";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
 import fs from "node:fs";
@@ -2284,6 +2285,7 @@ export class StateDb {
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
+      db.exec(APP_UPDATE_NOTICE_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);

@@ -1,3 +1,6 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
+
 export const PWRAGENT_HOMEPAGE_URL = "https://pwragent.ai";
 export const PWRAGENT_DOCUMENTATION_URL = "https://docs.pwragent.ai";
 
@@ -111,6 +114,21 @@ export type AppUpdateDownloadProgress = {
   transferred?: number;
   total?: number;
   bytesPerSecond?: number;
+};
+
+export type AppUpdateNotice = {
+  phase: "available" | "ready";
+  version: string;
+  currentVersion: string;
+  train: string;
+  replaces?: string;
+};
+
+export type AppUpdateNoticeAgentIdentity = { backend: AppServerBackendKind; threadId: string };
+export type AppUpdateNoticeAgent = AppUpdateNoticeAgentIdentity & {
+  name: string;
+  enabled: boolean;
+  conversations: Array<{ platform: MessagingChannelKind; name: string }>;
 };
 
 export type AppUpdateStatus =

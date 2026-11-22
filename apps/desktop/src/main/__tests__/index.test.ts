@@ -503,6 +503,11 @@ vi.mock("../shell/auto-updater", () => ({
   registerAppUpdateIpcHandlers: registerAppUpdateIpcHandlersMock,
   disposeAppUpdateIpcHandlers: disposeAppUpdateIpcHandlersMock,
   initAutoUpdater: initAutoUpdaterMock,
+  subscribeAppUpdateNotices: () => () => {},
+}));
+vi.mock("../shell/ipc/app-update-notices", () => ({
+  registerAppUpdateNoticeIpcHandlers: vi.fn(),
+  disposeAppUpdateNoticeIpcHandlers: vi.fn(),
 }));
 
 const isUpdateInstallInProgressMock = vi.fn(() => false);

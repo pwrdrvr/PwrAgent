@@ -874,7 +874,7 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
   if (
     intent.kind === "message" &&
     intent.role === "system" &&
-    intent.id.startsWith("tool-update")
+    (intent.id.startsWith("tool-update") || intent.id.startsWith("app-update-notice"))
   ) {
     return false;
   }

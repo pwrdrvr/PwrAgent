@@ -37,6 +37,7 @@ import { initializeDesktopBackendRegistry } from "./app-server/backend-registry"
 import { initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
+import { subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
 import { DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE } from "@pwragent/shared/contracts/messaging";
 import { initializeRuntimeLeaseManager } from "./runtime-lease-manager";
 import { initializeRuntimeFederationLeaseCoordinator } from "./runtime-federation-lease";
@@ -648,6 +649,13 @@ wireOwnerRendererEvents();
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
   if (bootMode === "active-profile") registry.setMessagingWorkingUpdatesSettings(settings);
   wireOwnerMessagingServices(messagingRuntime);
+  if (host.updates.subscribeToNotices && bootMode === "active-profile") {
+    ownerSubscriptions.add(subscribeAgentUpdateNotices({
+      subscribe: host.updates.subscribeToNotices,
+      selectDelivery: (binding) => messagingRuntime.selectAppUpdateNoticeDelivery(binding),
+      readMachine: () => config.read("federation").instanceLabel,
+    }));
+  }
 
 
   if (bootMode === "active-profile") {

@@ -988,6 +988,8 @@ export const APP_LOG_DEBUG_COLLECTION_SET_CHANNEL =
 export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";
+export const APP_UPDATE_NOTICE_AGENTS_CHANNEL = "app:list-update-notice-agents";
+export const APP_UPDATE_NOTICE_AGENT_SET_CHANNEL = "app:set-update-notice-agent";
 export const APP_UPDATE_STATUS_EVENT_CHANNEL = "app:update-status-event";
 /**
  * Main → renderer push: the outcome of a check the *operator* asked for.

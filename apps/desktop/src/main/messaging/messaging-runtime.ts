@@ -1215,6 +1215,20 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     };
   }
 
+  selectAppUpdateNoticeDelivery(binding: MessagingBindingRecord) {
+    const channel = binding.channel.channel;
+    const running = this.runningAdapters.get(channel);
+    if (!this.started || this.pendingAdapterStopReason || !running) return undefined;
+    return (...args: Parameters<MessagingController["deliverAppUpdateNotice"]>) => {
+      const [current, text, machine, guard] = args;
+      return running.controller.deliverAppUpdateNotice(current, text, machine, {
+        ...guard,
+        isCancelled: () => guard.isCancelled() || !this.started
+          || Boolean(this.pendingAdapterStopReason) || this.runningAdapters.get(channel) !== running,
+      });
+    };
+  }
+
   onPairingChanged(
     listener: (event: MessagingPairingChangedEvent) => void,
   ): () => void {

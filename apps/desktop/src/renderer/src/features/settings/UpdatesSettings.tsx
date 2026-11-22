@@ -37,6 +37,7 @@ import { copyText } from "../../lib/copy-text";
 import { ReleaseNotesLink } from "../update/ReleaseNotesLink";
 import { ReleaseSlotMatrix } from "./ReleaseSlotMatrix";
 import { sourceBadge } from "./settings-fields";
+import { AgentUpdateNoticesField } from "./AgentUpdateNoticesField";
 
 function updateResultText(result: AppUpdateCheckResult): string {
   if (result.status === "skipped") {
@@ -424,6 +425,7 @@ export function UpdatesSettings(props: {
               </div>
             }
           />
+          <AgentUpdateNoticesField desktopApi={props.desktopApi} />
         </div>
       </SettingsSection>
     </SettingsSectionStack>

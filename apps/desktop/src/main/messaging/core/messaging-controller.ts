@@ -1282,6 +1282,23 @@ export class MessagingController {
     return this.backendEventRouter.handleBackendEvent(event);
   }
 
+  deliverAppUpdateNotice(
+    binding: MessagingBindingRecord,
+    text: string,
+    machine: string | undefined,
+    guard: MessagingDeliveryGuard,
+  ): Promise<MessagingDeliveryResult> {
+    return this.deliver({
+      id: this.newIntentId("app-update-notice"),
+      kind: "message",
+      bindingId: binding.id,
+      createdAt: this.now(),
+      role: "system",
+      attribution: { label: "PwrAgent updates", hint: machine },
+      parts: [{ type: "text", text, markdown: "plain" }],
+    }, binding, undefined, { ...guard, isCancelled: () => this.disposed || guard.isCancelled() });
+  }
+
   private async refreshStatusSurfacesForBackend(
     backend: AppServerBackendKind,
     reason: string,

@@ -16,7 +16,7 @@ import type {
   StarMapViewSnapshot,
 } from "@pwragent/shared/contracts/star-map-tools";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
-import type { AppUpdateCancelResult, AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateStatus } from "../shared/app-metadata";
+import type { AppUpdateCancelResult, AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateNotice, AppUpdateStatus } from "../shared/app-metadata";
 import type { ClaudeSessionReaderChild } from "./claude/claude-session-reader-contracts";
 import type { OwnerReplayClients } from "./testing/replay-clients";
 import type { CodexClientHost } from "@pwragent/owner-core/codex-app-server/host";
@@ -96,6 +96,7 @@ export interface OwnerHostServices {
     download?(options: { expectedVersion: string }): Promise<AppUpdateStatus>;
     cancelDownload?(expectedVersion: string): AppUpdateCancelResult;
     read(): AppUpdateStatus;
+    subscribeToNotices?: (listener: (notice: AppUpdateNotice) => void) => () => void;
     stateToken?(): string;
     reserveQuit?(): () => void;
     install(options: { expectedVersion?: string; requestQuit: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean> }): Promise<AppUpdateInstallResult>;

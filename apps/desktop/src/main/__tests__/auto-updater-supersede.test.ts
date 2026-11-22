@@ -379,6 +379,11 @@ describe("a newer release replaces a downloaded update", () => {
 
   it("macOS offers the newer build only once Squirrel.Mac has staged it", async () => {
     const updater = await bootWithDownloaded();
+    const notice = vi.fn();
+    const unsubscribe = updater.subscribeAppUpdateNotices(notice);
+    expect(notice).not.toHaveBeenCalled();
+    mocks.native.emit("update-downloaded");
+    expect(notice).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "ready", version: "1.0.1" }));
     const second = await supersede(updater);
 
     mocks.updaterEvents.emit("download-progress", { percent: 40, transferred: 40, total: 100 });
@@ -400,9 +405,16 @@ describe("a newer release replaces a downloaded update", () => {
       version: "1.0.2",
     });
     expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+    expect(notice.mock.calls.map(([value]) => [value.phase, value.version])).toEqual([
+      ["ready", "1.0.1"], ["available", "1.0.2"],
+    ]);
 
     mocks.native.emit("update-downloaded");
     expect(updater.readAppUpdateStatus()).toEqual({ status: "downloaded", version: "1.0.2" });
+    expect(notice).toHaveBeenLastCalledWith(expect.objectContaining({
+      phase: "ready", version: "1.0.2", replaces: "1.0.1",
+    }));
+    unsubscribe();
     expect(mocks.native.count("update-downloaded")).toBe(0);
     expect(mocks.native.count("error")).toBe(0);
 
