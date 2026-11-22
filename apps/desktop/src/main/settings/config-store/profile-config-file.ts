@@ -5,6 +5,8 @@ import {
   type DesktopSettingsConfig,
 } from "../desktop-config";
 
+export { requireSavedMessagingSafetyAcknowledgment } from "./raw-config-file";
+
 /**
  * Explicit-path profile/bootstrap operations that cannot use the active
  * profile store. Keeping them inside config-store prevents profile workflows
@@ -21,4 +23,12 @@ export function writeProfileConfigPatch(
   patch: DesktopSettingsConfigPatch,
 ): void {
   applyDesktopSettingsPatch(configPath, patch);
+}
+
+/** Copy bootstrap settings and keep the target's existing provider enables. */
+export function writeBootstrapConfigToProfile(
+  configPath: string,
+  patch: DesktopSettingsConfigPatch,
+): void {
+  applyDesktopSettingsPatch(configPath, patch, { omitUnacknowledgedProviderEnables: true });
 }

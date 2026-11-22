@@ -35,6 +35,7 @@ vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
 });
 
 const tempRoots: string[] = [];
+const messagingAcknowledgment = { acknowledgedAt: "2026-11-22T12:00:00.000Z", providers: [] };
 
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
@@ -4927,6 +4928,7 @@ describe("DesktopSettingsService", () => {
     });
 
     await service.writeConfigPatchTargeted({
+      general: { messagingAcknowledgment },
       messaging: {
         inputDebounceMs: 1250,
         toolUpdateMode: "show_less",
@@ -5070,6 +5072,7 @@ describe("DesktopSettingsService", () => {
     });
 
     await service.writeConfigPatchTargeted({
+      general: { messagingAcknowledgment },
       messaging: {
         mattermost: {
           enabled: true,
@@ -5269,6 +5272,7 @@ describe("DesktopSettingsService", () => {
         unavailableReason: "No secure backend",
       }),
     });
+    await service.writeConfigPatchTargeted({ general: { messagingAcknowledgment } });
 
     const snapshot = await service.readSettingsProjection();
 

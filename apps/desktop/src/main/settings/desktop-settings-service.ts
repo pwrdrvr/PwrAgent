@@ -121,6 +121,7 @@ import {
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MAX_REPEATED_LARGE_OUTPUT_CALLS,
   MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  isMessagingRuntimeSecret,
   MAX_SPEND_ALERT_THRESHOLD_USD,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -2715,6 +2716,9 @@ export class DesktopSettingsService {
     secret: DesktopSettingsSecretName,
     value: string,
   ): Promise<DesktopSettingsSecretState> {
+    if (isMessagingRuntimeSecret(secret)) {
+      this.configStore.requireSavedMessagingSafetyAcknowledgment();
+    }
     await this.options.secretStore.setSecret(secret, value);
     return await this.readAndPublishSecretState(secret);
   }

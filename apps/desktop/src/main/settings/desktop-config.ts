@@ -29,6 +29,7 @@ import {
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
+import { requireMessagingSafetyAcknowledgment } from "./messaging-safety";
 import { normalizeOpenAIDecisionsAccountId } from "@pwragent/shared/openai-decisions";
 import os from "node:os";
 import path from "node:path";
@@ -611,22 +612,40 @@ export function managedGrokBuildsEnabledForRuntime(
 export function applyDesktopSettingsPatch(
   configPath: string,
   patch: DesktopSettingsConfigPatch,
+  options?: { omitUnacknowledgedProviderEnables?: boolean },
 ): DesktopSettingsPatchWriteResult {
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
     : "";
-  const edits = desktopSettingsPatchToEdits(
-    patch,
-    parseTomlTables(source, configPath),
-  );
+  const tables = parseTomlTables(source, configPath);
+  const edits = desktopSettingsPatchToEdits(patch, tables);
   if (edits.length === 0) {
     return { changed: false, text: source };
   }
-  const next = applyTomlEdits(source, edits);
+  const newProviderEnables = edits.filter((edit) =>
+    edit.op === "set"
+    && edit.path.length === 3
+    && edit.path[0] === "messaging"
+    && edit.path[2] === "enabled"
+    && edit.value === true
+    && tables[`messaging.${edit.path[1]}`]?.enabled !== true,
+  );
+  let next = applyTomlEdits(source, edits);
+  if (newProviderEnables.length > 0) {
+    // Duplicate-key repair can remove the timestamp that the source reader
+    // found. Use the rendered file, which also includes any new record.
+    const savedTables = parseTomlTables(next, configPath);
+    const acknowledgment = readMessagingAcknowledgment(savedTables["general.messaging_acknowledgment"]);
+    if (!acknowledgment && options?.omitUnacknowledgedProviderEnables) {
+      next = applyTomlEdits(source, edits.filter((edit) => !newProviderEnables.includes(edit)));
+    } else {
+      requireMessagingSafetyAcknowledgment(acknowledgment?.acknowledgedAt);
+    }
+  }
   if (next === source) {
     return { changed: false, text: source };
   }
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const temporaryPath = `${configPath}.${process.pid}.tmp`;
   fs.writeFileSync(temporaryPath, next, "utf8");
   fs.renameSync(temporaryPath, configPath);

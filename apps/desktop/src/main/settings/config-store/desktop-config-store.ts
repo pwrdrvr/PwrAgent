@@ -34,6 +34,7 @@ import type { DesktopSettingsConfig } from "../desktop-config";
 import {
   parseRawConfigText,
   readRawConfigFile,
+  requireSavedMessagingSafetyAcknowledgment,
   writeRawConfigPatch,
 } from "./raw-config-file";
 
@@ -200,6 +201,10 @@ export class DesktopConfigStore {
       throw new Error(`Cannot read settings from ${this.options.configPath}: ${observation.error}`);
     }
     return observation.kind === "valid" ? observation.config.messaging?.toolUpdateMode : undefined;
+  }
+
+  requireSavedMessagingSafetyAcknowledgment(): void {
+    requireSavedMessagingSafetyAcknowledgment(this.options.configPath);
   }
 
   version(): number {
