@@ -8,8 +8,10 @@ remember to.
 
 A pull request head is **reviewed** when a review covers its change. A review
 covers two commits: the head it reviewed (`context.headCommit`) and the head
-its findings were fixed through (`fixedThroughCommit`). Another head is
-covered when it carries the **same change** as either commit.
+its findings were fixed through (`fixedThroughCommit`). A review of
+uncommitted changes also covers the working tree it read
+(`context.reviewedTree`). Another head is covered when it carries the **same
+change** as any of them.
 
 | Readiness | When | Offer |
 | --- | --- | --- |
@@ -49,6 +51,15 @@ the eight newest reviews are read.
   `addressed`. A fix committed after settlement is a new change, so PwrAgent
   offers another review.
 
+- **Committing reviewed uncommitted changes.** A review whose target is the
+  checkout's uncommitted changes records the tree a commit of everything
+  would hold: staged, unstaged, and untracked files that Git does not ignore.
+  That covers a base-branch review and Claude Code's `/code-review` without a
+  named pull request too, since both read the working tree. The tree's change
+  is its diff from the merge base of `headCommit`, so the commit that later
+  records exactly that work, and any rebase of it, is covered. Any further
+  edit is not.
+
 What does reset it is any edit to the change itself, including resolving a
 rebase conflict differently.
 
@@ -62,8 +73,11 @@ rebase conflict differently.
   Otherwise PwrAgent uses `upstream/<base>`, `origin/<base>`, or the local
   branch. A stale target ref can make a rebased head look new. That causes
   an extra review offer, never an early merge offer.
-- A review of uncommitted changes records the HEAD it started from. A clean
-  review of that kind does not cover the commit made afterwards.
+- A reviewed working tree is stored as unreachable Git objects, which
+  `git gc` prunes after its grace period (two weeks by default). After that
+  the tree has no identity, and only `headCommit` counts.
+- Claude Code's review records its context when it reports findings. Edits
+  made during the review, before that report, count as reviewed.
 - Reviews recorded before this feature have no `fixedThroughCommit`. Their
   fix commits read as new changes once.
 
@@ -138,6 +152,13 @@ PwrAgent does no scan at startup, runs no timer, and makes no forge request.
     entries. A target branch that moves is read again.
   - A settlement costs one `rev-parse`, plus a `merge-base --is-ancestor` for
     a detached review.
+  - A review that reads the working tree costs three more processes when it
+    starts: `rev-parse`, `add --all` into a scratch copy of the index under
+    `GIT_INDEX_FILE`, and `write-tree`. The scratch index keeps Git's cached
+    file stats, so only changed files are hashed. The checkout's index, stash
+    list, and refs are untouched (purpose `review-working-tree`).
+  - The tree adds one field to the review row it is recorded with, so it
+    adds no commit.
 - **Concurrency.** Evaluations for the same thread and PR coalesce. A burst
   of events costs at most two evaluations.
 - **SQLite.** These budgets are recorded in

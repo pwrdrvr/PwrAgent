@@ -339,7 +339,7 @@ export class PrReviewOfferCoordinator {
   /**
    * Which of this PR's reviews cover its head. An exact commit match needs no
    * Git. Otherwise the head's change identity is compared with each review's
-   * reviewed and fixed-through commits.
+   * reviewed working tree, reviewed commit, and fixed-through commit.
    */
   private async reviewCoverage(
     thread: PrReviewOfferThread,
@@ -366,12 +366,13 @@ export class PrReviewOfferCoordinator {
       }
       return targetTip;
     };
-    const changeOf = async (sha: string): Promise<string | undefined> => {
+    const changeOf = async (sha: string, tree?: string): Promise<string | undefined> => {
       const target = await tip();
       if (!cwd || !target) return undefined;
       return await identity.changeIdentity({
         cwd,
         sha,
+        ...(tree ? { tree } : {}),
         targetTip: target,
       });
     };
@@ -386,15 +387,21 @@ export class PrReviewOfferCoordinator {
     };
     const coverage: PrReviewCoverage[] = [];
     for (const review of reviews) {
-      const covered = [review.context!.headCommit!, review.fixedThroughCommit]
+      const reviewed = review.context!.headCommit!;
+      const covered = [reviewed, review.fixedThroughCommit]
         .filter((sha): sha is string => Boolean(sha))
         .map((sha) => sha.toLowerCase());
+      // A review of uncommitted changes also covers the working tree it read.
+      const subjects: Array<{ sha: string; tree?: string }> = [
+        ...(review.context?.reviewedTree ? [{ sha: reviewed, tree: review.context.reviewedTree }] : []),
+        ...covered.map((sha) => ({ sha })),
+      ];
       let coversHead = covered.includes(head);
       if (!coversHead) {
         const current = await headChange();
         if (current) {
-          for (const sha of covered) {
-            if (await changeOf(sha) === current) {
+          for (const subject of subjects) {
+            if (await changeOf(subject.sha, subject.tree) === current) {
               coversHead = true;
               break;
             }

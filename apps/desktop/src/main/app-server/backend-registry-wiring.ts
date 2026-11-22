@@ -1058,6 +1058,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       // branch and its attached pull request name the card. One that named
       // pull requests is named by those.
       target: { type: "custom", instructions: "/code-review" },
+      // Its review includes uncommitted changes.
+      reviewsWorkingTree: true,
       ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
     }),
     suggestMonitorJob: async (request) => await ports.suggestClaudeMonitorJob(request),

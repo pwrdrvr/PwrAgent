@@ -21,6 +21,7 @@ import {
   resolveGitHubReposForDirectory,
   type GitHubRepoRef,
 } from "../pr-status/git-remote";
+import { captureReviewedWorkingTree } from "../pr-status/pr-change-identity";
 import {
   forgeRepositoryName,
   repositoryKey,
@@ -338,6 +339,17 @@ export async function resolveReviewProvenance(params: {
   resolveGitHubRepos?: (cwd: string) => Promise<GitHubRepoRef[]>;
   runGit?: ReviewGitRunner;
   target: AppServerReviewTarget;
+  /**
+   * The review reads the checkout's working tree, as Claude Code's
+   * `/code-review` without a target does. An `uncommittedChanges` or
+   * `baseBranch` target always does.
+   */
+  reviewsWorkingTree?: boolean;
+  /**
+   * Records the working tree's content. A caller that supplies its own
+   * `runGit` supplies this too, or no tree is recorded.
+   */
+  captureWorkingTree?: (cwd: string) => Promise<string | undefined>;
 }): Promise<AppServerReviewContext | undefined> {
   const cwd = params.cwd?.trim();
   if (!cwd) {
@@ -435,8 +447,9 @@ export async function resolveReviewProvenance(params: {
     }
     const [named] = resolved;
     // Only a pull request with a head branch can be the checked-out one.
+    // The pull request's diff was reviewed, not the working tree.
     const checkedOut = named.headRefName
-      ? await resolveReviewProvenance({ ...params, namedPullRequests: undefined })
+      ? await resolveReviewProvenance({ ...params, namedPullRequests: undefined, reviewsWorkingTree: false })
       : undefined;
     if (checkedOut?.pullRequest && samePullRequest(checkedOut.pullRequest, named)) {
       return checkedOut;
@@ -458,7 +471,15 @@ export async function resolveReviewProvenance(params: {
   const inspectsLocalGit = params.executionTarget !== "remote";
   // One round of Git rather than three serial spawns: a review is waiting on
   // this, and the three questions do not depend on each other's answers.
-  const [headCommit, baseCommit, checkedOutBranch] = inspectsLocalGit
+  // A review of uncommitted changes reads more than HEAD. Its tree lets the
+  // commit that later records those changes count as reviewed.
+  const readsWorkingTree = inspectsLocalGit
+    && (params.reviewsWorkingTree === true
+      || params.target.type === "uncommittedChanges"
+      || params.target.type === "baseBranch");
+  const captureWorkingTree = params.captureWorkingTree
+    ?? (params.runGit ? undefined : captureReviewedWorkingTree);
+  const [headCommit, baseCommit, checkedOutBranch, reviewedTree] = inspectsLocalGit
     ? await Promise.all([
         resolveCommitSha(runGit, cwd, ["rev-parse", "HEAD"]),
         context.baseBranch
@@ -469,10 +490,14 @@ export async function resolveReviewProvenance(params: {
             ])
           : undefined,
         resolveCheckedOutBranch(runGit, cwd),
+        readsWorkingTree ? captureWorkingTree?.(cwd) : undefined,
       ])
-    : [undefined, undefined, undefined];
+    : [undefined, undefined, undefined, undefined];
   if (headCommit) {
     context.headCommit = headCommit;
+    if (reviewedTree) {
+      context.reviewedTree = reviewedTree;
+    }
   }
   if (baseCommit) {
     context.baseCommit = baseCommit;
