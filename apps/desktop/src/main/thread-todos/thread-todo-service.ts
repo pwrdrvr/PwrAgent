@@ -7,6 +7,7 @@ import type {
   ListThreadTodosRequest,
   ThreadTodo,
   ThreadTodoAction,
+  ThreadTodoCiApproval,
   ThreadTodoItem,
   ThreadTodoMergeMethod,
   ThreadTodoModelSettings,
@@ -204,6 +205,7 @@ export class ThreadTodoError extends Error {
 
 export type ThreadTodoServiceOptions = {
   store: ThreadTodoStorage;
+  readCiApprovals?: (todo: ThreadTodo, dependencyId: string) => ThreadTodoCiApproval[];
   runners?: ThreadTodoActionRunners;
   onChanged?: (event: ThreadTodosChangedEvent) => void;
   /** `[git] default_merge_method`, read when it is needed. */
@@ -214,6 +216,7 @@ export type ThreadTodoServiceOptions = {
 
 export class ThreadTodoService {
   private readonly store: ThreadTodoStorage;
+  private readonly readCiApprovals: ThreadTodoServiceOptions["readCiApprovals"];
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly running = new Set<string>();
@@ -223,6 +226,7 @@ export class ThreadTodoService {
 
   constructor(options: ThreadTodoServiceOptions) {
     this.store = options.store;
+    this.readCiApprovals = options.readCiApprovals;
     this.runners = options.runners;
     this.onChanged = options.onChanged;
     this.defaultMergeMethod = options.defaultMergeMethod
@@ -529,7 +533,14 @@ export class ThreadTodoService {
   }
 
   list(request: ListThreadTodosRequest = {}): ThreadTodo[] {
-    return this.store.list(request);
+    const todos = this.store.list(request);
+    const readCiApprovals = this.readCiApprovals;
+    if (!readCiApprovals) return todos;
+    return todos.map((todo) => {
+      if (todo.status !== "open" || !todo.dependencyId) return todo;
+      const ciApprovals = readCiApprovals(todo, todo.dependencyId);
+      return ciApprovals.length > 0 ? { ...todo, ciApprovals } : todo;
+    });
   }
 
   /** The operator's last merge-method pick for a project, if any. */

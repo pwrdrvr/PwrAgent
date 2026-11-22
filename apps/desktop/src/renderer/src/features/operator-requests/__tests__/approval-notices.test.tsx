@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { OperatorServerRequest } from "@pwragent/shared/contracts/operator-requests";
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { AppNoticeStack } from "../../notifications/AppNoticeStack";
 import type { AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { APPROVAL_STILL_OPEN_MESSAGE } from "../approval-choices";
@@ -126,6 +127,8 @@ describe("buildApprovalNotices", () => {
 
 function Harness(props: {
   initialWaits: OperatorWait[];
+  ciApprovalTodos?: ThreadTodo[];
+  threadAKey?: string;
   otherNotices?: AppNoticeToastNotice[];
   onReview?: (wait: OperatorWait) => void;
   respond?: (wait: OperatorWait, response: unknown) => Promise<void>;
@@ -134,6 +137,7 @@ function Harness(props: {
   const [selected, setSelected] = useState<string>();
   const approvalNotices = useApprovalNotices({
     waits,
+    ciApprovalTodos: props.ciApprovalTodos,
     selectedThreadKey: selected,
     threadTitleForKey: titleFor,
     onReview: props.onReview ?? (() => {}),
@@ -149,7 +153,7 @@ function Harness(props: {
       <button type="button" onClick={() => setWaits((current) => current.slice(1))}>
         Answer first
       </button>
-      <button type="button" onClick={() => setSelected("codex:thread-a")}>
+      <button type="button" onClick={() => setSelected(props.threadAKey ?? "codex:thread-a")}>
         Open thread A
       </button>
       <button type="button" onClick={() => setSelected(undefined)}>
@@ -160,6 +164,33 @@ function Harness(props: {
 }
 
 describe("approval notice cards", () => {
+  it.each(["local", "remote"])("shows a signing gate on the selected %s thread and opens its exact GitHub run", (scope) => {
+    const url = "https://github.com/example/app/actions/runs/42";
+    const todo: ThreadTodo = {
+      id: scope === "remote" ? "remote-todo:release-owner:todo-42" : "todo-42",
+      backend: "codex", threadId: "thread-a", kind: "reminder", status: "open",
+      ...(scope === "remote" ? { federationTarget: { scope, instanceId: "release-owner" } } : {}),
+      title: "Review the signing gate", createdAt: 42, updatedAt: 42,
+      ciApprovals: [{ url, repository: "example/app", runId: 42, environments: ["apple-signing"] }],
+    };
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      const threadAKey = threadTodoThreadKey(todo);
+      const { rerender } = render(<Harness initialWaits={[]} ciApprovalTodos={[]} threadAKey={threadAKey} />);
+      fireEvent.click(screen.getByRole("button", { name: "Open thread A" }));
+      rerender(<Harness initialWaits={[]} ciApprovalTodos={[todo]} threadAKey={threadAKey} />);
+      expect(screen.getByText("Deployment approval needed")).toBeInTheDocument();
+      expect(screen.getByText("apple-signing")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Review on GitHub" }));
+      expect(open).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
+      expect(screen.getByText("Deployment approval needed")).toBeInTheDocument();
+      rerender(<Harness initialWaits={[]} ciApprovalTodos={[]} threadAKey={threadAKey} />);
+      expect(screen.queryByText("Deployment approval needed")).not.toBeInTheDocument();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it("hides one card without answering it, and keeps it hidden", () => {
     render(<Harness initialWaits={waitsFor([commandApproval, fileApproval])} />);
 

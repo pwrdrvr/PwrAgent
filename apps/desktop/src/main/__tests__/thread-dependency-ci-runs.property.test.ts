@@ -4,6 +4,7 @@ import { join } from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ThreadDependency,
   ThreadDependencyCiRunObservation,
   ThreadDependencyCiRunOutcome,
   ThreadDependencyCondition,
@@ -19,7 +20,7 @@ import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
 import {
-  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck,
+  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, ciApprovalsForDependency, evaluateCiRunCondition, mergeCiRunCheck,
   normalizeGithubEnterpriseHosts, parseCiRunUrl, readCiRun,
 } from "../app-server/thread-dependency-ci-runs";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -80,6 +81,38 @@ const observationArb: fc.Arbitrary<ThreadDependencyCiRunObservation> = fc.record
 }));
 
 describe("CI run prerequisite evaluation", () => {
+  it("projects only the signing environments that satisfied a delivered GitHub reminder", () => {
+    const environments = ["windows-signing", "apple-signing", "production"];
+    fc.assert(fc.property(
+      fc.subarray(environments, { minLength: 1 }),
+      fc.subarray(environments),
+      outcomesArb,
+      fc.constantFrom("waiting", "completed"),
+      fc.constantFrom("ready", "delivered"),
+      (pending, filter, on, runStatus, dependencyStatus) => {
+        const condition = ciRunCondition({ url: RUN_URL, on, environments: filter.map((name) => name.toUpperCase()) });
+        const check = observation({
+          status: runStatus,
+          conclusion: runStatus === "completed" ? "success" : undefined,
+          gates: runStatus === "waiting" ? pending.map((environment) => ({ environment, reviewers: ["release-team"] })) : [],
+        });
+        const evidence = evaluateCiRunCondition(condition, check, undefined, check.checkedAt);
+        if (evidence.state === "waiting") return;
+        const dependency: ThreadDependency = {
+          id: "watch", backend: "codex", threadId: "release-thread", conditions: [condition],
+          mode: "all", onFailure: "notify", continuation: "Review signing", deliver: "operator",
+          status: dependencyStatus, outcome: evidence.state === "satisfied" ? "success" : "failure",
+          evidence: [evidence], createdAt: 0, updatedAt: check.checkedAt,
+        };
+        const expected = dependencyStatus === "delivered" && runStatus === "waiting" && (!on || on.includes("approval_gate"))
+          ? pending.filter((name) => filter.length === 0 || filter.includes(name)) : [];
+        const approvals = ciApprovalsForDependency(dependency);
+        expect(approvals.map(({ url, environments }) => ({ url, environments })))
+          .toEqual(expected.length > 0 ? [{ url: RUN_URL, environments: expected }] : []);
+      },
+    ));
+  });
+
   it("fires once on the first check the oracle accepts and never changes after", () => {
     fc.assert(fc.property(outcomesArb, environmentsArb, fc.array(observationArb, { maxLength: 12 }), (on, environments, checks) => {
       const condition = ciRunCondition({ url: RUN_URL, ...(on ? { on } : {}), ...(environments && (!on || on.includes("approval_gate")) ? { environments } : {}) });

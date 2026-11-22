@@ -62,6 +62,33 @@ function props(todo: ThreadTodo): ThreadTodoCardProps {
   };
 }
 
+it("puts the signing gate, release facts and GitHub review action on the resting card", () => {
+  const url = "https://github.com/example/app/actions/runs/42";
+  const detail = "Check the release checklist before approving this deployment.";
+  const todo = card([], {
+    title: "Run 42 needs approval for windows-signing. Review the Windows signing gate for run 42.",
+    detail, items: undefined,
+    ciApprovals: [{
+      url, repository: "example/app", runId: 42, environments: ["windows-signing"], ref: "v2.0.0", headSha: "abc1234567890",
+    }],
+  });
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  const handlers = props(todo);
+  render(<ThreadTodoCard {...handlers} />);
+
+  expect(screen.getByRole("heading", { name: "Review windows-signing" })).toBeTruthy();
+  expect(screen.getByText(/example\/app.*v2\.0\.0/)).toBeTruthy();
+  expect(screen.getByText(/Run #42.*abc123456789/)).toBeTruthy();
+  expect(screen.queryByText(detail)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Review on GitHub" }));
+  expect(open).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
+  expect(handlers.onResolve).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+  expect(screen.getByText(detail)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Mark done" }));
+  expect(handlers.onResolve).toHaveBeenCalledWith(todo, "done", undefined, undefined);
+});
+
 const HANDOFF: ThreadTodo["action"] = {
   type: "start_thread",
   prompt: "Add stdio server support to the gateway.",

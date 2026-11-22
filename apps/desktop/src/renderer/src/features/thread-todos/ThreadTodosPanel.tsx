@@ -31,6 +31,7 @@ import {
 import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
+import { threadTodoCiApprovals, threadTodoCiApprovalTitle } from "./thread-todo-ci-approval";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 import { keepBusyThreadTodos } from "./busy-thread-todos";
 import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
@@ -677,6 +678,7 @@ function TodoRow(props: {
   view: ThreadTodosView;
 }) {
   const { todo, view } = props;
+  const title = (!todo.action ? threadTodoCiApprovalTitle(threadTodoCiApprovals(todo)) : undefined) ?? todo.title;
   const KindIcon = KIND_ICONS[todo.kind];
   const resolution = todo.status === "open"
     ? undefined
@@ -693,7 +695,7 @@ function TodoRow(props: {
       <span className="thread-todo-card__kind" aria-hidden="true">
         {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
       </span>
-      <span className="thread-todos-panel__row-title">{todo.title}</span>
+      <span className="thread-todos-panel__row-title">{title}</span>
       {progress ? (
         <span className="thread-todo-card__progress">
           {progress.checked} of {progress.total}
@@ -718,7 +720,7 @@ function TodoRow(props: {
         <button
           type="button"
           className="thread-todos-panel__row-main"
-          aria-label={`${openReview ? "Show review" : "Open thread"}: ${todo.title}, in ${view.threadTitle(todo)}${
+          aria-label={`${openReview ? "Show review" : "Open thread"}: ${title}, in ${view.threadTitle(todo)}${
             progress ? `, ${progress.checked} of ${progress.total} ${progress.noun} checked` : ""
           }${props.unread ? ", unread" : ""}`}
           onClick={() => (openReview ? openReview(todo) : view.openThread(todo))}

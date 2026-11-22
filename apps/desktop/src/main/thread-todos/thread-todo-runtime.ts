@@ -1,6 +1,8 @@
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
+import { ciApprovalsForDependency } from "../app-server/thread-dependency-ci-runs";
 import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
   AppServerBackendKind,
@@ -95,8 +97,12 @@ export function setThreadTodoMergeOfferGate(gate: MergeOfferGate | undefined): v
 
 export function getThreadTodoService(): ThreadTodoService {
   if (!service) {
+    const dependencies = createThreadDependencyStorage();
     service = new ThreadTodoService({
       store: createThreadTodoStorage(),
+      readCiApprovals: (todo, id) => ciApprovalsForDependency(dependencies.get(todo.backend, todo.threadId, id), () => ({
+        githubEnterpriseHosts: getDesktopSettingsService().resolveGithubEnterpriseHosts(),
+      })),
       defaultMergeMethod: () =>
         readDefaultMergeMethod?.() ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
     });

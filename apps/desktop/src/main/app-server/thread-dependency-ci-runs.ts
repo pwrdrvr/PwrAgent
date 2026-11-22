@@ -1,8 +1,11 @@
 import type {
+  ThreadDependency,
+  ThreadDependencyCiRun,
   ThreadDependencyCiRunObservation,
   ThreadDependencyCondition,
   ThreadDependencyEvidence,
 } from "@pwragent/shared/contracts/thread-dependencies";
+import type { ThreadTodoCiApproval } from "@pwragent/shared/contracts/thread-todos";
 import {
   threadDependencyCiRunId,
   threadDependencyCiRunOutcomes,
@@ -274,6 +277,33 @@ async function readGitlabPipeline(get: CiRunGet, ref: CiRunRef, now: number): Pr
   };
 }
 
+function matchingApprovalGates(ciRun: ThreadDependencyCiRun, observation: ThreadDependencyCiRunObservation) {
+  const wanted = ciRun.environments?.length ? new Set(ciRun.environments.map((name) => name.toLowerCase())) : undefined;
+  return (observation.gates ?? []).filter((gate) => !wanted || wanted.has(gate.environment.toLowerCase()));
+}
+
+/** Decorates an open reminder from its owner's saved milestone, including cards raised before notices existed. */
+export function ciApprovalsForDependency(dependency: ThreadDependency | undefined, urls?: () => CiRunUrlOptions): ThreadTodoCiApproval[] {
+  const approvals = new Map<string, ThreadTodoCiApproval>();
+  if (dependency?.status !== "delivered" || dependency.outcome !== "success") return [];
+  for (const entry of dependency.evidence) {
+    const { ciRun: observation, condition: { ciRun } } = entry;
+    if (entry.state !== "satisfied" || observation?.status !== "waiting" || !ciRun
+      || !threadDependencyCiRunOutcomes(ciRun).includes("approval_gate")) continue;
+    const ref = parseCiRunUrl(ciRun.url, urls?.());
+    if (ref?.repository.provider !== "github" || ref.runId !== observation.runId) continue;
+    const environments = matchingApprovalGates(ciRun, observation).map((gate) => gate.environment);
+    if (environments.length === 0) continue;
+    const existing = approvals.get(ref.url);
+    approvals.set(ref.url, {
+      url: ref.url, runId: ref.runId, repository: `${ref.repository.owner}/${ref.repository.repo}`,
+      environments: [...new Set([...(existing?.environments ?? []), ...environments])],
+      ref: observation.branch, headSha: observation.headSha,
+    });
+  }
+  return [...approvals.values()];
+}
+
 /**
  * The evidence for a `ci_run` prerequisite after one check. A fired outcome
  * is final: the wait is one-shot. While it waits, the evidence is the same
@@ -300,8 +330,7 @@ export function evaluateCiRunCondition(condition: ThreadDependencyCondition, obs
     return waiting;
   }
   const on = threadDependencyCiRunOutcomes(ciRun);
-  const wanted = ciRun.environments?.length ? new Set(ciRun.environments.map((name) => name.toLowerCase())) : undefined;
-  const gates = on.includes("approval_gate") ? (observation.gates ?? []).filter((gate) => !wanted || wanted.has(gate.environment.toLowerCase())) : [];
+  const gates = on.includes("approval_gate") ? matchingApprovalGates(ciRun, observation) : [];
   const needsApproval = () => fired("satisfied", `Needs approval: ${gates.map((gate) => gate.environment).join(", ")}`);
   if (observation.status === "completed") {
     const conclusion = observation.conclusion ?? "unknown";
