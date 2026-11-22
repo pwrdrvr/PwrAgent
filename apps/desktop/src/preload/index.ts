@@ -577,6 +577,8 @@ import type {
 } from "@pwragent/shared/contracts/backend";
 import type {
   SetThreadAgentRequest,
+  SetThreadAgentTrustPolicyRequest,
+  ThreadAgentTrustPolicyTarget,
   SetThreadTokenMiserRequest,
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
@@ -1264,6 +1266,8 @@ import {
   NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
+  NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL,
+  NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
@@ -3239,6 +3243,10 @@ const desktopApi = Object.freeze({
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_CHANNEL, request),
+  readThreadAgentTrustPolicy: async (request: ThreadAgentTrustPolicyTarget): Promise<{ policy?: unknown }> =>
+    await ipcRenderer.invoke(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL, request),
+  setThreadAgentTrustPolicy: async (request: SetThreadAgentTrustPolicyRequest): Promise<import("@pwragent/shared/contracts/agent-trust-policy").AgentTrustPolicy | null> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL, request),
   setThreadTokenMiser: async (
     request: SetThreadTokenMiserRequest,
   ): Promise<SetThreadTokenMiserResponse> =>

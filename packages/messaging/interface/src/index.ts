@@ -1566,6 +1566,13 @@ export type MessagingInboundBaseEvent = MessagingInboundReceipt & {
   sourceSurface?: MessagingSurfaceRef;
 };
 
+/** Fresh provider-authenticated assertion for one live inbound decision. */
+export type MessagingWorkspaceAdminEvidence = {
+  actorId: string;
+  workspaceId: string;
+  observedAt: number;
+};
+
 export type MessagingInboundChannelMetadataUpdate = {
   channel: MessagingChannelRef;
   eventId: string;

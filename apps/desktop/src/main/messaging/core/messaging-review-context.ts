@@ -30,6 +30,7 @@ export type MessagingReviewSubmission = {
 } & ({ target: AppServerReviewTarget } | { pullRequestArgs: string });
 
 export interface MessagingReviewHost {
+  readonly admitBoundAgentTrust: import("./messaging-agent-trust").BoundMessagingAgentTrustAdmission;
   readonly rememberHumanMessagingSource: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => MessagingRequestSource | undefined;
   readonly readBoundWorkspaceContext: (binding: MessagingBindingRecord) => Promise<MessagingThreadContext>;
   readonly readBoundThreadConfiguration: (binding: MessagingBindingRecord) => Promise<{ kind: "thread"; thread: NavigationThreadSummary; defaults: NavigationLaunchpadDefaults }>;

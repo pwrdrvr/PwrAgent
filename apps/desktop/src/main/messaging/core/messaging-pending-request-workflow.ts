@@ -197,6 +197,8 @@ export class MessagingPendingRequestWorkflow {
     if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
       return false;
     }
+    const binding = pendingIntent.bindingId ? await this.context.store.getBinding(pendingIntent.bindingId) : undefined;
+    if (binding && !await this.context.host().admitBoundAgentTrust(event, binding)) return true;
 
     const updated = this.questionnaireWithRecordedAnswer(intent, {
       kind: "custom",
@@ -219,6 +221,8 @@ export class MessagingPendingRequestWorkflow {
     if (pendingIntent.intent.kind !== "questionnaire") {
       return;
     }
+    const binding = pendingIntent.bindingId ? await this.context.store.getBinding(pendingIntent.bindingId) : undefined;
+    if (binding && !await this.context.host().admitBoundAgentTrust(event, binding)) return;
 
     const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
     if (action.id === "questionnaire:skip") {

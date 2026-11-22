@@ -5449,19 +5449,39 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     now?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const nextState: ThreadOverlayState = {
-      ...current,
-      agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
-      queuedAgentChange: undefined,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (!params.agent && current.agent?.trustPolicy !== undefined) {
+        throw new Error("Clear the Agent's invocation trust policy before removing its designation.");
+      }
+      const nextState: ThreadOverlayState = {
+        ...current,
+        agent: params.agent ? { ...current.agent, ...normalizeThreadAgent(params.agent, params.now) } : undefined,
+        queuedAgentChange: undefined,
+      };
+      this.putThread(threadKey, nextState);
+      return nextState;
+    }).immediate();
+  }
+
+  async setThreadAgentTrustPolicy(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    policy: NonNullable<ThreadOverlayState["agent"]>["trustPolicy"];
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getThread(threadKey);
+      if (!current?.agent) throw new Error("Invocation trust requires a designated Agent thread.");
+      const next = { ...current, agent: { ...current.agent, updatedAt: Date.now(), trustPolicy: params.policy } };
+      this.putThread(threadKey, next);
+      return next;
+    }).immediate();
   }
 
   async setQueuedThreadAgentChange(params: {
@@ -11603,9 +11623,7 @@ function normalizeThreadAgent(
   return {
     name,
     instructions: instructions || undefined,
-    ...(input.instructionsDelivery === "workspace-file"
-      ? { instructionsDelivery: "workspace-file" as const }
-      : {}),
+    instructionsDelivery: input.instructionsDelivery === "workspace-file" ? "workspace-file" : undefined,
     instructionLineCount,
     instructionsTooLong:
       instructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
@@ -11696,6 +11714,8 @@ function normalizeThreadOverlayState(
   }
   if (
     state.agent?.instructions === LEGACY_HANDOFF_AGENT_INSTRUCTIONS &&
+    state.agent.trustPolicy === undefined &&
+    !("capabilityPolicy" in state.agent) &&
     state.handoffOrigin &&
     (
       !state.handoffOrigin.taskTitle ||
@@ -12902,6 +12922,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setThreadAgentTrustPolicy"
   | "setQueuedThreadAgentChange"
   | "setThreadTokenMiser"
   | "setThreadKeepCheckoutAwake"

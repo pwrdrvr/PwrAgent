@@ -32,6 +32,7 @@ import type {
 import type { DesktopGhDiscoverySnapshot, DesktopProviderModelDefaults } from "./settings";
 import type { BackendAcpSessionRuntimeState, StartupProviderRefreshStatus } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
+import type { AgentTrustPolicy } from "./agent-trust-policy";
 import type { CelestialIconId } from "./celestial";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 import type {
@@ -112,6 +113,7 @@ export type ThreadAgentInstructionsDelivery = "workspace-file";
 
 export type ThreadAgentMetadata = {
   name: string;
+  trustPolicy?: AgentTrustPolicy;
   instructions?: string;
   instructionsDelivery?: ThreadAgentInstructionsDelivery;
   instructionLineCount: number;
@@ -3120,6 +3122,15 @@ export type SetThreadAgentResponse = {
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
   agentChange?: ThreadAgentChangeStatus;
+};
+
+export type ThreadAgentTrustPolicyTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type SetThreadAgentTrustPolicyRequest = ThreadAgentTrustPolicyTarget & {
+  policy: AgentTrustPolicy | null;
 };
 
 export type SetThreadTokenMiserRequest = {

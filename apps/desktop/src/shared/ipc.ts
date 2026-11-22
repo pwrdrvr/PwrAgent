@@ -465,6 +465,8 @@ export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
 export const AGENT_MEMORY_CHANNEL = "agent-memory:access";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
+export const NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL = "navigation:set-thread-agent-trust-policy";
+export const NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL = "navigation:read-thread-agent-trust-policy";
 export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =
   "navigation:set-thread-token-miser";
 export const NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL =

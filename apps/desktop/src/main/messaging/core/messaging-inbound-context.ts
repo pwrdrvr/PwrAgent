@@ -29,6 +29,7 @@ import type { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingFullAccessControlsResolver, FullAccessRiskPresentationMode } from "./messaging-inbound-helpers";
 
 export interface MessagingInboundHost {
+  readonly admitAgentTrust: (event: MessagingInboundEvent, target: import("./messaging-agent-trust").MessagingAgentTrustTarget) => Promise<boolean>;
   readonly commandHandlers: Pick<MessagingCommandHandlers, "handleCommand" | "presentHelp">;
   readonly interactionMapper: Pick<MessagingInteractionMapper, "mapText">;
   readonly callbackHandlers: Pick<MessagingCallbackHandlers, "handleCallback">;
@@ -91,7 +92,7 @@ export interface MessagingInboundConfiguration {
 
 export interface MessagingInboundContext {
   readonly store: Pick<MessagingStoreLike, "findActivePendingIntentForChannel" | "getBinding" | "deletePendingIntent" | "findActiveBindingForChannel" | "findActiveDefaultAgentAssignmentsForChannel" | "revokeDefaultAgentAssignment" | "revokeDefaultAgentAssignmentsForTarget" | "findActiveBrowseSessionForChannel" | "revokeBinding" | "findActiveBindings" | "deleteBrowseSession" | "upsertBinding">;
-  readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "supportsMessagingPdfTools" | "startTurn" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listBackends">;
+  readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "getThreadAgentTrustPolicy" | "supportsMessagingPdfTools" | "startTurn" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listBackends">;
   readonly adapter: Pick<MessagingAdapter, "capabilityProfile" | "deliver" | "downloadAttachment">;
   readonly capabilityProfile: MessagingCapabilityProfile;
   readonly now: () => number;

@@ -320,6 +320,12 @@ export type SlackFileInfo = {
 
 export type SlackUserInfo = {
   id?: string;
+  team_id?: string;
+  is_admin?: boolean;
+  deleted?: boolean;
+  is_bot?: boolean;
+  is_app_user?: boolean;
+  is_stranger?: boolean;
   name?: string;
   profile?: {
     display_name?: string;
@@ -342,6 +348,7 @@ type ValidatedSlackAgentSessionIds = {
 };
 
 export type SlackProviderAdapter = {
+  resolveWorkspaceAdmin?(event: MessagingInboundEvent): ReturnType<SlackAdapter["resolveWorkspaceAdmin"]>;
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "slack";
@@ -1297,6 +1304,27 @@ export class SlackAdapter implements SlackProviderAdapter {
   retainedSourceConnectionId(): string | undefined {
     return this.workspaceId && (this.botId || this.botUserId)
       ? `${this.workspaceId}:${this.botId ?? this.botUserId}` : undefined;
+  }
+
+  async resolveWorkspaceAdmin(event: MessagingInboundEvent): Promise<{
+    actorId: string;
+    workspaceId: string;
+    observedAt: number;
+  } | undefined> {
+    const generation = this.lifecycleGeneration;
+    const workspaceId = this.workspaceId;
+    const actorId = event.actor.platformUserId;
+    if (!this.started || event.channel.channel !== this.channel || event.actor.isBot === true
+      || !workspaceId || !validateSlackTeamId(workspaceId).ok
+      || event.channel.conversation.workspaceId !== workspaceId
+      || !validateSlackUserId(actorId).ok) return undefined;
+
+    const user = await this.api.usersInfo?.({ user: actorId });
+    if (!this.started || this.lifecycleGeneration !== generation || this.workspaceId !== workspaceId
+      || user?.id !== actorId || user.team_id !== workspaceId
+      || user.is_admin !== true || user.deleted === true || user.is_bot === true
+      || user.is_app_user === true || user.is_stranger === true) return undefined;
+    return { actorId, workspaceId, observedAt: this.now() };
   }
 
   async createManagedConversation(

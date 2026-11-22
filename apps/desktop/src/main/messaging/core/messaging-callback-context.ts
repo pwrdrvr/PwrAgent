@@ -31,6 +31,7 @@ import type { MessagingTurnAdmission, MessagingTurnInputEvent } from "./messagin
 import type { AcpRuntimeRiskWarningContext, FullAccessEscalationContext, PreparedInputStartResult, MessagingFullAccessControls, FullAccessWarningResolution, PendingQueueAuditMessage, PendingNewThreadPromptWindow, PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
 
 export interface MessagingCallbackHost {
+  readonly admitBoundAgentTrust: import("./messaging-agent-trust").BoundMessagingAgentTrustAdmission;
   readonly commandHandlers: Pick<MessagingCommandHandlers, "continueClaudeThreadInNewSession" | "handleCommand" | "presentHelp" | "handleMonitorTopicCommand">;
   readonly presentDefaultAgentAssignmentBrowser: (event: MessagingInboundEvent, scopeKind: MessagingDefaultAgentScopeKind) => Promise<void>;
   readonly clearDefaultAgentAssignment: (event: MessagingInboundEvent, scopeKind: MessagingDefaultAgentScopeKind) => Promise<void>;

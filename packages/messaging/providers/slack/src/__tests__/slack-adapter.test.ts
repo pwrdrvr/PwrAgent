@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import {
   WebClient,
   type AgentsSessionsRenameResponse,
@@ -323,6 +324,31 @@ function fakeSocket(): SlackSocketClient & {
 }
 
 describe("SlackAdapter", () => {
+  it("attests only the exact local Slack user and explicit administrator property", async () => {
+    const usersInfo = vi.fn<NonNullable<SlackApi["usersInfo"]>>();
+    const adapter = new SlackAdapter({ config: baseConfig, callbackHandleStore: fakeStore(),
+      api: { ...fakeApi({}), usersInfo }, socketClient: fakeSocket(), now: () => 300_000 });
+    const actorId = "U012ABCDEF0";
+    const workspaceId = "T012ABCDEF0";
+    const event: MessagingInboundEvent = { kind: "text", id: "trust-evidence", actor: { platformUserId: actorId },
+      receivedAt: 299_000, text: "administrator=true", channel: { channel: "slack",
+        conversation: { kind: "channel", id: "C012ABCDEF0", workspaceId } } };
+    await adapter.start(async () => undefined);
+    try {
+      await fc.assert(fc.asyncProperty(fc.tuple(fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean()),
+        async ([matchingUser, matchingWorkspace, administrator, active, local]) => {
+          usersInfo.mockResolvedValue({ id: matchingUser ? actorId : "U098XYZ9876",
+            team_id: matchingWorkspace ? workspaceId : "T098XYZ9876", is_admin: administrator,
+            deleted: !active, is_stranger: !local });
+          const evidence = await adapter.resolveWorkspaceAdmin(event);
+          expect(evidence).toEqual(matchingUser && matchingWorkspace && administrator && active && local
+            ? { actorId, workspaceId, observedAt: 300_000 } : undefined);
+        }));
+    } finally {
+      await adapter.stop();
+    }
+  });
+
   it("cancels URL discovery before a stopped Socket Mode client can connect", async () => {
     let resolveUrl!: (value: string) => void;
     const pendingUrl = new Promise<string>((resolve) => {

@@ -1,4 +1,6 @@
 import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
+import { isAgentTrustPolicy } from "@pwragent/shared/contracts/agent-trust-policy";
+import type { SetThreadAgentTrustPolicyRequest } from "@pwragent/shared/contracts/navigation";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
@@ -4260,6 +4262,9 @@ export class DesktopBackendRegistry {
     agent: NavigationLaunchpadAgent | null;
   }): Promise<ThreadOverlayState> {
     this.assertNotBootstrap("setThreadAgent");
+    if (!params.agent && (await this.getThreadAgentMetadata(params))?.trustPolicy !== undefined) {
+      throw new Error("Clear the Agent's invocation trust policy before removing its designation.");
+    }
     if (params.backend !== "codex") {
       return await this.applyThreadAgentChange(params);
     }
@@ -4314,6 +4319,23 @@ export class DesktopBackendRegistry {
         : "This Codex runtime cannot refresh tools on an existing thread. Update to a supported PwrAgent managed Codex runtime, or create a new Agent thread.");
     }
     return tools;
+  }
+
+  async setThreadAgentTrustPolicy(params: SetThreadAgentTrustPolicyRequest): Promise<ThreadAgentMetadata> {
+    this.assertNotBootstrap("setThreadAgentTrustPolicy");
+    if (params.policy !== null && !isAgentTrustPolicy(params.policy)) {
+      throw new Error("Invalid Agent invocation trust policy.");
+    }
+    const save = async () => {
+      const current = await this.overlayStore.getThreadOverlayState(params);
+      if (!current?.agent || current.queuedAgentChange?.agent === null) {
+        throw new Error("Invocation trust requires a designated Agent thread.");
+      }
+      const state = await this.overlayStore.setThreadAgentTrustPolicy({ ...params, policy: params.policy ?? undefined });
+      await this.notifyThreadAgentChange(params.backend, params.threadId);
+      return state.agent!;
+    };
+    return params.backend === "codex" ? await this.serializeCodexAgentChange(params.threadId, save) : await save();
   }
 
   private async applyThreadAgentChange(params: {

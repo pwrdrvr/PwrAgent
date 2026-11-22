@@ -693,7 +693,6 @@ export class MessagingInboundTurns {
     // uses the same claim, including for replies typed in the private thread.
     const replyClaim = requestId ? this.context.host().privateReplyClaims.claim(requestId) : undefined;
     if (requestId && !replyClaim) return false;
-    this.context.host().rememberHumanMessagingSource(params.binding, params.event);
     this.markAdmissionStage(params.event, "routed");
     const startedAt = this.context.now();
     try {
@@ -900,18 +899,37 @@ export class MessagingInboundTurns {
         );
       }
     }
-    const prepared = await this.prepareTurnInput(bundle.events, currentBinding, bundle.events[0]);
+    const target = {
+      backend: currentBinding.backend,
+      threadId: currentBinding.threadId,
+      federationTarget: federationTargetForBinding(currentBinding),
+    };
+    let policy: unknown;
+    try {
+      policy = await this.context.backend.getThreadAgentTrustPolicy?.(target);
+    } catch (error) {
+      this.context.logger.warn?.("messaging Agent trust lookup failed", { backend: target.backend, error });
+      return;
+    }
+    const allowedEvents: MessagingTurnInputEvent[] = [];
+    for (const event of bundle.events) {
+      if (policy !== undefined && !await this.context.host().admitAgentTrust(event, {
+        backend: target.backend, threadId: target.threadId, policy, remote: !!target.federationTarget,
+      })) continue;
+      allowedEvents.push(event);
+      this.context.host().rememberHumanMessagingSource(currentBinding, event);
+    }
+    const [firstEvent] = allowedEvents;
+    if (!firstEvent) return;
+    const prepared = await this.prepareTurnInput(allowedEvents, currentBinding, firstEvent);
     if (!prepared) {
       return;
     }
-    this.markAdmissionStage(bundle.events[0], "inputPrepared");
+    this.markAdmissionStage(firstEvent, "inputPrepared");
     const preparedWithSkill = this.prependPendingSkillSelection(
       prepared,
       currentBinding,
     );
-    if (currentBinding.privateReplyContinuation) {
-      await this.context.host().completePrivateReplyContinuation(currentBinding.id);
-    }
     const consumedSkillBinding = currentBinding.pendingSkillSelection
       ? bindingWithoutPendingSkillSelection(currentBinding)
       : currentBinding;
@@ -919,12 +937,8 @@ export class MessagingInboundTurns {
     try {
       // Completion can drain an empty local queue while media is preparing.
       // Read occupancy now so an earlier busy snapshot cannot strand this input.
-      admissionState = await this.context.backend.getThreadAdmissionState({
-        backend: currentBinding.backend,
-        federationTarget: federationTargetForBinding(currentBinding),
-        threadId: currentBinding.threadId,
-      });
-      this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
+      admissionState = await this.context.backend.getThreadAdmissionState(target);
+      this.markAdmissionStage(firstEvent, "admissionStateResolved");
     } catch (error) {
       await this.context.host().deliver(
         buildErrorIntent({
@@ -935,12 +949,20 @@ export class MessagingInboundTurns {
           recoverable: true,
         }),
         consumedSkillBinding,
-        bundle.events[0],
+        firstEvent,
       );
       return;
     }
 
-    this.markAdmissionStage(bundle.events[0], "occupancyResolved");
+    const latestPolicy = admissionState.thread?.agent?.trustPolicy;
+    if (latestPolicy !== undefined && JSON.stringify(latestPolicy) !== JSON.stringify(policy)) {
+      // Work already prepared against a different policy is no longer admissible.
+      return;
+    }
+    if (currentBinding.privateReplyContinuation) {
+      await this.context.host().completePrivateReplyContinuation(currentBinding.id);
+    }
+    this.markAdmissionStage(firstEvent, "occupancyResolved");
     const startResult = await this.startPreparedInput({
       binding: consumedSkillBinding,
       input: preparedWithSkill.input,
@@ -948,12 +970,12 @@ export class MessagingInboundTurns {
       privateResponseRequested: preparedWithSkill.privateResponseRequested,
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
-      event: bundle.events[0],
+      event: firstEvent,
       admissionState,
     });
     if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.context.host().clearPendingSkillSelection(currentBinding);
-      await this.context.host().bindingService.renderAutomaticBindingStatus(updatedBinding, bundle.events[0]);
+      await this.context.host().bindingService.renderAutomaticBindingStatus(updatedBinding, firstEvent);
     }
   }
 

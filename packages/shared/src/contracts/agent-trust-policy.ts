@@ -41,8 +41,12 @@ function hasOnlyFields(value: unknown, fields: readonly string[]): value is Reco
 }
 
 function isReference(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_REFERENCE_LENGTH
-    && value === value.trim() && !/[\u0000-\u001f\u007f]/u.test(value);
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_REFERENCE_LENGTH || value !== value.trim()) return false;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) return false;
+  }
+  return true;
 }
 
 function isConversation(value: unknown): value is AgentTrustConversation {

@@ -1227,6 +1227,18 @@ export function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadAgentTrustPolicy: async (settings: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      policy: NonNullable<ThreadOverlayState["agent"]>["trustPolicy"];
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key);
+      if (!current?.agent) throw new Error("Invocation trust requires a designated Agent thread.");
+      const next = { ...current, agent: { ...current.agent, updatedAt: Date.now(), trustPolicy: settings.policy } };
+      overlays.set(key, next);
+      return next;
+    },
     setQueuedThreadAgentChange: async (settings: {
       backend: AppServerBackendKind;
       threadId: string;

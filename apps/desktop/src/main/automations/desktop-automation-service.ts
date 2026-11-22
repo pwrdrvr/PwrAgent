@@ -84,6 +84,7 @@ import {
   resolveInboundTriggerForMessage,
 } from "./automation-trigger-matcher.js";
 import { mergeTranscriptEvents } from "./transcript-merge.js";
+import type { MessagingAgentTrustAdmission } from "../messaging/core/messaging-agent-trust";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
 
@@ -956,6 +957,12 @@ export class DesktopAutomationService {
     if (!automation) {
       throw new Error("Automation not found.");
     }
+    const agent = await this.options.registry.getThreadAgentMetadata({
+      backend: automation.backend, threadId: automation.threadId,
+    });
+    if (agent?.trustPolicy !== undefined) {
+      throw new Error("Replay is unavailable for an Agent with restricted invocation trust.");
+    }
     if (!automation.triggers.some((candidate) => candidate.kind === "inbound_message")) {
       throw new Error("This automation has no inbound trigger to replay.");
     }
@@ -1017,7 +1024,7 @@ export class DesktopAutomationService {
     };
   }
 
-  async handleMessagingInboundEvent(event: MessagingInboundEvent): Promise<boolean> {
+  async handleMessagingInboundEvent(event: MessagingInboundEvent, admitTrust?: MessagingAgentTrustAdmission): Promise<boolean> {
     const matches = matchAutomationInboundEvent({
       automations: this.enabledInboundAutomations(),
       event,
@@ -1026,6 +1033,9 @@ export class DesktopAutomationService {
       return false;
     }
     for (const match of matches) {
+      const target = { backend: match.automation.backend, threadId: match.automation.threadId };
+      const policy = (await this.options.registry.getThreadAgentMetadata(target))?.trustPolicy;
+      if (policy !== undefined && !await admitTrust?.({ ...target, policy })) continue;
       if (match.automation.status === "paused") {
         // Held at its daily run limit: the message is recorded, not run.
         const skipped = this.scheduler.recordSkipWhilePaused(match.automation, {

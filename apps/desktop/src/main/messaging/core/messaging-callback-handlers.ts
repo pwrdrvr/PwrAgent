@@ -48,6 +48,10 @@ export class MessagingCallbackHandlers {
       return;
     }
 
+    if (action.kind !== "cancel"
+      && (!await this.context.host().admitBoundAgentTrust(event, entry.binding)
+        || (entry.event && !await this.context.host().admitBoundAgentTrust(entry.event, entry.binding)))) return;
+
     if (action.kind === "retry") {
       if (!entry.manualRetryRequired
         || !(await this.context.host().requirePermission(event, "message.reply", "queued-turn:retry"))
@@ -379,6 +383,8 @@ export class MessagingCallbackHandlers {
         if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
           return;
         }
+        const binding = pendingIntent.bindingId ? await this.context.store.getBinding(pendingIntent.bindingId) : undefined;
+        if (binding && !await this.context.host().admitBoundAgentTrust(event, binding)) return;
         const decision = await this.context.host().submitApprovalAction(
           pendingIntent.intent,
           action.id,

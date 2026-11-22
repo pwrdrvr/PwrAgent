@@ -13,6 +13,7 @@ import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "./messaging-adapter.js";
 
 export interface MessagingPendingRequestHost {
+  readonly admitBoundAgentTrust: import("./messaging-agent-trust").BoundMessagingAgentTrustAdmission;
   readonly filterBindingsForChannel: (bindings: MessagingBindingRecord[]) => MessagingBindingRecord[];
   readonly bindingsForAgentTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string | undefined, persistentBindings: MessagingBindingRecord[]) => MessagingBindingRecord[];
   readonly readBackendThreadStatus: (binding: MessagingBindingRecord) => Promise<string | undefined>;

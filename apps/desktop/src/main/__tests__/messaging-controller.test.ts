@@ -17082,6 +17082,27 @@ describe("MessagingController", () => {
     expect(harness.delivered).not.toContainEqual(expect.objectContaining({ kind: "confirmation", title: "Message queued" }));
   });
 
+  it("rejects restricted Agent media before downloading the attachment or starting a turn", async () => {
+    const downloadAttachment = vi.fn();
+    const getThreadAgentTrustPolicy = vi.fn<NonNullable<MessagingBackendBridge["getThreadAgentTrustPolicy"]>>()
+      .mockResolvedValue({ version: 1, denialResponse: "silent", rules: [] });
+    const harness = await createHarness({ downloadAttachment, backendOverrides: {
+      getThreadAgentTrustPolicy,
+    } });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "trust-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    expect(downloadAttachment).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    getThreadAgentTrustPolicy.mockResolvedValue({ version: 1, denialResponse: "silent", rules: [{
+      provider: "telegram", allOf: [{ kind: "actor-id", actorId: "user-1" }],
+    }] });
+    await harness.controller.handleInboundEvent(buildTextEvent("Accepted text"));
+    expect(harness.startTurn).toHaveBeenCalledOnce();
+  });
+
   it("reads admission after media preparation and waits for it before dispatch", async () => {
     let releaseMedia!: () => void;
     let releaseAdmission!: () => void;

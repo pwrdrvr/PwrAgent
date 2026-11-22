@@ -702,6 +702,7 @@ export class MessagingCommandHandlers {
     } else if (!this.context.backend.continueClaudeThreadInNewSession) {
       errorMessage = "This backend does not support continuing Claude in a new session.";
     } else {
+      if (!await this.context.host().admitBoundAgentTrust(event, binding)) return;
       try {
         await this.context.backend.continueClaudeThreadInNewSession({ threadId: binding.threadId });
       } catch (error) {
