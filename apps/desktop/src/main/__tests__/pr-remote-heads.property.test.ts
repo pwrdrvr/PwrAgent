@@ -16,7 +16,7 @@ const git = async (cwd: string, ...args: string[]) => (await run(cwd, args)).std
 const setRemoteHead = (cwd: string, remote: string, target: string) =>
   git(cwd, "symbolic-ref", `refs/remotes/${remote}/HEAD`, target);
 
-async function fixture(refFormat?: string) {
+async function fixture(refFormat: "files" | "reftable" = "files") {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-remote-heads-"));
   const restoreEnv = isolateProcessGitEnvironment(root);
   onTestFinished(async () => {
@@ -26,7 +26,7 @@ async function fixture(refFormat?: string) {
   });
   const repository = path.join(root, "repository");
   await mkdir(repository);
-  await git(repository, "init", "-b", "main", ...(refFormat ? [`--ref-format=${refFormat}`] : []));
+  await git(repository, "init", "-b", "main", `--ref-format=${refFormat}`, "--object-format=sha1");
   await git(repository, "-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture");
   await git(repository, "remote", "add", "origin", "https://github.com/fixture/project.git");
   await git(repository, "config", "extensions.worktreeConfig", "true");

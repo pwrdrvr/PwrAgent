@@ -3,15 +3,12 @@ import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { getConfiguredGitCommand } from "../git-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { runPrMetadataGit, runPrMetadataProcess, type PrMetadataDemand } from "./pr-metadata-process";
+import { runPrMetadataFileProbe, runPrMetadataGit, type PrMetadataDemand } from "./pr-metadata-process";
 
 const REF_FILE_BYTES = 4096;
 const PACKED_REFS_BYTES = 256 * 1024;
 const MAX_REMOTES = 16;
 const MAX_SYMREF_DEPTH = 4;
-const FILE_PROBE_TIMEOUT_MS = 250;
-const FILE_PROBE_LIMIT = 8;
-let activeFileProbes = 0;
 
 async function fileStatus(file: string): Promise<BigIntStats | undefined> {
   try {
@@ -202,31 +199,6 @@ async function observeRefs(cwd: string, remotes: string[], signal: AbortSignal):
   return heads.size >= 2 ? { ...location, heads, files } : undefined;
 }
 
-async function probeFiles<T>(
-  read: (signal: AbortSignal) => Promise<T>,
-  demand?: PrMetadataDemand,
-): Promise<T | undefined> {
-  return await runPrMetadataProcess(async () => {
-    // A slow or disconnected filesystem must release the scheduler slot.
-    // Keep timed-out reads charged to the filesystem budget until they settle.
-    if (activeFileProbes >= FILE_PROBE_LIMIT) return undefined;
-    const controller = new AbortController();
-    const signal = demand?.signal ? AbortSignal.any([demand.signal, controller.signal]) : controller.signal;
-    activeFileProbes++;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const operation = Promise.resolve().then(() => read(signal)).catch(() => undefined).finally(() => { activeFileProbes--; });
-    try {
-      const result = await Promise.race([operation, new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => { controller.abort(); resolve(undefined); }, FILE_PROBE_TIMEOUT_MS);
-      })]);
-      demand?.signal?.throwIfAborted();
-      return result;
-    } finally {
-      clearTimeout(timer);
-    }
-  }, demand);
-}
-
 /**
  * Replace two or more subprocesses only when Git confirms the exact checkout
  * and SHA-1 files backend observed by the filesystem reader. One observation
@@ -241,7 +213,7 @@ export async function readProvenRemoteHeads(
     || Object.keys(env).some((key) =>
       /^(PWRAGENT_GIT_PATH|GIT_(DIR|WORK_TREE|COMMON_DIR|NAMESPACE|TEST_.*))$/i.test(key))) return undefined;
 
-  const observation = await probeFiles((signal) => observeRefs(cwd, remotes, signal), demand);
+  const observation = await runPrMetadataFileProbe((signal) => observeRefs(cwd, remotes, signal), demand);
   if (!observation) return undefined;
   try {
     const { stdout } = await runPrMetadataGit(cwd, [
@@ -253,6 +225,6 @@ export async function readProvenRemoteHeads(
     demand?.signal?.throwIfAborted();
     return undefined;
   }
-  return await probeFiles((signal) => observation.files.unchanged(signal), demand)
+  return await runPrMetadataFileProbe((signal) => observation.files.unchanged(signal), demand)
     ? observation.heads : undefined;
 }
