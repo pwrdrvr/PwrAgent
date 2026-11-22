@@ -59,14 +59,18 @@ export const PROJECT_INDEX_KEYBOARD_STEP = 16;
 /**
  * Which project the list is in, and which are on screen.
  *
- * Current is the first section whose bottom is below the list's top edge,
- * which is the section whose sticky header is stuck there. It is never "the
- * most visible" section, which flips back and forth inside a tall project.
+ * Current is the first section whose bottom is below the line the headers
+ * stick to, which is the section whose sticky header is stuck there. It is
+ * never "the most visible" section, which flips back and forth inside a tall
+ * project. The line is the list's top edge, or `topInset` below it while the
+ * selected thread's dock takes the top: a section ending under the dock has
+ * lost its header, and shows nothing the operator can read.
  */
 export function spyProjects(
   count: number,
   readBlock: (index: number) => ProjectBlockBox,
   viewportHeight: number,
+  topInset = 0,
 ): ProjectSpy {
   // The Directories list lays out its project sections in DOM order with
   // non-overlapping, increasing bounds. Only their headers are sticky.
@@ -77,7 +81,7 @@ export function spyProjects(
   let end = count;
   while (first < end) {
     const middle = first + Math.floor((end - first) / 2);
-    if (readBlock(middle).bottom <= 1) first = middle + 1;
+    if (readBlock(middle).bottom <= topInset + 1) first = middle + 1;
     else end = middle;
   }
 
@@ -104,6 +108,10 @@ export function sameProjectSpy(a: ProjectSpy, b: ProjectSpy): boolean {
  * A project near the end has too little list below it to reach the top; the
  * tail supplies exactly the missing height. It is dropped once it scrolls out
  * of view (`jumpTailIsOffscreen`). A port of PwrGit's `jumpScrollPlan`.
+ *
+ * "The top" is where the section's header sticks: `topInset` below the list's
+ * edge while the selected thread's dock is there. Landed higher, the header
+ * would stick below its own place and cover the project's first rows.
  */
 export function jumpScrollPlan(input: {
   scrollTop: number;
@@ -113,14 +121,48 @@ export function jumpScrollPlan(input: {
   clientHeight: number;
   /** The tail already drawn, in px. */
   tailHeight: number;
+  /** Where the headers stick, below the list's top edge, in px. */
+  topInset?: number;
 }): { scrollTop: number; tailHeight: number } {
-  const target = Math.max(0, Math.round(input.scrollTop + input.blockTop));
+  const target = Math.max(
+    0,
+    Math.round(input.scrollTop + input.blockTop - (input.topInset ?? 0)),
+  );
   const maxScroll = Math.max(0, input.scrollHeight - input.clientHeight);
   const missing = target - maxScroll;
   return {
     scrollTop: target,
     tailHeight: missing > 0 ? input.tailHeight + missing : input.tailHeight,
   };
+}
+
+/**
+ * A jump's landing, held until the operator scrolls: the dock's reserve it
+ * placed the project under, and whether it has already moved for a shrink.
+ */
+export type JumpLanding = { reserve: number; lowered: boolean };
+
+/**
+ * Whether a held landing lands again when the dock's reserve changes to
+ * `reserve`, and how it is held after.
+ *
+ * The jump itself can move the dock: scrolling the open thread's row out of
+ * view brings it to the top, scrolling it back in sends it away. A reserve
+ * that grew always lands again, or the stuck header slides over the first
+ * rows, and so does one that shrank while the dock stays (its card settling
+ * to its drawn height). The dock leaving leaves the header resting in its
+ * own place with the strip above showing; landing again is tidier, but
+ * landing flush can be what scrolls the open thread's row away and brings
+ * the dock back. So the dock's leaving moves the list once per landing, and
+ * the answer always settles.
+ */
+export function jumpRelanding(
+  landing: JumpLanding,
+  reserve: number,
+): JumpLanding | undefined {
+  if (reserve === landing.reserve) return undefined;
+  if (reserve > 0) return { reserve, lowered: landing.lowered };
+  return landing.lowered ? undefined : { reserve, lowered: true };
 }
 
 /** The tail can go when none of it is on screen: removing it then moves
