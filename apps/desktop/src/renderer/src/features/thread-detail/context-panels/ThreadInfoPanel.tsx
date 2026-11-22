@@ -8,6 +8,7 @@ import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { formatOwnerProviderLabel } from "../../../lib/thread-provider-label";
+import { formatBackendLabel } from "../../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../../lib/execution-mode";
 import {
   CODEX_AGENT_THREAD_CHANGE_NOTE,
@@ -47,6 +48,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
   const memoryAccess = props.desktopApi?.accessAgentMemory;
   const { agent, id, source, federation } = props.thread;
   const capabilitySupport = agent && agentCapabilityRuntimeSupport(agent.capabilityPolicy, source, "interactive");
+  const policyBackendLabel = source === "codex" ? "Codex" : formatBackendLabel(source, props.backends);
   const providerLabel = formatOwnerProviderLabel(source, props.thread.model, props.backends);
   const instanceId = federation?.ref.target.scope === "remote" ? federation.ref.target.instanceId : undefined;
   const accessMemory = useCallback(async (operation: AgentMemoryArgs) => {
@@ -140,20 +142,19 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
           </div>
         )}
         {capabilitySupport ? (
-          <div className="context-list__item">
-            <div className="context-list__content">
-              <p className="context-list__label">
-                Runtime policy · {capabilitySupport.status === "legacy" ? "Legacy" : "Unavailable"}
-              </p>
-              <p className="context-list__meta">
+          <dl className="context-grid">
+            <div>
+              <dt>Runtime policy</dt>
+              <dd>{capabilitySupport.status === "legacy" ? "Legacy" : "Unavailable"}</dd>
+              <dd className="context-list__meta">
                 {capabilitySupport.status === "legacy"
-                  ? `Provider settings apply. ${providerLabel} cannot run restricted Agent policies.`
+                  ? `Provider settings apply. ${policyBackendLabel} cannot run restricted Agent policies.`
                   : capabilitySupport.status === "unsupported"
-                    ? `${providerLabel} cannot enforce this policy. Interactive turns, Automations, and child runs are blocked.`
+                    ? `${policyBackendLabel} cannot enforce this policy. Interactive turns, Automations, and child runs are blocked.`
                     : "This policy is invalid or unsupported. Agent execution is blocked."}
-              </p>
+              </dd>
             </div>
-          </div>
+          </dl>
         ) : null}
         {memoryAccess && props.thread.agent ? (
           <AgentMemoryPanel key={JSON.stringify([instanceId, source, id])}
