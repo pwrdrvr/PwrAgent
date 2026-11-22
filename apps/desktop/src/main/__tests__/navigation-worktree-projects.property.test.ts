@@ -5,8 +5,10 @@ import fc from "fast-check";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
+import { ProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("../git-info/worktree-store", () => ({ resolveWorktreeRepositoryDirectory: async () => undefined }));
@@ -72,8 +74,68 @@ it("projects every case spelling of one Windows folder under its saved project",
         query: { kind: "directory-index", keys: [legacy.directoryKey] },
       } });
       expect(lookup.directories?.map((row) => row.key)).toEqual([saved.directoryKey]);
+      const keys = [legacy.directoryKey, saved.directoryKey];
+      const scopedReads = keys.map((directoryKey) => projectNavigationQuery({ index, request: {
+        protocol: 2, consumer: "main-sidebar", inventory: "owner", query: { kind: "directory", directoryKey },
+      } }));
+      const messages = [reportedPath, diskPath].map((directoryKey) => projectNavigationQuery({ index, request: {
+        protocol: 2, consumer: "messaging-browse", inventory: "owner", query: { kind: "messaging-threads", directoryKey },
+      } }));
+      for (const scoped of [...scopedReads, ...messages]) {
+        expect(scoped.entries.map(({ row }) => row.id).sort()).toEqual(["1", "2"]);
+        expect(scoped.selectionDirectory?.key).toBe(saved.directoryKey);
+      }
     },
   ));
+});
+
+it("keeps a saved alias pause effective for the row and its threads", async () => {
+  vi.mocked(realpath).mockResolvedValue("C:\\Aa");
+  const threads = [thread("1", "c:/aa"), thread("2", "C:/Aa")];
+  const saved = registration("C:/Aa");
+  const paused = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 5 };
+  const overlays = { "directory:c:/aa": { directoryKey: "directory:c:/aa", forgeAutomation: paused } };
+  const dirs = buildDirectorySummaries({ threads, launchpadsByKey: { [saved.directoryKey]: saved }, directoryOverlayByKey: overlays });
+  const projects = await resolveNavigationWorktreeProjects(dirs, { threads });
+  expect(projects.directories).toMatchObject([{ forgeAutomation: paused, threadKeys: ["codex:2", "codex:1"] }]);
+  const automation = new ProjectForgeAutomationIndex();
+  automation.hydrate(overlays);
+  automation.rememberDirectories(projects.directories);
+  for (const id of ["1", "2"]) expect(automation.automationForThread({ backend: "codex", threadId: id })).toEqual(paused);
+  expect(automation.automationForThread({ backend: "codex", threadId: "new" },
+    () => ({ linkedDirectories: threads[1]!.linkedDirectories }))).toEqual(paused);
+});
+
+it("resolves a folded directory key in a scoped children page", async () => {
+  vi.mocked(realpath).mockResolvedValue("C:\\Aa");
+  const parent = thread("1", "C:/Aa");
+  const child = { ...thread("2", "c:/aa"), parentThreadId: parent.id, parentThreadBackend: "codex" as const };
+  const threads = [parent, child];
+  const saved = registration("C:/Aa");
+  const projects = await resolveNavigationWorktreeProjects(buildDirectorySummaries({
+    threads, launchpadsByKey: { [saved.directoryKey]: saved },
+  }), { threads });
+  for (const directoryKey of [saved.directoryKey, "directory:c:/aa"]) {
+    const page = projectNavigationQuery({ index: { ...projects, threads }, request: {
+      protocol: 2, consumer: "main-sidebar", inventory: "owner",
+      query: { kind: "children", directoryKey, parent: { backend: "codex", threadId: parent.id } },
+    } });
+    expect(page.entries.map(({ row }) => row.id)).toEqual([child.id]);
+    expect(page.selectionDirectory?.key).toBe(saved.directoryKey);
+  }
+});
+
+it("uses the checkout group's stored spelling and exact membership for editing", async () => {
+  vi.mocked(realpath).mockResolvedValue("C:\\Aa");
+  const threads = [thread("1", "c:/aa"), thread("2", "C:/Aa")];
+  const saved = registration("C:/Aa");
+  const checkoutPaths = ["c:/aa", "C:/AnotherCheckout"];
+  const dirs = buildDirectorySummaries({ threads, launchpadsByKey: { [saved.directoryKey]: saved },
+    checkoutGroups: [{ preferredPath: "c:/aa", paths: checkoutPaths }],
+  });
+  expect((await resolveNavigationWorktreeProjects(dirs, { threads })).directories).toMatchObject([{
+    path: "c:/aa", checkoutPaths,
+  }]);
 });
 
 it("shows the c:/aa thread inside an existing C:/Aa registration", async () => {

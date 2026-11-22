@@ -80,7 +80,8 @@ export async function removeLocalNavigationDirectory(
       const caseAliases = index.directoryCaseAliases?.[request.directoryKey];
       await getDesktopOverlayStore().removeDirectoryRegistration({
         directoryKey: request.directoryKey,
-        worktreeKeys: caseAliases ? [...(worktreeKeys ?? []), ...caseAliases] : worktreeKeys,
+        worktreeKeys,
+        caseAliasKeys: caseAliases,
       });
     }
   } finally { unsubscribe(); }

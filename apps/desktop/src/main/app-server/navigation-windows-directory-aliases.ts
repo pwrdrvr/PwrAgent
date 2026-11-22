@@ -13,6 +13,26 @@ type DirectoryCaseAliases = {
   directoryCaseAliases?: Record<string, string[]>;
 };
 
+function readDirectoryRealPath(key: string): Promise<string | undefined> {
+  return realpath(key.slice(DIRECTORY_PREFIX.length)).then(canonicalizeNavigationPath, () => undefined);
+}
+
+/** Find saved local keys that still resolve to the same Windows directory. */
+export async function findWindowsDirectoryCaseAliases(key: string, keys: readonly string[]): Promise<string[]> {
+  if (process.platform !== "win32" || !key.startsWith(DIRECTORY_PREFIX)
+    || !path.win32.isAbsolute(key.slice(DIRECTORY_PREFIX.length))) return [];
+  const identity = navigationPathIdentity(key, true);
+  const variants = keys.filter((candidate) => candidate !== key && navigationPathIdentity(candidate, true) === identity);
+  if (!variants.length) return [];
+  const diskPath = await readDirectoryRealPath(key);
+  if (!diskPath) return [];
+  const aliases: string[] = [];
+  for (const variant of variants) {
+    if (await readDirectoryRealPath(variant) === diskPath) aliases.push(variant);
+  }
+  return aliases;
+}
+
 /** Reconcile local rows at read time so historical draft/setting keys stay valid. */
 export async function reconcileWindowsDirectoryAliases(
   directories: NavigationDirectorySummary[],
@@ -40,7 +60,7 @@ export async function reconcileWindowsDirectoryAliases(
     signal?.throwIfAborted();
     const results = await Promise.all(collisions.slice(start, start + CASE_PROBE_BATCH_SIZE).map(async (directory) => ({
       directory,
-      diskPath: await realpath(directory.key.slice(DIRECTORY_PREFIX.length)).then(canonicalizeNavigationPath, () => undefined),
+      diskPath: await readDirectoryRealPath(directory.key),
     })));
     for (const { directory, diskPath } of results) {
       if (!diskPath) continue;
@@ -63,26 +83,36 @@ export async function reconcileWindowsDirectoryAliases(
   const rows = new Map(directories.map((directory) => [directory.key, directory]));
   const directoryCaseAliases: Record<string, string[]> = {};
   for (const { diskPath, rows: group } of aliases) {
+    const policyOwners = group.filter((directory) => directory.forgeAutomation);
+    const checkoutGroups = group.filter((directory) => directory.checkoutPaths?.length);
+    // Each policy and checkout group has its own editable storage key. Keep
+    // independently configured records reachable until they can be reconciled.
+    if (policyOwners.length > 1 || checkoutGroups.length > 1) continue;
     const diskKey = `${DIRECTORY_PREFIX}${diskPath}`;
-    // Match registration's preference for the disk-spelled key when both
-    // spellings have a saved launchpad. With one, honor its existing key.
+    // Keep a saved Forge policy on the editable key, even when the
+    // registration would otherwise favor the disk-spelled key.
     group.sort((left, right) => Number(Boolean(right.launchpad)) - Number(Boolean(left.launchpad))
       || Number(right.key === diskKey) - Number(left.key === diskKey)
       || (left.key < right.key ? -1 : 1));
-    const preferred = group[0]!;
-    const duplicates = group.slice(1);
+    const preferred = policyOwners[0] ?? group[0]!;
+    const checkoutGroup = checkoutGroups[0];
+    const duplicates = group.filter((directory) => directory !== preferred);
+    const aliasKeys = duplicates.map((directory) => directory.key);
     const threadKeys = [...new Set(group.flatMap((directory) => directory.threadKeys))]
       .sort((left, right) => (threadOrder.get(left) ?? Infinity) - (threadOrder.get(right) ?? Infinity));
-    const checkoutPaths = [...new Set(group.flatMap((directory) => directory.checkoutPaths ?? []))];
     rows.set(preferred.key, {
       ...preferred,
-      ...(checkoutPaths.length ? { checkoutPaths } : {}),
+      ...(checkoutGroup ? {
+        path: checkoutGroup.path, checkoutPaths: checkoutGroup.checkoutPaths,
+        repositoryKey: checkoutGroup.repositoryKey ?? preferred.repositoryKey,
+      } : {}),
+      caseAliasKeys: aliasKeys,
       threadKeys,
       needsAttentionCount: threadKeys.filter((key) => needsAttention.has(key)).length,
       latestUpdatedAt: group.reduce((latest, directory) => Math.max(latest, directory.latestUpdatedAt ?? 0), 0) || undefined,
     });
-    directoryCaseAliases[preferred.key] = duplicates.map((duplicate) => duplicate.key);
+    directoryCaseAliases[preferred.key] = aliasKeys;
     for (const duplicate of duplicates) rows.delete(duplicate.key);
   }
-  return { directories: [...rows.values()], directoryCaseAliases };
+  return Object.keys(directoryCaseAliases).length ? { directories: [...rows.values()], directoryCaseAliases } : { directories };
 }
