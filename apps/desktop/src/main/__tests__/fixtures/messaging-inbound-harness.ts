@@ -5,6 +5,7 @@ import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/tes
 import type { MessagingBackendBridge } from "../../messaging/core/messaging-adapter";
 import { MessagingController, type MessagingControllerOptions } from "../../messaging/core/messaging-controller";
 import { SqliteMessagingStore } from "../../state/messaging-store-sqlite";
+import { StateDb } from "../../state/state-db";
 import { openInMemoryStateDb } from "../sqlite-test-utils";
 
 export async function messagingInboundHarness(options: {
@@ -19,8 +20,9 @@ export async function messagingInboundHarness(options: {
   ownsQueue?: boolean;
   clock?: () => number;
   maxActions?: number;
+  dbPath?: string;
 } = {}) {
-  const db = openInMemoryStateDb();
+  const db = options.dbPath ? StateDb.open(options.dbPath) : openInMemoryStateDb();
   const store = new SqliteMessagingStore(db);
   let now = 1_000;
   let sequence = 0;

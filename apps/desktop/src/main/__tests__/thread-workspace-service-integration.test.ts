@@ -274,7 +274,7 @@ describe("DesktopBackendRegistry", () => {
         claudeBackendOptions: {
           store: new ClaudeSessionStore(path.join(root, "sessions")),
           getSessionInfo: async () => undefined,
-          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
           discoverModels: async () => [],
           query: ({ options = {} }) => {
             const threadId = options.sessionId!;
@@ -292,6 +292,7 @@ describe("DesktopBackendRegistry", () => {
               }
             }
             return Object.assign(messages(), {
+              initializationResult: async () => ({ mcp_servers_applied: true }),
               close: () => outcome.resolve("closed"),
               // Claude asks for the account after saving its init metadata.
               accountInfo: async () => { initialized.resolve(); },

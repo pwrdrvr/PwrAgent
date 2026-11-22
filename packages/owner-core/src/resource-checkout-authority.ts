@@ -25,6 +25,16 @@ export type CheckoutStatus = {
   | { state: CheckoutGrant["state"]; allocationId: string; generation: number; authorityEpoch: number; deadlineAt: number; durationMs: number }
 );
 
+/** The saved definition differs from the configured one in owner, epoch, key or capacity. */
+export class CheckoutDefinitionConflictError extends Error {
+  constructor() {
+    super("The durable definition conflicts with the configured authority or capacity.");
+    this.name = "CheckoutDefinitionConflictError";
+  }
+}
+
+type OwnershipAction = Extract<ResourceCheckoutActionRequest, { kind: "resolve_ownership" }>;
+
 function executionOwner(grant: CheckoutGrant): CheckoutActor {
   return grant.executor ?? grant.actor;
 }
@@ -171,7 +181,7 @@ export class ResourceCheckoutAuthority {
       const saved = record.definition;
       if (saved.authorityId !== definition.authorityId || saved.epoch !== definition.epoch
         || saved.canonicalKey !== definition.canonicalKey) {
-        throw new Error("The durable definition conflicts with the configured authority or capacity.");
+        throw new CheckoutDefinitionConflictError();
       }
       if (options?.machineCpuPool && saved.scope === "machine" && definition.scope === "machine"
         && saved.publication === "published" && definition.revision === 2 && definition.counted) {
@@ -187,12 +197,37 @@ export class ResourceCheckoutAuthority {
         }
       }
       if (saved.capacity !== definition.capacity) {
-        throw new Error("The durable definition conflicts with the configured authority or capacity.");
+        throw new CheckoutDefinitionConflictError();
       }
       if (definition.revision > saved.revision) {
         record.definition = definition;
         tx.save(record);
       }
+    });
+  }
+
+  /**
+   * Apply an operator's ownership resolution once, under its request key. A
+   * retry with the same key returns the recorded result; without `apply`
+   * (the conflict is already gone) only a recorded result is returned.
+   */
+  resolveOwnership(
+    actor: CheckoutActor,
+    action: OwnershipAction,
+    apply?: (record: CheckoutDomainRecord, now: number) => void,
+  ): ResourceCheckoutActionResult {
+    const fingerprint = JSON.stringify(action);
+    return this.store.change((tx) => {
+      const previous = tx.receipt(actor.key, action.idempotencyKey);
+      if (previous) return previous.fingerprint === fingerprint ? previous.result
+        : rejectCheckout("conflict", "This request key was already used for another action.");
+      const record = tx.read(action.resourceId);
+      if (!apply || !record) return rejectCheckout("not_applicable", "Ownership of this resource is already resolved.");
+      apply(record, this.now());
+      tx.save(record);
+      const result: ResourceCheckoutActionResult = { outcome: "accepted", message: "Ownership resolved." };
+      tx.recordReceipt(actor.key, action.idempotencyKey, { result, fingerprint, resourceId: action.resourceId });
+      return result;
     });
   }
 

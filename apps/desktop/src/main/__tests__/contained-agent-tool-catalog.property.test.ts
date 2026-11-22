@@ -259,6 +259,7 @@ function listingClaudeQuery(launches: AgentSideSession[], turnTools: string[][])
     }
     return Object.assign(run(), {
       close: vi.fn(),
+      initializationResult: async () => ({ mcp_servers_applied: true }),
       setPermissionMode: vi.fn().mockResolvedValue(undefined),
       setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }),
     }) as unknown as Query;
@@ -280,7 +281,7 @@ it("gives a live Claude session the new role's tools at its next turn, and refus
       query: listingClaudeQuery(launches, turnTools),
       getSessionInfo: vi.fn().mockResolvedValue(undefined),
       discoverModels: vi.fn().mockResolvedValue([]),
-      inspectInstallation: vi.fn(async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const })),
+      inspectInstallation: vi.fn(async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" as const })),
       resolveEnv: async () => ({ PATH: "/fixture" }),
       emit: async (event: AgentEvent) => {
         if (event.notification.method === "turn/completed") completedTurns += 1;

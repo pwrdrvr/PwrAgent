@@ -31,7 +31,7 @@ export async function exerciseDesktopSelfStartedAdmission(root: string, cliFixtu
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "invented-self-started-owner",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [],
     claudeBackendOptions: { store: new ClaudeSessionStore(path.join(root, "sessions")),
-      inspectInstallation: async () => ({ executable: path.join(root, "claude.js"), authStatus: "signed-in" }),
+      inspectInstallation: async () => ({ executable: path.join(root, "claude.js"), version: "999.0.0", authStatus: "signed-in" }),
       discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined } });
   const events: AgentEvent[] = [];
   const initialCompleted = Promise.withResolvers<void>();

@@ -16,8 +16,8 @@ import {
   RecoveryDialog,
   RegisterResourceDialog,
   ReleaseDialog,
-  RequestCheckoutDialog,
   ResolveOwnershipDialog,
+  RequestCheckoutDialog,
 } from "./ResourceDialogs";
 import {
   formatAge,
@@ -161,13 +161,14 @@ export function ResourcesScreen(props: {
     if (!selected) return;
     const resource = selected.resource;
     if (intent.kind === "recover") return setDialog({ ...intent, resourceId: resource.resourceId });
-    if (intent.kind === "resolve") return setDialog({ kind: "resolve", resourceId: resource.resourceId });
     const { action } = intent;
     switch (action.kind) {
       case "request":
         return setDialog({ kind: "request", resourceId: resource.resourceId, action });
       case "release":
         return setDialog({ kind: "release", resourceId: resource.resourceId });
+      case "resolve_ownership":
+        return setDialog({ kind: "resolve", resourceId: resource.resourceId });
       case "cancel_request": {
         const entry = resource.queue.find((candidate) => candidate.viewerOwns);
         if (entry) {

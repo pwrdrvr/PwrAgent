@@ -62,7 +62,7 @@ Administrative release includes the audit note in the action receipt.
 
 Packaged owners admit machine jobs only through the primary root. Paths
 that resolve to the same root share its store. An alternate production
-root remains unresolved until shared-broker enrollment is available.
+root stays unresolved, so run machine work from the primary root.
 Unpackaged test roots use isolated stores.
 
 ## Federation external domains
@@ -110,8 +110,10 @@ The operator can submit a local draft from Resources. With
 `allowAgentDrafts`, a local agent can submit the same unpublished draft.
 Publishing requires the explicit operator binding. An incremented
 definition revision updates document metadata while preserving existing
-leases. A capacity, owner or epoch change requires a separate migration
-procedure. The owner-core authority depends on a transaction port so a
+leases. A capacity, owner or epoch change leaves the resource unresolved
+until the operator accepts it in Resources (see
+[Ownership unresolved](#ownership-unresolved)). The owner-core authority
+depends on a transaction port so a
 Cloud implementation can provide its own storage and route.
 
 ## Agent continuation and handoff
@@ -178,45 +180,34 @@ retained EC2 control wired to it. Reservations remain advisory unless the
 authority has an approved controller binding. Direct credentials, arbitrary
 SSH, and independent jobs remain advisory even with a managed route.
 
-## Fenced enrollment, restore, and migration procedure
+## Ownership unresolved
 
-The recovery policy in `resource-checkout-recovery.ts` is exercised offline.
-It requires a durable registry witness outside the source and destination
-authority backups. The shipped manifest does not provide that witness.
-Treat conflicting manifests, restored production stores, and unenrolled
-production roots as unresolved pending reconciliation.
+An authority that can't be bound shows **Ownership unresolved**. Its
+resources block every other action, and the authority refuses every other
+request for them.
 
-1. **Enroll the host.** A production root enrolls with the authenticated
-   OS broker under the canonical physical host domain. Pin its broker,
-   its platform evidence, and the root's enrollment identity. Another
-   profile or installed root joins that same broker and store. Test roots
-   remain isolated. A copied root, alternate OS account, managed VM parent,
-   or host clone needs explicit enrollment evidence. Missing evidence
-   leaves it unresolved and unpublished.
-2. **Quarantine the canonical domain.** Gather each conflicting authority
-   and store incarnation for the immutable resource key. Compare-and-swap
-   the live witness revision to `fencing` before staging a successor. Every
-   allocator and executor must consult that witness at the admission and
-   effect boundary. Close the legacy launch or credential paths that
-   cannot enforce the witness. A partition leaves the domain closed.
-3. **Drain and prove fences.** Record fresh, revision-scoped evidence for
-   every incumbent or competing issuer. Capture closed admission, drained
-   jobs, sealed delayed commands, retired stop guards, and the highest
-   generation issued. Include the provider or process evidence required
-   by the domain. An unknown issuer or missing proof pauses migration. Discovering another
-   issuer advances the fencing revision and invalidates earlier proofs and
-   checkpoints.
-4. **Stage the successor disabled.** Choose a new store incarnation even
-   when restoring to the same owner. Allocate an epoch above all confirmed
-   issuers and seed its counter at the highest witnessed generation. Import
-   definitions, receipts, and historical records for audit. Old grants,
-   waiters, and continuations are non-executable. Have requesters submit
-   fresh intents after cutover. Record the staged checkpoint and verify it
-   against the fenced domain and destination.
-5. **Activate by compare-and-swap.** Publish the exact staged checkpoint
-   against the fencing revision. Reject stale owners and backups by the
-   issuer tuple, epoch, and current witness checkpoint. A registry must
-   advance the checkpoint with durable admission state, including changes
-   that reuse the current generation. If staging or activation fails,
-   keep the domain closed and retry against the same fencing revision.
-   Returning to an earlier owner requires a new fenced cutover.
+Checkouts are cooperative reservations, not locks. Agents and managed jobs
+that follow them take turns. Nothing outside the registry is stopped, and
+the worst result of a wrong resolution is overlapping work until the
+affected leases end. So when the app has one sensible choice, Resources
+offers it. Only this instance's operator can resolve ownership: a peer or
+an agent can't. The `resolve_ownership` action is idempotent, so a retry
+with the same key returns the recorded result.
+
+Each case carries a reason and a remedy (`checkout-ownership.ts`). The
+inspector shows both, and a button when the case has a resolution.
+
+| Cause | Resolution in Resources | Otherwise |
+| --- | --- | --- |
+| `resource-checkouts.db` was created under another machine identity | **Adopt for this machine** takes the store under this machine's identity. Checkouts and waiters that came with the copy are dropped: they never held this machine. Another profile on this root that still shows the conflict binds the adopted store without dropping anything. | Run machine work on the machine that created the root. |
+| This machine's saved record differs from the current definition, pool capacity aside | **Accept current definition** saves the current definition and keeps checkouts, the queue and the pool's saved capacity. | |
+| The configured owner, epoch or capacity differs from a hosted resource's saved record | **Accept configured definition** saves the configured definition and keeps checkouts and the queue. If capacity shrank, new requests wait until holds end. | Restore the previous values in `resource-checkout-authorities.json` and restart. |
+| The root has no valid `machine-id` | None | Make sure the file is readable, then restart. |
+| A packaged app runs from an alternate root | None | Run machine work from the primary root. |
+| The machine store can't be opened | None | Read `pwragent:resource-checkouts` in the main-process log, correct the cause, and restart. |
+| A binding names this instance on another machine | None | If the profile was copied from that machine, run the authority there. Otherwise correct `authorityMachineId` on every participating instance and restart them. |
+| This instance hosts a binding but has no Federation store | None | Hosting needs the platform machine identity. Read the log, correct the cause, and restart. |
+| This instance hosts a binding, but `federation-resource-checkouts.db` was created on another machine | None | Host it from the machine that created the root, or bind it to another instance on every participant. Federation peers hold those checkouts, so adopting the copy would hand out capacity twice. |
+
+The cases without a resolution have nothing for the app to choose between:
+the fix is a file, a path or a restart.

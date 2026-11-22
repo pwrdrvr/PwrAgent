@@ -6,8 +6,14 @@ import { messagingInboundHarness } from "./messaging-inbound-harness";
 
 // Only the provider and transport are contrived. Routing, pending records,
 // callback selection and delivery run through the actual controller and store.
-export async function messagingReviewHarness(channel: "telegram" | "discord" = "telegram", workspaceCount = 1, maxActions?: number, backendKind: "codex" | "claude" = "codex") {
-  const real = await messagingInboundHarness({ channel, maxActions, backend: backendKind });
+export async function messagingReviewHarness(
+  channel: "telegram" | "discord" = "telegram",
+  workspaceCount = 1,
+  maxActions?: number,
+  backendKind: "codex" | "claude" = "codex",
+  dbPath?: string,
+) {
+  const real = await messagingInboundHarness({ channel, maxActions, backend: backendKind, dbPath });
   const trace: string[] = [];
   const receipts = new Map<string, MessagingSurfaceRef>();
   const requests: Array<Parameters<NonNullable<MessagingBackendBridge["submitReview"]>>[0]> = [];

@@ -29,12 +29,11 @@ import { SetupMark, type SetupMarkId } from "./SetupMark";
  * launches the provider's CLI.
  */
 
-export type AgentBackendId =
-  | "codex"
-  | "gemini"
-  | "kimi"
-  | "qwen"
-  | "grok";
+/** An ACP agent PwrAgent supports: one per key of the settings contract's
+ *  `acpAgents`. */
+type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
+
+export type AgentBackendId = "codex" | AcpAgentId;
 
 type AgentDesktopPlatform = "darwin" | "win32" | "linux";
 type AgentInstallCommand = { label: string; command: string };
@@ -50,8 +49,7 @@ function agentPlatformLabel(platform: AgentDesktopPlatform): string {
   return "macOS";
 }
 
-const AGENT_BACKENDS: ReadonlyArray<{
-  id: AgentBackendId;
+type AgentBackendDefinition = {
   name: string;
   description: string;
   /**
@@ -73,44 +71,52 @@ const AGENT_BACKENDS: ReadonlyArray<{
     ReadonlyArray<AgentInstallCommand>
   >;
   platformNotes?: Partial<Record<AgentDesktopPlatform, string>>;
-}> = [
-  {
-    id: "codex",
-    name: "Codex CLI",
-    description:
-      "OpenAI's coding agent. Sign in with your ChatGPT account after install.",
-    mark: "codex",
-    vendor: "OpenAI",
-    trademarks: "OpenAI, Codex, and the OpenAI logo are trademarks of OpenAI.",
-    docsUrl: "https://learn.chatgpt.com/docs/codex/cli#getting-started",
-    installCommands: {
-      darwin: [
-        {
-          label: "Recommended",
-          command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-        },
-        { label: "Homebrew", command: "brew install --cask codex" },
-        { label: "npm", command: "npm install -g @openai/codex" },
-      ],
-      linux: [
-        {
-          label: "Recommended",
-          command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-        },
-        { label: "npm", command: "npm install -g @openai/codex" },
-      ],
-      win32: [
-        {
-          label: "PowerShell (recommended)",
-          command:
-            'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
-        },
-        { label: "npm", command: "npm install -g @openai/codex" },
-      ],
-    },
+};
+
+const CODEX_BACKEND: AgentBackendDefinition = {
+  name: "Codex CLI",
+  description:
+    "OpenAI's coding agent. Sign in with your ChatGPT account after install.",
+  mark: "codex",
+  vendor: "OpenAI",
+  trademarks: "OpenAI, Codex, and the OpenAI logo are trademarks of OpenAI.",
+  docsUrl: "https://learn.chatgpt.com/docs/codex/cli#getting-started",
+  installCommands: {
+    darwin: [
+      {
+        label: "Recommended",
+        command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      },
+      { label: "Homebrew", command: "brew install --cask codex" },
+      { label: "npm", command: "npm install -g @openai/codex" },
+    ],
+    linux: [
+      {
+        label: "Recommended",
+        command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      },
+      { label: "npm", command: "npm install -g @openai/codex" },
+    ],
+    win32: [
+      {
+        label: "PowerShell (recommended)",
+        command:
+          'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+      },
+      { label: "npm", command: "npm install -g @openai/codex" },
+    ],
   },
-  {
-    id: "gemini",
+};
+
+/**
+ * The ACP agents, keyed by the settings contract's `acpAgents`. That
+ * contract lists every ACP agent PwrAgent supports, and main discovers
+ * exactly those, so the guided flow covers each by construction: an agent
+ * added there fails typecheck here until it has its install copy, and its
+ * tab follows. Key order is tab order.
+ */
+const ACP_AGENT_BACKENDS: Record<AcpAgentId, AgentBackendDefinition> = {
+  gemini: {
     name: "Gemini CLI",
     description:
       "Google's terminal coding agent with Google-account and API-key login options.",
@@ -130,8 +136,7 @@ const AGENT_BACKENDS: ReadonlyArray<{
       ],
     },
   },
-  {
-    id: "kimi",
+  kimi: {
     name: "Kimi Code",
     description:
       "Moonshot AI's Node.js coding agent. Run /login for OAuth or an API key.",
@@ -175,8 +180,7 @@ const AGENT_BACKENDS: ReadonlyArray<{
         "Install Git for Windows before first launch; Kimi uses its bundled Git Bash.",
     },
   },
-  {
-    id: "qwen",
+  qwen: {
     name: "Qwen Code",
     description:
       "Qwen's coding agent. Run /auth for ModelStudio, third-party, or custom providers.",
@@ -227,8 +231,7 @@ const AGENT_BACKENDS: ReadonlyArray<{
         "Restart the terminal after install. Qwen OAuth has ended; use /auth after launch.",
     },
   },
-  {
-    id: "grok",
+  grok: {
     name: "Grok Build",
     description:
       "xAI's coding agent. The CLI opens browser sign-in on first launch.",
@@ -257,12 +260,21 @@ const AGENT_BACKENDS: ReadonlyArray<{
       ],
     },
   },
-];
+};
+
+const ACP_AGENT_IDS: readonly AcpAgentId[] = Object.keys(
+  ACP_AGENT_BACKENDS,
+) as AcpAgentId[];
+
+const AGENT_BACKEND_IDS: readonly AgentBackendId[] = ["codex", ...ACP_AGENT_IDS];
+
+/** Every id has a definition, so there is no fallback to show in its place. */
+function agentBackendDefinition(id: AgentBackendId): AgentBackendDefinition {
+  return id === "codex" ? CODEX_BACKEND : ACP_AGENT_BACKENDS[id];
+}
 
 export function backendTrademarkNotice(id: AgentBackendId): string {
-  const backend =
-    AGENT_BACKENDS.find((candidate) => candidate.id === id)
-    ?? AGENT_BACKENDS[0];
+  const backend = agentBackendDefinition(id);
   return `${backend.trademarks} PwrAgent is independently developed and is not affiliated with, endorsed by, or sponsored by ${backend.vendor}.`;
 }
 
@@ -270,14 +282,13 @@ export function installedAgentBackendNames(
   snapshot: DesktopSettingsSnapshot | undefined,
   acpEntries: readonly AcpAgentSettingsEntry[],
 ): string[] {
-  return AGENT_BACKENDS.flatMap((backend) => {
+  return AGENT_BACKEND_IDS.flatMap((id) => {
     const installed =
-      backend.id === "codex"
+      id === "codex"
         ? Boolean(selectedCodexCandidate(snapshot))
-        : Boolean(acpEntryFor(acpEntries, backend.id)?.installed);
-    const enabled = backend.id === "codex"
-      || acpBackendEnabled(snapshot, backend.id);
-    return installed && enabled ? [backend.name] : [];
+        : Boolean(acpEntryFor(acpEntries, id)?.installed);
+    const enabled = id === "codex" || acpBackendEnabled(snapshot, id);
+    return installed && enabled ? [agentBackendDefinition(id).name] : [];
   });
 }
 
@@ -325,10 +336,7 @@ export type AgentTabId = AgentBackendId | "claude";
 export const AGENT_TABS: readonly AgentTabId[] = [
   "codex",
   "claude",
-  "gemini",
-  "kimi",
-  "qwen",
-  "grok",
+  ...ACP_AGENT_IDS,
 ];
 
 type ClaudeInstallation = BackendSummary["claude"];
@@ -345,7 +353,7 @@ const CLAUDE_DEFINITION = {
 
 export function agentTabName(id: AgentTabId): string {
   if (id === "claude") return CLAUDE_DEFINITION.name;
-  return AGENT_BACKENDS.find((backend) => backend.id === id)?.name ?? id;
+  return agentBackendDefinition(id).name;
 }
 
 function agentTrademarkNotice(id: AgentTabId): string {
@@ -507,8 +515,7 @@ export function AgentChooseStep(props: {
   const activeDefinition =
     active === "claude"
       ? undefined
-      : AGENT_BACKENDS.find((backend) => backend.id === active)
-        ?? AGENT_BACKENDS[0];
+      : agentBackendDefinition(active);
   const activeAcpEntry =
     active === "codex" || active === "claude"
       ? undefined
@@ -982,8 +989,7 @@ function GeminiSignIn(props: {
 }
 
 function CliSignInNote(props: { active: Exclude<AgentBackendId, "codex" | "gemini"> }) {
-  const definition = AGENT_BACKENDS.find((backend) => backend.id === props.active);
-  if (!definition) return null;
+  const definition = agentBackendDefinition(props.active);
   return (
     <div className="guided-setup__prereq-card">
       <div className="guided-setup__prereq-sub">{definition.description}</div>

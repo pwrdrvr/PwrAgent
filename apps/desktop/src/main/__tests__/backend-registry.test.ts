@@ -346,7 +346,7 @@ describe("DesktopBackendRegistry", () => {
     const getSessionInfo = vi.fn().mockResolvedValue(undefined);
     const revokeBridge = vi.fn();
     const registerBridge = vi.fn(async () => ({
-      server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
+      server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: { FIXTURE_TOKEN: "synthetic-stdio-token" } },
       bindThread: vi.fn(), revoke: revokeBridge,
     }));
     const overlayStore = createOverlayStoreMock();
@@ -373,7 +373,7 @@ describe("DesktopBackendRegistry", () => {
         store,
         // This fixture owns a mocked Claude session, not SDK transcript/Git probes.
         getSessionInfo,
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [
           { id: "fable", label: "Fable 5.1", current: true },
           { id: "claude-custom-fixture", label: "Custom fixture", supportsReasoning: true,
@@ -391,7 +391,7 @@ describe("DesktopBackendRegistry", () => {
             yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${optionsSeen.length}`, content: [{ type: "text", text: "Done" }] } } as ClaudeMessage;
             yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -427,7 +427,10 @@ describe("DesktopBackendRegistry", () => {
         expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: started.turnId });
         expect(optionsSeen[turn].permissionMode).toBe("auto");
         expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId, undefined, "claude");
-        expect(Object.values(optionsSeen[turn].mcpServers ?? {})).toContainEqual(expect.objectContaining({ type: "stdio", command: "/fixture/bridge" }));
+        expect(optionsSeen[turn].mcpServersDelivery).toBe("initialize");
+        expect(Object.values(optionsSeen[turn].mcpServers ?? {})).toContainEqual({
+          type: "stdio", command: "/fixture/bridge", args: ["--stdio"], env: { FIXTURE_TOKEN: "synthetic-stdio-token" },
+        });
         const server = optionsSeen[turn].mcpServers!.pwragent;
         if (!("url" in server)) throw new Error("Expected HTTP MCP server");
         const mcp = new McpClient({ name: "claude-fixture", version: "1.0.0" });
@@ -520,14 +523,14 @@ describe("DesktopBackendRegistry", () => {
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(root, "sessions")),
         getSessionInfo: vi.fn().mockResolvedValue(undefined),
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [],
         query: ({ options = {} }) => {
           async function* messages(): AsyncGenerator<ClaudeMessage> {
             yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
             yield { type: "result", subtype: "success", is_error: false, result: "Done." } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -570,7 +573,7 @@ describe("DesktopBackendRegistry", () => {
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(root, "sessions")),
         getSessionInfo: vi.fn().mockResolvedValue(undefined),
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [],
         query: ({ options = {} }) => {
           async function* messages(): AsyncGenerator<ClaudeMessage> {
@@ -579,7 +582,7 @@ describe("DesktopBackendRegistry", () => {
             await release.promise;
             yield { type: "result", subtype: "success", is_error: false, result: "Done." } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -637,7 +640,7 @@ describe("DesktopBackendRegistry", () => {
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(root, "sessions")),
         getSessionInfo: vi.fn().mockResolvedValue(undefined),
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [],
         taskFollowUpGraceMs: 10,
         query: ({ options = {} }) => {
@@ -660,7 +663,7 @@ describe("DesktopBackendRegistry", () => {
             // its follow-up grace. close() must also unblock a pending task.
             await queryClosed.promise;
           }
-          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });

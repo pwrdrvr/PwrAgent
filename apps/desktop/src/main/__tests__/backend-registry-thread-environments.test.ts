@@ -3350,7 +3350,7 @@ command = "pnpm dev"
     return {
       store: new ClaudeSessionStore(path.join(root, "sessions")),
       getSessionInfo: vi.fn().mockResolvedValue(undefined),
-      inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
+      inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" as const }),
       discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
       query: ({ options = {} }: { options?: ClaudeOptions }) => {
         optionsSeen.push(options);
@@ -3358,7 +3358,7 @@ command = "pnpm dev"
           yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
           yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
         }
-        return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
       },
     };
   }

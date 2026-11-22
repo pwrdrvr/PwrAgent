@@ -2,17 +2,23 @@ import { executeResourceCheckout, recoverResourceCheckout } from "@pwragent/owne
 import { createPwrSuiteLabCheckoutAdapter, type ApprovedLabCheckout } from "./pwrsuitelab-checkout-adapter";
 import { isEnvironmentGroupGone } from "./checkout-machine-evidence";
 import { createHash, randomUUID } from "node:crypto";
-import { ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus, type CheckoutToken } from "@pwragent/owner-core/resource-checkout-authority";
-import type { CheckoutActor, CheckoutDefinition, CheckoutStore } from "@pwragent/owner-core/resource-checkout-storage";
+import {
+  CheckoutDefinitionConflictError, ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus, type CheckoutToken,
+} from "@pwragent/owner-core/resource-checkout-authority";
+import type {
+  CheckoutActor, CheckoutDefinition, CheckoutDomainRecord, CheckoutStore,
+} from "@pwragent/owner-core/resource-checkout-storage";
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
   type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
+  type ResourceOwnershipConflict,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseCheckoutAction, parseCheckoutToken, object, text } from "./checkout-input";
 import type { ExternalBinding } from "./checkout-configuration";
-import { projectCheckoutDomain } from "./checkout-projection";
+import { projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONFLICT } from "./checkout-projection";
+import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "./checkout-ownership";
 
 export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v1";
 const REFRESH_MS = 2_000;
@@ -22,8 +28,18 @@ type Store = CheckoutStore & { close(): void };
 type Options = {
   viewer: ResourceViewer;
   machineStore?: Store;
+  /** Why no machine store was passed, for the operator. */
+  machineUnresolved?: ResourceOwnershipConflict;
+  /**
+   * Opens the machine store under this machine's identity. `adopted` is true
+   * only when this call took the store over from another identity; another
+   * profile on the root may already have done that.
+   */
+  adoptMachineStore?: () => { store: Store; adopted: boolean };
   machineCpuCount?: number;
   externalStore?: Store;
+  /** Why no Federation store was passed, for the operator. */
+  externalUnresolved?: ResourceOwnershipConflict;
   bindings: ExternalBinding[];
   allowAgentDrafts?: boolean;
   approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
@@ -35,14 +51,18 @@ type Options = {
 };
 
 type CheckoutDelegation = Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>;
+type OwnershipAction = Extract<ResourceCheckoutActionRequest, { kind: "resolve_ownership" }>;
 type ExternalView = { authority: ResourceAuthority; resource: ResourceDomain };
 
 export class DesktopResourceCheckoutService {
   private readonly now: () => number;
-  private readonly machine?: ResourceCheckoutAuthority;
+  private machine?: ResourceCheckoutAuthority;
+  private machineStore?: Store;
   private readonly machineDefinition: CheckoutDefinition;
   private readonly external?: ResourceCheckoutAuthority;
   private readonly hosted = new Set<string>();
+  /** Hosted definitions whose saved record conflicts with the configuration. */
+  private readonly changedDefinitions = new Set<string>();
   private readonly operator: CheckoutActor;
   private readonly listeners = new Set<(revision: number) => void>();
   private readonly remoteViews = new Map<string, ExternalView>();
@@ -62,6 +82,9 @@ export class DesktopResourceCheckoutService {
   private closed = false;
   private closing?: Promise<void>;
   private machineConflict = false;
+  /** The adopted machine store came from another identity in this process. */
+  private machineAdopted = false;
+  private machineConflictExplanation: ResourceOwnershipConflict = UNEXPLAINED_OWNERSHIP_CONFLICT;
   private lastAdvertisementScan = -Infinity;
   private localAdvertisements: ResourceAdvertisement[] = [];
 
@@ -77,6 +100,7 @@ export class DesktopResourceCheckoutService {
       scope: "machine", capacity: Math.max(1, options.machineCpuCount ?? 1), counted: true, authorityId: machineKey, epoch: 1,
       maxHoldMs: MAX_CHECKOUT_HOLD_MS, publication: "published", revision: 2, updatedAt: this.now(),
     };
+    this.machineStore = machineStore;
     if (machineStore) {
       try {
         this.machine = new ResourceCheckoutAuthority(machineStore, this.now, randomUUID);
@@ -84,10 +108,14 @@ export class DesktopResourceCheckoutService {
         if (options.bootId) this.machine.reconcilePriorMachineBoot(machineKey, options.bootId);
       } catch (error) {
         this.machineConflict = true;
+        this.machineConflictExplanation = error instanceof CheckoutDefinitionConflictError
+          ? OWNERSHIP_CONFLICTS.machineDefinitionChanged
+          : OWNERSHIP_CONFLICTS.machineStoreUnavailable;
         options.warn(error);
       }
     } else {
       this.machineConflict = true;
+      this.machineConflictExplanation = options.machineUnresolved ?? OWNERSHIP_CONFLICTS.machineStoreUnavailable;
     }
     if (externalStore) {
       this.external = new ResourceCheckoutAuthority(externalStore, this.now, randomUUID);
@@ -97,6 +125,7 @@ export class DesktopResourceCheckoutService {
           this.external.ensure(binding.definition);
           this.hosted.add(binding.definition.resourceId);
         } catch (error) {
+          if (error instanceof CheckoutDefinitionConflictError) this.changedDefinitions.add(binding.definition.resourceId);
           options.warn(error);
         }
       }
@@ -112,6 +141,15 @@ export class DesktopResourceCheckoutService {
   private isLocalAuthority(binding: ExternalBinding): boolean {
     return binding.authorityInstanceId === this.options.viewer.instanceId
       && binding.authorityMachineId === this.options.viewer.machineId;
+  }
+
+  /**
+   * A binding that names this instance as owner on another machine. It is
+   * not a peer: asking "ourselves" over Federation would fail as an unknown
+   * outcome instead of a definite refusal.
+   */
+  private isMisbound(binding: ExternalBinding): boolean {
+    return binding.authorityInstanceId === this.options.viewer.instanceId && !this.isLocalAuthority(binding);
   }
 
   private operatorFor(instanceId: string): CheckoutActor {
@@ -154,7 +192,7 @@ export class DesktopResourceCheckoutService {
         const authority = this.authorityView(def, "machine_broker", "unresolved");
         return [{ authority, resource: projectCheckoutDomain({
           definition: { ...def, publication: "pending_registration" }, generation: 0, grants: [], queue: [],
-        }, actor, authority) }];
+        }, actor, authority, false, this.machineConflictExplanation) }];
       }
       const authority = this.authorityView(def, "machine_broker", "reachable");
       return this.machine.records().filter(({ definition }) => definition.publication !== "pending_registration"
@@ -186,7 +224,20 @@ export class DesktopResourceCheckoutService {
       : local || binding.authorityInstanceId === this.options.viewer.instanceId ? "unresolved" : "unreachable");
     const approved = this.options.approvedLabCheckouts?.get(definition.resourceId);
     const managed = !!saved && approved?.resourceId === definition.resourceId && approved.expiresAt > this.now();
-    return { authority, resource: projectCheckoutDomain(saved ?? { definition, generation: 0, grants: [], queue: [] }, actor, authority, managed) };
+    return {
+      authority,
+      resource: projectCheckoutDomain(
+        saved ?? { definition, generation: 0, grants: [], queue: [] }, actor, authority, managed, this.bindingConflict(binding),
+      ),
+    };
+  }
+
+  /** Why a binding this instance should host is unresolved. */
+  private bindingConflict(binding: ExternalBinding): ResourceOwnershipConflict {
+    if (!this.isLocalAuthority(binding)) return misboundAuthorityConflict(binding.authorityMachineId);
+    if (!this.external) return this.options.externalUnresolved ?? OWNERSHIP_CONFLICTS.federationStoreUnavailable;
+    if (this.changedDefinitions.has(binding.definition.resourceId)) return OWNERSHIP_CONFLICTS.definitionChanged;
+    return UNEXPLAINED_OWNERSHIP_CONFLICT;
   }
 
   private readView(actor: CheckoutActor, remotes: ReadonlyMap<string, ExternalView>): ExternalView[] {
@@ -297,7 +348,7 @@ export class DesktopResourceCheckoutService {
   async status(actor: CheckoutActor, resourceId: string, key: string): Promise<CheckoutStatus | undefined> {
     const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === resourceId);
     if (binding && !this.isLocalAuthority(binding)) {
-      if (!binding.allowedInstances.includes(this.options.viewer.instanceId)) return undefined;
+      if (this.isMisbound(binding) || !binding.allowedInstances.includes(this.options.viewer.instanceId)) return undefined;
       const response = await this.options.requestPeer<CheckoutStatus | null>(binding.authorityInstanceId, {
         operation: "status", resourceId, key, epoch: binding.definition.epoch, subject: this.subject(actor),
       });
@@ -317,6 +368,7 @@ export class DesktopResourceCheckoutService {
     try {
       if (action.kind === "delegate_execution" && !handoff) return rejectCheckout("not_authorized", "Use the authorized checkout handoff route.");
       if (this.closing || this.closed) return rejectCheckout("authority_unreachable", "The checkout authority is shutting down.");
+      if (action.kind === "resolve_ownership") return this.resolveOwnership(actor, action);
       if (action.kind === "register_definition") {
         if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
         const { draft } = action;
@@ -347,6 +399,9 @@ export class DesktopResourceCheckoutService {
         if (this.isLocalAuthority(binding)) {
           if (!this.hosted.has(action.resourceId)) return rejectCheckout("ownership_unresolved", "The configured authority could not confirm this definition.");
           return this.performWithExecutor(this.external!, actor, action, executor);
+        }
+        if (this.isMisbound(binding)) {
+          return rejectCheckout("ownership_unresolved", misboundAuthorityConflict(binding.authorityMachineId).reason);
         }
         if (!binding.allowedInstances.includes(this.options.viewer.instanceId)) return rejectCheckout("not_authorized", "This instance cannot use the resource.");
         if (this.remoteViews.get(action.resourceId)?.authority.status === "unreachable") {
@@ -380,7 +435,7 @@ export class DesktopResourceCheckoutService {
     const binding = this.options.bindings.find(({ definition }) => definition.resourceId === token.resourceId);
     if (!binding || binding.definition.epoch !== token.epoch) return "rejected";
     if (!this.isLocalAuthority(binding)) {
-      if (!binding.allowedInstances.includes(this.options.viewer.instanceId)) return "rejected";
+      if (this.isMisbound(binding) || !binding.allowedInstances.includes(this.options.viewer.instanceId)) return "rejected";
       return await this.options.requestPeer(binding.authorityInstanceId, {
         operation: "lab_execution", resourceId: token.resourceId, epoch: token.epoch, token, cost, subject: this.subject(actor),
       });
@@ -427,6 +482,108 @@ export class DesktopResourceCheckoutService {
 
   handoffInstanceId(): string {
     return this.options.viewer.instanceId;
+  }
+
+  /**
+   * Apply the operator's fix for an unresolved authority. Each resolution is
+   * recorded under its request key in the store it changes, so a retry after
+   * success returns the same result.
+   */
+  private resolveOwnership(actor: CheckoutActor, action: OwnershipAction): ResourceCheckoutActionResult {
+    if (!actor.manage || actor.holder.kind !== "operator") {
+      return rejectCheckout("not_authorized", "Only this instance's operator can resolve ownership.");
+    }
+    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === action.resourceId);
+    if (binding) {
+      const id = binding.definition.resourceId;
+      if (!this.isLocalAuthority(binding) || !this.external) return rejectCheckout("not_applicable", this.bindingConflict(binding).remedy);
+      if (!this.changedDefinitions.has(id)) return this.external.resolveOwnership(actor, action);
+      if (action.resolution !== "accept_definition") return rejectCheckout("not_applicable", OWNERSHIP_CONFLICTS.definitionChanged.remedy);
+      const result = this.external.resolveOwnership(actor, action, (record) => { record.definition = binding.definition; });
+      if (result.outcome === "accepted") {
+        this.changedDefinitions.delete(id);
+        this.hosted.add(id);
+      }
+      return result;
+    }
+    if (action.resourceId !== this.machineDefinition.resourceId) {
+      return rejectCheckout("not_applicable", "This resource has no ownership conflict.");
+    }
+    const offered = this.machineConflict ? this.machineConflictExplanation.resolution?.kind : undefined;
+    if (!offered) {
+      return this.machine && !this.machineConflict
+        ? this.machine.resolveOwnership(actor, action)
+        : rejectCheckout("not_applicable", this.machineConflictExplanation.remedy);
+    }
+    if (action.resolution !== offered) return rejectCheckout("not_applicable", this.machineConflictExplanation.remedy);
+    if (offered === "accept_definition" && this.machine) {
+      const result = this.machine.resolveOwnership(actor, action, (record) => this.acceptMachineDefinition(record));
+      if (result.outcome === "accepted") this.machineResolved(this.machine);
+      return result;
+    }
+    if (!this.machine) {
+      const adopt = this.options.adoptMachineStore;
+      if (!adopt) return rejectCheckout("not_applicable", this.machineConflictExplanation.remedy);
+      let opened: { store: Store; adopted: boolean };
+      try {
+        opened = adopt();
+      } catch (error) {
+        this.options.warn(error);
+        return rejectCheckout("not_applicable", OWNERSHIP_CONFLICTS.machineStoreUnavailable.remedy);
+      }
+      const machine = new ResourceCheckoutAuthority(opened.store, this.now, randomUUID);
+      try {
+        machine.ensure(this.machineDefinition, { machineCpuPool: true });
+      } catch (error) {
+        // A copied record is replaced below; anything else leaves nothing half bound.
+        if (!(error instanceof CheckoutDefinitionConflictError)) {
+          opened.store.close();
+          this.options.warn(error);
+          return rejectCheckout("not_applicable", OWNERSHIP_CONFLICTS.machineStoreUnavailable.remedy);
+        }
+      }
+      this.machineStore = opened.store;
+      this.machine = machine;
+      this.machineAdopted = opened.adopted;
+    }
+    const adopted = this.machineAdopted;
+    const result = this.machine.resolveOwnership(actor, action, (record, now) => {
+      this.acceptMachineDefinition(record);
+      // Holds and waiters copied from the other machine never held this one.
+      // When another profile on this root adopted first, they are its own.
+      if (!adopted) return;
+      record.grants = [];
+      record.queue = [];
+      record.cleanupVerifiedAt = now;
+    });
+    if (result.outcome === "accepted") this.machineResolved(this.machine);
+    return result;
+  }
+
+  /**
+   * The first profile to initialize the counted pool set its capacity, and a
+   * later CPU sample can't resize it under live reservations, so keep it.
+   */
+  private acceptMachineDefinition(record: CheckoutDomainRecord): void {
+    const saved = record.definition;
+    if (saved.counted) {
+      record.definition = { ...this.machineDefinition, capacity: saved.capacity };
+      return;
+    }
+    // A pre-release single-slot record: its holds took the whole machine.
+    record.definition = this.machineDefinition;
+    for (const hold of [...record.grants, ...record.queue]) hold.units = this.machineDefinition.capacity;
+  }
+
+  private machineResolved(machine: ResourceCheckoutAuthority): void {
+    this.machineConflict = false;
+    if (!this.options.bootId) return;
+    try {
+      // The constructor skipped this while the machine was unresolved.
+      machine.reconcilePriorMachineBoot(this.machineDefinition.resourceId, this.options.bootId);
+    } catch (error) {
+      this.options.warn(error);
+    }
   }
 
   private performWithExecutor(
@@ -592,7 +749,7 @@ export class DesktopResourceCheckoutService {
     }
     this.providerJobs.clear();
     this.closed = true;
-    this.options.machineStore?.close();
+    this.machineStore?.close();
     this.options.externalStore?.close();
   }
 }

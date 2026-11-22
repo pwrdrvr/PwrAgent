@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type {
   getSessionInfo, getSessionMessages, getSubagentMessages, query, AccountInfo, McpServerStatus, Options, Query, SDKMessage,
@@ -51,7 +52,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -112,6 +113,8 @@ export type ClaudeBackendOptions = {
   planLimits?: PlanLimitStore;
   /** Overrides CLAUDE_TASK_FOLLOW_UP_GRACE_MS. */
   taskFollowUpGraceMs?: number;
+  /** Maximum wait for launch-time MCP configuration. */
+  mcpStartupTimeoutMs?: number;
   /** Overrides CLAUDE_LIVE_USAGE_INTERVAL_MS. */
   liveUsageIntervalMs?: number;
   /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
@@ -250,6 +253,44 @@ function claudeExceptionMessage(error: unknown, stderr: string): string {
  * of its own; this bounds the wait when it does not.
  */
 const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
+const CLAUDE_MCP_STARTUP_TIMEOUT_MS = 30_000;
+
+async function configureClaudeStartupMcp(
+  query: Query,
+  servers: NonNullable<Options["mcpServers"]>,
+  initialize: boolean,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<void> {
+  const timer = new AbortController();
+  const waitSignal = AbortSignal.any([signal, timer.signal]);
+  try {
+    signal.throwIfAborted();
+    await Promise.race([
+      (async () => {
+        if (initialize) {
+          const result = await query.initializationResult();
+          // Host-resident SDK servers are registered separately from CLI servers.
+          if (Object.values(servers).some((server) => server.type !== "sdk") && result.mcp_servers_applied !== true) {
+            throw new Error("Claude Code did not apply the MCP configuration. Check the connections and try again.");
+          }
+        } else {
+          const result = await query.setMcpServers(servers).catch((error: unknown) => {
+            throw new Error("Claude Code could not attach the MCP servers. Check the connections and try again.", { cause: error });
+          });
+          if (Object.keys(result.errors).length > 0) {
+            throw new Error("Claude Code refused one or more MCP servers. Check the connections and try again.");
+          }
+        }
+      })(),
+      delay(timeoutMs, undefined, { signal: waitSignal, ref: false }).then(() => {
+        throw new Error("Claude Code timed out applying the MCP configuration. Try again.");
+      }),
+    ]);
+  } finally {
+    timer.abort();
+  }
+}
 
 /**
  * The shortest gap between usage reports while a turn runs. Each report is a
@@ -778,17 +819,17 @@ export class ClaudeBackend {
       .catch((error: unknown) => claudeBackendLog.warn("Could not publish Claude sign-in status", error));
   }
 
-  private async requireInstallation(): Promise<string> {
+  private async requireInstallation(): Promise<ClaudeInstallation & { executable: string }> {
     // Inspection spawns the CLI three times. Reuse a usable result; an explicit
     // Settings check or startup refresh re-inspects through discover().
-    if (this.installation.executable && this.installation.authStatus !== "sign-in-required") {
-      return this.installation.executable;
-    }
-    await this.discover({ models: false });
     if (!this.installation.executable || this.installation.authStatus === "sign-in-required") {
-      throw new Error(this.installation.message ?? CLAUDE_SETUP_INSTRUCTIONS);
+      await this.discover({ models: false });
     }
-    return this.installation.executable;
+    const installation = this.installation;
+    if (!installation.executable || installation.authStatus === "sign-in-required") {
+      throw new Error(installation.message ?? CLAUDE_SETUP_INSTRUCTIONS);
+    }
+    return { ...installation, executable: installation.executable };
   }
 
   async startThread(params: {
@@ -1157,7 +1198,7 @@ export class ClaudeBackend {
     const turn = claudeTurn(++this.authSequence);
     let live: LiveSession | undefined;
     try {
-      const executable = await this.requireInstallation();
+      const { executable, version } = await this.requireInstallation();
       const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
       const session = await this.store.read(threadId);
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
@@ -1197,6 +1238,7 @@ export class ClaudeBackend {
         : configDir === signInConfigDir;
       current.usesProviderAuth = sameConfigDir && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE
         && env.HOME === providerEnv.HOME && env.USERPROFILE === providerEnv.USERPROFILE;
+      const initializeMcp = supportsClaudeMcpInitialize(version);
       // The thread id names its first SDK session. A rewind past the first
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
@@ -1231,7 +1273,7 @@ export class ClaudeBackend {
         ...(config.effort ? { effort: config.effort } : {}),
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
-        mcpServers: config.mcpServers,
+        ...(initializeMcp ? { mcpServers: config.mcpServers, mcpServersDelivery: "initialize" } : {}),
         ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
         // PwrAgent's gateway and forge policy ask for their own calls, so Claude
         // does not ask first.
@@ -1276,9 +1318,11 @@ export class ClaudeBackend {
       };
       let releasePrompt!: () => void;
       const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });
+      let promptAccepted = false;
       const input = current.input;
       async function* prompt(): AsyncIterable<SDKUserMessage> {
         await promptReady;
+        if (!promptAccepted || controller.signal.aborted) return;
         // The turn id doubles as the prompt's UUID, which a rewind targets.
         yield { type: "user", uuid: claudePromptUuid(turn), parent_tool_use_id: null,
           session_id: session.sdkSessionId ?? session.forkFromSdkSessionId ?? freshSdkSessionId,
@@ -1291,11 +1335,19 @@ export class ClaudeBackend {
       // session totals before releasing the prompt, so this turn cannot race
       // its own baseline. If unavailable, the first result seeds the next turn.
       try {
+        // The SDK buffers the prompt during initialize, so its query object
+        // alone is not proof that Claude can accept the first message.
+        if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+          await configureClaudeStartupMcp(current.query, config.mcpServers, initializeMcp, controller.signal,
+            this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS);
+        }
         // A fork's totals start from its source's, so it reads them too.
         if ((session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage) {
           const usage = await claudeTelemetry(() => current.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
           if (usage?.session?.model_usage) session.modelUsage = usage.session.model_usage;
         }
+        controller.signal.throwIfAborted();
+        promptAccepted = true;
       } finally { releasePrompt(); }
       turn.usageBaseline = session.modelUsage;
       turn.needsUsageBaseline = Boolean(session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage;
@@ -1305,21 +1357,23 @@ export class ClaudeBackend {
       void done.catch(() => {}).finally(() => this.sessionRuns.delete(done));
       return { backend: "claude", threadId, turnId: turn.turnId };
     } catch (error) {
-      const failure = claudeExceptionMessage(error, live?.stderr ?? "");
-      claudeBackendLog.warn("Claude turn failed during startup", {
+      const cancelled = controller.signal.aborted;
+      const failure = cancelled ? "Claude turn cancelled before sending the prompt." : claudeExceptionMessage(error, live?.stderr ?? "");
+      if (!cancelled) claudeBackendLog.warn("Claude turn failed during startup", {
         threadId, turnId: turn.turnId, error: failure, stderr: live?.stderr.slice(-320),
       });
       turn.ending = true;
       if (live) {
         live.closing = true;
-        live.input.close();
+        try { await this.closeSession(live); }
+        catch { /* The startup failure still owns the terminal result. */ }
         // A steer accepted during startup writes its own row; let it land
         // before the failed status, so the failed status is final.
         await this.settleInputWrites(live);
         if (this.sessions.get(threadId) === live) this.sessions.delete(threadId);
         this.runSessionClosed(live);
       }
-      if (turn.started) await this.failTurn(threadId, turn, failure, live?.usesProviderAuth);
+      if (turn.started) await this.finishUnsentTurn(threadId, turn, failure, live?.usesProviderAuth, cancelled);
       throw new Error(failure, { cause: error });
     } finally {
       if (this.starting.get(threadId) === controller) this.starting.delete(threadId);
@@ -1372,7 +1426,7 @@ export class ClaudeBackend {
       const failure = claudeExceptionMessage(error, "");
       claudeBackendLog.warn("Claude turn failed to start in a live session", { threadId, turnId: turn.turnId, error: failure });
       // A session that closed meanwhile has already ended a started turn.
-      if (turn.started && !turn.ended.settled) await this.failTurn(threadId, turn, failure, live.usesProviderAuth);
+      if (turn.started && !turn.ended.settled) await this.finishUnsentTurn(threadId, turn, failure, live.usesProviderAuth);
       throw error;
     } finally {
       prompted.resolve();
@@ -1503,16 +1557,25 @@ export class ClaudeBackend {
     } });
   }
 
-  /** Fail a turn that never reached its query. */
-  private async failTurn(threadId: string, turn: RunningTurn, failure: string, usesProviderAuth: boolean | undefined): Promise<void> {
+  /** Persist the terminal state of a turn whose prompt was never sent. */
+  private async finishUnsentTurn(
+    threadId: string, turn: RunningTurn, failure: string, usesProviderAuth: boolean | undefined, cancelled = false,
+  ): Promise<void> {
     this.sessions.get(threadId)?.accountChecked.resolve();
-    const end = { turnId: turn.turnId, status: "failed" as const, startedAt: turn.startedAt };
+    const status = cancelled ? "cancelled" : "failed";
+    const end = { turnId: turn.turnId, status, startedAt: turn.startedAt } as const;
     for (const entry of turn.entries.values()) {
-      entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
+      entry.turn = { id: turn.turnId, status, startedAt: turn.startedAt };
     }
     try {
-      const loginRejected = await this.observeTurnAuth(turn, usesProviderAuth, failure);
+      const loginRejected = !cancelled && await this.observeTurnAuth(turn, usesProviderAuth, failure);
       await this.store.append(threadId, this.unsavedTurnEntries(turn), end);
+      if (cancelled) {
+        await this.emit({ method: "turn/cancelled", params: {
+          threadId, turnId: turn.turnId, turn: { id: turn.turnId, status: "cancelled", startedAt: turn.startedAt },
+        } });
+        return;
+      }
       await this.emit({ method: "turn/failed", params: {
         threadId, turnId: turn.turnId,
         turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: {
@@ -2626,7 +2689,7 @@ export class ClaudeBackend {
     if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return [];
     const probe = (async () => {
       try {
-        const executable = await this.requireInstallation();
+        const { executable } = await this.requireInstallation();
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
         const commands = await (this.options.readCommands ?? ((probeParams) => readClaudeMetadata({
           ...probeParams,
@@ -2667,7 +2730,7 @@ export class ClaudeBackend {
         probe = (async () => {
           try {
             const { cwd } = await this.store.read(threadId);
-            const executable = await this.requireInstallation();
+            const { executable } = await this.requireInstallation();
             const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
             return await (this.options.readMcpServers ?? readClaudeMcpServerStatus)({ executable, env, cwd });
           } finally {
@@ -3376,7 +3439,7 @@ export class ClaudeBackend {
   }
 
   private async runRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
-    const executable = await this.requireInstallation();
+    const { executable } = await this.requireInstallation();
     const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     const input = new ClaudeInputStream();

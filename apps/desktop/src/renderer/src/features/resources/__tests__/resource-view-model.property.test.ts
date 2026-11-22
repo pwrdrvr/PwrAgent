@@ -26,7 +26,8 @@ import { acceptSnapshot } from "../useResourceCheckouts";
  * - The UI may make an authority's answer more conservative, never less.
  * - Cached state from an unreachable (or missing) authority never reads as
  *   usable capacity and never offers an action.
- * - Ownership unresolved offers nothing but resolving it.
+ * - Ownership unresolved offers only the resolution the authority describes:
+ *   every other action shows blocked, and resolving is offered nowhere else.
  * - A draft offers nothing.
  * - Administrative release needs verified fencing.
  * - "Available" never shows while the capacity is fully held.
@@ -123,7 +124,7 @@ const sharingArb = fc.oneof(
 const resourceArb: fc.Arbitrary<ResourceDomain> = fc.record({
   condition: fc.constantFrom(...CONDITIONS),
   boundAuthority: fc.boolean(),
-  conflict: fc.boolean(),
+  conflict: fc.constantFrom("none", "remedy", "resolvable"),
   sharing: sharingArb,
   allocations: fc.array(allocationArb, { maxLength: 3 }),
   queue: fc.array(queueEntryArb, { maxLength: 3 }),
@@ -155,9 +156,15 @@ const resourceArb: fc.Arbitrary<ResourceDomain> = fc.record({
   recovery: fencing
     ? { allocationId: "a", generation: 1, reason: "r", since: 0, fencing, evidence: [] }
     : null,
-  ownershipConflict: conflict
-    ? { reason: "two ids", candidates: [{ candidateId: "c1", label: "c1", detail: "d", observedAt: 0 }] }
-    : null,
+  ownershipConflict: conflict === "none"
+    ? null
+    : {
+      reason: "two ids",
+      remedy: "Run it on the machine that created the root.",
+      ...(conflict === "resolvable"
+        ? { resolution: { kind: "adopt_store" as const, label: "Adopt for this machine", consequence: "Copied checkouts are dropped." } }
+        : {}),
+    },
   definition: { revision: 1, publication: "published", updatedAt: 0 },
   actions,
 }));
@@ -194,13 +201,24 @@ describe("resource view model", () => {
     }));
   });
 
-  it("offers only resolving ownership while ownership is unresolved", () => {
+  it("offers only the described resolution while ownership is unresolved, whatever the server sends", () => {
     fc.assert(fc.property(scenarioArb, ([resource, authority]) => {
-      const condition = effectiveCondition(resource, authority);
-      fc.pre(condition === "ownership_unresolved");
-      for (const kind of allowedKinds(resource, authority)) {
-        expect(kind).toBe("resolve_ownership");
+      fc.pre(effectiveCondition(resource, authority) === "ownership_unresolved");
+      const resolution = resource.ownershipConflict?.resolution;
+      const expected = resolution && resource.actions.resolve_ownership?.allowed ? ["resolve_ownership"] : [];
+      expect(allowedKinds(resource, authority)).toEqual(expected);
+      for (const action of resourceActions(resource, authority)) {
+        expect(action.gate.allowed).toBe(action.kind === "resolve_ownership" && expected.length === 1);
+        if (action.kind === "resolve_ownership") expect(action.label).toBe(resolution?.label);
       }
+    }));
+  });
+
+  it("never offers resolving ownership outside the unresolved condition", () => {
+    fc.assert(fc.property(scenarioArb, ([resource, authority]) => {
+      fc.pre(effectiveCondition(resource, authority) !== "ownership_unresolved");
+      expect(effectiveGate(resource, authority, "resolve_ownership")?.allowed ?? false).toBe(false);
+      expect(resourceActions(resource, authority).map((action) => action.kind)).not.toContain("resolve_ownership");
     }));
   });
 

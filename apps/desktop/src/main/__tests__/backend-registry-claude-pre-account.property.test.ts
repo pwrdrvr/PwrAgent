@@ -20,11 +20,12 @@ it.each(["EOF", "a rejected read"] as const)("retires a Claude turn when its fir
     overlayStore: createOverlayStoreMock(),
     claudeBackendOptions: {
       store: new ClaudeSessionStore(path.join(cwd, "sessions")),
-      inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+      inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
       discoverModels: async () => [],
       query: () => ({
         [Symbol.asyncIterator]() { return this; },
         next: () => read.promise,
+        initializationResult: async () => ({ mcp_servers_applied: true }),
         close: eof,
       }) as unknown as Query,
     },
