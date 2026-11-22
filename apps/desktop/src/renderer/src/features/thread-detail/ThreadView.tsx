@@ -79,12 +79,9 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import type { FederationRemoteTarget, FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
-import type { PendingRequestAction } from "@pwragent/shared/pending-request-response";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
-import type { ThreadTodo, ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { ToolOutputIncidentExplorerLens } from "@pwragent/shared/contracts/tool-output-incidents";
-import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
-import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
@@ -217,15 +214,9 @@ import {
   SandboxerConnectionPrompt,
   sandboxerConnectionIds,
 } from "./SandboxerConnectionPrompt";
-import {
-  buildQuestionnaireResponse,
-  type PendingQuestionnaireState,
-} from "./questionnaire";
-import {
-  buildMcpElicitationResponse,
-  type PendingMcpInteractionState,
-  type McpApprovalPersistence,
-} from "./mcp-elicitation";
+import type { PendingQuestionnaireState } from "./questionnaire";
+import type { PendingMcpInteractionState } from "./mcp-elicitation";
+import { usePendingRequestControls } from "./usePendingRequestControls";
 import { readRendererSequence } from "./live-transcript-activity";
 import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
 import {
@@ -1212,8 +1203,19 @@ export function ThreadView(props: ThreadViewProps) {
     undefined,
   );
   const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
-  const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
-  const [pendingRequestError, setPendingRequestError] = useState<string>();
+  const {
+    pendingRequestError,
+    setPendingRequestBusy,
+    setPendingRequestError,
+    transcriptControls,
+  } = usePendingRequestControls({
+    desktopApi: props.desktopApi,
+    thread: props.selectedThread,
+    pendingRequest: props.pendingRequest,
+    clearPendingRequest: props.clearPendingRequest,
+    updatePendingUserInput: props.onUpdatePendingUserInput,
+    updatePendingMcpInteraction: props.onUpdatePendingMcpInteraction,
+  });
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
@@ -3032,115 +3034,6 @@ export function ThreadView(props: ThreadViewProps) {
     updatePendingProtocolActivityEntries,
   ]);
 
-  async function respondToPendingRequest(action: PendingRequestAction): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread || !props.pendingRequest) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
-      return;
-    }
-
-    setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
-
-    try {
-      await props.desktopApi.submitServerRequest({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
-        turnId:
-          typeof props.pendingRequest.params.turnId === "string"
-            ? props.pendingRequest.params.turnId
-            : undefined,
-        requestId: props.pendingRequest.params.requestId,
-        response: buildPendingRequestResponse(props.pendingRequest, action),
-      });
-      props.clearPendingRequest(
-        props.pendingRequest.params.requestId,
-        (
-          action.decision === "accept" ||
-          action.decision === "accept_for_session" ||
-          action.decision === "accept_with_execpolicy_amendment" ||
-          action.decision === "apply_network_policy_amendment"
-        )
-          ? "Thinking"
-          : undefined,
-      );
-    } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingRequestBusy(false);
-    }
-  }
-
-  async function submitPendingUserInput(
-    pendingUserInput: PendingQuestionnaireState
-  ): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
-      return;
-    }
-
-    setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
-
-    try {
-      await props.desktopApi.submitServerRequest({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
-        turnId: pendingUserInput.turnId,
-        requestId: pendingUserInput.requestId,
-        response: buildQuestionnaireResponse(pendingUserInput),
-      });
-      props.clearPendingRequest(pendingUserInput.requestId, "Thinking");
-    } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingRequestBusy(false);
-    }
-  }
-
-  async function submitPendingMcpInteraction(
-    pendingMcpInteraction: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel",
-    persist?: McpApprovalPersistence,
-    remember?: ForgeApprovalRememberOptionId,
-    mergeMethod?: ThreadTodoMergeMethod,
-    projectGrant?: boolean,
-  ): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
-      return;
-    }
-
-    setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
-
-    try {
-      await props.desktopApi.submitServerRequest({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
-        turnId:
-          typeof pendingMcpInteraction.turnId === "string"
-            ? pendingMcpInteraction.turnId
-            : undefined,
-        requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember, mergeMethod, projectGrant),
-      });
-      props.clearPendingRequest(
-        pendingMcpInteraction.requestId,
-        action === "accept" ? "Thinking" : undefined
-      );
-    } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingRequestBusy(false);
-    }
-  }
-
   const handleMaterializeLaunchpad = useEventCallback<
     Parameters<NonNullable<ThreadViewProps["onMaterializeLaunchpad"]>>,
     Promise<void>
@@ -3645,7 +3538,6 @@ export function ThreadView(props: ThreadViewProps) {
               pendingPlanEntry={undefined}
               pendingMcpInteraction={props.pendingMcpInteraction}
               pendingRequest={props.pendingRequest}
-              pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
               agentCommandsStatus={props.agentCommandsStatus}
@@ -3679,15 +3571,7 @@ export function ThreadView(props: ThreadViewProps) {
               onExpandedWorkPhaseGroupIdsChange={
                 props.onExpandedTranscriptWorkPhaseGroupIdsChange
               }
-              onRespondToPendingRequest={respondToPendingRequest}
-              onPendingMcpInteractionChange={(state) => {
-                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
-              }}
-              onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
-              onPendingUserInputChange={(state) => {
-                props.onUpdatePendingUserInput?.(state.requestId, () => state);
-              }}
-              onSubmitPendingUserInput={submitPendingUserInput}
+              {...transcriptControls}
               onViewportChange={props.onTranscriptViewportChange}
             />
             {pendingRequestError ? (
