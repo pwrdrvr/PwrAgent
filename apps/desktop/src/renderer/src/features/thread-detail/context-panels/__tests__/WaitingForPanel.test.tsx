@@ -258,6 +258,25 @@ describe("WaitingForPanel", () => {
     }
   });
 
+  it("explains that new Job Monitors are off while keeping the running monitor's stop action", async () => {
+    const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
+    const onTurnOnJobMonitors = vi.fn(async () => undefined);
+    render(<WaitingForPanel thread={{ ...thread, source: "codex", jobMonitorCreationEnabled: false }}
+      controller={controller(ready([monitor], []))} now={NOW} onTurnOnJobMonitors={onTurnOnJobMonitors} />);
+    expect(screen.getByText("New Job Monitors off")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Turn on Job Monitors" })); });
+    expect(onTurnOnJobMonitors).toHaveBeenCalledOnce();
+  });
+
+  it("omits monitor creation from the empty-state instructions while Job Monitors is off", () => {
+    render(<WaitingForPanel thread={{ ...thread, source: "codex", jobMonitorCreationEnabled: false }}
+      controller={controller(ready([], []))} now={NOW} />);
+    expect(screen.getByText("The agent can still delegate work and use Continue After.")).toBeInTheDocument();
+    expect(screen.getByText(/Ask the agent to watch CI or wait for another thread/)).toBeInTheDocument();
+    expect(screen.queryByText(/or start a monitor/)).not.toBeInTheDocument();
+  });
+
   it("shows a suppressed monitor after rearm with Stop and zero pending wakes", () => {
     const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
     render(<WaitingForPanel thread={thread} controller={controller(ready([{ ...monitor, wakeSuppressed: true }], []))} now={NOW} />);

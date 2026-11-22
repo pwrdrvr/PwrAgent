@@ -1993,6 +1993,65 @@ describe("Composer", () => {
     expect(onRefreshNavigation).toHaveBeenCalledOnce();
   });
 
+  it("shows Job Monitor creation separately from suggestions and keeps focus during a failed save", async () => {
+    const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false },
+      activeSubAgents: [{ monitorId: "monitor-fixture", task: "Watch the build", status: "running" as const, createdAt: 1, updatedAt: 1 }],
+    };
+    let rejectSave!: (error: Error) => void;
+    const setThreadJobMonitorCreation = vi.fn(() => new Promise<never>((_, reject) => { rejectSave = reject; }));
+    const setThreadMonitorJobSuggestions = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id }));
+    const onShowRunningMonitors = vi.fn();
+    const props = { desktopApi: { setThreadJobMonitorCreation, setThreadMonitorJobSuggestions },
+      disabled: false, skills: [], onShowRunningMonitors };
+    const { rerender } = render(<Composer {...props} thread={thread} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const switchRow = screen.getByRole("menuitemcheckbox", { name: "Job Monitors" });
+    expect(switchRow).toHaveAttribute("aria-checked", "true");
+    expect(switchRow).toHaveTextContent("1 running");
+    act(() => { switchRow.focus(); });
+    fireEvent.click(switchRow);
+    expect(setThreadJobMonitorCreation).toHaveBeenCalledWith({ threadId: thread.id, enabled: false });
+    expect(switchRow).toHaveAttribute("aria-busy", "true");
+    expect(switchRow).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Agent thread" })).toHaveAttribute("aria-disabled", "true");
+    expect(switchRow).toHaveFocus();
+    fireEvent.click(switchRow);
+    expect(setThreadJobMonitorCreation).toHaveBeenCalledOnce();
+    await act(async () => rejectSave(new Error("fixture save error")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't change Job Monitors");
+    expect(screen.getByRole("alert")).toHaveTextContent("fixture save error");
+    expect(switchRow).toHaveAttribute("aria-checked", "true");
+    expect(switchRow).toHaveAccessibleDescription("Couldn't turn off. Still on.");
+
+    rerender(<Composer {...props} thread={{ ...thread, jobMonitorCreationEnabled: false }} />);
+    expect(switchRow).toHaveAttribute("aria-checked", "false");
+    expect(switchRow).toHaveTextContent("1 running still reports back.");
+    const suggestions = screen.getByRole("menuitemcheckbox", { name: "Monitor job suggestions" });
+    expect(suggestions).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(suggestions);
+    expect(setThreadMonitorJobSuggestions).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Show running monitors…" }));
+    expect(onShowRunningMonitors).toHaveBeenCalledOnce();
+  });
+
+  it("shows the next-turn note when Job Monitors is turned back on during a turn", async () => {
+    const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const setThreadJobMonitorCreation = vi.fn(async () => ({ threadId: thread.id, enabled: true }));
+    const props = { desktopApi: { setThreadJobMonitorCreation }, disabled: false, skills: [] };
+    const { rerender } = render(<Composer {...props} activeTurnId="turn-1" thread={{ ...thread, jobMonitorCreationEnabled: false }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const row = screen.getByRole("menuitemcheckbox", { name: "Job Monitors" });
+    expect(row).toHaveAccessibleDescription("The agent can't start new ones.");
+    await act(async () => { fireEvent.click(row); });
+    expect(setThreadJobMonitorCreation).toHaveBeenCalledWith({ threadId: thread.id, enabled: true });
+    rerender(<Composer {...props} activeTurnId="turn-1" thread={thread} />);
+    expect(row).toHaveAccessibleDescription("Available from the agent's next turn.");
+    rerender(<Composer {...props} activeTurnId="turn-2" thread={thread} />);
+    expect(row).not.toHaveAccessibleDescription();
+  });
+
   it("shows the profile default and lets a thread clear its monitor suggestion override", async () => {
     const setThreadMonitorJobSuggestions = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
     const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,

@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
 import {
@@ -44,6 +44,9 @@ type WaitingForPanelProps = {
   /** Set for a peer's thread: the wakes run there. */
   ownerLabel?: string;
   onTurnOffAutoFix?: () => Promise<void>;
+  onTurnOnJobMonitors?: () => Promise<void>;
+  /** Focus the heading and acknowledge a composer navigation request. */
+  onFocusHeading?: () => void;
   onSendScheduledNow?: (actionId: string) => Promise<void>;
   /** Sends a wake-up a paused project holds, through the project's own release. */
   onSendHeldNow?: (wake: HeldMessageWake) => Promise<void>;
@@ -66,6 +69,7 @@ type BackendWake = Extract<ThreadPendingWake, { kind: "backend_wake" }>;
 /** The busy key of the loop-guard rearm, which belongs to no single wake. */
 const REARM_FOLLOW_UPS_KEY = "rearm-follow-ups";
 const REARM_MONITOR_WAKES_KEY = "rearm-monitor-wakes";
+const TURN_ON_JOB_MONITORS_KEY = "turn-on-job-monitors";
 
 /** Ended rows one list shows. */
 const ENDED_ROWS = 8;
@@ -85,11 +89,19 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const capabilities = props.thread.federation?.capabilities ?? [];
   const peer = state.status === "ready" && state.peer;
   const [unlocking, setUnlocking] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const onFocusHeading = props.onFocusHeading;
+  useEffect(() => {
+    if (!onFocusHeading || !headingRef.current) return;
+    headingRef.current.focus();
+    onFocusHeading();
+  }, [onFocusHeading]);
+  const heading = <h3 ref={headingRef} tabIndex={-1}>Waiting for</h3>;
 
   if (state.status !== "ready") {
     return (
       <section className="context-panel__section waiting-for-panel">
-        <header className="waiting-for-panel__header"><h3>Waiting for</h3></header>
+        <header className="waiting-for-panel__header">{heading}</header>
         <p className="context-empty">
           {state.status === "loading" ? "Loading…"
             : props.ownerLabel ? `${props.ownerLabel} does not share what will wake this thread.`
@@ -142,6 +154,8 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const groups = groupWakes(wakes, props.thread);
   // Auto-fix on an ended PR is listed but waits for nothing.
   const liveCount = wakes.filter(isThreadPendingWakeLive).length;
+  const jobMonitorCreationOff = props.thread.jobMonitorCreationEnabled === false;
+  const hasRunningMonitor = wakes.some((wake) => wake.kind === "monitor");
   const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
   const notice = readHoldNotice(props.thread, wakes);
@@ -155,7 +169,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   return (
     <section className="context-panel__section waiting-for-panel">
       <header className="waiting-for-panel__header">
-        <h3>Waiting for</h3>
+        {heading}
         {liveCount > 0 ? <span className="waiting-for-panel__count">{liveCount}</span> : null}
       </header>
       <div className="waiting-for-panel__body">
@@ -211,13 +225,36 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
             ) : null}
           </div>
         ) : null}
+        {jobMonitorCreationOff ? (
+          <div className="waiting-for-panel__hold" role="note">
+            <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
+            <span className="waiting-for-panel__hold-text">
+              <span className="waiting-for-panel__hold-title">New Job Monitors off</span>
+              <span className="pr-watch-list__sub">
+                {hasRunningMonitor ? "Running monitors below still report back. " : null}
+                The agent can still delegate work and use Continue After.
+              </span>
+            </span>
+            {!peer && props.onTurnOnJobMonitors ? (
+              <button
+                aria-label="Turn on Job Monitors"
+                type="button"
+                className="pr-watch-list__action"
+                disabled={busy.has(TURN_ON_JOB_MONITORS_KEY)}
+                onClick={() => run(TURN_ON_JOB_MONITORS_KEY, props.onTurnOnJobMonitors!)}
+              >
+                Turn on
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {state.monitorWakesSuspended ? (
           <div className="waiting-for-panel__hold" role="note">
             <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
             <span className="waiting-for-panel__hold-text">
               <span className="waiting-for-panel__hold-title">Job Monitors suspended</span>
               <span className="pr-watch-list__sub">
-                A lightweight review detected a repeated monitoring loop. Results are in Sub-agents. Rearm to allow new Job Monitors.
+                A lightweight review detected a repeated monitoring loop. Results are in Sub-agents. Rearm to clear the suspension.
                 {peer ? ` Rearm on ${props.ownerLabel ?? "the thread's own machine"}.` : null}
               </span>
             </span>
@@ -240,8 +277,9 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
           <div className="waiting-for-panel__empty">
             <p className="waiting-for-panel__empty-title">{state.incomplete ? "Could not confirm everything this thread is waiting for." : "Nothing will wake this thread."}</p>
             <p className="pr-watch-list__sub">
-              It runs again when a message is sent. An agent can watch CI, wait for another
-              thread, or start a monitor; ask it to.
+              {jobMonitorCreationOff
+                ? "It runs again when a message is sent. Ask the agent to watch CI or wait for another thread."
+                : "It runs again when a message is sent. Ask the agent to watch CI, wait for another thread, or start a monitor."}
             </p>
           </div>
         ) : null}

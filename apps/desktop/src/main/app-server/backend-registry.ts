@@ -65,7 +65,7 @@ import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-place
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import { lowerThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
-import { TASK_MONITOR_TOOL_NAMESPACE } from "@pwragent/shared/contracts/task-monitor-tools";
+import { TASK_MONITOR_TOOL_NAMESPACE, type TaskMonitorRequest, type TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
 import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import {
   type DesktopThreadArchivePolicy,
@@ -2094,7 +2094,8 @@ export class DesktopBackendRegistry {
       get gitDirectoryService() { return current().gitDirectoryService; },
       get gitWorkingStateService() { return current().gitWorkingStateService; },
       handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
-      handleAgentTaskMonitorRequest: (...args: Parameters<SubAgentMonitorService["handleAgentTaskMonitorRequest"]>) => this.subAgentMonitorService.handleAgentTaskMonitorRequest(...args),
+      handleAgentTaskMonitorRequest: (request: TaskMonitorRequest) => this.handleAgentTaskMonitorRequest(request),
+      isJobMonitorCreationEnabled: (context: { backend: AppServerBackendKind; threadId: string }) => this.isJobMonitorCreationEnabled(context),
       handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit>) => this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
@@ -8321,7 +8322,7 @@ export class DesktopBackendRegistry {
       messagingHandler: this.messagingHandler,
       messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
       taskMonitorHandler: async (request) =>
-        await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request),
+        await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
       forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
@@ -15598,12 +15599,50 @@ export class DesktopBackendRegistry {
       : undefined;
   }
 
+  async setThreadJobMonitorCreation({ threadId, enabled }: {
+    threadId: string;
+    enabled: boolean;
+  }): Promise<{ threadId: string; enabled: boolean }> {
+    if (typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
+      throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
+    }
+    const backend = "codex";
+    this.overlayStore.setThreadJobMonitorCreation({ backend, threadId, enabled });
+    await this.publishLocalEvent({
+      backend,
+      notification: { method: "thread/agent/updated", params: { threadId } },
+    });
+    return { threadId, enabled };
+  }
+
+  private async isJobMonitorCreationEnabled(context: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    return (await this.overlayStore.getThreadOverlayState(context))?.jobMonitorCreationEnabled !== false;
+  }
+
+  private async handleAgentTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse> {
+    if (request.operation === "create_monitor_delegation"
+      && !await this.isJobMonitorCreationEnabled(request.context)) {
+      return {
+        ok: false,
+        operation: request.operation,
+        error: {
+          code: "forbidden",
+          message: "Job Monitors are off for this thread. The operator turned them off. Use Continue After or ask for a sub-agent instead. Existing monitors still report back.",
+        },
+      };
+    }
+    return await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
+  }
+
   private async buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
     discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
     eagerTools?: ReadonlySet<string>,
     caller?: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext,
   ): Promise<CodexDynamicToolSpec[]> {
+    const jobMonitorCreationEnabled = caller?.threadId
+      ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId })
+      : true;
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         currentTurnInputSource: this.currentTurnInputSource,
@@ -15617,7 +15656,7 @@ export class DesktopBackendRegistry {
         messagingHandler: this.messagingHandler,
         messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
         taskMonitorHandler: async (request) =>
-          await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request),
+          await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
         forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
         forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
@@ -15629,7 +15668,7 @@ export class DesktopBackendRegistry {
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
         checkoutHandler: this.checkoutHandler,
-      }),
+      }, { jobMonitorCreationEnabled }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
     const allowlist = localAgentToolAllowlist();
@@ -17442,6 +17481,9 @@ export class DesktopBackendRegistry {
             // Eager director tools are a latency optimization, not authority.
             const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+              this.resolveCodexToolDiscoveryFn(),
+              undefined,
+              { backend: "codex", threadId },
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
@@ -18578,7 +18620,7 @@ export class DesktopBackendRegistry {
         messagingHandler: this.messagingHandler,
         messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
         taskMonitorHandler: async (monitorRequest) =>
-          await this.subAgentMonitorService.handleAgentTaskMonitorRequest(monitorRequest),
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
         threadInspectionHandler: this.threadInspectionHandler,
         forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
         forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
@@ -18695,7 +18737,7 @@ export class DesktopBackendRegistry {
         backend,
         call: taskMonitorToolCall,
         handler: async (monitorRequest) =>
-          await this.subAgentMonitorService.handleAgentTaskMonitorRequest(monitorRequest),
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
       });
     }
 

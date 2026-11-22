@@ -485,6 +485,29 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       rules: options?.rules ?? (colorTheme ? COLOR_RULES : undefined),
     });
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${colorThemeLabel})`, () => {
+    test("Job Monitors composer options have no violations", async () => {
+      const app = await launchAuditApp(appearance);
+      try {
+        await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+        const trigger = app.window.getByRole("button", { name: "Thread options", exact: true });
+        await trigger.click();
+        const menu = app.window.getByRole("menu", { name: "Thread options", exact: true });
+        const monitors = menu.getByRole("menuitemcheckbox", { name: "Job Monitors", exact: true });
+        const include = ".composer-thread-options__menu";
+        await expect(monitors).toHaveAttribute("aria-checked", "true");
+        await runAxe(app.window, "Job Monitors on", { include });
+        await monitors.click();
+        await expect(monitors).toHaveAttribute("aria-checked", "false");
+        await runAxe(app.window, "Job Monitors off", { include });
+        await monitors.press("ArrowDown");
+        await expect(menu.getByRole("menuitemcheckbox", { name: "Monitor job suggestions", exact: true })).toBeFocused();
+        await app.window.keyboard.press("Escape");
+        await expect(trigger).toBeFocused();
+      } finally {
+        await app.close();
+      }
+    });
+
     test("smoke fixture surfaces have no violations", async () => {
       const app = await launchAuditApp(appearance);
       try {

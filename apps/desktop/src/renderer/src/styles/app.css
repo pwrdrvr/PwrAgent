@@ -47423,6 +47423,11 @@ button.composer__subthread-source-parent:hover {
   font-weight: 400;
 }
 
+.composer-thread-options__detail {
+  display: block;
+  margin-top: 3px;
+}
+
 .composer-thread-options__toggle {
   width: 28px;
   height: 16px;
@@ -47457,6 +47462,15 @@ button.composer__subthread-source-parent:hover {
   .composer-thread-options__toggle-thumb {
   transform: translateX(12px);
   background: var(--button-text);
+}
+
+.composer-thread-options__toggle.is-saving {
+  opacity: 0.65;
+}
+
+.composer-thread-options__toggle.is-saving .composer-thread-options__toggle-thumb {
+  background: transparent;
+  border: 1px solid var(--text-primary);
 }
 
 /* ==============================================}

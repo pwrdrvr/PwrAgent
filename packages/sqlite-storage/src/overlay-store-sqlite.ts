@@ -5559,6 +5559,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return nextState;
   }
 
+  setThreadJobMonitorCreation(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean;
+  }): void {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    this.stateDb.raw.transaction(() => {
+      const current: ThreadOverlayState = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      if ((current.jobMonitorCreationEnabled !== false) !== params.enabled) {
+        const { jobMonitorCreationEnabled: _cleared, ...rest } = current;
+        this.putThread(threadKey, params.enabled ? rest : { ...rest, jobMonitorCreationEnabled: false });
+      }
+    }).immediate();
+  }
+
   async setThreadHandoffOrigin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -12906,6 +12926,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadTokenMiser"
   | "setThreadKeepCheckoutAwake"
   | "setThreadMonitorJobSuggestions"
+  | "setThreadJobMonitorCreation"
   | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
