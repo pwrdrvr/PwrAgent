@@ -384,7 +384,7 @@ async function openProfileAndQuitBootstrap(
    Agents
    ---------------------------------------------------------------- */
 
-type AcpAgentId = "gemini" | "kimi" | "qwen" | "grok";
+type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
 type AgentId = "codex" | "claude" | AcpAgentId;
 type DesktopPlatform = "darwin" | "win32" | "linux";
 type InstallCommand = { label: string; command: string };
@@ -402,7 +402,7 @@ type AgentDefinition = {
   primary?: boolean;
 };
 
-const AGENTS: readonly AgentDefinition[] = [
+const NATIVE_AGENTS: readonly AgentDefinition[] = [
   {
     id: "codex",
     name: "Codex",
@@ -436,8 +436,10 @@ const AGENTS: readonly AgentDefinition[] = [
     docsUrl: "https://code.claude.com/docs/en/setup",
     installCommands: { darwin: [], linux: [], win32: [] },
   },
-  {
-    id: "gemini",
+];
+
+const ACP_AGENT_DEFINITIONS: Record<AcpAgentId, Omit<AgentDefinition, "id">> = {
+  gemini: {
     name: "Gemini CLI",
     mark: "cli",
     docsUrl: "https://geminicli.com/docs/get-started/installation/",
@@ -450,8 +452,7 @@ const AGENTS: readonly AgentDefinition[] = [
       win32: [{ label: "npm", command: "npm install -g @google/gemini-cli" }],
     },
   },
-  {
-    id: "kimi",
+  kimi: {
     name: "Kimi Code",
     mark: "cli",
     docsUrl: "https://moonshotai.github.io/kimi-code/en/guides/getting-started",
@@ -473,8 +474,7 @@ const AGENTS: readonly AgentDefinition[] = [
       win32: "Install Git for Windows before first launch; Kimi uses its bundled Git Bash.",
     },
   },
-  {
-    id: "qwen",
+  qwen: {
     name: "Qwen Code",
     mark: "cli",
     docsUrl: "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
@@ -512,8 +512,7 @@ const AGENTS: readonly AgentDefinition[] = [
       win32: "Restart the terminal after install. Qwen OAuth has ended; use /auth after launch.",
     },
   },
-  {
-    id: "grok",
+  grok: {
     name: "Grok Build",
     mark: "grok",
     docsUrl: "https://docs.x.ai/build/overview",
@@ -523,14 +522,29 @@ const AGENTS: readonly AgentDefinition[] = [
       win32: [{ label: "PowerShell", command: "irm https://x.ai/cli/install.ps1 | iex" }],
     },
   },
+};
+
+const ACP_AGENT_IDS = Object.keys(ACP_AGENT_DEFINITIONS) as AcpAgentId[];
+const AGENTS: readonly AgentDefinition[] = [
+  ...NATIVE_AGENTS,
+  ...ACP_AGENT_IDS.map((id) => ({ id, ...ACP_AGENT_DEFINITIONS[id] })),
 ];
 
-const TRADEMARK_NOTE =
-  "OpenAI, Codex, and the OpenAI logo are trademarks of OpenAI. Grok and the Grok logo are "
-  + "trademarks of SpaceXAI, formerly xAI. Claude is a trademark of Anthropic. Gemini is a "
-  + "trademark of Google LLC. Kimi is a trademark of Moonshot AI. Qwen is a trademark of Alibaba "
-  + "Cloud. PwrAgent is independently developed and is not affiliated with, endorsed by, or "
-  + "sponsored by any of them.";
+const ACP_AGENT_TRADEMARKS: Record<AcpAgentId, string> = {
+  grok: "Grok and the Grok logo are trademarks of SpaceXAI, formerly xAI.",
+  gemini: "Gemini is a trademark of Google LLC.",
+  kimi: "Kimi is a trademark of Moonshot AI.",
+  qwen: "Qwen is a trademark of Alibaba Cloud.",
+};
+
+const { grok: grokTrademark, ...otherAcpTrademarks } = ACP_AGENT_TRADEMARKS;
+const TRADEMARK_NOTE = [
+  "OpenAI, Codex, and the OpenAI logo are trademarks of OpenAI.",
+  grokTrademark,
+  "Claude is a trademark of Anthropic.",
+  ...Object.values(otherAcpTrademarks),
+  "PwrAgent is independently developed and is not affiliated with, endorsed by, or sponsored by any of them.",
+].join(" ");
 
 const CLAUDE_SIGN_IN_COMMAND = "claude auth login";
 
@@ -557,8 +571,7 @@ function desktopPlatform(platform?: string): DesktopPlatform {
 }
 
 function acpEnabled(snapshot: DesktopSettingsSnapshot | undefined, id: AcpAgentId): boolean {
-  const agents = snapshot?.acpAgents as Record<string, { enabled?: boolean } | undefined> | undefined;
-  return agents?.[id]?.enabled !== false;
+  return snapshot?.acpAgents?.[id]?.enabled !== false;
 }
 
 /**
