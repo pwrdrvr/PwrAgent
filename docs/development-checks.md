@@ -24,12 +24,17 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Run unit tests, lint and typecheck locally using the commands below or in repository CI.
 - Desktop E2E uses the existing local and CI routes. Linux checks do not verify
   macOS or Windows behavior; use the corresponding native CI or PwrSuiteLab skills.
-- The [Sandboxer verification process](../.agents/skills/sandboxer-verification/SKILL.md)
-  is **dormant** while a replacement provider is evaluated. Preserve its
-  procedure, helper and historical measurements; do not automatically invoke
-  it or route repository checks to Sandboxer.
-- Use the native/local and CI alternatives above while the process is dormant.
-- Keep product/remote-compute integrations and installed MCP settings intact.
+- For optional remote verification, check PwrAgent's `manage_mcp_connections`
+  with `action: list`. The `builtin:boat` entry must be ready and report
+  `sandboxStart.canStart: true`. If Boat is at its limit, report the reason
+  and use local checks and repository CI without waiting for capacity.
+- Use Boat only when the operator asks or approves in this thread. If you
+  propose it, say it bills per second while running and wait for approval.
+  If approval or capacity is missing, keep using local checks and CI.
+  Follow the [Boat verification skill](../.agents/skills/boat-verification/SKILL.md)
+  for setup, checks and cleanup. The
+  [old Sandboxer procedure](../.agents/skills/sandboxer-verification/SKILL.md)
+  is preserved as a historical reference.
 
 ## Desktop test operations
 
@@ -37,6 +42,9 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Run desktop E2E from the repository root with `pnpm test:desktop-e2e`.
 - The package command `pnpm --filter @pwragent/desktop test:e2e` is also safe.
 - Both commands build `apps/desktop/out/` before Playwright starts.
+- Do not run the desktop Playwright suite on the operator's Mac. Use native
+  CI or the matching lab route. An approved Boat sandbox can run Linux
+  desktop E2E when the prerequisites in the Boat skill are met.
 - For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
   [the macOS VM E2E lab skill](../.agents/skills/macos-vm-e2e-lab/SKILL.md). It uses PwrSuiteLab Control MCP's
   current schemas and served skills when connected. Use the

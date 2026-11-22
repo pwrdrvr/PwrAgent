@@ -112,12 +112,12 @@ Live sign-in requires the operator to complete consent. Public metadata or an
 open consent page does not prove callback success, credential storage,
 authenticated tools, refresh or account-side revocation.
 
-For cloud verification, follow the Sandboxer verification skill and inspect the
-selected `create_sandbox` schema first. Require `noEnv: true`; do not create via
-an older schema that cannot suppress account environment inheritance. Report
-that blocker and wait for an authorized alternative. Inspect quota before
-creating an owned fixture and clean up only its exact ID. Do not clear existing
-resources to make room.
+For repository checks, see [development verification](development-checks.md#verification).
+For an operator-approved live test of the Sandboxer integration itself, inspect
+the selected `create_sandbox` schema first. Require `noEnv: true` to suppress
+account environment inheritance. If the schema lacks it, report the blocker
+and wait for an authorized alternative. Inspect quota before creating an owned
+fixture and clean up only its exact ID. Do not clear existing resources to make room.
 
 ## Mode B — not shipped
 
