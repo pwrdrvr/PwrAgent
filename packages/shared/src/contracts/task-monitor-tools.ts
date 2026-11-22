@@ -11,6 +11,9 @@ export const DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS = 45;
 export const DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS =
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
 
+export const JOB_MONITOR_WAKE_LIMIT = 3;
+export const JOB_MONITOR_WAKE_WINDOW_MINUTES = 30;
+
 export const TASK_MONITOR_OPERATION_NAMES = [
   "create_monitor_delegation",
   "cancel_monitor_delegation",
@@ -80,6 +83,7 @@ export type TaskMonitorUsageSnapshot = {
 export type TaskMonitorCompletionSource =
   | {
       type: "monitor_tool";
+      recoveredAfter?: "completed" | "failed" | "cancelled";
     }
   | {
       type: "parent_cancel";
@@ -140,6 +144,7 @@ export type TaskMonitorProgressData = {
 export type TaskMonitorCompletionData = TaskMonitorProgressData & {
   completionSource?: TaskMonitorCompletionSource;
   outcome: CompleteMonitoringToolArgs["outcome"];
+  parentWakeSuppressed?: true;
   parentTurn?: {
     status: "started" | "queued";
     turnId?: string;

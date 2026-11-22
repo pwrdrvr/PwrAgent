@@ -81,3 +81,48 @@ it("a scheduled drain starts the queue head without other event-loop work to wak
     { numRuns: 24, endOnFailure: true },
   );
 });
+
+it("keeps the assessed entry checkpointable and rechecks the live FIFO when the verdict arrives", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (trip, cancel) => {
+    let busy = true;
+    let assessed = false;
+    let reviews = 0;
+    let resolveReview!: () => void;
+    const reviewing = new Promise<void>((resolve) => { resolveReview = resolve; });
+    const sent: string[] = [];
+    const waitForDrain = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => busy,
+      startTurn: async (entry) => {
+        sent.push(entry.id);
+        return { ...THREAD, turnId: `turn-${entry.id}` };
+      },
+      needsFreshDispatchSlot: (entry) => entry.id === "monitor",
+      reviewQueuedDispatch: (entry) => {
+        if (entry.id !== "monitor") return;
+        reviews++;
+        return reviewing;
+      },
+      prepareDispatch: (entry) => entry.id === "monitor" && assessed && trip ? "suppressed" : entry,
+    });
+    try {
+      for (const id of ["monitor", "human"]) await queue.submit({ ...THREAD, id, origin: "manual", input: [] });
+      busy = false;
+      queue.scheduleThreadDrain(THREAD);
+      await waitForDrain();
+      expect(reviews).toBe(1);
+      expect(queue.getQueuedEntries(THREAD).map((entry) => entry.id)).toEqual(["monitor", "human"]);
+      expect(sent).toEqual([]);
+      if (cancel) queue.cancelEntry("monitor");
+      assessed = true;
+      resolveReview();
+      await waitForDrain();
+      await waitForDrain();
+      expect(sent).toEqual([cancel || trip ? "human" : "monitor"]);
+      expect(reviews).toBe(1);
+    } finally {
+      resolveReview();
+      queue.close();
+    }
+  }), { numRuns: 8, examples: [[true, false], [false, false], [false, true]] });
+});

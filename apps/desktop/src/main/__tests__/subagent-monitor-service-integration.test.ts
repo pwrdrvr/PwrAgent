@@ -57,6 +57,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -3426,6 +3427,112 @@ describe("DesktopBackendRegistry", () => {
       ],
     });
     await registry.close();
+  });
+
+  it.each([true, false])("uses one lightweight verdict to distinguish a release loop from real work (loop: %s)", async (loop) => {
+    const parent = "thread-1";
+    const outcomes = loop ? ["failure", "cancelled", "success", "fallback"] as const
+      : ["success", "failure", "success", "success", "success", "success", "success"] as const;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startTurnResults: outcomes.flatMap((outcome, index) => [
+        { threadId: `observer-${index}`, turnId: `watch-${index}` },
+        ...(!loop || index < 3 ? [{ threadId: parent, turnId: `follow-up-${index}` }] : []),
+        ...(outcome === "fallback" ? [{ threadId: `observer-${index}`, turnId: `recover-${index}` }] : []),
+      ]),
+    });
+    const assess = vi.fn(async (_request: { prompt: string }) => ({ status: "ok" as const, object: { loop } }));
+    Object.assign(codexClient, { generateStructuredObject: assess });
+    let observer = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({ threadId: `observer-${observer++}` }));
+    const storeMock = createOverlayStoreMock();
+    const overlayStore = {
+      ...storeMock,
+      listEndedThreadTaskMonitors: async (request: Parameters<typeof storeMock.listThreadSubAgents>[0] & { limit: number }) =>
+        (await storeMock.listThreadSubAgents(request)).filter((row) => row.completedAt !== undefined).slice(0, request.limit),
+    };
+    const db = openInMemoryStateDb();
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, taskMonitorWakeStore: new TaskMonitorWakeStore(db.raw) });
+    onTestFinished(async () => { await registry.close(); db.close(); });
+    const guardChanges = vi.fn();
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/taskMonitorWakeGuard/updated") guardChanges();
+    });
+    const toolCall = async (threadId: string, turnId: string, tool: string, args: Record<string, unknown>) => {
+      const result = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: { threadId, turnId, callId: `${turnId}-${tool}`, requestId: `${turnId}-${tool}`,
+          namespace: "pwragent_task_monitors", tool, arguments: args },
+      } as AppServerPendingRequestNotification) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(result.success).toBe(true);
+      return JSON.parse(result.contentItems[0]!.text) as {
+        monitorId: string;
+        parentTurn?: { status: string };
+        parentWakeSuppressed?: true;
+      };
+    };
+    const monitorIds = new Set<string>();
+    let parentTurn = "initial";
+    for (const [index, outcome] of outcomes.entries()) {
+      await emitStartedTurn(registry, "codex", parent, parentTurn);
+      const created = await toolCall(parent, parentTurn, "create_monitor_delegation", {
+        task: loop ? "Observe the same pending release watcher." : `Observe independent workflow ${index}.`,
+      });
+      monitorIds.add(created.monitorId);
+      await emitCompletedTurn(registry, "codex", parent, parentTurn);
+      if (outcome === "fallback") {
+        await emitCompletedTurn(registry, "codex", `observer-${index}`, `watch-${index}`);
+        await emitCompletedTurn(registry, "codex", `observer-${index}`, `recover-${index}`);
+        expect(await overlayStore.getThreadSubAgent({ backend: "codex", threadId: parent, monitorId: created.monitorId }))
+          .toMatchObject({ outcome: "failure", completionSource: { type: "pwragent_fallback" } });
+        continue;
+      }
+      const report = await toolCall(`observer-${index}`, `watch-${index}`, "complete_monitoring", {
+        monitorId: created.monitorId,
+        outcome,
+        summary: outcome === "success" ? "The release finished." : "The observer stopped while the release was pending.",
+      });
+      expect(report.parentTurn?.status).toBe("started");
+      expect(report.parentWakeSuppressed).toBeUndefined();
+      expect(await overlayStore.getThreadSubAgent({ backend: "codex", threadId: parent, monitorId: created.monitorId }))
+        .toMatchObject({ outcome });
+      parentTurn = `follow-up-${index}`;
+    }
+    expect(monitorIds.size).toBe(outcomes.length);
+    expect(assess).toHaveBeenCalledTimes(loop ? 1 : 2);
+    const { wakingMonitorIds, attempts: evidence } = JSON.parse(assess.mock.calls.at(-1)![0].prompt) as {
+      wakingMonitorIds: string[];
+      attempts: Array<{ monitorId: string; outcome: string; elapsedMs: number }>;
+    };
+    expect(wakingMonitorIds).toEqual([Array.from(monitorIds).at(-1)]);
+    expect(evidence).toHaveLength(loop ? 4 : 5);
+    expect(new Set(evidence.map((attempt) => attempt.monitorId)).size).toBe(evidence.length);
+    expect(evidence.every((attempt) => attempt.elapsedMs >= 0)).toBe(true);
+    expect(evidence.map((attempt) => attempt.outcome)).toEqual(expect.arrayContaining(loop ? ["failure", "cancelled", "success"] : ["success"]));
+    expect(assess).toHaveBeenCalledWith(expect.objectContaining({ disableExecution: true, model: "gpt-5.6-luna", reasoningEffort: "low" }));
+    expect(codexClient.startTurnCalls.filter((call) => call.threadId === parent)).toHaveLength(loop ? 3 : 7);
+    const owner = { backend: "codex", threadId: parent } as const;
+    expect(registry.taskMonitorWakesTripped(owner)).toBe(loop);
+    expect(guardChanges).toHaveBeenCalledTimes(loop ? 1 : 0);
+    if (loop) {
+      expect(registry.listTaskMonitorWakeAlerts()).toEqual([expect.objectContaining(owner)]);
+      expect(registry.acknowledgeTaskMonitorWakeAlert(owner, 0)).toBe(true);
+      expect(registry.listTaskMonitorWakeAlerts()).toEqual([]);
+      expect(registry.taskMonitorWakesTripped(owner)).toBe(true);
+      await emitStartedTurn(registry, "codex", parent, "operator-turn");
+      const rejected = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: parent, turnId: "operator-turn", callId: "blocked-monitor", requestId: "blocked-monitor",
+        namespace: "pwragent_task_monitors", tool: "create_monitor_delegation", arguments: { task: "Start another observer" },
+      } } as AppServerPendingRequestNotification);
+      expect(rejected).toMatchObject({ success: false });
+      await emitCompletedTurn(registry, "codex", parent, "operator-turn");
+    } else {
+      await emitCompletedTurn(registry, "codex", parent, parentTurn);
+    }
+    await expect(registry.submitTurn({ backend: "codex", threadId: parent, input: [{ type: "text", text: "Verify the release." }] }))
+      .resolves.toMatchObject({ status: "started" });
+    expect(registry.taskMonitorWakesTripped(owner)).toBe(loop);
   });
 
   it("holds a task monitor's result for a locked parent and delivers it on unlock", async () => {

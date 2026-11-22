@@ -262,6 +262,7 @@ import {
 } from "./features/notifications/CodexLaunchNotice";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
+import { useJobMonitorWakeNotices } from "./features/notifications/useJobMonitorWakeNotices";
 import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
 import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
@@ -2630,11 +2631,10 @@ function DesktopAppShell(props: {
     onReview: reviewApprovalNotice,
     ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
+  const monitorWakeNotices = useJobMonitorWakeNotices(desktopApi, showAppNotice);
   const durableNotices = useMemo(
-    () => approvalNotices.length > 0
-      ? [...approvalNotices, ...appNotices.durable]
-      : appNotices.durable,
-    [appNotices.durable, approvalNotices],
+    () => [...approvalNotices, ...monitorWakeNotices, ...appNotices.durable],
+    [appNotices.durable, approvalNotices, monitorWakeNotices],
   );
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
@@ -5219,7 +5219,11 @@ function DesktopAppShell(props: {
           <AppNoticeStack
             desktopApi={desktopApi}
             durableNotices={durableNotices}
-            onDismissDurable={dismissAppNotice}
+            onDismissDurable={(id) => {
+              const acknowledge = monitorWakeNotices.find((notice) => notice.id === id)?.onDismiss;
+              if (acknowledge) acknowledge();
+              else dismissAppNotice(id);
+            }}
             onOpenThread={showThreadFromLink}
             onSuppressSkillQuestionsWarning={() => settings.writeConfig({
               experimental: { codexSkillQuestionsWarningDismissed: true },

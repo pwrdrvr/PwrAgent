@@ -42,6 +42,7 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { QUIET_RESTART_STEER_TEXT } from "../app-server/thread-restart-helpers";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { TaskMonitorWakeStore } from "@pwragent/sqlite-storage/task-monitor-wake-store";
 import { RestartContinuationStore, type StoredRestartContinuation } from "../state/restart-continuation-store";
 import type { RestartDispatchPlanOptions } from "../app-server/restart-continuation-gate";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -435,6 +436,7 @@ describe("DesktopBackendRegistry", () => {
       live: string[] = [],
       plan: Omit<RestartDispatchPlanOptions, "now"> = {},
       uniqueTurns = false,
+      taskMonitorWakeStore?: TaskMonitorWakeStore,
     ) => {
       const codexClient = new MockBackendClient(uniqueTurns ? { startTurnResults: Array.from({ length: 10 }, (_, index) => ({ threadId: "manager", turnId: `turn-${index + 1}` })) } : {});
       const registry = createDesktopBackendRegistry({
@@ -442,6 +444,7 @@ describe("DesktopBackendRegistry", () => {
         overlayStore: createOverlayStoreMock(),
         projectHeldWakeupStore: null,
         restartContinuationStore: store,
+        taskMonitorWakeStore,
         restartDispatchPlan: { firstDelayMs: 0, intervalMs: 0, jitterMs: 0, releaseGraceMs: 60_000, ...plan },
         runtimeInstanceId: instanceId,
         resolveLiveProfileRuntimeInstanceIds: () => live,
@@ -450,6 +453,76 @@ describe("DesktopBackendRegistry", () => {
       return { codexClient, registry };
     };
     const text = (value: string) => [{ type: "text" as const, text: value }];
+    const fixtureMonitorOrigin = (monitorId: string): AppServerThreadMessageOrigin => ({
+      kind: "sub-agent", subAgent: { kind: "monitor", monitorId, task: "Check build", summary: "Finished", outcome: "success" },
+    });
+    it("preserves the FIFO of unrelated messages in a checkpointed monitor batch on trip and rearm", async () => {
+      // The stored batch belongs to all of its senders. Suppression of one
+      // contribution must preserve the others in order and keep the batch ID.
+      await fc.assert(fc.asyncProperty(fc.boolean(), fc.nat(2), async (rearm, position) => {
+        const db = StateDb.open(":memory:");
+        const store = new RestartContinuationStore(db.raw, { processAlive: () => false });
+        const guard = new TaskMonitorWakeStore(db.raw);
+        const parent = { backend: "codex", threadId: "thread-1" } as const;
+        const origin: AppServerThreadMessageOrigin = { kind: "agent" };
+        const agentMessages = ["first agent input", "second agent input"].map((message) => ({ input: text(message), origin, receivedAt: 1 }));
+        agentMessages.splice(position, 0, { input: text("monitor input"), origin: fixtureMonitorOrigin("old"), receivedAt: 1 });
+        store.saveAll("before", [{ ...parent, id: "old-batch", kind: "queued", createdAt: 1,
+          input: agentMessages.flatMap((message) => message.input), messageOrigin: agentMessages[0]!.origin,
+          queued: { origin: "manual", delivery: "queued-steer", agentMessages, agentMessageOrigins: agentMessages.map((message) => message.origin), paused: true },
+        }]);
+        for (const monitorId of ["1", "2", "3"]) guard.reserve({ ...parent, monitorId }, 0);
+        const review = guard.claimReview(parent);
+        if (typeof review === "string") throw new Error(`Expected a claimed review, received ${review}`);
+        guard.settleReview(parent, review, "loop");
+        const { registry, codexClient } = launch(store, "after", ["after"], {}, false, guard);
+        try {
+          if (rearm) expect(registry.rearmTaskMonitorWakes(parent)).toBe(true);
+          await registry.setQueuedTurnPaused({ queueEntryId: "old-batch", paused: false });
+          await vi.waitFor(() => expect(registry.getQueuedTurnsForThread(parent)).toHaveLength(0));
+          await vi.waitFor(() => expect(codexClient.startTurnCalls).toHaveLength(1));
+          const delivered = JSON.stringify(codexClient.startTurnCalls[0]!.input);
+          expect(delivered).not.toContain("monitor input");
+          expect(delivered.indexOf("first agent input")).toBeGreaterThanOrEqual(0);
+          expect(delivered.indexOf("first agent input")).toBeLessThan(delivered.indexOf("second agent input"));
+        } finally { await registry.close(); db.close(); }
+      }), { numRuns: 6, examples: [[false, 0], [true, 1]] });
+    });
+
+    it("delivers a monitor wake after restart if the active parent could not steer", async () => {
+      const { db, store, payloads } = durableStore();
+      const guard = new TaskMonitorWakeStore(db.raw);
+      const parent = { backend: "codex", threadId: "thread-1" } as const;
+      const first = launch(store, "instance-a", [], {}, false, guard);
+      await emitStartedTurn(first.registry, parent.backend, parent.threadId, "active");
+      const discover = first.registry.listBackends.bind(first.registry);
+      const listBackends = vi.spyOn(first.registry, "listBackends").mockImplementation(async (request) => {
+        const catalog = await discover(request);
+        return { ...catalog, backends: catalog.backends.map((backend) => ({
+          ...backend, capabilities: { ...backend.capabilities, steerTurn: false },
+        })) };
+      });
+      expect(guard.reserve({ ...parent, monitorId: "pending" }, 0)).toBe("admitted");
+      await first.registry.submitTurn({ ...parent, queueEntryId: "task-monitor:wake:pending",
+        input: text("Unsent monitor result"), messageOrigin: fixtureMonitorOrigin("pending") });
+      await vi.waitFor(() => expect(listBackends).toHaveBeenCalled());
+      await Promise.all(listBackends.mock.results.map(({ value }) => value));
+      await vi.waitFor(() => expect(first.registry.getQueuedTurnsForThread(parent)).toHaveLength(1));
+      expect(first.codexClient.steerTurnCallCount).toBe(0);
+      first.registry.beginQuietRestart();
+      // The parent can finish while quieting. The restart gate keeps the
+      // waiting wake queued, with no continuation needed for the parent.
+      await emitCompletedTurn(first.registry, parent.backend, parent.threadId, "active");
+      first.registry.saveRestartContinuations([]);
+      expect(payloads().map((row) => row.id)).toEqual(["task-monitor:wake:pending"]);
+      await first.registry.close();
+
+      const second = launch(store, "instance-b", ["instance-b"], {}, false, guard);
+      second.registry.beginRestartContinuationDispatch();
+      await vi.waitFor(() => expect(second.codexClient.startTurnCalls).toHaveLength(1));
+      expect(second.codexClient.startTurnCalls[0]!.input).toEqual(text("Unsent monitor result"));
+    });
+
     const startRunningTurn = async (registry: DesktopBackendRegistry, threadId: string) => {
       const started = await registry.submitTurn({ backend: "codex", threadId, input: text("Long task") });
       expect(started).toMatchObject({ status: "started" });

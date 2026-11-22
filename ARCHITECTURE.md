@@ -695,6 +695,57 @@ admission, so early lifecycle outcomes survive the response. A durable new-turn
 receipt remains attached to its cancelled original identity, and cannot replay
 or retarget changed input.
 
+**Job Monitor wake circuit breaker.** Three automatic admissions in a rolling
+thirty minutes trigger a review when another wake needs a slot. The owning
+profile tracks the budget per parent backend, thread and wake kind. One
+lightweight Codex helper reviews up to five of the thread's most recent
+completed monitor setups. It receives bounded task and result excerpts,
+durations, reported outcomes, and available recovery and wake provenance. The
+helper runs in isolation without execution tools. Its input and answer add no
+parent transcript messages. Explicit reports and synthesized fallbacks both
+spend the allowance. A no-loop verdict makes room for three more admissions.
+If the helper is unavailable, the ordinary rolling allowance remains in effect
+and overflow wakes are withheld, with reviews cooled down for thirty minutes.
+One leased claim coordinates competing submissions and prevents a stale
+verdict from an earlier owner from opening the breaker.
+
+A loop verdict suspends new Job Monitors and automatic Job Monitor deliveries
+for the parent. Existing monitors can keep observing and human turns continue.
+Results stay on the Sub-agents cards. The owner posts a message to bound
+conversations and exposes one durable desktop toast. Acknowledge clears the
+toast and leaves the breaker open. Rearm from the toast or **Waiting for** opens
+a new generation without replaying results from the previous generation.
+
+Like scheduled agent follow-ups, the owner checks and reserves the allowance in
+an immediate SQLite transaction before starting or queueing a wake. Compaction
+recovery also rechecks its reservation before steering. Job Monitor wakes
+recheck at FIFO dispatch, before combining messages or calling a provider. An
+unlock, project release or restart can only deliver an eligible reservation.
+Dispatch renews its slot so an old hold cannot burst alongside fresh wakes.
+A FIFO head that needs another review stays queued while the helper runs. The
+owner rechecks the live queue and steering target before claiming delivery.
+The immutable monitor ID deduplicates results across replay and restart. Rearm
+opens a new generation for monitors created afterwards and retires earlier
+automatic deliveries, including durable holds. A restored batch keeps unrelated
+messages at their original FIFO position. Monitors from older generations stay
+visible and stoppable without contributing to the pending wake count. A steer
+claims delivery after capability discovery, and a definitive no-send releases
+the dispatch owner so a saved wake can still run after restart. Sending a
+project-held wake reports suppression when the guard already rules it out.
+PR Auto-fix continues to use its
+repair claim and refill budget. The ordinary lock, archive, workspace, handoff
+and active-turn admission checks still apply to their respective turn paths.
+
+The checked-in SQLite budget excludes existing monitor result and turn
+bookkeeping. Pending and release checks use zero commits. A reservation and
+dispatch claim use two commits and about 16.5 KB of WAL. Claiming and settling a
+successful review uses two commits and about 8.2 KB. A loop verdict adds one
+page in the same settling commit, for two commits and about 12.4 KB total.
+After tripping, suppressed reports add no commits. Acknowledge and rearm each
+use one commit. A definitive no-send can release its steer claim for one commit
+and about 4.1 KB. At 144 wakes and 48 no-loop reviews per day, one parent adds
+about 2.8 MB of WAL per day.
+
 Both hosts use the federation runtime's `DurableTurnRequestService` from
 owner-core. The profile binding supplies the FULL/immediate inbox storage port.
 Authenticated caller namespaces and owner-bound payload hashes precede dispatch

@@ -121,6 +121,15 @@ describe("ResumeForgeAutomationDialog", () => {
     expect(rows()).toHaveLength(2);
   });
 
+  it("removes a suppressed wake and shows why it was not sent", async () => {
+    renderDialog({ onResolve: vi.fn(async () => ({ results: [{ entryId: "entry-1", status: "suppressed" as const,
+      error: "Automatic Job Monitor wake suppressed.",
+    }] })) });
+    fireEvent.click(screen.getByRole("button", { name: "Send wake-up to Block GitHub access from ordinary tests" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Automatic Job Monitor wake suppressed.");
+    expect(rows()).toHaveLength(1);
+  });
+
   it("resumes and leaves what is left held", async () => {
     const { props } = renderDialog();
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));

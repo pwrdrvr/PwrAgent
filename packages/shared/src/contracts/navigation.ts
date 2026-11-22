@@ -342,6 +342,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   pendingWakesIncomplete?: true;
   /** The owner's agent follow-ups are suspended by loop protection, even with none waiting. */
   pendingWakesFollowUpsSuspended?: true;
+  pendingWakesMonitorWakesSuspended?: true;
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**
@@ -483,6 +484,8 @@ export type ThreadSubAgentSummary = {
    * own usage line carries the helper's turn, not the parent's.
    */
   parentTurnId?: ThreadIdentifier;
+  /** The monitor delivery that prompted this monitor's setup, when known. */
+  triggeringMonitorId?: string;
   lastMessage?: string;
   outcome?: "success" | "failure" | "cancelled";
   completedAt?: number;

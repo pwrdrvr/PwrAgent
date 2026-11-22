@@ -3018,6 +3018,10 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/taskMonitorWakeGuard/updated";
+      params: { threadId: string; trippedGeneration?: number };
+    }
+  | {
       method: "thread/subAgents/updated";
       params: {
         threadId: string;

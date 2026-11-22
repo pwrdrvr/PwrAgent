@@ -43,6 +43,41 @@ CREATE TABLE IF NOT EXISTS thread_agent_follow_up_guards (
 );
 `;
 
+export const AUTOMATIC_WAKE_GUARD_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_automatic_wake_guards (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0,
+  tripped_at INTEGER,
+  PRIMARY KEY (backend, thread_id, kind)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS thread_automatic_wake_admissions (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  wake_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  admitted_at INTEGER NOT NULL,
+  dispatch_owner TEXT,
+  PRIMARY KEY (backend, thread_id, kind, wake_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_thread_automatic_wake_window
+  ON thread_automatic_wake_admissions (backend, thread_id, kind, generation, admitted_at);
+CREATE TABLE IF NOT EXISTS thread_automatic_wake_reviews (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  claim_id TEXT,
+  claim_until INTEGER NOT NULL DEFAULT 0,
+  allowance INTEGER NOT NULL DEFAULT 0,
+  allowance_until INTEGER NOT NULL DEFAULT 0,
+  retry_after INTEGER NOT NULL DEFAULT 0,
+  acknowledged_at INTEGER,
+  PRIMARY KEY (backend, thread_id, kind)
+) WITHOUT ROWID;
+`;
+
 export const PROJECT_HELD_WAKEUP_SCHEMA = `
 CREATE TABLE IF NOT EXISTS project_held_wakeups (
   entry_id TEXT PRIMARY KEY,

@@ -208,6 +208,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The Harness state and source-record indexes add two more VACUUM pages.
     // Main's thread_agent_follow_up_guards table and primary-key index add two more.
     // Each change separately budgeted 360 frames; their combined schema requires 362.
+    // The automatic wake guard, admission and review tables and admission-window index add four pages.
     // The WITHOUT ROWID sub-agent dismissal table adds one VACUUM page.
     // The six operator-request scope indexes add six VACUUM frames.
     // The three pricing summary read indexes add three VACUUM frames.

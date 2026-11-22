@@ -808,6 +808,7 @@ describe("NavigationDetailService", () => {
       // A suspension with nothing waiting still reaches the peer viewer.
       scheduledActions: vi.fn(() => ({ actions: [], followUpsSuspended: true as const })),
       monitors: vi.fn(() => [monitor]),
+      monitorWakesTripped: vi.fn(() => true),
       recentSubAgents: vi.fn(async () => []),
       backendTasks: vi.fn(async () => []),
       backendWakes: vi.fn(() => []),
@@ -841,6 +842,7 @@ describe("NavigationDetailService", () => {
     const detail = await peer.getNavigationSelectedDetail!(request);
     expect(detail.thread?.pendingWakes).toEqual([expect.objectContaining({ kind: "monitor", lastActivityAt: 3 })]);
     expect(detail.thread?.pendingWakesFollowUpsSuspended).toBe(true);
+    expect(detail.thread?.pendingWakesMonitorWakesSuspended).toBe(true);
     expect(project).toHaveBeenCalledExactlyOnceWith(request.ref, mocks.prWatches);
     expect(mocks.listActiveThreadPrStatusWatches).toHaveBeenCalledExactlyOnceWith(request.ref);
     expect(readers.prWatches).not.toHaveBeenCalled();

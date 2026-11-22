@@ -4456,8 +4456,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadId: string;
     limit: number;
+    includeReviewEvidence?: boolean;
   }): Promise<ThreadSubAgentSummary[]> {
-    return this.subAgentTable.endedMonitors(this.subAgentStorageKey(params), params.limit);
+    return this.subAgentTable.endedMonitors(this.subAgentStorageKey(params), params.limit, params.includeReviewEvidence);
   }
 
   /** Sums over every Token Miser gate card, kept on write; reads no card. */

@@ -267,7 +267,7 @@ export type ResolveProjectHeldWakeupsRequest = {
 export type ResolveProjectHeldWakeupsResponse = {
   results: Array<{
     entryId: string;
-    status: "sent" | "discarded" | "not_found" | "failed";
+    status: "sent" | "discarded" | "suppressed" | "not_found" | "failed";
     error?: string;
   }>;
 };

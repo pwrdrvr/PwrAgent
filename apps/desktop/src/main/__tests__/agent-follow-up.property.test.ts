@@ -623,6 +623,7 @@ describe("agent follow-up loop guard", () => {
         prWatches: async () => [], prWatchHistory: async () => [], autoFix: async () => [], dependencies: async () => [],
         scheduledActions: (thread, endedLimit) => world.store.listPendingWakes({ ...thread, endedLimit }),
         monitors: () => [], recentSubAgents: async () => [], backendTasks: async () => [], backendWakes: () => [],
+        monitorWakesTripped: () => false,
         hold: async () => undefined, heldEntries: () => [],
       };
       // Oracle: Waiting for reports a suspension exactly when the guard holds one.

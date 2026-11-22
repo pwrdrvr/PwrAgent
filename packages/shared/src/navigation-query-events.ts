@@ -103,6 +103,7 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/backgroundTasks/updated",
   // A backend's own scheduled wakes refresh only that thread's Waiting for.
   "thread/sessionWakes/updated",
+  "thread/taskMonitorWakeGuard/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
 ]);
 

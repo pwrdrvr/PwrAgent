@@ -1,4 +1,12 @@
 {
+  "job-monitor-wake-acknowledged": {"commits": 1, "note": "acknowledge a loop alert once without rearming", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "job-monitor-wake-reviewed": {"commits": 2, "note": "claim one review and allow another tranche after differentiated work", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
+  "job-monitor-wake-unsent-steer": {"commits": 1, "note": "release an owner claim for a definitively unsent steer", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "job-monitor-wake-release-check": {"commits": 0, "note": "preview 100 operator releases without changing the dispatch receipt", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "job-monitor-wake-rearmed": {"commits": 1, "note": "rearm once and attempt to rearm again", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
+  "job-monitor-wake-tripped": {"commits": 2, "note": "claim a review and trip once on its verdict, then suppress 100 reports and a held dispatch", "observedWalBytes": 12360, "rowsChanged": 3, "statements": 3},
+  "job-monitor-wake-admitted": {"commits": 2, "note": "reserve and claim dispatch of one final result", "observedWalBytes": 16512, "rowsChanged": 2, "statements": 2},
+  "job-monitor-wake-pending": {"commits": 0, "note": "read the generation and check pending protection 100 times", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "resource-checkout-resolve-ownership": {"commits": 1, "note": "One commit for an operator's ownership resolution and its receipt; a retry commits nothing", "observedWalBytes": 4120, "rowsChanged": 2, "statements": 2},
   "agent-working-updates-default-read-noop-invalid": {"commits": 0, "note": "Profile Working Updates read, identical update and invalid attempts commit nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "agent-working-updates-default-change": {"commits": 1, "note": "One existing config snapshot commit per changed Working Updates default. No per-turn, idle or streaming writes.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},

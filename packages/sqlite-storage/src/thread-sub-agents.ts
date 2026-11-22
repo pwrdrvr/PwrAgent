@@ -611,7 +611,12 @@ export class ThreadSubAgentTable {
       .all(params.storageKey, excluded, params.limit, params.offset) as CardRow[]);
   }
 
-  endedMonitors(storageKey: string, limit: number): ThreadSubAgentSummary[] {
+  endedMonitors(storageKey: string, limit: number, includeReviewEvidence?: boolean): ThreadSubAgentSummary[] {
+    if (includeReviewEvidence) {
+      return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_created WHERE thread_id = ?
+        AND monitor_id >= 'monitor-' AND monitor_id < 'monitor.' AND completed_at IS NOT NULL
+        ORDER BY created_at DESC, monitor_id LIMIT ?`).all(storageKey, limit) as CardRow[]);
+    }
     return this.db.prepare(`SELECT monitor_id AS monitorId, substr(json_extract(card, '$.task'), 1, 600) AS task,
       status, created_at AS createdAt, updated_at AS updatedAt, completed_at AS completedAt,
       json_extract(card, '$.outcome') AS outcome
