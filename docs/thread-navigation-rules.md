@@ -140,6 +140,10 @@ Read this before changing thread lenses, Attention membership/order, unread stat
     Every rank sort, store, and federation hop already orders it first.
   - A new pin, including an auto-pinned new thread, lands at the top of the
     ordinary pins and never above a kept pin.
+  - A new root thread in a project with **Directory threads** collapsed is
+    auto-pinned using the saved fold, even while navigation is loading.
+    Allocate the rank against the saved local and peer pins in the same
+    transaction as the pin. Keep any pin the operator already gave the row.
   - Cross tiers only explicitly: the **Keep at Top** check item in the
     context menu, or a drag. Move Up, Move Down, and the shortcuts stay
     inside the pin's tier.

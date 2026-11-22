@@ -43,7 +43,7 @@ import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { PROJECT_CHECKOUT_GROUPS_META_KEY, sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
-import { buildAppendPinRank } from "@pwragent/shared/thread-pins";
+import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { navigationLaunchpadProviderKey } from "@pwragent/shared/contracts/navigation";
 import {
@@ -4852,7 +4852,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return nextState;
   }
 
-  private appendThreadPinRank(): string {
+  private readThreadPinRanks(): string[] {
     const ranks = this.stateDb.raw.prepare(
       `SELECT json_extract(payload, '$.pinnedRank') AS rank FROM threads
        WHERE json_type(payload, '$.pinnedRank') = 'text'
@@ -4860,7 +4860,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
        SELECT json_extract(payload, '$.localPinnedRank') AS rank FROM remote_thread_pins
        WHERE revoked_at IS NULL AND json_type(payload, '$.localPinnedRank') = 'text'`,
     ).all() as Array<{ rank: string }>;
-    return buildAppendPinRank(ranks.map((row) => row.rank));
+    return ranks.map((row) => row.rank);
   }
 
   async setThreadPin(params: {
@@ -4868,10 +4868,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     threadId: string;
     pinned?: boolean;
     pinnedRank?: string | null;
+    prepend?: boolean;
   }): Promise<ThreadOverlayState> {
     if (params.pinned !== undefined
       && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
       throw new Error("Provide either pin intent or an explicit legacy rank.");
+    }
+    if (params.prepend && params.pinned !== true) {
+      throw new Error("Prepending requires pin intent.");
     }
     return this.stateDb.raw.transaction(() => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -4881,15 +4885,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         executionMode: "default" as const,
         extraLinkedDirectories: [],
       };
+      // Creation may race an explicit pin. Keep the rank the operator gave
+      // the thread, and allocate against the live local and viewer ranks.
+      if (params.prepend && current.pinnedRank) return current;
+      const rank = params.prepend ? buildPrependPinRank : buildAppendPinRank;
       const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
-        : params.pinned ? current.pinnedRank ?? this.appendThreadPinRank() : undefined;
+        : params.pinned ? current.pinnedRank ?? rank(this.readThreadPinRanks()) : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
         pinnedRank: pinnedRank || undefined,
       };
       this.putThread(threadKey, nextState);
       return nextState;
-    })();
+    }).immediate();
   }
 
   async addRemoteThreadPin(params: {
@@ -5051,7 +5059,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim() || undefined
         : params.pinned ? (typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
-          ? parsed.localPinnedRank : this.appendThreadPinRank()) : undefined;
+          ? parsed.localPinnedRank : buildAppendPinRank(this.readThreadPinRanks())) : undefined;
       if (pinnedRank === undefined) {
         delete parsed.localPinnedRank;
       } else {
@@ -6083,7 +6091,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       : pinnedRanks;
   }
 
-  private readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
+  readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
     const payload = this.stateDb.getMeta(PROJECT_CHECKOUT_GROUPS_META_KEY);
     if (!payload) return [];
     // Every navigation read passes through here; an unreadable row must not
