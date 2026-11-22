@@ -44631,7 +44631,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer-goal__summary[aria-expanded="true"] .composer__queued-env-action-chevron {
-  transform: rotate(90deg);
+  transform: rotate(45deg);
 }
 
 .composer-goal__usage {
