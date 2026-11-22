@@ -1187,7 +1187,7 @@ async function discoverRecentProjectsForOnboarding(
   const acpLabels = new Map<string, string>();
   const response = await discoverRecentProjects({
     includeCodex: request.includeCodex,
-    ignorePathCase: process.platform === "win32",
+    platform: process.platform,
     signal,
     readCodexDirectories: command
       ? async () => await readRecentCodexDirectories(

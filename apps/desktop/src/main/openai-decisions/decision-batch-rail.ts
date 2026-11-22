@@ -6,6 +6,7 @@ import {
   type DecisionsRailItem,
   type DecisionsRailItemFilter,
 } from "@pwragent/shared/decisions-rail";
+import { isAdHocDecisionId } from "@pwragent/shared/openai-decisions";
 import {
   compactBatchItem,
   isFinishedBatch,
@@ -47,6 +48,10 @@ export function railBatch(record: DecisionBatchRecord, now: number): DecisionsRa
     decisionId: record.decisionId,
     name: record.name,
     version: record.version,
+    adHoc: isAdHocDecisionId(record.decisionId),
+    ...(record.definition
+      ? { questionNames: record.definition.questions.map((question) => question.name ?? question.type) }
+      : {}),
     provider: record.provider,
     ...(model ? { model } : {}),
     state: record.state,
@@ -97,12 +102,16 @@ export function railBatchPage(
     const view = railItem(item);
     const size = Buffer.byteLength(JSON.stringify(view));
     if (items.length >= limit || (items.length > 0 && bytes + size > maxBytes)) {
-      return { batch: railBatch(record, params.now), items, nextFrom: index };
+      return { batch: railBatch(record, params.now), ...definitionField(record), items, nextFrom: index };
     }
     items.push(view);
     bytes += size;
   }
-  return { batch: railBatch(record, params.now), items };
+  return { batch: railBatch(record, params.now), ...definitionField(record), items };
+}
+
+function definitionField(record: DecisionBatchRecord) {
+  return record.definition ? { definition: record.definition } : {};
 }
 
 export function matchesRailFilter(item: DecisionBatchItem, status: DecisionsRailItemFilter): boolean {

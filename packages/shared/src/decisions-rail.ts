@@ -17,6 +17,25 @@ export type DecisionsRailQuestion = {
   levels?: string[];
 };
 
+/** One question as a batch asked it: what it asks and the answers it allows. */
+export type DecisionsRailDefinitionQuestion = {
+  type: "predicate" | "choice" | "score";
+  name?: string;
+  instructions: string;
+  /** A choice question's values, or a score question's level labels, in order. */
+  options?: Array<{ label: string; description?: string }>;
+};
+
+/**
+ * The prompt every item of a batch shared: its questions and the cached
+ * prefix. Kept in the batch's result file, so an ad hoc definition, which
+ * is never stored, still reads back.
+ */
+export type DecisionsRailDefinition = {
+  questions: DecisionsRailDefinitionQuestion[];
+  prefix?: string;
+};
+
 /** Per-request time for one decision version, from requests since PwrAgent started. */
 export type DecisionsRailTiming = {
   samples: number;
@@ -46,6 +65,10 @@ export type DecisionsRailBatch = {
   decisionId: string;
   name: string;
   version: number;
+  /** Ran from a decisions_invoke definition that was never stored; its name and version are placeholders. */
+  adHoc: boolean;
+  /** Each question's name, or its type when it has none. Absent for batches written before definitions were kept. */
+  questionNames?: string[];
   provider: DecisionsRailProvider;
   /** The model the provider reported for the batch's first answered item. */
   model?: string;
@@ -132,6 +155,8 @@ export type DecisionsRailBatchRequest = DecisionsRailThreadRequest & {
 
 export type DecisionsRailBatchPage = {
   batch: DecisionsRailBatch;
+  /** Absent for batches written before definitions were kept. */
+  definition?: DecisionsRailDefinition;
   items: DecisionsRailItem[];
   /** Pass back as `from` for the items after these; absent when none follow yet. */
   nextFrom?: number;

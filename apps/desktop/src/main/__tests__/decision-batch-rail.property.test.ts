@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DecisionsRailItem, DecisionsRailItemFilter } from "@pwragent/shared/decisions-rail";
+import type { OpenAIDecisionQuestion } from "@pwragent/shared/openai-decisions";
 import {
   DECISION_INPUT_PREVIEW_MAX_BYTES,
+  batchDefinition,
   decisionInputPreview,
   pageBatchResults,
   recordBatchItem,
@@ -46,7 +48,42 @@ type BatchPlan = {
   startedAt: number;
   wallMs: number;
   background: boolean;
+  /** Ran from an ad hoc definition, which is never stored. */
+  adHoc: boolean;
+  /** The prompt the batch ran; absent as in a file written before prompts were kept. */
+  definition?: { questions: OpenAIDecisionQuestion[]; prefix?: string };
 };
+
+const questionArb: fc.Arbitrary<OpenAIDecisionQuestion> = fc.oneof(
+  fc.record({
+    type: fc.constant("predicate" as const),
+    instructions: fc.string({ minLength: 1, maxLength: 60 }),
+    name: fc.option(fc.string({ minLength: 1, maxLength: 12 }), { nil: undefined }),
+  }, { requiredKeys: ["type", "instructions"] }),
+  fc.record({
+    type: fc.constant("choice" as const),
+    instructions: fc.string({ minLength: 1, maxLength: 60 }),
+    name: fc.option(fc.string({ minLength: 1, maxLength: 12 }), { nil: undefined }),
+    choices: fc.array(fc.record({
+      value: fc.string({ minLength: 1, maxLength: 8 }),
+      description: fc.option(fc.string({ maxLength: 30 }), { nil: undefined }),
+    }, { requiredKeys: ["value"] }), { minLength: 2, maxLength: 4 }),
+  }, { requiredKeys: ["type", "instructions", "choices"] }),
+  fc.record({
+    type: fc.constant("score" as const),
+    instructions: fc.string({ minLength: 1, maxLength: 60 }),
+    name: fc.option(fc.string({ minLength: 1, maxLength: 12 }), { nil: undefined }),
+    levels: fc.array(fc.record({
+      label: fc.string({ minLength: 1, maxLength: 8 }),
+      description: fc.option(fc.string({ maxLength: 30 }), { nil: undefined }),
+    }, { requiredKeys: ["label"] }), { minLength: 2, maxLength: 4 }),
+  }, { requiredKeys: ["type", "instructions", "levels"] }),
+);
+
+const definitionArb = fc.option(fc.record({
+  questions: fc.array(questionArb, { minLength: 1, maxLength: 3 }),
+  prefix: fc.option(fc.string({ maxLength: 200 }), { nil: undefined }),
+}, { requiredKeys: ["questions"] }), { nil: undefined });
 
 const outcomeArb: fc.Arbitrary<Outcome> = fc.oneof(
   fc.record({
@@ -74,6 +111,8 @@ const planArb: fc.Arbitrary<BatchPlan> = fc.integer({ min: 1, max: 30 }).chain((
   startedAt: fc.integer({ min: 1_700_000_000_000, max: 1_800_000_000_000 }),
   wallMs: fc.integer({ min: 0, max: 600_000 }),
   background: fc.boolean(),
+  adHoc: fc.boolean(),
+  definition: definitionArb,
 }));
 
 function itemFor(plan: BatchPlan, index: number): DecisionBatchItem {
@@ -95,9 +134,9 @@ function buildBatch(plan: BatchPlan, resultsFile?: string): { record: DecisionBa
   const record: DecisionBatchRecord = {
     batchId: "batch_rail-test",
     caller: { ...CALLER },
-    decisionId: "dec_1",
-    name: "triage",
-    version: 2,
+    decisionId: plan.adHoc ? "adhoc:0123abcd" : "dec_1",
+    name: plan.adHoc ? "ad_hoc" : "triage",
+    version: plan.adHoc ? 1 : 2,
     provider: "jev",
     count: plan.count,
     concurrency: plan.concurrency,
@@ -111,6 +150,7 @@ function buildBatch(plan: BatchPlan, resultsFile?: string): { record: DecisionBa
     skipped: 0,
     controller: new AbortController(),
     ...(resultsFile ? { resultsFile } : {}),
+    ...(plan.definition ? { definition: batchDefinition(plan.definition.questions, plan.definition.prefix) } : {}),
   };
   const written: DecisionBatchItem[] = [];
   const ran = plan.ending === "completed" ? plan.count : plan.ran;
@@ -267,6 +307,10 @@ describe("decision batch rail projection", () => {
           expect(fromFile).toBeDefined();
           const now = plan.startedAt + plan.wallMs + 1_000;
           expect(railBatch(fromFile!, now)).toEqual(railBatch(record, now));
+          // The prompt and the ad hoc flag survive a restart too.
+          expect(railBatch(fromFile!, now).adHoc).toBe(plan.adHoc);
+          expect(railBatchPage(fromFile!, { status: "all", from: 0, limit: 1, now }).definition)
+            .toEqual(plan.definition ? batchDefinition(plan.definition.questions, plan.definition.prefix) : undefined);
           for (const status of FILTERS) {
             expect(railBatchPage(fromFile!, { status, from: 0, limit: 500, now }))
               .toEqual(railBatchPage(record, { status, from: 0, limit: 500, now }));

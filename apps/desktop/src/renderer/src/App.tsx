@@ -4394,6 +4394,8 @@ function DesktopAppShell(props: {
         onOpenMessagingActivity: openMessagingActivityWindow,
         onOpenMessagingSettings: openMessagingSettings,
         onOpenPluginSettings: openPluginSettings,
+        decisionSettings: props.settings,
+        onOpenDecisionSettings: (focus?: string) => openSettingsSection("models", focus),
         onRevealSelectedThreadInList: revealSelectedThreadInList,
         onRevealSelectedProjectInList: revealSelectedProjectInList,
         projectThreadActions: {

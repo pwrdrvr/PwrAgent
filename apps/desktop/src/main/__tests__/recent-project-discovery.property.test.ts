@@ -1,34 +1,45 @@
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DiscoverRecentProjectsResponse,
   RecentProjectAgent,
   RecentProjectObservation,
 } from "@pwragent/shared/contracts/settings";
-import { discoverRecentProjects } from "../onboarding/recent-project-discovery";
+import { registerDirectoryFromDisk, resolveDirectoryRegistrationRoot, type DirectoryRegistrationDeps } from "../app-server/directory-registration-service";
 import { readRecentClaudeCodeDirectories } from "../claude/claude-recent-projects";
+import { discoverRecentProjects, type RecentProjectDiscoveryDeps } from "../onboarding/recent-project-discovery";
 
 /*
  * Rule: the main process sends Get started one spelling per folder. Two
  * agents, or two threads of one agent, that name the same folder differently
  * (slashes, a trailing separator, or letter case where the platform's paths
  * ignore it) give one observation per agent, all with the same path, so the
- * renderer's exact-path merge shows one row. On a platform whose paths keep
- * case, `/home/dev/App` and `/home/dev/app` are two folders.
+ * renderer's exact-path merge shows one row. On a case-sensitive volume,
+ * `App` and `app` are two folders.
  *
  * The oracle folds each reported path the way the platform names files:
- * forward slashes, no trailing separator, and lower case on Windows.
+ * forward slashes, no trailing separator, and lower case on Windows and the
+ * case-insensitive macOS volume.
  */
 
 const AGENTS: readonly RecentProjectAgent[] = ["codex", "claude", "acp:gemini"];
 
-type Platform = "win32" | "linux";
+type Platform = "win32" | "linux" | "darwin";
 type Reported = { cwd: string; agent: RecentProjectAgent; lastActiveAt?: number };
+
+const MAC_INSENSITIVE_ROOT = "/Volumes/Insensitive/Code";
+const MAC_SENSITIVE_ROOT = "/Volumes/Sensitive/Code";
 
 function oracleIdentity(path: string, platform: Platform): string {
   const canonical = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  return platform === "win32" ? canonical.toLowerCase() : canonical;
+  const folded = canonical.toLowerCase();
+  return platform === "win32" || (platform === "darwin" && folded.startsWith(`${MAC_INSENSITIVE_ROOT.toLowerCase()}/`))
+    ? folded
+    : canonical;
 }
 
 /** One folder as an agent might report it: separators, trailing slash, case. */
@@ -43,20 +54,23 @@ function spell(base: string, separators: number, caseMask: readonly boolean[]): 
 }
 
 const arbInput = fc.record({
-  platform: fc.constantFrom<Platform>("win32", "linux"),
+  platform: fc.constantFrom<Platform>("win32", "linux", "darwin"),
   names: fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9-]{0,6}$/), { minLength: 1, maxLength: 12 }),
 }).chain(({ platform, names }) => {
   const root = platform === "win32" ? "c:/code" : "/home/dev";
   const folders = names.map((name) => `${root}/${name}`);
   const arbReported: fc.Arbitrary<Reported> = fc.record({
-    folder: fc.integer({ min: 0, max: folders.length - 1 }),
+    index: fc.integer({ min: 0, max: folders.length - 1 }),
+    caseSensitive: fc.boolean(),
     separators: fc.integer({ min: 0, max: 3 }),
     caseMask: fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }),
     agent: fc.constantFrom(...AGENTS),
     // A narrow range so ties and undated reports are common.
     lastActiveAt: fc.option(fc.integer({ min: 0, max: 20 }), { nil: undefined }),
-  }).map(({ folder, separators, caseMask, agent, lastActiveAt }) => ({
-    cwd: spell(folders[folder]!, separators, caseMask),
+  }).map(({ index, caseSensitive, separators, caseMask, agent, lastActiveAt }) => ({
+    cwd: platform !== "darwin" ? spell(folders[index]!, separators, caseMask)
+      : caseSensitive ? `${MAC_SENSITIVE_ROOT}/${spell(names[index]!, 0, caseMask)}`
+      : spell(`${MAC_INSENSITIVE_ROOT}/${names[index]!}`, 0, caseMask),
     agent,
     ...(lastActiveAt === undefined ? {} : { lastActiveAt }),
   }));
@@ -79,14 +93,22 @@ function thread(report: Reported, index: number): AppServerThreadSummary {
 }
 
 /**
- * Discovery against a disk that answers like the platform's: the folder
- * exists under every spelling the platform accepts, and the registration
- * root keeps the spelling it was asked about, as a folder outside Git does.
+ * The modeled folders are outside Git. On macOS the disk returns the stored
+ * spelling, with differently cased entries sharing one physical folder only
+ * on the case-insensitive volume.
  */
-async function discover(platform: Platform, reported: readonly Reported[]): Promise<DiscoverRecentProjectsResponse> {
+async function discover(
+  platform: Platform,
+  reported: readonly Reported[],
+  overrides?: Partial<RecentProjectDiscoveryDeps>,
+): Promise<DiscoverRecentProjectsResponse> {
   return await discoverRecentProjects({
     includeCodex: true,
-    ignorePathCase: platform === "win32",
+    platform,
+    macDirectorySpelling: async (folder) => {
+      if (folder.startsWith(`${MAC_SENSITIVE_ROOT}/`)) return folder;
+      return `${MAC_INSENSITIVE_ROOT}/${folder.slice(MAC_INSENSITIVE_ROOT.length + 1).toLowerCase()}`;
+    },
     readCodexDirectories: async () => ({
       complete: true,
       directories: reported.filter((report) => report.agent === "codex")
@@ -97,6 +119,7 @@ async function discover(platform: Platform, reported: readonly Reported[]): Prom
     listPwrAgentThreads: async () => reported.map(thread).filter((summary) => summary.source !== "codex"),
     labelFor: (agent) => agent,
     resolveProjectRoot: async (folder) => folder.replace(/\\/g, "/").replace(/\/+$/, ""),
+    ...overrides,
   });
 }
 
@@ -166,6 +189,118 @@ describe("recent project discovery path identity", () => {
     expect(sorted(observations).map((observation) => [observation.agent, observation.lastActiveAt]))
       .toEqual([["claude", 7], ["codex", 5]]);
   });
+
+  it("uses the stored spelling on a case-insensitive Mac volume and keeps distinct folders on another volume", async () => {
+    const { observations } = await discover("darwin", [
+      { cwd: "/volumes/insensitive/code/A", agent: "codex", lastActiveAt: 5 },
+      { cwd: `${MAC_INSENSITIVE_ROOT}/a`, agent: "claude", lastActiveAt: 7 },
+      { cwd: `${MAC_SENSITIVE_ROOT}/A`, agent: "codex", lastActiveAt: 9 },
+      { cwd: `${MAC_SENSITIVE_ROOT}/a`, agent: "claude", lastActiveAt: 11 },
+    ]);
+    expect(new Set(observations.map((observation) => observation.path))).toEqual(new Set([
+      `${MAC_INSENSITIVE_ROOT}/a`,
+      `${MAC_SENSITIVE_ROOT}/A`,
+      `${MAC_SENSITIVE_ROOT}/a`,
+    ]));
+  });
+});
+
+async function withMacFixture(run: (folder: string) => Promise<void>): Promise<void> {
+  const folder = await mkdtemp(path.join(await realpath(os.tmpdir()), "pwragent-project-spelling-"));
+  try {
+    await run(folder);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}
+
+/** Ask the disk whether the alternate spelling resolves before creating it. */
+async function createFolderSpellings(stored: string, alternate: string): Promise<boolean> {
+  await mkdir(stored);
+  try {
+    await lstat(alternate);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    await mkdir(alternate);
+    return false;
+  }
+}
+
+const noGit = async () => "";
+
+function registrationRecorder() {
+  return vi.fn<DirectoryRegistrationDeps["ensureDirectoryLaunchpad"]>(async (request) => ({
+    launchpad: { ...request, backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+    defaults: { backend: "codex", executionMode: "default" },
+  }));
+}
+
+async function discoverMacFolders(folders: string[]): Promise<string[]> {
+  const { observations } = await discover("darwin", folders.map((cwd) => ({ cwd, agent: "codex" })), {
+    macDirectorySpelling: undefined,
+    resolveProjectRoot: async (cwd) => {
+      const root = await resolveDirectoryRegistrationRoot(cwd, { runGit: noGit });
+      return root.ok ? root.directoryPath : undefined;
+    },
+  });
+  return observations.map(({ path }) => path).sort();
+}
+
+describe.skipIf(process.platform !== "darwin")("recent projects against the macOS filesystem", () => {
+  it("uses the names of linked path components and their children, including APFS Unicode case matches", async () => {
+    await withMacFixture(async (folder) => {
+      const target = path.join(folder, "target");
+      const alias = path.join(folder, "Alias");
+      const alternateAlias = path.join(folder, "alias");
+      await mkdir(target);
+      await symlink(target, alias);
+      const aliasIgnoresCase = await lstat(alternateAlias).then(() => true, () => false);
+      const aliases = aliasIgnoresCase ? [alias, alternateAlias] : [alias];
+      expect(await discoverMacFolders([alias, target])).toEqual([alias, target].sort());
+      const [discoveredAlias] = await discoverMacFolders([aliases[aliases.length - 1]!]);
+      await expect(registerDirectoryFromDisk({ path: discoveredAlias! }, {
+        ensureDirectoryLaunchpad: registrationRecorder(),
+        runGit: noGit,
+        listRegisteredProjectPaths: async () => [target, `${alias}/`],
+      })).resolves.toMatchObject({ ok: true, directoryKey: `directory:${alias}/` });
+
+      for (const [stored, alternate] of [["Project", "project"], ["ΟΣ", "οσ"]] as const) {
+        const ignoresCase = await createFolderSpellings(path.join(target, stored), path.join(target, alternate));
+        const reported = aliases.flatMap((name) => [path.join(name, stored), path.join(name, alternate)]);
+        const expected = ignoresCase ? [path.join(alias, stored)] : [path.join(alias, stored), path.join(alias, alternate)];
+        expect(await discoverMacFolders(reported)).toEqual(expected.sort());
+        expect(await discoverMacFolders([path.join(target, alternate)])).toEqual([
+          path.join(target, ignoresCase ? stored : alternate),
+        ]);
+      }
+    });
+  });
+
+  it("registers a discovered project under its existing key exactly when the disk treats the spellings as one folder", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[a-z]{1,5}$/), async (name) => {
+      await withMacFixture(async (folder) => {
+        const stored = path.join(folder, name.toUpperCase());
+        const legacy = path.join(folder, name);
+        const ignoresCase = await createFolderSpellings(stored, legacy);
+        const ensureDirectoryLaunchpad = registrationRecorder();
+        const old = await registerDirectoryFromDisk({ path: legacy }, { ensureDirectoryLaunchpad, runGit: noGit });
+        expect(old).toMatchObject({ ok: true, directoryKey: `directory:${legacy}` });
+
+        const [discovered] = await discoverMacFolders([stored]);
+        expect(discovered).toBe(stored);
+        const registrationDeps = {
+          ensureDirectoryLaunchpad,
+          runGit: noGit,
+          listRegisteredProjectPaths: async () => [legacy],
+        };
+        const registration = await registerDirectoryFromDisk({ path: discovered! }, registrationDeps);
+        const expected = `directory:${ignoresCase ? legacy : stored}`;
+        expect(registration).toMatchObject({ ok: true, directoryKey: expected });
+        expect(ensureDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ directoryKey: expected }));
+      });
+    }), { numRuns: 12 });
+  });
 });
 
 describe("Claude Code recent projects", () => {
@@ -190,7 +325,7 @@ describe("Claude Code recent projects", () => {
         });
         const result = await discoverRecentProjects({
           includeCodex: false,
-          ignorePathCase: false,
+          platform: "linux",
           readClaudeCodeDirectories: read,
           labelFor: (agent) => agent,
           resolveProjectRoot: async (folder) => folder,
@@ -222,7 +357,7 @@ describe("Claude Code recent projects", () => {
         const historyRead = historyStatus === "complete" || historyStatus === "partial";
         const result = await discoverRecentProjects({
           includeCodex: false,
-          ignorePathCase: false,
+          platform: "linux",
           readClaudeCodeDirectories: async () => {
             if (historyStatus === "failed") throw new Error("history failed");
             if (!historyRead) return undefined;

@@ -16,12 +16,13 @@ export type DecisionsRailState = {
 };
 
 /**
- * The selected thread's decisions and batches. It reads once when the
- * thread changes or shows new activity (a turn starting or ending, which
- * is when a decision gets registered, or the owner announcing that a batch
- * moved), which is enough to decide whether the tab shows at all. While
- * the tab is open it also polls: every 2 s while a batch can still move,
- * every 10 s otherwise. Nothing here is persisted.
+ * The selected thread's decisions and batches, read while the tab is open:
+ * on opening, when the thread shows new activity (a turn starting or
+ * ending, which is when a decision gets registered, or the owner
+ * announcing that a batch moved), and on a poll, every 2 s while a batch
+ * can still move and every 10 s otherwise. The tab shows whether or not
+ * the thread has used decisions, so a closed tab reads nothing. Nothing
+ * here is persisted.
  */
 export function useDecisionsRail(params: {
   desktopApi?: Pick<DesktopApi, "readDecisionsRail" | "onAgentEvent">;
@@ -50,14 +51,14 @@ export function useDecisionsRail(params: {
   // The owner announces a batch starting, each tenth of it, and its end.
   const subscribe = params.desktopApi?.onAgentEvent;
   useEffect(() => {
-    if (!available || !subscribe || !backend || !threadId) return;
+    if (!available || !params.open || !subscribe || !backend || !threadId) return;
     return subscribe((event) => {
       if (isDecisionBatchEventFor(event, { backend, threadId })) refresh();
     });
-  }, [available, backend, refresh, subscribe, threadId]);
+  }, [available, backend, params.open, refresh, subscribe, threadId]);
 
   useEffect(() => {
-    if (!available || !read || !backend || !threadId || !threadKey) return;
+    if (!available || !params.open || !read || !backend || !threadId || !threadKey) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async (): Promise<void> => {
@@ -70,9 +71,7 @@ export function useDecisionsRail(params: {
           setState((current) => ({ key: threadKey, snapshot: current.key === threadKey ? current.snapshot : undefined, error: true }));
         }
       } finally {
-        if (!disposed && params.open) {
-          timer = setTimeout(() => { void load(); }, decisionsRailPollDelayMs(next));
-        }
+        if (!disposed) timer = setTimeout(() => { void load(); }, decisionsRailPollDelayMs(next));
       }
     };
     void load();

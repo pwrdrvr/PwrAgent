@@ -4,11 +4,17 @@ import type {
   DecisionsRailDecision,
   DecisionsRailSnapshot,
 } from "@pwragent/shared/decisions-rail";
+import type { DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
 import { SignalCount } from "../../../components/SignalCount";
 import { BanIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from "../../../icons";
+import { copyText } from "../../../lib/copy-text";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { DecisionBatchDetailsModal } from "./DecisionBatchDetailsModal";
+import { BatchTitle } from "./DecisionBatchTitle";
+import { DecisionsSetupDialog, ReadinessPill } from "./DecisionsSetupDialog";
+import { decisionSetupReadiness, type DecisionSetupSettings } from "./decision-setup";
 import {
+  decisionBatchAsksLine,
   decisionBatchCountsLabel,
   decisionBatchStatusLabel,
   decisionBatchTimingLine,
@@ -23,27 +29,40 @@ import {
 import { RailStatusChip } from "./RailStatusChip";
 import "./decisions-panel.css";
 
+export type { DecisionSetupSettings } from "./decision-setup";
+
 type DecisionsPanelProps = {
-  desktopApi?: Pick<DesktopApi, "readDecisionsRailBatch" | "actOnDecisionsRailBatch" | "openDecisionsRailResults">;
+  desktopApi?: DesktopApi;
   thread: { backend: string; threadId: string };
   snapshot?: DecisionsRailSnapshot;
   error: boolean;
   onRefresh: () => void;
-  /** Keeps the hover rail open while the batch dialog is up. */
+  /** The profile's Settings: which providers are ready, and where keys are saved. */
+  settings?: DecisionSetupSettings;
+  /** Opens Settings → AI Providers, at a decision provider's screen when one is named. */
+  onOpenSettings?: (focus?: string) => void;
+  /** Keeps the hover rail open while the batch dialog or setup dialog is up. */
   onDetailsModalOpenChange?: (open: boolean) => void;
 };
+
+/** What the tab suggests asking once a provider is ready. */
+const TRY_PROMPT = "Use a decision model to sort the open issues in this repository into bug, feature, or question, and show me the ones it was least sure about.";
 
 /**
  * The Decisions tab: what decisions this thread can run, and the batches
  * it ran, newest first. A batch opens a dialog with its items. Registered
- * decisions and batches both come from the owner; the tab writes nothing.
+ * decisions and batches both come from the owner. A thread that has not
+ * used decisions gets a short pitch instead, with each provider's status
+ * and a setup dialog, so the tab is where the operator finds the feature.
  */
 export function DecisionsPanel(props: DecisionsPanelProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [detailsFor, setDetailsFor] = useState<string>();
   const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  const [setupOpen, setSetupOpen] = useState(false);
   const snapshot = props.snapshot;
+  const readiness = decisionSetupReadiness(props.settings?.snapshot);
   const now = snapshot?.now ?? Date.now();
   const detailsBatch = detailsFor ? snapshot?.batches.find((batch) => batch.batchId === detailsFor) : undefined;
   const onDetailsModalOpenChange = props.onDetailsModalOpenChange;
@@ -78,6 +97,22 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
     setDetailsFor(undefined);
     onDetailsModalOpenChange?.(false);
   };
+  const openSetup = (): void => {
+    setSetupOpen(true);
+    onDetailsModalOpenChange?.(true);
+  };
+  const closeSetup = (): void => {
+    setSetupOpen(false);
+    onDetailsModalOpenChange?.(false);
+  };
+  const setupDialog = setupOpen && props.settings ? (
+    <DecisionsSetupDialog
+      settings={props.settings}
+      desktopApi={props.desktopApi}
+      onOpenSettings={props.onOpenSettings}
+      onClose={closeSetup}
+    />
+  ) : null;
   const stop = async (batch: DecisionsRailBatch): Promise<void> => {
     const act = props.desktopApi?.actOnDecisionsRailBatch;
     if (!act) return;
@@ -107,6 +142,25 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
         <p className={`context-empty${props.error ? " context-empty--error" : ""}`}>
           {props.error ? "Couldn't read this thread's decisions." : "Loading decisions…"}
         </p>
+        {/* Setup is about the profile, not this thread: it stays open across a reload. */}
+        {setupDialog}
+      </section>
+    );
+  }
+
+  const unused = snapshot.decisions.length === 0 && snapshot.batches.length === 0;
+  const anyReady = readiness?.providers.some((entry) => entry.ready) ?? false;
+  // Nothing to show and nothing set up: the tab is the feature's front door.
+  if (unused && readiness && !anyReady) {
+    return (
+      <section className="context-panel__section decisions-panel">
+        {props.error ? (
+          <p className="context-empty context-empty--error decisions-panel__stale" role="status">
+            Couldn't refresh. Showing the last read.
+          </p>
+        ) : null}
+        <DecisionsPitch readiness={readiness} canSetUp={Boolean(props.settings)} onSetUp={openSetup} />
+        {setupDialog}
       </section>
     );
   }
@@ -118,6 +172,15 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
           Couldn't refresh. Showing the last read.
         </p>
       ) : null}
+      <div className="decisions-panel__head">
+        <h3>Decisions</h3>
+        {props.settings ? (
+          <button type="button" className="context-list__action decisions-panel__providers" onClick={openSetup}>
+            Providers
+          </button>
+        ) : null}
+      </div>
+      {unused && readiness ? <TryCard readiness={readiness} desktopApi={props.desktopApi} /> : null}
       <div className="decisions-panel__group">
         <h3 className="decisions-panel__heading">
           Registered{" "}
@@ -136,8 +199,8 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
           </ul>
         ) : (
           <p className="decisions-panel__empty">
-            No decisions are visible to this thread. Agents register them with{" "}
-            <code>decisions_register</code>.
+            None saved. Agents save a decision with <code>decisions_register</code> to run it
+            again; a one-off question runs ad hoc.
           </p>
         )}
       </div>
@@ -175,7 +238,66 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
           onClose={closeDetails}
         />
       ) : null}
+      {setupDialog}
     </section>
+  );
+}
+
+/** The tab before decisions are set up: what they are, what they are for, and each provider's status. */
+function DecisionsPitch(props: { readiness: DecisionProvidersReadiness; canSetUp: boolean; onSetUp: () => void }) {
+  return (
+    <div className="decisions-pitch">
+      <p className="decisions-pitch__eyebrow">Decisions</p>
+      <h3 className="decisions-pitch__title">Ask one typed question of hundreds of items, in seconds</h3>
+      <p className="decisions-pitch__body">
+        A decision model answers yes/no, pick-one, or score questions with a probability for every
+        answer. It writes no text, so it is fast and cheap. Agents use it to sort, filter, and grade
+        in bulk, and you review the results here.
+      </p>
+      <ol className="decisions-pitch__uses">
+        <li><strong>Triage</strong> 300 issues into bug, feature, or question.</li>
+        <li><strong>Compare</strong> two captions per screenshot and pick the better one.</li>
+        <li><strong>Screen</strong> search results for relevance before reading them.</li>
+      </ol>
+      <h3 className="decisions-panel__heading">Providers</h3>
+      <ul className="decisions-pitch__providers">
+        {props.readiness.providers.map((entry) => (
+          <li key={entry.provider}>
+            <span>{decisionProviderSettingsName(entry.provider)}</span>
+            <ReadinessPill entry={entry} />
+          </li>
+        ))}
+      </ul>
+      {props.canSetUp ? (
+        <button type="button" className="button button--primary decisions-pitch__setup" onClick={props.onSetUp}>
+          Set up decisions
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Once a provider is ready and the thread has not used it: one thing to ask, ready to copy. */
+function TryCard(props: { readiness: DecisionProvidersReadiness; desktopApi?: DesktopApi }) {
+  const [copied, setCopied] = useState(false);
+  const provider = props.readiness.providers.find((entry) => entry.provider === props.readiness.defaultProvider);
+  if (!provider?.ready) return null;
+  return (
+    <div className="decisions-try">
+      <p className="decisions-try__label">
+        {decisionProviderSettingsName(provider.provider)} is ready. Try asking:
+      </p>
+      <p className="decisions-try__prompt">{TRY_PROMPT}</p>
+      <button
+        type="button"
+        className="context-list__action decisions-try__copy"
+        onClick={() => {
+          void copyText(TRY_PROMPT, props.desktopApi).then(() => setCopied(true), () => setCopied(false));
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
   );
 }
 
@@ -254,11 +376,8 @@ function BatchCard(props: {
         </RailStatusChip>
         {batch.background ? <span className="decisions-panel__tag">background</span> : null}
       </p>
-      <p className="rail-card__title decisions-batch__title">
-        <span>{batch.name}</span>
-        <span className="decisions-panel__tag">v{batch.version}</span>
-        <span className="rail-card__provider-chip">{decisionProviderLabel(batch.provider)}</span>
-      </p>
+      <BatchTitle batch={batch} className="rail-card__title decisions-batch__title" />
+      {decisionBatchAsksLine(batch) ? <p className="decisions-batch__asks">{decisionBatchAsksLine(batch)}</p> : null}
       <p className="decisions-batch__counts">
         <span className="decisions-panel__sr">
           {`${batch.finished} of ${batch.count} items done: ${decisionBatchCountsLabel(batch)}`}
@@ -273,7 +392,7 @@ function BatchCard(props: {
       <p className="rail-card__message decisions-batch__timing">{decisionBatchTimingLine(batch, props.now)}</p>
       <div className="context-list__actions rail-card__actions">
         <button className="context-list__action rail-card__details-action" type="button" onClick={props.onDetails}>
-          Details
+          Review
         </button>
         {running && props.canStop ? (
           <button

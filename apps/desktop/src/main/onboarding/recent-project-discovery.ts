@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { RECENT_PROJECT_CLAUDE_SESSION_LIMIT, type RecentClaudeCodeDirectories } from "../claude/claude-recent-projects";
+import { macDirectorySpelling } from "../mac-path-spelling";
 
 /** Codex is read newest first, one page at a time, up to this budget. */
 export const RECENT_PROJECT_CODEX_PAGE_SIZE = 100;
@@ -30,11 +31,9 @@ export type RecentCodexDirectories = {
 export type RecentProjectDiscoveryDeps = {
   /** False when the profile being set up has its own Codex login. */
   includeCodex: boolean;
-  /**
-   * True where folder names ignore case (Windows): `C:/code/app` and
-   * `c:/code/app` are one folder, checked once and sent as one path.
-   */
-  ignorePathCase: boolean;
+  platform: NodeJS.Platform;
+  /** Test seam for the on-disk spelling of a macOS project root. */
+  macDirectorySpelling?: (path: string) => Promise<string | undefined>;
   /** Aborted when a newer discovery replaces this one; stops Claude and folder checks. */
   signal?: AbortSignal;
   /**
@@ -134,10 +133,9 @@ export class RecentProjectDiscoveryRuns {
  * Recent project folders for Get started, with how each agent's read went.
  * Codex answers through its protocol and Claude Code through its Agent SDK.
  * PwrAgent's thread lists also contribute Claude and ACP folders.
- * Two spellings of one folder leave here as one path, since only main knows
- * whether the platform's folder names ignore case. Ranking, prechecking and
- * merging the same folder from two agents happen in the renderer
- * (`get-started-projects.ts`).
+ * Main takes the spelling of the registered root from disk where case can
+ * vary. Ranking, prechecking and merging the same folder from two agents
+ * happen in the renderer (`get-started-projects.ts`).
  */
 export async function discoverRecentProjects(
   deps: RecentProjectDiscoveryDeps,
@@ -220,9 +218,16 @@ export async function discoverRecentProjects(
     }
   }
 
+  const { platform } = deps;
   const { observations, droppedAgents, probed } = await resolveObservations(raw, {
-    identity: (path) => navigationPathIdentity(path, deps.ignorePathCase),
-    resolveProjectRoot: deps.resolveProjectRoot,
+    // macOS volumes can have different case rules. Compare their on-disk
+    // root spellings exactly so App and app can remain distinct.
+    identity: (path) => navigationPathIdentity(path, platform === "win32"),
+    resolveProjectRoot: async (folder) => {
+      const root = await deps.resolveProjectRoot(folder);
+      if (!root || platform !== "darwin") return root;
+      return (await (deps.macDirectorySpelling ?? macDirectorySpelling)(root)) ?? root;
+    },
     signal: deps.signal,
   });
   for (const agent of droppedAgents) {

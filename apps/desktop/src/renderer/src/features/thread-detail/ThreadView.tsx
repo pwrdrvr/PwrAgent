@@ -145,6 +145,7 @@ import {
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { ThreadContextPanel } from "./ThreadContextPanel";
+import type { DecisionSetupSettings } from "./context-panels/DecisionsPanel";
 import { ArrowRightToLineIcon } from "../../icons/ArrowRightToLineIcon";
 import {
   DEFAULT_CONTEXT_TAB,
@@ -835,6 +836,10 @@ export type ThreadViewProps = {
    */
   /** Opens Settings → Plugins, at one connection's row when it is named. */
   onOpenPluginSettings?: (connectionId?: string) => void;
+  /** The profile's Settings, for the Decisions tab's provider setup. */
+  decisionSettings?: DecisionSetupSettings;
+  /** Opens Settings → AI Providers, at a decision provider's screen when one is named. */
+  onOpenDecisionSettings?: (focus?: string) => void;
   onRevealSelectedThreadInList?: () => void;
   /** Show the breadcrumb's project in the Directories lens. */
   onRevealSelectedProjectInList?: (directory: NavigationDirectorySummary) => void;
@@ -3791,6 +3796,8 @@ export function ThreadView(props: ThreadViewProps) {
               ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
               desktopApi={props.desktopApi}
               onOpenAutomations={props.onOpenAutomations}
+              decisionSettings={props.decisionSettings}
+              onOpenDecisionSettings={props.onOpenDecisionSettings}
               onActiveTabChange={onActiveContextTabChange}
               onResizingChange={setContextRailResizing}
               onWidthChange={setContextRailWidth}

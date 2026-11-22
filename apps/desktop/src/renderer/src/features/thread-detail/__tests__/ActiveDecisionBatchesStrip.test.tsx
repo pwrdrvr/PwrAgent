@@ -24,6 +24,7 @@ const running: DecisionsRailBatch = {
   decisionId: "dec_1",
   name: "triage_relevance",
   version: 2,
+  adHoc: false,
   provider: "openai",
   state: "running",
   stopping: false,
