@@ -25,9 +25,10 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Desktop E2E uses the existing local and CI routes. Linux checks do not verify
   macOS or Windows behavior; use the corresponding native CI or PwrSuiteLab skills.
 - For optional remote verification, check PwrAgent's `manage_mcp_connections`
-  with `action: list`. The `builtin:boat` entry must be ready and report
-  `sandboxStart.canStart: true`. If Boat is at its limit, report the reason
-  and use local checks and repository CI without waiting for capacity.
+  with `action: list` for account capacity and `action: describe_thread` for
+  thread access. Boat must be selected and ready for this thread and report
+  `sandboxStart.canStart: true` in the account list. If Boat is at its limit,
+  report the reason and use local checks and repository CI without waiting.
 - Use Boat only when the operator asks or approves in this thread. If you
   propose it, say it bills per second while running and wait for approval.
   If approval or capacity is missing, keep using local checks and CI.
