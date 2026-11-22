@@ -11,12 +11,8 @@ import { copyText } from "../../../lib/copy-text";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { DecisionBatchDetailsModal } from "./DecisionBatchDetailsModal";
 import { BatchTitle } from "./DecisionBatchTitle";
-import { DecisionsSetupDialog } from "./DecisionsSetupDialog";
-import {
-  decisionReadinessLabel,
-  decisionSetupReadiness,
-  type DecisionSetupSettings,
-} from "./decision-setup";
+import { DecisionsSetupDialog, ReadinessPill } from "./DecisionsSetupDialog";
+import { decisionSetupReadiness, type DecisionSetupSettings } from "./decision-setup";
 import {
   decisionBatchAsksLine,
   decisionBatchCountsLabel,
@@ -146,6 +142,8 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
         <p className={`context-empty${props.error ? " context-empty--error" : ""}`}>
           {props.error ? "Couldn't read this thread's decisions." : "Loading decisions…"}
         </p>
+        {/* Setup is about the profile, not this thread: it stays open across a reload. */}
+        {setupDialog}
       </section>
     );
   }
@@ -266,9 +264,7 @@ function DecisionsPitch(props: { readiness: DecisionProvidersReadiness; canSetUp
         {props.readiness.providers.map((entry) => (
           <li key={entry.provider}>
             <span>{decisionProviderSettingsName(entry.provider)}</span>
-            <span className={`decisions-setup__pill decisions-setup__pill--${entry.ready ? "ok" : entry.enabled ? "warning" : "muted"}`}>
-              {decisionReadinessLabel(entry)}
-            </span>
+            <ReadinessPill entry={entry} />
           </li>
         ))}
       </ul>

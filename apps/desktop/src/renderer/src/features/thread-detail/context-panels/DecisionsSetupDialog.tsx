@@ -10,14 +10,15 @@ import {
 import { CloseIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useModalDialog } from "../../../lib/useModalDialog";
+import { openAIDecisionsKeyState } from "../../settings/OpenAIDecisionsSettings";
 import { SecretField } from "../../settings/SecretField";
 import { SettingsTestBlock } from "../../settings/SettingsTestBlock";
 import type { DecisionSetupSettings } from "./decision-setup";
+import { decisionSecrets } from "../../settings/DecisionModelSettings";
 import {
   DECISION_SETUP_FOCUS,
   decisionReadinessLabel,
   decisionSetupReadiness,
-  decisionSetupSecrets,
 } from "./decision-setup";
 import { decisionProviderSettingsName } from "./decisions-format";
 
@@ -65,7 +66,7 @@ export function DecisionsSetupDialog(props: {
   ) : (
     <ul className="decisions-setup__cards">
       {readiness.providers.map((entry) => {
-        const secrets = decisionSetupSecrets(snapshot);
+        const secrets = decisionSecrets(snapshot);
         const resolved = resolveDecisionModelSettings(snapshot.models.decisionModels);
         const expanded = openCard === entry.provider;
         const card = PROVIDER_CARDS[entry.provider];
@@ -127,7 +128,7 @@ export function DecisionsSetupDialog(props: {
                   label="OpenAI API key"
                   sub={<>An API key from a project that can call the Decisions API. Signing in to Codex does not provide one. <ExternalLink href={OPENAI_API_KEYS_URL}>Create a key</ExternalLink></>}
                   secret="openaiDecisionsApiKey"
-                  state={snapshot.models.openaiDecisions?.apiKey ?? secrets.unset}
+                  state={openAIDecisionsKeyState(snapshot)}
                   disabled={saving}
                   onClearSecret={props.settings.clearSecret}
                   onReplaceSecret={props.settings.replaceSecret}
@@ -212,7 +213,8 @@ const PROVIDER_CARDS: Record<DecisionRunProvider, { mark: string; summary: strin
   local: { mark: "C", summary: "A decision model on this Mac, such as Cloudflare's Clef." },
 };
 
-function ReadinessPill(props: { entry: DecisionProviderReadiness }) {
+/** Ready, Needs key, Not chosen or Off, in the tone the operator acts on. */
+export function ReadinessPill(props: { entry: DecisionProviderReadiness }) {
   const tone = props.entry.ready ? "ok" : props.entry.enabled ? "warning" : "muted";
   return <span className={`decisions-setup__pill decisions-setup__pill--${tone}`}>{decisionReadinessLabel(props.entry)}</span>;
 }

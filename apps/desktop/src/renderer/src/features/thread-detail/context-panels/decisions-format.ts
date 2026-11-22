@@ -210,8 +210,3 @@ export function decisionAnswerText(answer: DecisionsRailAnswer): string {
 export function decisionsRailPollDelayMs(snapshot: DecisionsRailSnapshot | undefined): number {
   return snapshot?.batches.some(isDecisionBatchRunning) ? 2_000 : 10_000;
 }
-
-/** The tab shows once the thread has a decision it can see or a batch it ran. */
-export function decisionsRailHasContent(snapshot: DecisionsRailSnapshot | undefined): boolean {
-  return Boolean(snapshot && (snapshot.decisions.length > 0 || snapshot.batches.length > 0));
-}

@@ -4,10 +4,9 @@ import {
   type DecisionProvidersReadiness,
   type DecisionRunProvider,
 } from "@pwragent/shared/decision-models";
-import type {
-  DesktopSettingsSecretState,
-  DesktopSettingsSnapshot,
-} from "@pwragent/shared/contracts/settings";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
+import { decisionSecrets } from "../../settings/DecisionModelSettings";
+import { openAIDecisionsEnabled, openAIDecisionsKeyState } from "../../settings/OpenAIDecisionsSettings";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 
 /** What the Decisions tab reads from and writes to the profile's Settings. */
@@ -23,27 +22,17 @@ export const DECISION_SETUP_FOCUS: Record<DecisionRunProvider, string> = {
   local: "decision-local",
 };
 
-const UNSET_SECRET: DesktopSettingsSecretState = { configured: false, source: "unset", writable: false };
-
 /** Each provider's readiness, from the Settings snapshot the window already holds. */
 export function decisionSetupReadiness(
   snapshot: DesktopSettingsSnapshot | undefined,
 ): DecisionProvidersReadiness | undefined {
   if (!snapshot) return undefined;
-  const secrets = decisionSetupSecrets(snapshot);
   return decisionProvidersReadiness({
     decisionModels: snapshot.models.decisionModels,
-    openaiEnabled: snapshot.models.openaiDecisions?.enabled !== false,
-    openaiKey: snapshot.models.openaiDecisions?.apiKey?.configured === true,
-    jevKey: secrets.jevApiKey.configured,
+    openaiEnabled: openAIDecisionsEnabled(snapshot),
+    openaiKey: openAIDecisionsKeyState(snapshot).configured,
+    jevKey: decisionSecrets(snapshot).jevApiKey.configured,
   });
-}
-
-export function decisionSetupSecrets(snapshot: DesktopSettingsSnapshot) {
-  return {
-    jevApiKey: snapshot.models.decisionSecrets?.jevApiKey ?? UNSET_SECRET,
-    unset: UNSET_SECRET,
-  };
 }
 
 /** Ready, Needs key, Not chosen, Off. */

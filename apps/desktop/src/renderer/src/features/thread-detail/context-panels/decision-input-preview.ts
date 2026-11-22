@@ -43,6 +43,9 @@ export function parsePartialPreview(text: string): PreviewValue | undefined {
   try {
     parser.skipSpace();
     const value = parser.value();
+    // A cut container stops where its last whole value ends, before the
+    // number, literal or key the text ends inside.
+    if (isCut(value)) return value;
     parser.skipSpace();
     return parser.atEnd() ? value : undefined;
   } catch (error) {
@@ -193,13 +196,15 @@ class PreviewParser {
   private scalar(): PreviewValue {
     const match = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(this.text.slice(this.at));
     if (!match) {
-      if (/^[-0-9.eE+tfrueals]+$/.test(this.text.slice(this.at))) throw new EndOfText();
+      if (isScalarPrefix(this.text.slice(this.at))) throw new EndOfText();
       throw new NotJson();
     }
     const end = this.at + match[0].length;
     // "12" at the very end may be the start of "123": not a whole value yet.
     if (end >= this.text.length && /\d$/.test(match[0])) throw new EndOfText();
     if (end < this.text.length && /[-0-9.eE+a-z]/.test(this.text[end]!)) {
+      // "1." or "1e" at the very end: a number the cut ended inside.
+      if (isScalarPrefix(this.text.slice(this.at))) throw new EndOfText();
       throw new NotJson();
     }
     this.at = end;
@@ -217,6 +222,13 @@ const ESCAPES: Record<string, string> = {
   r: "\r",
   t: "\t",
 };
+
+/** The rest of the text is the start of a number or literal the cut ended inside. */
+function isScalarPrefix(rest: string): boolean {
+  return rest.length > 0
+    && (["true", "false", "null"].some((literal) => literal.startsWith(rest))
+      || /^-?(?:0|[1-9]\d*)?(?:\.\d*)?(?:[eE][+-]?\d*)?$/.test(rest));
+}
 
 function isCut(value: PreviewValue): boolean {
   return value.kind !== "scalar" && value.cut === true;

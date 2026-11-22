@@ -89,6 +89,9 @@ describe("decision input previews", () => {
       const text = JSON.stringify(value);
       const cut = text.slice(0, at % (text.length + 1));
       const shown = parsePartialPreview(cut);
+      // Every value here is a string, object or array, so any non-empty
+      // cut has something to show, if only an empty cut container.
+      if (cut.length > 0) expect(shown).toBeDefined();
       if (shown) expectPrefixOf(shown, JSON.parse(text));
     }), { numRuns: 1_000 });
   });
@@ -99,6 +102,17 @@ describe("decision input previews", () => {
       false,
     );
     expect(previewSummary(shown, "")).toBe("Settings window");
+  });
+
+  it("keeps the fields before a cut that falls inside a number or literal", () => {
+    for (const [text, entries] of [
+      ['{"a":"x","b":nu', [["a", { kind: "text", text: "x" }]]],
+      ['{"a":"x","b":12', [["a", { kind: "text", text: "x" }]]],
+      ['{"a":"x","b":tr', [["a", { kind: "text", text: "x" }]]],
+      ['{"a":"x","b', [["a", { kind: "text", text: "x" }]]],
+    ] as const) {
+      expect(parsePartialPreview(text)).toEqual({ kind: "object", cut: true, entries });
+    }
   });
 
   it("keeps the fields before a cut and marks the one it falls in", () => {

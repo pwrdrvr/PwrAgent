@@ -2,11 +2,13 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { DecisionsRailBatch } from "@pwragent/shared/decisions-rail";
 import {
+  decisionBatchAsksLine,
   decisionBatchStatusLabel,
   decisionBatchTimingLine,
+  decisionBatchTitle,
   decisionBatchTone,
+  decisionBatchVersionTag,
   decisionInputSchemaSummary,
-  decisionsRailHasContent,
   decisionsRailPollDelayMs,
   formatDecisionDuration,
   formatDecisionRate,
@@ -108,7 +110,17 @@ describe("decisions format", () => {
     expect(decisionBatchStatusLabel({ state: "queued", stopping: false })).toBe("Waiting");
     expect(decisionsRailPollDelayMs({ now: NOW, decisions: [], batches: [{ ...batch, state: "running" }] })).toBe(2_000);
     expect(decisionsRailPollDelayMs({ now: NOW, decisions: [], batches: [batch] })).toBe(10_000);
-    expect(decisionsRailHasContent({ now: NOW, decisions: [], batches: [] })).toBe(false);
-    expect(decisionsRailHasContent({ now: NOW, decisions: [], batches: [batch] })).toBe(true);
+  });
+
+  // Rule: an ad hoc definition is never stored, so its placeholder name and
+  // version never reach the operator.
+  it("names an ad hoc batch Ad hoc with no version, and lists what a batch asked", () => {
+    expect(decisionBatchTitle({ adHoc: true, name: "ad_hoc" })).toBe("Ad hoc");
+    expect(decisionBatchVersionTag({ adHoc: true, version: 1 })).toBeUndefined();
+    expect(decisionBatchTitle({ adHoc: false, name: "diff_risk" })).toBe("diff_risk");
+    expect(decisionBatchVersionTag({ adHoc: false, version: 3 })).toBe("v3");
+    expect(decisionBatchAsksLine({ questionNames: ["kind", "severity"] })).toBe("Asks kind, severity");
+    expect(decisionBatchAsksLine({ questionNames: ["a", "b", "c", "d", "e"] })).toBe("Asks a, b, c and 2 more");
+    expect(decisionBatchAsksLine({})).toBeUndefined();
   });
 });

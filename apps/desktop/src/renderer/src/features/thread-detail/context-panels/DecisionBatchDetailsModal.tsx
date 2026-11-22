@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type {
   DecisionsRailAnswer,
@@ -80,6 +80,20 @@ export function DecisionBatchDetailsModal(props: DecisionBatchDetailsModalProps)
   const [refreshToken, setRefreshToken] = useState(0);
   const [selected, setSelected] = useState<number>();
   const baseId = useId();
+  // A running batch re-reads its page every 2 s; parse each preview once,
+  // not once per row per poll.
+  const previewCache = useRef(new Map<string, PreviewValue | undefined>());
+  const previewOf = useCallback((item: DecisionsRailItem): PreviewValue | undefined => {
+    if (item.inputPreview === undefined || item.inputRedacted) return undefined;
+    const key = `${item.inputTruncated ? "cut" : "whole"}:${item.inputPreview}`;
+    const cache = previewCache.current;
+    if (cache.has(key)) return cache.get(key);
+    // A page holds at most 500 items; the cache never needs more than two pages' worth.
+    if (cache.size >= 1_000) cache.clear();
+    const parsed = parseInputPreview(item.inputPreview, item.inputTruncated === true);
+    cache.set(key, parsed);
+    return parsed;
+  }, []);
   const read = props.desktopApi?.readDecisionsRailBatch;
   const { backend, threadId } = props.thread;
   const batchId = props.batch.batchId;
@@ -341,6 +355,7 @@ export function DecisionBatchDetailsModal(props: DecisionBatchDetailsModalProps)
                 >
                   {items.map((item) => (
                     <ItemRow
+                      preview={previewOf(item)}
                       id={`${baseId}-item-${item.index}`}
                       item={item}
                       key={item.index}
@@ -365,6 +380,7 @@ export function DecisionBatchDetailsModal(props: DecisionBatchDetailsModalProps)
           <div className="decisions-review__detail" aria-live="polite">
             {current && items ? (
               <ItemDetail
+                preview={previewOf(current)}
                 item={current}
                 canPrevious={position > 0}
                 canNext={position < items.length - 1}
@@ -387,7 +403,7 @@ function PromptSection(props: { definition?: DecisionsRailDefinition; loaded: bo
   if (!definition) {
     return (
       <p className="decisions-prompt decisions-prompt--missing">
-        This batch ran before PwrAgent kept each batch's prompt.
+        This batch's prompt was not saved.
       </p>
     );
   }
@@ -440,13 +456,19 @@ function isLowConfidence(answer: DecisionsRailAnswer | undefined): boolean {
   return answer?.probability !== undefined && answer.probability < DECISION_LOW_CONFIDENCE;
 }
 
-function ItemRow(props: { id: string; item: DecisionsRailItem; selected: boolean; onSelect: () => void }) {
+function ItemRow(props: {
+  id: string;
+  item: DecisionsRailItem;
+  preview: PreviewValue | undefined;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const { item } = props;
   const answer = item.ok ? leadingAnswer(item) : undefined;
   const summary = item.inputRedacted
     ? "Input hidden"
     : item.inputPreview !== undefined
-      ? previewSummary(parseInputPreview(item.inputPreview, item.inputTruncated === true), item.inputPreview)
+      ? previewSummary(props.preview, item.inputPreview)
       : "—";
   return (
     <div
@@ -474,13 +496,14 @@ function ItemRow(props: { id: string; item: DecisionsRailItem; selected: boolean
 
 function ItemDetail(props: {
   item: DecisionsRailItem;
+  preview: PreviewValue | undefined;
   canPrevious: boolean;
   canNext: boolean;
   onPrevious: () => void;
   onNext: () => void;
 }) {
   const { item } = props;
-  const parsed = item.inputPreview !== undefined ? parseInputPreview(item.inputPreview, item.inputTruncated === true) : undefined;
+  const parsed = props.preview;
   return (
     <section className="decisions-detail" aria-label={`Item ${item.index}`}>
       <div className="decisions-detail__head">
