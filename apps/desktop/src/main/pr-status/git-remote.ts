@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
+import { parseGitRemoteConfiguration, type GitRemote } from "./git-remote-config";
 import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
@@ -104,6 +104,7 @@ type ParsedGitRemote = GitRemote & {
 type RemoteCacheEntry = {
   value: ParsedGitRemote[];
   names?: string[];
+  unconfirmedEmpty?: true;
   fetchedAt: number;
 };
 
@@ -128,6 +129,10 @@ export type ResolveGitHubRepoOptions = {
   resolveSshHostname?: (host: string) => Promise<string | undefined>;
   now?: () => number;
   demand?: PrMetadataDemand;
+  /** Re-observe the remote before an action that needs the current checkout. */
+  fresh?: boolean;
+  /** Confirm an empty config in Git before using it as checkout authority. */
+  confirmEmpty?: boolean;
 };
 
 /**
@@ -144,6 +149,21 @@ export async function resolveGitHubRepoForDirectory(
 ): Promise<GitHubRepoRef | undefined> {
   const observation = await readParsedGitRemotes(cwd, options);
   return observation.value.find((remote) => remote.name === "origin")?.repo;
+}
+
+/** Keep negative observations until the shared remote cache permits a retry. */
+export function readObservedGitOrigin(cwd: string): {
+  repo?: GitHubRepoRef;
+  conclusive: boolean;
+  retryAt: number;
+} | undefined {
+  const observation = remoteCache.get(cwd);
+  if (!observation) return undefined;
+  const origin = observation.value.find((remote) => remote.name === "origin");
+  // A listed origin with a failed get-url read is inconclusive. A confirmed
+  // remote list without origin establishes absence, even if the list is empty.
+  const conclusive = Boolean(origin || (observation.names && !observation.names.includes("origin")));
+  return { repo: origin?.repo, conclusive, retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS };
 }
 
 /**
@@ -217,14 +237,21 @@ async function readParsedGitRemotes(
 ): Promise<RemoteCacheEntry> {
   options.demand?.signal?.throwIfAborted();
   const now = options.now ?? (() => Date.now());
+  const confirmEmpty = Boolean(options.confirmEmpty || options.fresh);
   const cached = remoteCache.get(cwd);
-  if (cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS) {
+  if (!options.fresh && cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS
+    && !(confirmEmpty && cached.unconfirmedEmpty)) {
     return cached;
   }
 
   const existing = remoteLookups.get(cwd);
   if (existing && !existing.signal.aborted) {
-    return existing.read(options.demand);
+    const observation = await existing.read(options.demand);
+    // A checkout-authority read can join a cheaper discovery already in
+    // flight. Confirm an ambiguous result once the shared read settles.
+    return confirmEmpty && observation.unconfirmedEmpty
+      ? readParsedGitRemotes(cwd, options)
+      : observation;
   }
 
   const pending = new SharedPrMetadataRead(async (demand) => {
@@ -253,9 +280,9 @@ async function loadParsedGitRemotes(
   const localSshLookups = new Map<string, Promise<string | undefined>>();
   try {
     demand.signal?.throwIfAborted();
-    const { names, remotes } = options.readRemotes
-      ? { names: undefined, remotes: await options.readRemotes(cwd) }
-      : await defaultReadRemotes(cwd, demand);
+    const { names, remotes, unconfirmedEmpty } = options.readRemotes
+      ? { remotes: await options.readRemotes(cwd) }
+      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh));
     const value = await Promise.all(
       remotes.map(async (remote) => {
         const repo = parseForgeRemote(remote.url);
@@ -277,7 +304,7 @@ async function loadParsedGitRemotes(
         };
       }),
     );
-    return { names, value };
+    return { names, value, unconfirmedEmpty };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
@@ -306,7 +333,9 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
   return pending.read(demand);
 }
 
-async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promise<GitRemoteConfiguration> {
+async function defaultReadRemotes(
+  cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
+): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
     purpose: "pr-remotes" as const,
@@ -322,15 +351,19 @@ async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promis
       const { stdout } = await runPrMetadataGit(cwd,
         ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
       const configuration = parseGitRemoteConfiguration(stdout);
-      if (configuration) return configuration;
+      if (configuration?.names.length) return configuration;
+      if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true };
     } catch (error) {
       demand.signal?.throwIfAborted();
-      // `config --get-regexp` exits 1 when no key matches.
       const result = error as { code?: number; stdout?: string; stderr?: string };
-      if (result.code === 1 && result.stdout === "" && result.stderr === "") return { names: [], remotes: [] };
+      if (!confirmEmpty && result.code === 1 && result.stdout === "" && result.stderr === "") {
+        return { remotes: [], unconfirmedEmpty: true };
+      }
     }
   }
 
+  // An empty config is enough to skip discovery. It takes Git's remote
+  // command to distinguish a checkout without an origin from an unavailable one.
   const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
   const names = uniqueNonEmptyLines(stdout);
   const entries = await Promise.all(

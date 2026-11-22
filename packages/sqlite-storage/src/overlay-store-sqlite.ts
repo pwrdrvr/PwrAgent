@@ -7261,7 +7261,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async getPrAutoDispatchCandidateWinner(params: {
     prKey: string;
     /** Passes over an eligible thread the caller rules out, such as one whose project narrows Auto-fix. */
-    accepts?: (candidate: { backend: ThreadOverlayState["backend"]; threadId: string }) => boolean;
+    accepts?: (candidate: { backend: ThreadOverlayState["backend"]; threadId: string }) => boolean | Promise<boolean>;
   }): Promise<PrAutoDispatchCandidate | undefined> {
     const rows = this.stateDb.raw
       .prepare(
@@ -7277,17 +7277,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         thread_id: string;
       }>;
     for (const row of rows) {
-      if (
-        isPrAutoDispatchCandidateEligible(this.getThread(buildThreadIdentityKey(row.backend, row.thread_id)))
-        && (params.accepts?.({ backend: row.backend, threadId: row.thread_id }) ?? true)
-      ) {
-        return {
-          backend: row.backend,
-          eligibleSince: row.eligible_since,
-          prKey: row.pr_key,
-          threadId: row.thread_id,
-        };
-      }
+      const identity = { backend: row.backend, threadId: row.thread_id };
+      const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+      if (!isPrAutoDispatchCandidateEligible(this.getThread(key))) continue;
+      // A checkout check may yield while another operation locks or disables
+      // the thread. Read its current eligibility before returning a winner.
+      if (params.accepts && (!await params.accepts(identity)
+        || !isPrAutoDispatchCandidateEligible(this.getThread(key)))) continue;
+      return { ...identity, eligibleSince: row.eligible_since, prKey: row.pr_key };
     }
     return undefined;
   }

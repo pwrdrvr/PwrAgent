@@ -4,19 +4,34 @@
  * The fast GraphQL poller (`pr-polling-scheduler.ts`) keeps the status of PRs
  * we ALREADY track fresh. It cannot find a PR we don't know about yet — it
  * polls by number. Discovery closes that gap by re-running the in-process
- * branch-based lookup across EVERY open thread, not just the selected one, on
- * a slow rotation.
+ * branch-based lookup on a slow rotation across recently accessed threads.
  *
  * Why branch-lookup rather than a GitHub search/`since` crawl: PwrAgent attaches
  * PRs to a thread by matching the thread's branch. A raw "list PRs updated since
  * T" crawl would find PRs but have nowhere to attach them. Re-running the branch
  * lookup reuses the entire existing attachment + cache + coalescing path, so a
  * discovered PR surfaces on its thread exactly as an on-selection fetch would.
- * This is the periodic refresh across open repos that was lost.
  *
  * The selection below is a pure function so the rotation logic is testable
  * without timers or a live GitHub request.
  */
+
+const MAX_RECENT_THREADS = 100;
+const RECENT_THREAD_ACCESS_MS = 7 * 24 * 60 * 60_000;
+
+/** Take only recently accessed candidates before applying the per-tick budget. */
+export function selectRecentPrDiscoveryThreads(
+  threadKeys: string[],
+  accessByThreadKey: ReadonlyMap<string, number>,
+  now: number,
+): string[] {
+  return threadKeys
+    .map((threadKey) => ({ threadKey, accessedAt: accessByThreadKey.get(threadKey) ?? 0 }))
+    .filter(({ accessedAt }) => accessedAt > 0 && accessedAt >= now - RECENT_THREAD_ACCESS_MS)
+    .sort((left, right) => right.accessedAt - left.accessedAt)
+    .slice(0, MAX_RECENT_THREADS)
+    .map(({ threadKey }) => threadKey);
+}
 
 export type DiscoveryDueSelection = {
   /** All threads that currently have a PR refresh context. */
@@ -37,7 +52,7 @@ export type DiscoveryDueSelection = {
 
 /**
  * Pick the threads to discovery-refresh this tick: those past their cadence,
- * least-recently-swept first (so the rotation covers everyone), capped.
+ * least-recently-swept first (so the rotation covers the eligible set), capped.
  */
 export function selectDiscoveryDueThreadKeys(
   selection: DiscoveryDueSelection,

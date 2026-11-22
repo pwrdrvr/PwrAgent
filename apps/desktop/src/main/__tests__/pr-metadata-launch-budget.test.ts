@@ -12,6 +12,7 @@ import {
   clearGitHubRemoteCache,
   parseForgeRemote,
   readForgeRepositoryRemotes,
+  readObservedGitOrigin,
   resolveGitHubRepoForDirectory,
 } from "../pr-status/git-remote";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
@@ -57,6 +58,30 @@ describe("PR metadata launch budgets", () => {
     const expected = kind === "missing" ? ["config", "remote"] : ["config"];
     expect(runner.mock.calls.map(([, args]) => args[0])).toEqual(expected);
     expect(launches).toHaveBeenCalledTimes(expected.length);
+  });
+
+  it("shares checkout confirmation when authority readers join an empty discovery", async () => {
+    await git.runGitCommand(root, ["init", "-b", "main"]);
+    const runGit = git.runGitCommand;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void;
+    const configStarted = new Promise<void>((resolve) => { started = resolve; });
+    const runner = vi.spyOn(git, "runGitCommand").mockImplementationOnce(async (...args) => {
+      started();
+      await held;
+      return runGit(...args);
+    });
+
+    const discovery = resolveGitHubRepoForDirectory(root);
+    await configStarted;
+    const authority = resolveGitHubRepoForDirectory(root, { confirmEmpty: true });
+    const fresh = resolveGitHubRepoForDirectory(root, { fresh: true });
+    release();
+    expect(await Promise.all([discovery, authority, fresh])).toEqual([undefined, undefined, undefined]);
+    expect(readObservedGitOrigin(root)).toMatchObject({ conclusive: true, repo: undefined });
+    // Only the authority readers need a confirmed negative answer from Git.
+    expect(runner.mock.calls.map(([, args]) => args[0])).toEqual(["config", "config", "remote"]);
   });
 
   it("uses one fallback-ref lookup for concurrent and unchanged consumers of a checkout", async () => {
