@@ -170,4 +170,3 @@ it("does not enable experimental Code Mode in the CLI environment", () => {
   expect(claudeEnvironment({})).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE");
   expect(claudeEnvironment({ CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" }).CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("0");
 });
-
