@@ -115,7 +115,8 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
       yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
     }
     return Object.assign(messages ? messages(options, args.prompt as AsyncIterable<SDKUserMessage>) : normal(), {
-      close, setPermissionMode: vi.fn().mockResolvedValue(undefined), ...controls,
+      close, initializationResult: vi.fn().mockResolvedValue({ mcp_servers_applied: true }),
+      setPermissionMode: vi.fn().mockResolvedValue(undefined), ...controls,
     }) as unknown as Query;
   });
   const backendOptions = {
@@ -124,7 +125,7 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     getSessionInfo: vi.fn().mockResolvedValue(undefined),
     discoverModels: vi.fn().mockResolvedValue([]),
     inspectInstallation: vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => ({
-      executable: "/fixture/claude", authStatus: "signed-in" as const,
+      executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" as const,
     })),
     emit: async (event: AgentEvent) => {
       events.push(event);
@@ -1675,7 +1676,7 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", signal: expect.any(AbortSignal), env: {
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", cliVersion: "2.1.330", signal: expect.any(AbortSignal), env: {
       PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
       CLAUDE_CODE_ARTIFACT: "1", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "0",
     } });

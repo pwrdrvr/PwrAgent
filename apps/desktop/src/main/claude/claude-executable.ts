@@ -118,6 +118,11 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
+export function supportsClaudeMcpInitialize(version: string | undefined): boolean {
+  // The SDK supports this transport with its bundled CLI or newer.
+  return version !== undefined && compareVersions(version, "2.1.330") >= 0;
+}
+
 async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal,
   options?: { timeout: number; cwd: string }): Promise<string> {
   signal?.throwIfAborted();

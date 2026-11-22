@@ -684,7 +684,7 @@ describe("DesktopBackendRegistry", () => {
       claudeBackendOptions: {
         store,
         getSessionInfo: vi.fn().mockResolvedValue(undefined),
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
         query: ({ options = {} }) => {
           async function* messages(): AsyncGenerator<ClaudeMessage> {
@@ -692,7 +692,7 @@ describe("DesktopBackendRegistry", () => {
             await finished;
             yield { type: "result", subtype: "success", is_error: false, result: "Reviewed" } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -4096,7 +4096,7 @@ describe("DesktopBackendRegistry", () => {
         claudeBackendOptions: {
           store,
           getSessionInfo: vi.fn().mockResolvedValue(undefined),
-          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
           discoverModels: async () => [],
           query: () => {
             async function* messages(): AsyncGenerator<ClaudeMessage> {
@@ -4112,7 +4112,7 @@ describe("DesktopBackendRegistry", () => {
               }] } } as ClaudeMessage;
               yield { type: "result", subtype: "success", is_error: false, result: "" } as ClaudeMessage;
             }
-            return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+            return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
           },
           ...claudeOptions,
         },
@@ -4198,7 +4198,7 @@ describe("DesktopBackendRegistry", () => {
               await new Promise<void>(resolve => options?.abortController?.signal.addEventListener("abort", () => resolve(), { once: true }));
             }
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       });
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true }, issueProviderDiscoveryPermit("settings-user-action"));

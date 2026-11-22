@@ -683,7 +683,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
         "apps/desktop/src/main/__tests__/fixtures/claude-self-started-cli.cjs")));
     }, workspace => ({ store: new ClaudeSessionStore(path.join(workspace, "sessions")),
-      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), authStatus: "signed-in" }),
+      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), version: "999.0.0", authStatus: "signed-in" }),
       discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined }));
     const registry = desktopOwner.registry as DesktopBackendRegistry;
     try {
@@ -2592,7 +2592,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         "apps/desktop/src/main/__tests__/fixtures/claude-owner-cli.cjs")));
     }, (workspace) => ({
       store: new ClaudeSessionStore(path.join(workspace, "sessions")),
-      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), authStatus: "signed-in" }),
+      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), version: "999.0.0", authStatus: "signed-in" }),
       discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [],
       getSessionInfo: async () => undefined,
     }));

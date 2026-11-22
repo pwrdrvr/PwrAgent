@@ -494,7 +494,14 @@ it never falls back to the Codex account. Probes are bounded and never read
 credential files or call account endpoints outside the official CLI.
 
 Selected managed MCP connections and the PwrAgent gateway are injected into
-`query({ options: { mcpServers } })`. Changes apply on the next message. While
+`query({ options: { mcpServers, mcpServersDelivery: "initialize" } })` with
+Claude Code `2.1.330` or newer. The SDK sends HTTP headers and stdio environment
+variables over stdin. If only an older CLI is available or its version cannot
+be read, PwrAgent sends the same servers through `setMcpServers()`. PwrAgent
+waits up to 30 seconds for the CLI to accept the configuration before sending
+the first prompt. A refusal or timeout leaves the reply available to retry.
+Stopping during setup cancels the turn. Changes to a live session still apply
+on the next message. While
 a turn runs, inventory comes from `Query.mcpServerStatus()`. An idle thread
 reports that inventory is unavailable instead of querying Codex. The CLI's own
 MCP configuration remains enabled. Auto is Claude's native `auto` mode on both
