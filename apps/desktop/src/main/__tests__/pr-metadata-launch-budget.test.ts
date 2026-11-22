@@ -14,19 +14,24 @@ import {
   readForgeRepositoryRemotes,
   resolveGitHubRepoForDirectory,
 } from "../pr-status/git-remote";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 const execFileAsync = promisify(execFile);
 // Every async launch reaches this method; Node's public typings omit it.
 const spyOnLaunches = () => vi.spyOn(ChildProcess.prototype as unknown as { spawn(options: unknown): unknown }, "spawn");
+const originConfig = ["local", "remote.origin.url\nhttps://github.com/fixture/project.git", ""].join("\0");
 
 describe("PR metadata launch budgets", () => {
   let root: string;
+  let restoreGitEnv: () => void;
   beforeEach(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-launch-budget-"));
+    restoreGitEnv = isolateProcessGitEnvironment(root);
     clearGitHubRemoteCache();
   });
   afterEach(async () => {
     vi.restoreAllMocks();
+    restoreGitEnv();
     clearGitHubRemoteCache();
     await rm(root, { recursive: true, force: true });
   });
@@ -47,10 +52,10 @@ describe("PR metadata launch budgets", () => {
     for (let round = 0; round < 5; round++) {
       expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([pr]);
     }
-    // Let the admitted child discover missing checkouts without touching the
-    // owner's filesystem pool. The negative answer still coalesces and caches.
-    const expected = [["remote"]];
-    expect(runner.mock.calls.map(([, args]) => args)).toEqual(expected);
+    // A missing checkout also reaches the compatibility fallback. All the
+    // negative answers are cached, so subsequent sweeps launch nothing.
+    const expected = kind === "missing" ? ["config", "remote"] : ["config"];
+    expect(runner.mock.calls.map(([, args]) => args[0])).toEqual(expected);
     expect(launches).toHaveBeenCalledTimes(expected.length);
   });
 
@@ -62,10 +67,9 @@ describe("PR metadata launch budgets", () => {
     const pr = attachment(root);
     await Promise.all(Array.from({ length: 12 }, () => filterStoredDiscoveredPullRequests([pr])));
     for (let round = 0; round < 5; round++) await filterStoredDiscoveredPullRequests([pr]);
-    // Identity's remote list + all URLs; defaults' remote list + remote HEAD
-    // + one fallback-ref query. Git still owns both metadata reads.
-    expect(runner).toHaveBeenCalledTimes(5);
-    expect(launches).toHaveBeenCalledTimes(5);
+    // The shared effective-config read, remote HEAD and one fallback-ref query.
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(launches).toHaveBeenCalledTimes(3);
     expect(runner.mock.calls.filter(([, args]) => args[0] === "for-each-ref")).toHaveLength(1);
   });
 
@@ -82,9 +86,8 @@ describe("PR metadata launch budgets", () => {
       peak = Math.max(peak, ++active);
       await new Promise<void>((resolve) => setImmediate(resolve));
       active--;
-      if (rejected.has(cwd)) throw new Error("inconclusive repository");
       const stdout = args[0] === "symbolic-ref" ? "origin/main\n"
-        : args.length === 1 ? "origin\n" : "https://github.com/fixture/project.git\n";
+        : rejected.has(cwd) ? "" : originConfig;
       return { stdout, stderr: "" };
     });
     const prs = directories.map((cwd) => ({ ...attachment(cwd), headRefName: "main" }));
@@ -97,12 +100,12 @@ describe("PR metadata launch budgets", () => {
     const third = filterStoredDiscoveredPullRequests(prs);
     expect(await Promise.all([first, second, third])).toEqual([retained, retained, retained]);
     expect({ calls: runner.mock.calls.length, peak }).toEqual({
-      calls: (size - rejected.size) * 4 + rejected.size,
+      calls: (size - rejected.size) * 2 + rejected.size,
       peak: 8,
     });
     for (const cwd of directories) {
       const commands = runner.mock.calls.filter(([path]) => path === cwd).map(([, args]) => args[0]);
-      expect(commands).toEqual(rejected.has(cwd) ? ["remote"] : ["remote", "remote", "remote", "symbolic-ref"]);
+      expect(commands).toEqual(rejected.has(cwd) ? ["config"] : ["config", "symbolic-ref"]);
     }
   });
 
@@ -135,9 +138,9 @@ describe("PR metadata launch budgets", () => {
     const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (path, args) => {
       starts.push(path);
       if (starts.length === 8) ready();
-      if (path === cwd(40)) selected.push(args.join(" "));
+      if (path === cwd(40)) selected.push(args[0]!);
       if (Number(path.split(/[\\/]/).at(-1)) < 8) await held;
-      return { stdout: args.length === 1 ? "origin\n" : "https://github.com/fixture/project.git\n", stderr: "" };
+      return { stdout: originConfig, stderr: "" };
     });
     const read = (index: number) => resolveGitHubRepoForDirectory(cwd(index));
     const scan = Array.from({ length: 41 }, (_, index) => read(index));
@@ -164,10 +167,10 @@ describe("PR metadata launch budgets", () => {
     expect(starts[8]).toBe(cwd(40));
     expect(starts.indexOf(cwd(38))).toBeLessThan(starts.indexOf(cwd(39)));
     expect(starts.lastIndexOf(cwd(40))).toBeLessThan(starts.indexOf(cwd(39)));
-    expect(selected).toEqual(["remote", "remote get-url --all origin"]);
+    expect(selected).toEqual(["config"]);
     expect(starts).not.toContain(cwd(41));
     await expect(read(41)).resolves.toMatchObject({ repo: "project" });
-    expect(runner.mock.calls.filter(([path]) => path === cwd(41))).toHaveLength(2);
+    expect(runner.mock.calls.filter(([path]) => path === cwd(41))).toHaveLength(1);
   });
 
   it("coalesces aliases while more than 128 distinct hosts are pending", async () => {
@@ -294,6 +297,6 @@ describe("PR metadata launch budgets", () => {
     expect(origins.map((remote) => remote?.repo)).toEqual(dirs.map((_, index) => `checkout-${index}`));
     expect(first[0]?.at(-1)).toEqual({ host: "gitlab.com", owner: "fixture/subgroup", repo: "project" });
     expect(first[1]?.map((remote) => remote.repo)).toEqual(["checkout-1", "mirror"]);
-    expect(launches).toHaveBeenCalledTimes(2 * size + 1);
+    expect(launches).toHaveBeenCalledTimes(size);
   });
 });

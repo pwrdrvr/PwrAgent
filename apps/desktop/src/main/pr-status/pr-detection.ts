@@ -1,7 +1,7 @@
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { resolveForgeReposForDirectory, type GitHubRepoRef } from "./git-remote";
+import { observeForgeRepositoriesForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
@@ -65,11 +65,11 @@ export async function detectPullRequestsForThread(params: {
 
   const results = await Promise.all(
     dirs.map(async (cwd) => {
-      const repos = await resolveForgeReposForDirectory(cwd);
+      const { repos, refreshedRemoteNames } = await observeForgeRepositoriesForDirectory(cwd);
       if (repos.length === 0) {
         return [];
       }
-      const plan = await resolvePrLookupPlan({ branch, cwd });
+      const plan = await resolvePrLookupPlan({ branch, cwd, remoteNames: refreshedRemoteNames });
       let branchLookupFailed = false;
       const onBranchLookupFailure = params.onProviderFailure
         ? () => {
@@ -160,8 +160,9 @@ type PrLookupPlan = {
 async function resolvePrLookupPlan(params: {
   branch: string;
   cwd: string;
+  remoteNames?: string[];
 }): Promise<PrLookupPlan> {
-  const defaultBranchInfo = await readDefaultBranchInfo(params.cwd);
+  const defaultBranchInfo = await readDefaultBranchInfo(params.cwd, undefined, params.remoteNames);
   // A timed-out/failed git probe must not turn a default branch into an
   // eligible head-name lookup against every contributor's fork.
   if (defaultBranchInfo.remotes.size === 0) return { branches: [] };
@@ -306,10 +307,10 @@ function readStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand): Pro
   storedDiscoveryContexts.delete(cwd);
   const pending = new SharedPrMetadataRead(async (sharedDemand) => {
     try {
-      const repos = await resolveForgeReposForDirectory(cwd, undefined, { demand: sharedDemand });
+      const { repos, refreshedRemoteNames } = await observeForgeRepositoriesForDirectory(cwd, undefined, { demand: sharedDemand });
       // Inconclusive identity keeps the attachment without reading default refs.
       const defaults = repos.length > 0
-        ? await readDefaultBranchInfo(cwd, sharedDemand)
+        ? await readDefaultBranchInfo(cwd, sharedDemand, refreshedRemoteNames)
         : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
       sharedDemand.signal?.throwIfAborted();
       // Failed metadata stays inconclusive and is retried by the next read.
@@ -371,13 +372,22 @@ async function readTrackedRemoteBranch(params: {
   return undefined;
 }
 
-async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand): Promise<DefaultBranchInfo> {
+async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand, remoteNames?: string[]): Promise<DefaultBranchInfo> {
   try {
-    const { defaultsByRemote, remotes } = await readRemoteDefaultBranches(cwd, demand);
+    const { defaultsByRemote, remotes, confirmed } = await readRemoteDefaultBranches(cwd, demand, remoteNames);
     const names = new Set(defaultsByRemote.values());
 
     if (names.size === 0) {
-      const fallbackDefaultBranch = await readFallbackDefaultBranchName(cwd, demand);
+      const refs = await readGitLine(cwd, [
+        "for-each-ref",
+        "--format=%(refname)",
+        ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
+      ], demand);
+      // A successful empty ref read still confirms that Git can read the
+      // checkout. After only failures, revalidate the previously sampled names.
+      if (remoteNames && !confirmed && refs === undefined) return await readDefaultBranchInfo(cwd, demand);
+      const localRefs = new Set(refs?.split(/\r?\n/));
+      const fallbackDefaultBranch = FALLBACK_DEFAULT_BRANCHES.find((branch) => localRefs.has(`refs/heads/${branch}`));
       if (fallbackDefaultBranch) {
         names.add(fallbackDefaultBranch);
       }
@@ -394,25 +404,30 @@ async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand): Pr
   }
 }
 
-async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand): Promise<{
+async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand, remoteNames?: string[]): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
+  confirmed: boolean;
 }> {
-  const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
-    purpose: "pr-discovery",
-    env: buildPwrAgentChildProcessEnv(process.env),
-    maxBuffer: 64 * 1024,
-    timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
-  }, demand);
-  const remotes = uniqueNonEmpty(stdout.split(/\r?\n/));
+  if (!remoteNames) {
+    const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
+      purpose: "pr-discovery",
+      env: buildPwrAgentChildProcessEnv(process.env),
+      maxBuffer: 64 * 1024,
+      timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+    }, demand);
+    remoteNames = uniqueNonEmpty(stdout.split(/\r?\n/));
+  }
+  let confirmed = false;
   const defaults = await Promise.all(
-    remotes.map(async (remote) => {
+    remoteNames.map(async (remote) => {
       const remoteHead = await readGitLine(cwd, [
         "symbolic-ref",
         "--quiet",
         "--short",
         `refs/remotes/${remote}/HEAD`,
       ], demand);
+      if (remoteHead !== undefined) confirmed = true;
       const prefix = `${remote}/`;
       return remoteHead?.startsWith(prefix)
         ? ([remote, remoteHead.slice(prefix.length)] as const)
@@ -425,21 +440,9 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand)
         (entry): entry is readonly [string, string] => Boolean(entry?.[1]),
       ),
     ),
-    remotes: new Set(remotes),
+    remotes: new Set(remoteNames),
+    confirmed,
   };
-}
-
-async function readFallbackDefaultBranchName(
-  cwd: string,
-  demand?: PrMetadataDemand,
-): Promise<string | undefined> {
-  const refs = await readGitLine(cwd, [
-    "for-each-ref",
-    "--format=%(refname)",
-    ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
-  ], demand);
-  const names = new Set(refs?.split(/\r?\n/));
-  return FALLBACK_DEFAULT_BRANCHES.find((branch) => names.has(`refs/heads/${branch}`));
 }
 
 async function readGitLine(
@@ -454,7 +457,7 @@ async function readGitLine(
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
     }, demand);
-    return stdout.trim() || undefined;
+    return stdout.trim();
   } catch {
     demand?.signal?.throwIfAborted();
     return undefined;

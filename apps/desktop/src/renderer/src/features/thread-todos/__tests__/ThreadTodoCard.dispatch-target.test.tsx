@@ -343,7 +343,7 @@ describe("to-do dispatch target", () => {
     expect(within(row).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
       "Machine for the new thread: studio",
       "Model for the new thread: Claude, Opus 5.5, high",
-      "Where the new thread is filed: Sub-thread",
+      "Where the new thread is filed: Top-level",
       "Where the new thread works: This thread's directory",
       "Environment for the new thread: Dev",
       "Show start settings",
@@ -359,25 +359,61 @@ describe("to-do dispatch target", () => {
     expect(api.listThreadTodoDispatchEnvironments).toHaveBeenCalledWith({ id: "card" });
   });
 
-  it("files the thread as a sub-thread by default and sends a top-level pick", async () => {
+  it("files a top-level thread's follow-up as another top-level thread by default", async () => {
     const { onRun } = setup();
     await settle();
-    expect(chip("Where the new thread is filed").getAttribute("data-tooltip")).toBe("Thread: Sub-thread of this thread");
+    // A sibling of a thread with no parent is a top-level thread: one row.
+    expect(chip("Where the new thread is filed").textContent).toBe("Top-level");
+    expect(chip("Where the new thread is filed").getAttribute("data-tooltip")).toBe("Thread: New thread in atlas");
     await act(async () => { fireEvent.click(chip("Where the new thread is filed")); });
     const menu = within(screen.getByRole("menu", { name: "Where the new thread is filed" }));
     expect(menu.getAllByRole("menuitemradio").map((entry) => entry.textContent)).toEqual([
-      "Sub-thread of this threadDefault",
+      "Sub-thread of this thread",
+      "New thread in atlasDefault",
+    ]);
+    await act(async () => { fireEvent.click(menu.getByRole("menuitemradio", { name: /^Sub-thread of this thread/ })); });
+    expect(chip("Where the new thread is filed").classList.contains("is-changed")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(card, expect.objectContaining({ placement: "sub_thread" }));
+    // Back to the default sends nothing, so the owner's own default holds.
+    await choose("Where the new thread is filed", "New thread in atlas");
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun.mock.calls.at(-1)?.[1]).not.toHaveProperty("placement");
+  });
+
+  it("files a child thread's follow-up beside it, under the same parent, by default", async () => {
+    const child: ThreadTodo = { ...card, dispatchDefaults: { thread, threadParent: { backend: "claude", threadId: "cpu-analysis" } } };
+    const { onRun } = setup({ todo: child });
+    await settle();
+    expect(chip("Where the new thread is filed").textContent).toBe("Sibling");
+    expect(chip("Where the new thread is filed").getAttribute("data-tooltip")).toBe("Thread: Sibling of this thread, under its parent");
+    await act(async () => { fireEvent.click(chip("Where the new thread is filed")); });
+    const menu = within(screen.getByRole("menu", { name: "Where the new thread is filed" }));
+    expect(menu.getAllByRole("menuitemradio").map((entry) => entry.textContent)).toEqual([
+      "Sibling of this threadDefault",
+      "Sub-thread of this thread",
       "New thread in atlas",
     ]);
     await act(async () => { fireEvent.click(menu.getByRole("menuitemradio", { name: /^New thread in atlas/ })); });
-    expect(chip("Where the new thread is filed").textContent).toBe("Top-level");
-    expect(chip("Where the new thread is filed").classList.contains("is-changed")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
-    expect(onRun).toHaveBeenLastCalledWith(card, expect.objectContaining({ placement: "top_level" }));
-    // Back to the default sends nothing, so the owner's own default holds.
-    await choose("Where the new thread is filed", "Sub-thread of this thread");
+    expect(onRun).toHaveBeenLastCalledWith(child, expect.objectContaining({ placement: "top_level" }));
+    await choose("Where the new thread is filed", "Sibling of this thread");
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun.mock.calls.at(-1)?.[1]).not.toHaveProperty("placement");
+  });
+
+  it("offers an owner without siblings only its own two placements, defaulting to a sub-thread", async () => {
+    const remote: ThreadTodo = {
+      ...card, federationTarget: { scope: "remote", instanceId: "win" },
+      dispatchDefaults: { thread, threadParent: { backend: "claude", threadId: "cpu-analysis" } },
+    };
+    setup({ todo: remote, instances: [{ ...WIN, placement: true }], backendsTarget: { scope: "remote", instanceId: "win" } });
+    await settle();
+    expect(chip("Where the new thread is filed").textContent).toBe("Sub-thread");
+    await act(async () => { fireEvent.click(chip("Where the new thread is filed")); });
+    expect(within(screen.getByRole("menu", { name: "Where the new thread is filed" }))
+      .getAllByRole("menuitemradio").map((entry) => entry.textContent))
+      .toEqual(["Sub-thread of this threadDefault", "New thread in atlas"]);
   });
 
   it("starts with the agent's top-level proposal, and sends a sub-thread pick against it", async () => {

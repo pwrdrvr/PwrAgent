@@ -1,14 +1,17 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
 import type { TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
 import type { DynamicToolCallResponse, DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { buildTurnUserMessageOriginId } from "../app-server/thread-transcript-helpers";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { PWRAGENT_TOOL_GUIDE } from "../agent-tools/pwragent-tool-guide";
+import { RbacPolicyService } from "../messaging/rbac-policy-service";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -20,6 +23,7 @@ import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { DurableConfigSnapshotStore } from "../storage/durable-config-snapshot-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { messagingAccessHarness } from "./fixtures/messaging-access-harness";
 
 describe("Codex catalog dynamic tool dispatch", () => {
   let directory: string;
@@ -125,7 +129,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
 
     const management = await internals.performServerRequest("codex", request("pwragent", "manage_pwragent"));
     expect(management.success).toBe(false);
-    expect(JSON.stringify(management)).toContain("tools.instance_lifecycle");
+    expect(JSON.stringify(management)).toContain("persisted Agent designation");
     expect(checkDynamicToolPermission).not.toHaveBeenCalled();
 
     checkDynamicToolPermission.mockClear();
@@ -239,22 +243,84 @@ describe("Codex catalog dynamic tool dispatch", () => {
   it.each([
     ["pwragent_automations", "list_automations"],
     ["pwragent_threads", "get_thread_status"],
-    ["pwragent_app", "manage_pwragent"],
     ["pwragent_messaging", "get_current_messaging_surface"],
   ])("keeps persisted %s definitions dispatchable", async (namespace, tool) => {
-    if (tool === "manage_pwragent") vi.spyOn(registry, "canManagePwrAgent").mockResolvedValue(true);
     const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall").mockResolvedValue({ success: true, contentItems: [] });
     expect((await internals.performServerRequest("codex", request(namespace, tool))).success).toBe(true);
     expect(dispatch).toHaveBeenCalledWith({ backend: "codex", call: expect.objectContaining({ namespace: "pwragent", tool }) });
   });
 
-  it.each(["pwragent", "pwragent_app"])("retains lifecycle authority checks through the %s namespace", async (namespace) => {
-    vi.spyOn(registry, "canManagePwrAgent").mockResolvedValue(false);
-    const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall");
-    const response = await internals.performServerRequest("codex", request(namespace, "manage_pwragent"));
-    expect(response.success).toBe(false);
-    expect(JSON.stringify(response)).toContain("tools.instance_lifecycle");
-    expect(dispatch).not.toHaveBeenCalled();
+  it("reports the lifecycle gate that actually denied an admitted Telegram request", async () => {
+    const fixture = await messagingAccessHarness("telegram", true);
+    try {
+      const policy = new RbacPolicyService({ env: { PWRAGENT_HOME: directory } }, () => {});
+      fixture.controllerOptions.rbacPolicy = policy.providerFor("telegram");
+      fixture.controllerOptions.adapter.retainedSourceConnectionId = () => "fixture-connection";
+      const context = { backend: "codex" as const, threadId: "fixture-thread", turnId: "fixture-turn" };
+      const subject = { kind: "actor" as const, platform: "telegram" as const, actorId: "fixture-actor" };
+      registryModules(registry).turnState.registerTurn("codex:fixture-thread:fixture-turn");
+      registry.setMessagingAgentToolService({
+        handlePwrAgentMessagingRequest: vi.fn(),
+        checkDynamicToolPermission: vi.fn(),
+        authorizeRetainedTool: async (caller, check) => fixture.controller.authorizeRetainedTool(caller, check),
+      });
+      const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall")
+        .mockResolvedValue({ success: true, contentItems: [] });
+      const cases = [
+        { scenario: "legacy", denial: "requires messaging RBAC enforcement" },
+        { scenario: "admin", denial: null },
+        { scenario: "power_user_tools", denial: "tools.instance_lifecycle" },
+        { scenario: "custom", denial: null },
+        { scenario: "ordinary-thread", denial: "persisted Agent designation" },
+        { scenario: "missing-origin", denial: "no retained messaging actor" },
+        { scenario: "ambiguous-origin", denial: "messaging actor for this turn is ambiguous" },
+        { scenario: "revoked-provider", denial: "could not verify current messaging access" },
+        { scenario: "actor-changed", denial: "messaging actor changed during app management authorization" },
+      ] as const;
+      policy.upsertRole({ id: "fixture-role", name: "Fixture role", builtIn: false,
+        permissions: ["message.reply", "tools.instance_management", "tools.instance_lifecycle"] });
+      await fc.assert(fc.asyncProperty(fc.constantFrom(...cases), fc.constantFrom("pwragent", "pwragent_app"), async ({ scenario, denial }, namespace) => {
+        dispatch.mockClear();
+        policy.setEnforced(scenario !== "legacy");
+        policy.upsertAttachment({ subject, roleIds: [scenario === "custom" ? "fixture-role"
+          : scenario === "power_user_tools" ? scenario : "admin"] });
+        fixture.controllerOptions.adapter.authorizeRetainedSource = async () => {
+          if (scenario === "actor-changed") {
+            await overlay.upsertThreadMessageOrigin({
+              ...context,
+              messageId: buildTurnUserMessageOriginId(context.turnId),
+              origin: { kind: "messaging", causalMessagingSource: { ...fixture.source.ref, requestId: "replacement-request" } },
+            });
+          }
+          return scenario !== "revoked-provider";
+        };
+        await overlay.setThreadAgent({ ...context, agent: scenario === "ordinary-thread" ? null : { name: "Fixture Agent" } });
+        await overlay.upsertThreadMessageOrigin({
+          ...context,
+          messageId: buildTurnUserMessageOriginId(context.turnId),
+          origin: scenario === "missing-origin" ? { kind: "agent" } : {
+            kind: "messaging", causalMessagingSource: fixture.source.ref,
+            causalMessagingAmbiguous: scenario === "ambiguous-origin",
+          },
+        });
+        const response = await internals.performServerRequest("codex", {
+          method: "item/tool/call",
+          params: {
+            ...context, namespace, tool: "manage_pwragent", arguments: { action: "status" },
+            callId: "fixture-call", requestId: "fixture-call",
+          },
+        });
+        expect(response.success).toBe(denial === null);
+        expect(dispatch).toHaveBeenCalledTimes(denial === null ? 1 : 0);
+        if (denial) {
+          const error = JSON.parse((response.contentItems[0] as { text: string }).text);
+          expect(error.code).toBe("forbidden");
+          expect(error.message).toContain(denial);
+        }
+      }), { examples: cases.flatMap(testCase => [[testCase, "pwragent"], [testCase, "pwragent_app"]]), numRuns: 24 });
+    } finally {
+      await fixture.close();
+    }
   });
 
   it.each(["inject_progress", "complete_monitoring"])("routes the monitor role's %s definition", async (tool) => {

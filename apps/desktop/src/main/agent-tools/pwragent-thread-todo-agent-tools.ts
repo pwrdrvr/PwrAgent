@@ -53,11 +53,11 @@ const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
   readonly ThreadExecutionMode[];
 const WORK_MODES = ["local", "worktree"] as const;
 const PLACEMENT_DESCRIPTION = [
-  "sub_thread files the new thread under this one.",
-  "Use it for part of this thread's work, such as a follow-up to its PR.",
-  "top_level starts its own thread in the project.",
-  "Use it for standalone work, such as an unrelated bug or a new feature.",
-  "Omitted is sub_thread. Work for another project is always top_level, so sub_thread is refused there.",
+  "sibling, the default, files the new thread beside this one, under this thread's parent.",
+  "A sibling of a top-level thread is another top-level thread.",
+  "Use sub_thread only for work that belongs to this thread alone, such as a fix it depends on.",
+  "Use top_level for work unrelated to this thread's parent.",
+  "Work for another project is always top_level, and sub_thread is refused there.",
   "The operator can change it before starting.",
 ].join(" ");
 const TODO_WRITING_GUIDANCE = [
@@ -357,7 +357,7 @@ function normalizeAction(
       }
       const placement = action.placement;
       if (placement !== undefined && !isOneOf(placement, THREAD_TODO_PLACEMENTS)) {
-        return { ok: false, message: "start_thread placement must be sub_thread or top_level." };
+        return { ok: false, message: "start_thread placement must be sibling, sub_thread or top_level." };
       }
       const executionMode = action.executionMode;
       if (executionMode !== undefined && !isOneOf(executionMode, EXECUTION_MODES)) {
@@ -643,7 +643,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread for follow-up work. For Git work, set action.workMode=worktree unless the instructions require sharing a checkout. Give the child its task in the assigned checkout.",
-        "Set action.placement=top_level for standalone work. It starts as its own thread in the project, not a sub-thread.",
+        "Leave action.placement as sibling unless the work belongs to this thread alone, which is sub_thread.",
         "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",

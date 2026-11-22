@@ -18,6 +18,7 @@ import type {
   RbacResolution,
 } from "@pwragent/shared/contracts/rbac";
 import type { PwrAgentMessagingRequest } from "@pwragent/shared/contracts/messaging-tools";
+import type { DynamicToolPermissionResult } from "../messaging-agent-tool-service";
 import type { MessagingRequestSource } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingConfirmationIntent, MessagingInboundEvent } from "@pwragent/messaging-interface";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
@@ -375,7 +376,7 @@ export class MessagingAccessControl {
   async authorizeRetainedTool(
     context: PwrAgentMessagingRequest["context"],
     check: Parameters<MessagingAccessControl["checkDynamicToolPermission"]>[0],
-  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }> {
+  ): Promise<DynamicToolPermissionResult & { owns: boolean }> {
     const source = this.retainedRequestSource(context);
     if (!source || !this.context.host().isChannelInScope(source.event.channel)) return { owns: false, allowed: false };
     const permission = permissionForDynamicTool(check.category, check.tool);
@@ -637,7 +638,7 @@ export class MessagingAccessControl {
     category: MessagingDynamicToolCategory;
     tool: string;
     arguments?: Record<string, unknown> | null;
-  }, source?: MessagingRequestSource): { owns: boolean; allowed: boolean; permission?: string } {
+  }, source?: MessagingRequestSource): DynamicToolPermissionResult & { owns: boolean } {
     if (!params.turnId && !source) {
       return { owns: false, allowed: true };
     }
@@ -649,11 +650,12 @@ export class MessagingAccessControl {
     }
     const resolution = this.resolveActorPermissions(origin.event);
     if (resolution === null) {
-      const explicitPermission = params.tool === "manage_pwragent"
-        ? "tools.instance_lifecycle"
-        : permissionForDynamicTool(params.category, params.tool);
-      if (explicitPermission === "tools.instance_lifecycle" || explicitPermission === "tools.messaging_profile_settings") {
-        return { owns: true, allowed: false, permission: explicitPermission };
+      if (params.tool === "manage_pwragent") {
+        // Lifecycle control requires an explicit current grant, including in legacy mode.
+        return { owns: true, allowed: false, permission: "tools.instance_lifecycle", rbacNotEnforced: true };
+      }
+      if (permissionForDynamicTool(params.category, params.tool) === "tools.messaging_profile_settings") {
+        return { owns: true, allowed: false, permission: "tools.messaging_profile_settings" };
       }
       // Legacy-compatible mode: full capability, exactly as before RBAC.
       return { owns: true, allowed: true };

@@ -7,14 +7,18 @@ const execFile = promisify(execFileCallback);
 /** Environment that can change what Git discovers, how it reads HEAD, or its config. */
 export const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
 
-/** Removes the machine's Git environment from process.env. Call the result to put it back. */
-export function isolateProcessGitEnvironment(): () => void {
+/** Isolate Git environment overrides and, with a fixture root, global and system config. */
+export function isolateProcessGitEnvironment(configRoot?: string): () => void {
   const saved = new Map<string, string>();
   for (const [key, value] of Object.entries(process.env)) {
     if (isolatedGitKeys.test(key) && value !== undefined) {
       saved.set(key, value);
       delete process.env[key];
     }
+  }
+  if (configRoot) {
+    process.env.GIT_CONFIG_GLOBAL = path.join(configRoot, "global-config");
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
   }
   return () => {
     for (const key of Object.keys(process.env)) {
