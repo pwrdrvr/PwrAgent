@@ -33,11 +33,14 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   let profiler: HotCpuProfiler | undefined;
   try {
-    const resolved = resolveHotCpuProfileConfig({ enabled: true, repoRoot: workspace.path, env: {} });
+    const resolved = resolveHotCpuProfileConfig({
+      enabled: true,
+      repoRoot: workspace.path,
+      env: { PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "20", PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "5" },
+    });
     if (!resolved.enabled) throw new Error("Expected enabled config");
     const config = {
-      ...resolved, startDelayMs: 0, intervalMs: 1, profileDurationMs: 5,
-      thresholdPercent: 50, consecutiveSamples: 2, maxProfiles: 1,
+      ...resolved, maxProfiles: 1,
       captureHeapSnapshot: true,
     };
     const created = await createHotCpuProfileSession({
@@ -49,10 +52,12 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
     const capture = new Promise<HotCpuProfileCapturedEvent>((resolve) => { resolveCapture = resolve; });
     let cpuSeconds = 0;
     let nowMs = 0;
+    let sampleMs = performance.now();
     profiler = new HotCpuProfiler({
       config, session: created.session, target,
       logger,
       now: () => new Date(nowMs += 1000),
+      sampleNow: () => (sampleMs += config.intervalMs),
       getAppMetrics: () => [
         metric(1234, 0, 0),
         metric(process.pid, 200, cpuSeconds += 4),

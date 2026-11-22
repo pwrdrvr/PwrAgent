@@ -1129,10 +1129,10 @@ function DesktopAppShell(props: {
             { label: "Session", value: event.sessionDirectoryName },
           ],
           dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
-          id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
+          id: `hot-cpu-profile:${event.sessionDirectoryName}:${event.profileFilename}`,
           title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
           message: [
-            `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
+            `Matched ${formatHotCpuProfileTriggerSummary(event)}. Saved ${event.profileFilename}.`,
             heapSnapshotSummary,
           ].join(""),
         });

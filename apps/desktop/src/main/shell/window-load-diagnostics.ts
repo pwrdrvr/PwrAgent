@@ -1,4 +1,5 @@
-import { app, type WebContents } from "electron";
+import type { WebContents } from "electron";
+import { readAppMetrics } from "./diagnostics/app-metrics";
 
 /**
  * Where a window's page load stands, for a log line about a window that has
@@ -7,7 +8,7 @@ import { app, type WebContents } from "electron";
 export function describeWebContentsLoad(contents: WebContents): Record<string, unknown> {
   if (contents.isDestroyed?.()) return { destroyed: true };
   const rendererPid = contents.getOSProcessId?.();
-  const metric = app.getAppMetrics?.().find((entry) => entry.pid === rendererPid);
+  const metric = readAppMetrics().metrics.find((entry) => entry.pid === rendererPid);
   return {
     url: contents.getURL?.(),
     isLoading: contents.isLoading?.(),

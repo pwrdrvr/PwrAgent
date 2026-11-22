@@ -120,6 +120,7 @@ async function exerciseRotation(input: Rotation): Promise<void> {
     config: {
       enabled: true, repoRoot: workspace.path, outputRoot: workspace.path,
       intervalMs: SAMPLE_MS, startDelayMs: 0, triggerMode: "spike",
+      rules: [{ id: "spike", sampleCount: 1, thresholdPercent: THRESHOLD_PERCENT, durationMs: SAMPLE_MS }],
       thresholdPercent: THRESHOLD_PERCENT, slowburnThresholdPercent: 20, consecutiveSamples: 2,
       profileDurationMs: 50, maxProfiles: 1, cooldownMs: 60_000,
       captureHeapSnapshot: false, heapSnapshotLimit: 0,
@@ -128,6 +129,7 @@ async function exerciseRotation(input: Rotation): Promise<void> {
     session,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     now: () => new Date(Date.now() + elapsedDuringRotationMs),
+    sampleNow: () => Date.now() + elapsedDuringRotationMs,
     getAppMetrics: () => metricAvailable ? [{
       pid: 1, type: "Browser", creationTime: 0,
       cpu: { cumulativeCPUUsage: processCpuMs / 1_000, percentCPUUsage: 0, idleWakeupsPerSecond: 0 },
@@ -146,6 +148,16 @@ async function exerciseRotation(input: Rotation): Promise<void> {
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
 
     const sample = samples.at(-1)!;
+    if (input.skipMetric) {
+      expect(sample.cpuMeasurementSource).toBe("baseline");
+      expect(sample.wallDeltaSeconds).toBeUndefined();
+      expect(events.some((event) => event.type === "profile-started")).toBe(false);
+      processCpuMs += 100;
+      await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+      expect(samples.at(-1)?.cpuPercent).toBeCloseTo(5, 8);
+      expect(samples.at(-1)?.recorderRotationCpuSeconds).toBeUndefined();
+      return;
+    }
     expect(sample.cumulativeCpuDeltaSeconds).toBeCloseTo((applicationCpuMs + rotationCpuMs) / 1_000, 8);
     expect(sample.wallDeltaSeconds).toBeCloseTo(elapsedMs / 1_000, 8);
     expect(sample.cpuPercent).toBeCloseTo(expectedPercent, 8);

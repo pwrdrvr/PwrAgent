@@ -1,3 +1,4 @@
+import { readAppMetrics } from "./diagnostics/app-metrics";
 import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
 import { readRendererListingDiagnostics, setRendererListingDiagnosticsEnabled } from "../diagnostics/renderer-listing-diagnostics";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -16,9 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import {
-  DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
-  DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
 } from "@pwragent/shared/contracts/settings";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import {
@@ -128,8 +127,11 @@ const MAIN_WINDOW_MIN_WIDTH = 960;
 const MAIN_WINDOW_MIN_HEIGHT = 640;
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
-const sharedMainHotCpuProfiler = new SharedHotCpuProfiler();
-type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmListingDiagnostics">;
+const sharedMainHotCpuProfiler = new SharedHotCpuProfiler<HotCpuProfiler>();
+type EnabledHotCpuConfig = Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>;
+type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmListingDiagnostics"> & {
+  updateRules: (config: EnabledHotCpuConfig) => Promise<void>;
+};
 
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
 const chromiumTrace = new ChromiumTrace(
@@ -606,7 +608,7 @@ export function createMainWindow(options?: {
   let hotCpuProfilerSyncQueue: Promise<void> = Promise.resolve();
 
   const createTargetHotCpuProfiler = async (
-    hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    hotCpuConfig: EnabledHotCpuConfig,
     target: "main" | "renderer",
     getListingsAtStop?: () => ReturnType<typeof listingDiagnostics.snapshot> | undefined,
     trace?: ChromiumTrace,
@@ -638,7 +640,7 @@ export function createMainWindow(options?: {
     return new HotCpuProfiler({
       chromiumTrace: trace,
       config: hotCpuConfig,
-      getAppMetrics: () => app.getAppMetrics(),
+      getAppMetrics: readAppMetrics,
       onHeapSnapshotLimitReached: async () => {
         await getDesktopSettingsService().writeConfigPatchTargeted({
           general: { hotCpuProfilingCaptureHeapSnapshot: false },
@@ -669,7 +671,7 @@ export function createMainWindow(options?: {
   };
 
   const createHotCpuProfiler = async (
-    config: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    config: EnabledHotCpuConfig,
     captureChromiumTrace: boolean,
   ): Promise<HotCpuProfilerLifecycle> => {
     let listingsAtStop: ReturnType<typeof listingDiagnostics.snapshot> | undefined;
@@ -678,17 +680,25 @@ export function createMainWindow(options?: {
     );
     const owner = Symbol("main-hot-cpu-window");
     let stopped = false;
+    const acquireMainProfiler = (next: EnabledHotCpuConfig) => {
+      const mainConfig = { ...next, captureHeapSnapshot: false };
+      return sharedMainHotCpuProfiler.acquire(owner, {
+        key: hotCpuConfigKey(next),
+        create: () => createTargetHotCpuProfiler(mainConfig, "main"),
+        update: (profiler) => profiler.updateRules(mainConfig),
+      });
+    };
     return {
       start: async () => {
         if (stopped) return;
         await renderer?.start();
         if (stopped) return;
-        await sharedMainHotCpuProfiler.acquire(owner, {
-          key: hotCpuConfigKey(config),
-          create: () => createTargetHotCpuProfiler(
-            { ...config, captureHeapSnapshot: false }, "main",
-          ),
-        });
+        await acquireMainProfiler(config);
+      },
+      updateRules: async (next) => {
+        if (stopped) return;
+        renderer?.updateRules(next);
+        await acquireMainProfiler(next);
       },
       rearmListingDiagnostics: async () => {
         if (!stopped) await renderer?.rearmListingDiagnostics();
@@ -728,16 +738,11 @@ export function createMainWindow(options?: {
   };
 
   const hotCpuConfigKey = (
-    hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    hotCpuConfig: EnabledHotCpuConfig,
     captureChromiumTrace = false,
   ): string => {
     return JSON.stringify({
       startDelayMs: hotCpuConfig.startDelayMs,
-      triggerMode: hotCpuConfig.triggerMode,
-      intervalMs: hotCpuConfig.intervalMs,
-      thresholdPercent: hotCpuConfig.thresholdPercent,
-      slowburnThresholdPercent: hotCpuConfig.slowburnThresholdPercent,
-      consecutiveSamples: hotCpuConfig.consecutiveSamples,
       profileDurationMs: hotCpuConfig.profileDurationMs,
       cooldownMs: hotCpuConfig.cooldownMs,
       maxProfiles: hotCpuConfig.maxProfiles,
@@ -770,22 +775,12 @@ export function createMainWindow(options?: {
         ),
         outputRoot: resolveHotCpuProfileOutputRoot(),
         repoRoot: resolveRepoRoot(),
-        slowburnThresholdPercent: Math.min(
-          100,
-          Math.max(
-            1,
-            Math.round(
-              settings.hotCpuProfilingSlowburnThresholdPercent
-              ?? DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
-            ),
-          ),
-        ),
+        captureRules: settings.hotCpuProfilingCaptureRules,
+        slowburnThresholdPercent: settings.hotCpuProfilingSlowburnThresholdPercent,
         startDelayMs:
           settings.hotCpuProfilingStartDelayMs
           ?? DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
-        triggerMode:
-          settings.hotCpuProfilingTriggerMode
-          ?? DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
+        triggerMode: settings.hotCpuProfilingTriggerMode,
       });
 
       if (!hotCpuConfig.enabled) {
@@ -797,10 +792,9 @@ export function createMainWindow(options?: {
       const nextConfigKey = hotCpuConfigKey(hotCpuConfig, captureChromiumTrace);
       if (hotCpuProfilerPromise) {
         if (hotCpuProfilerConfigKey === nextConfigKey) {
-          if (reloaded) {
-            const profiler = await hotCpuProfilerPromise;
-            await profiler.rearmListingDiagnostics();
-          }
+          const profiler = await hotCpuProfilerPromise;
+          await profiler.updateRules(hotCpuConfig);
+          if (reloaded) await profiler.rearmListingDiagnostics();
           return;
         }
         await stopHotCpuProfiler(reason);

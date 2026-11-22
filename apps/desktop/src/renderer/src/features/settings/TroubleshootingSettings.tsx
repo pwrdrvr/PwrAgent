@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type {
   DesktopHotCpuProfileStartDelayMs,
-  DesktopHotCpuProfileTriggerMode,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
+import type { HotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import type { AppMetadata } from "../../../../shared/app-metadata";
 import {
   buildCodexProtocolCaptureHandoffMessage,
@@ -25,6 +25,7 @@ import {
   SettingsSectionStack,
   ToggleField,
 } from "./SettingsLayout";
+import { HotCpuCaptureRulesField } from "./HotCpuCaptureRulesField";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { RenderingDiagnosticsSettings } from "./RenderingDiagnosticsSettings";
 import { formatProcessIds, sourceBadge } from "./settings-fields";
@@ -46,16 +47,6 @@ const HOT_CPU_START_DELAY_OPTIONS: Array<{
   { label: "Immediate", meta: "Arm now", value: 0 },
   { label: "5 seconds", meta: "Short setup", value: 5_000 },
   { label: "10 seconds", meta: "Long setup", value: 10_000 },
-];
-
-const HOT_CPU_TRIGGER_MODE_OPTIONS: Array<{
-  label: string;
-  meta: string;
-  value: DesktopHotCpuProfileTriggerMode;
-}> = [
-  { label: "Spike", meta: "> 50%", value: "spike" },
-  { label: "Sustained", meta: "2x > 50%", value: "sustained" },
-  { label: "Slowburn", meta: "2x > 15%", value: "slowburn" },
 ];
 
 /** Session-local, not persisted: it is a one-shot capture, not a preference. */
@@ -83,9 +74,7 @@ export function TroubleshootingSettings(props: {
   onHotCpuProfilingStartDelayMsChange: (
     value: DesktopHotCpuProfileStartDelayMs,
   ) => Promise<void>;
-  onHotCpuProfilingTriggerModeChange: (
-    value: DesktopHotCpuProfileTriggerMode,
-  ) => Promise<void>;
+  onHotCpuProfilingCaptureRulesChange: (value: HotCpuCaptureRules) => Promise<boolean>;
   onHotCpuProfilingCaptureChromiumTraceChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingCaptureHeapSnapshotChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingHeapSnapshotLimitChange: (value: number) => Promise<void>;
@@ -114,16 +103,14 @@ export function TroubleshootingSettings(props: {
     props.snapshot.general.hotCpuProfilingEnabled;
   const hotCpuProfilingStartDelayMs =
     props.snapshot.general.hotCpuProfilingStartDelayMs;
-  const hotCpuProfilingTriggerMode =
-    props.snapshot.general.hotCpuProfilingTriggerMode;
-  const hotCpuProfilingSlowburnThresholdPercent =
-    props.snapshot.general.hotCpuProfilingSlowburnThresholdPercent;
+  const captureRules = props.snapshot.general.hotCpuProfilingCaptureRules;
   const hotCpuProfilingCaptureChromiumTrace =
     props.snapshot.general.hotCpuProfilingCaptureChromiumTrace;
   const hotCpuProfilingCaptureHeapSnapshot =
     props.snapshot.general.hotCpuProfilingCaptureHeapSnapshot;
   const hotCpuProfilingHeapSnapshotLimit =
     props.snapshot.general.hotCpuProfilingHeapSnapshotLimit;
+  const hotCpuMonitoring = hotCpuProfilingEnabled.value || hotCpuProfilingCaptureHeapSnapshot.value;
   const hotCpuCountdownActive = hotCpuCountdownRemainingMs > 0;
   const hotCpuCountdownSeconds = Math.ceil(hotCpuCountdownRemainingMs / 1_000);
   const hotCpuStartDelayText = formatHotCpuStartDelay(
@@ -475,11 +462,11 @@ export function TroubleshootingSettings(props: {
         <div className="settings-fields">
           <SettingsField
             label="Hot CPU profiling"
-            sub="Monitor main and renderer CPU independently using the presets below. Main-process samples also record heap usage."
+            sub={`Samples main and renderer CPU independently every ${captureRules.effective.intervalMs / 1_000} s. Main-process samples also record heap usage.`}
             source={sourceBadge(hotCpuProfilingEnabled)}
             control={
               <div className="settings-hot-cpu-capture">
-                {hotCpuProfilingEnabled.value || hotCpuCountdownActive ? (
+                {hotCpuMonitoring || hotCpuCountdownActive ? (
                   <button
                     type="button"
                     className="button button--secondary"
@@ -508,7 +495,7 @@ export function TroubleshootingSettings(props: {
                 >
                   {hotCpuCountdownActive
                     ? `Starting in ${hotCpuCountdownSeconds}s`
-                    : hotCpuProfilingEnabled.value
+                    : hotCpuMonitoring
                       ? "Monitoring"
                       : "Not armed"}
                 </span>
@@ -526,17 +513,10 @@ export function TroubleshootingSettings(props: {
               return props.onHotCpuProfilingStartDelayMsChange(value);
             }}
           />
-          <SegmentedField
-            label="CPU profile trigger"
-            sub="Choose whether one spike, two hot samples, or a lower slowburn starts the capture."
-            help={`Slowburn currently uses ${hotCpuProfilingSlowburnThresholdPercent.value}% across the same consecutive-sample window.`}
-            source={sourceBadge(hotCpuProfilingTriggerMode)}
-            disabled={props.saving}
-            options={HOT_CPU_TRIGGER_MODE_OPTIONS}
-            value={hotCpuProfilingTriggerMode.value}
-            onChange={(value) => {
-              return props.onHotCpuProfilingTriggerModeChange(value);
-            }}
+          <HotCpuCaptureRulesField
+            setting={captureRules}
+            saving={props.saving}
+            onChange={props.onHotCpuProfilingCaptureRulesChange}
           />
           <ToggleField
             checked={hotCpuProfilingCaptureChromiumTrace.value}
