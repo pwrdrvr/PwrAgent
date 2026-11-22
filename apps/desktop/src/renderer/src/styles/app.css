@@ -28971,7 +28971,7 @@ a.button {
 }
 
 .thread-todo-launches__row.is-setup-failed .thread-todo-launches__glyph {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .thread-todo-launches__row.is-failed .thread-todo-launches__glyph {

@@ -21,6 +21,7 @@ import {
 import { applyNavigationLaunchpadDefaultsPatch } from "@pwragent/shared/contracts/navigation";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
+import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { resolveHelperModel, type HelperModelId } from "@pwragent/shared/helper-models";
 import type {
   AcpBackendId,
@@ -1109,11 +1110,15 @@ export function createOverlayStoreMock(params?: {
     setThreadPin: async ({
       backend,
       threadId,
+      pinned,
       pinnedRank,
+      prepend,
     }: {
       backend: AppServerBackendKind;
       threadId: string;
+      pinned?: boolean;
       pinnedRank?: string | null;
+      prepend?: boolean;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1124,7 +1129,11 @@ export function createOverlayStoreMock(params?: {
       };
       const next = {
         ...current,
-        pinnedRank: pinnedRank?.trim() || undefined,
+        pinnedRank: pinned === undefined ? pinnedRank?.trim() || undefined
+          : pinned ? current.pinnedRank ?? (prepend ? buildPrependPinRank : buildAppendPinRank)([
+            ...[...overlays.values()].map((overlay) => overlay.pinnedRank),
+            ...(params?.remotePinnedRanks ?? []),
+          ]) : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
