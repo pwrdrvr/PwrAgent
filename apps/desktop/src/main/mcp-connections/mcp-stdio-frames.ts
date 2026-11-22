@@ -157,10 +157,13 @@ function scanLeadingMembers(text: string): Member[] {
     at = skipSpace(text, at + 1);
     const valueEnd = valueEndAt(text, at);
     if (valueEnd === undefined) return members;
+    // A value is whole only once what follows it shows; the window can cut
+    // a number short, and `"id":12` must not be read from `"id":1234`.
+    const next = skipSpace(text, valueEnd);
+    if (text[next] !== "," && text[next] !== "}") return members;
     members.push([key, parseJson(text.slice(at, valueEnd))]);
-    at = skipSpace(text, valueEnd);
-    if (text[at] !== ",") return members;
-    at += 1;
+    if (text[next] !== ",") return members;
+    at = next + 1;
   }
 }
 
@@ -264,12 +267,20 @@ function parseJson(text: string): unknown {
 
 /** The operator- and agent-facing reason an oversized message was dropped. */
 export function describeOversizedMcpMessage(bytes: number, limitBytes: number): string {
-  return `The MCP server sent a ${formatMegabytes(bytes)} message, over PwrAgent's `
-    + `${formatMegabytes(limitBytes)} limit for one message. Ask the server for a smaller response.`;
+  const size = roundedSize(bytes);
+  const limit = roundedSize(limitBytes);
+  // Just over the limit rounds to the limit itself; then give exact sizes.
+  const sizes = size.shown > limit.shown
+    ? `a ${size.text} message, over PwrAgent's ${limit.text} limit`
+    : `a ${bytes.toLocaleString("en-US")}-byte message, over PwrAgent's ${limit.text} `
+      + `(${limitBytes.toLocaleString("en-US")}-byte) limit`;
+  return `The MCP server sent ${sizes} for one message. Ask the server for a smaller response.`;
 }
 
-function formatMegabytes(bytes: number): string {
-  const megabytes = bytes / (1024 * 1024);
-  if (megabytes >= 1) return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`;
-  return `${bytes} byte${bytes === 1 ? "" : "s"}`;
+/** A size as shown, in MB to one decimal from 1 MB up, and the bytes that text stands for. */
+function roundedSize(bytes: number): { text: string; shown: number } {
+  const megabyte = 1024 * 1024;
+  if (bytes < megabyte) return { text: `${bytes} byte${bytes === 1 ? "" : "s"}`, shown: bytes };
+  const megabytes = Number((bytes / megabyte).toFixed(1));
+  return { text: `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`, shown: megabytes * megabyte };
 }

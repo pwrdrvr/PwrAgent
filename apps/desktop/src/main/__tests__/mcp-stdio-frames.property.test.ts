@@ -97,6 +97,27 @@ describe("scanOversizedMessageEnvelope", () => {
   });
 });
 
+describe("scanOversizedMessageEnvelope at the window edge", () => {
+  it("never reads an id the 4 KB head window cut short", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 10_000, max: 99_999_999 }),
+      fc.integer({ min: 0, max: 12 }),
+      (id, shift) => {
+        // Pad so the head window ends `shift` characters into `"id":<id>`.
+        const prefix = "{\"jsonrpc\":\"2.0\",\"_meta\":{\"pad\":\"";
+        const before = "\"},\"id\":";
+        const pad = "x".repeat(4096 - prefix.length - before.length - shift);
+        const bytes = Buffer.from(`${prefix}${pad}${before}${id},"result":{"blob":"${"A".repeat(9000)}"}}`);
+        const envelope = scanOversizedMessageEnvelope(
+          bytes.subarray(0, 4096),
+          bytes.subarray(bytes.length - 4096),
+        );
+        expect([undefined, id]).toContain(envelope.id);
+      },
+    ));
+  });
+});
+
 type ServerLine =
   | { kind: "response"; id: number; size: number; idFirst: boolean }
   | { kind: "notification"; size: number };

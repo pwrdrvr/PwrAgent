@@ -160,8 +160,10 @@ JSON-RPC id:
   an MCP error, `-32603`, with `data.reason: "message_too_large"`. The message
   names the size and the limit and asks for a smaller response. The connection
   stays up.
-- If the line is a request or notification from the server, PwrAgent drops it
-  and reports `McpStdioMessageTooLargeError` through `onerror`.
+- If the line is a request or notification from the server, or answers a
+  request nothing waits for any more (one that timed out or was cancelled),
+  PwrAgent drops it and reports `McpStdioMessageTooLargeError` through
+  `onerror`.
 - If the id cannot be read and requests are waiting, any of them could be the
   lost answer. Each one fails with the same error, and the connection closes.
   The next use starts it again.

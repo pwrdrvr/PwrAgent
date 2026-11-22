@@ -76,4 +76,46 @@ describe.skipIf(process.platform === "win32")("the gateway bridge socket", () =>
       expect(JSON.parse(answers[0]!)).toMatchObject({ ok: false });
     }), { numRuns: 40 });
   });
+
+  it("lets go of a socket that sent an over-limit request once its peer closes", async () => {
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      bridgeEntryPath: "/test/mcp-connection-bridge.js",
+      settings: {
+        clearMcpConnectionCredentials: vi.fn(async () => undefined),
+        clearPwrSnapMcpCredential: vi.fn(async () => undefined),
+        resolveMcpConnectionCredentials: vi.fn(async () => undefined),
+        resolvePwrSnapMcpCredential: vi.fn(async () => undefined),
+        resolvePwrGitMcpCredential: vi.fn(async () => undefined),
+        clearPwrGitMcpCredential: vi.fn(async () => undefined),
+        saveMcpConnectionCredentials: vi.fn(async () => undefined),
+        savePwrSnapMcpCredential: vi.fn(async () => undefined),
+      },
+      resolveInstallPaths: () => [pwrSuiteInstall("pwrsnap")],
+      leaseManager: null,
+    });
+    services.push(service);
+    const socketPath = (await service.registerBridge("pwrsnap", "thread-1")).server.env.PWRAGENT_MCP_CONNECTION_SOCKET!;
+    const open = (): number => (service as unknown as { activeRpcSockets: number }).activeRpcSockets;
+
+    const answer = await new Promise<string>((resolve) => {
+      const socket = connect(socketPath);
+      let received = "";
+      socket.setEncoding("utf8");
+      socket.on("connect", () => socket.write("x".repeat(1024 * 1024 + 1)));
+      socket.on("data", (chunk: string) => {
+        received += chunk;
+        // The answer is in; the peer goes away, as the bridge client does.
+        if (received.includes("\n")) socket.end();
+      });
+      socket.on("error", () => undefined);
+      socket.on("close", () => resolve(received));
+    });
+
+    expect(JSON.parse(answer)).toEqual({ ok: false, error: "request too large" });
+    for (let attempt = 0; attempt < 100 && open() > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(open()).toBe(0);
+  });
 });

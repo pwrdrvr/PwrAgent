@@ -19,12 +19,19 @@ export class FakeMcpStdioChild extends EventEmitter {
   readonly stdin: Writable;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
+  /** Fail the next write to stdin, as a pipe the server stopped reading would. */
+  failNextWrite = false;
   private written = "";
 
   constructor(private readonly onRequest?: (message: JSONRPCMessage) => void) {
     super();
     this.stdin = new Writable({
       write: (chunk: Buffer, _encoding, done) => {
+        if (this.failNextWrite) {
+          this.failNextWrite = false;
+          done(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+          return;
+        }
         this.written += chunk.toString("utf8");
         let newline: number;
         while ((newline = this.written.indexOf("\n")) !== -1) {

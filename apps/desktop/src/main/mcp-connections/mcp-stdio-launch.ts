@@ -15,7 +15,7 @@ import {
 } from "@pwragent/shared/contracts/mcp-connections";
 import { pathIsExecutable, resolveCommandOnPath } from "../settings/command-discovery";
 import { terminateOwnedProcessTree, type OwnedChildProcess } from "../process-tree";
-import { mcpSharedStdio } from "./mcp-sdk";
+import { loadedMcpTypes, mcpSharedStdio } from "./mcp-sdk";
 import {
   describeOversizedMcpMessage,
   McpStdioFrameReader,
@@ -47,9 +47,6 @@ const INHERITED_WINDOWS = [
   "PROCESSOR_ARCHITECTURE", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
   "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERNAME", "USERPROFILE", "WINDIR",
 ];
-
-/** JSON-RPC's internal error, the code a dropped oversized response gets. */
-const JSON_RPC_INTERNAL_ERROR = -32603;
 
 /**
  * A message from a local server over PwrAgent's per-message limit. It was
@@ -429,6 +426,20 @@ export class OwnedStdioClientTransport implements Transport {
     const serializeMessage = this.serializeMessage;
     if (!stdin || !serializeMessage || this.closed) throw new Error("The MCP server is not running.");
     this.noteSent(message);
+    try {
+      await this.write(stdin, serializeMessage, message);
+    } catch (error) {
+      // The server never received this request, so it cannot answer it.
+      if ("method" in message && "id" in message) this.outstanding.delete(requestKey(message.id));
+      throw error;
+    }
+  }
+
+  private async write(
+    stdin: Writable,
+    serializeMessage: (message: JSONRPCMessage) => string,
+    message: JSONRPCMessage,
+  ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const ok = stdin.write(serializeMessage(message), (error) => {
         if (error) reject(error);
@@ -518,22 +529,22 @@ export class OwnedStdioClientTransport implements Transport {
 
   /**
    * Fail what an oversized message answered, and only that. A response whose
-   * id shows gets an error in its place. One whose id cannot be read leaves
-   * every waiting request unanswerable, so each fails with the same reason and
-   * the connection closes; the next use starts it again. A request or
-   * notification from the server is dropped and reported.
+   * id shows gets an error in its place, or is dropped when nothing waits for
+   * it any more, such as a request that timed out. One whose id cannot be read
+   * leaves every waiting request unanswerable, so each fails with the same
+   * reason and the connection closes; the next use starts it again. A request
+   * or notification from the server is dropped and reported.
    */
   private settleOversized(frame: Extract<McpStdioFrame, { kind: "oversized" }>): void {
     const error = new McpStdioMessageTooLargeError(frame.bytes, this.frames.maxMessageBytes);
-    const envelope = scanOversizedMessageEnvelope(frame.head, frame.tail);
-    const answered = !envelope.hasMethod && envelope.id !== undefined
-      && this.outstanding.has(requestKey(envelope.id));
-    if (answered) {
-      this.failRequest(envelope.id!, error);
+    const { id, hasMethod } = scanOversizedMessageEnvelope(frame.head, frame.tail);
+    if (!hasMethod && id !== undefined && this.outstanding.has(requestKey(id))) {
+      this.failRequest(id, error);
       return;
     }
     this.reportError(error);
-    if (envelope.hasMethod || this.outstanding.size === 0) return;
+    // Dropped: the server's own message, a late answer, or nothing waiting.
+    if (hasMethod || id !== undefined || this.outstanding.size === 0) return;
     for (const id of [...this.outstanding.values()]) this.failRequest(id, error);
     void this.close().catch(() => undefined);
   }
@@ -544,7 +555,7 @@ export class OwnedStdioClientTransport implements Transport {
       jsonrpc: "2.0",
       id,
       error: {
-        code: JSON_RPC_INTERNAL_ERROR,
+        code: loadedMcpTypes().ErrorCode.InternalError,
         message: error.message,
         data: { reason: error.reason, messageBytes: error.messageBytes, limitBytes: error.limitBytes },
       },

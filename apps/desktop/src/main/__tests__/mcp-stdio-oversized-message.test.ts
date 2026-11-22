@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpError, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MCP_STDIO_MAX_MESSAGE_BYTES } from "../mcp-connections/mcp-stdio-frames";
 import { McpStdioMessageTooLargeError, type OwnedStdioClientTransport } from "../mcp-connections/mcp-stdio-launch";
 import { createFakeStdioTransport, FakeMcpStdioChild } from "./helpers/fake-mcp-stdio-child";
@@ -186,8 +186,39 @@ describe("an oversized message from a local MCP server", () => {
 
     await expect(read).resolves.toEqual({ contents: [] });
     const reported = errors.find((error) => error instanceof McpStdioMessageTooLargeError);
-    expect(reported?.message).toMatch(/^The MCP server sent a 10\.0 MB message, over PwrAgent's 10 MB limit/);
+    // Just over 10 MB rounds to 10.0 MB, so the size is given exactly.
+    expect(reported?.message).toMatch(/^The MCP server sent a [\d,]+-byte message, over PwrAgent's 10 MB \(10,485,760-byte\) limit for one message\./);
     expect(closed()).toBe(false);
+  });
+
+  it("drops a late oversized answer to a request that timed out, without touching the others", async () => {
+    // The incident's order: the read times out, then its answer arrives.
+    const { client, child, held, errors, closed } = await connect();
+    const late = client.readResource({ uri: RESOURCE_URI }, { timeout: 20 });
+    const lateRequest = await heldRequest(held, "resources/read");
+    await expect(late).rejects.toThrow(/timed out/i);
+    const waiting = client.readResource({ uri: "pwrsnap://capture/1" });
+    const waitingRequest = await heldRequest(held, "resources/read");
+
+    child.emitStdout(...videoResponse(lateRequest.id, MCP_STDIO_MAX_MESSAGE_BYTES + 1, "id-last"));
+    child.reply({ jsonrpc: "2.0", id: waitingRequest.id, result: { contents: [] } });
+
+    await expect(waiting).resolves.toEqual({ contents: [] });
+    expect(errors.some((error) => error instanceof McpStdioMessageTooLargeError)).toBe(true);
+    await settle();
+    expect(closed()).toBe(false);
+  });
+
+  it("forgets a request whose write failed, so an unreadable oversized line does not close the connection", async () => {
+    const { client, transport, child, errors } = await connect();
+    const close = vi.spyOn(transport, "close");
+    child.failNextWrite = true;
+    await expect(client.readResource({ uri: RESOURCE_URI })).rejects.toThrow(/EPIPE/);
+
+    child.emitStdout(...videoResponse(99, MCP_STDIO_MAX_MESSAGE_BYTES + 1, "id-hidden"));
+
+    expect(errors.some((error) => error instanceof McpStdioMessageTooLargeError)).toBe(true);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("keeps reading after a line that is not JSON-RPC", async () => {
