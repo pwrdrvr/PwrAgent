@@ -68,6 +68,7 @@ import type {
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
+  ReviewThreadTodoCiDeploymentRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
@@ -1438,6 +1439,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Ticks or unticks one step of a card's checklist. */
   setThreadTodoItemChecked?: (
     request: SetThreadTodoItemCheckedRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /**
+   * Approves the GitHub deployment gate a CI approval card showed, on the
+   * card's owner, after it re-reads the run. Operator clicks only.
+   */
+  reviewThreadTodoCiDeployment?: (
+    request: ReviewThreadTodoCiDeploymentRequest,
   ) => Promise<ThreadTodoMutationResponse>;
   /** Marker event for review details; the To-do queue follows deltas instead. */
   onThreadTodosChanged?: (

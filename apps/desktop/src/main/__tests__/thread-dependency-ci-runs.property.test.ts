@@ -283,7 +283,7 @@ describe("reading a run", () => {
       if (path.endsWith("/pending_deployments")) {
         return [
           { environment: { name: "cooldown" }, wait_timer: 10, reviewers: [] },
-          { environment: { name: "windows-signing" }, wait_timer: 5, reviewers: [
+          { environment: { id: 4410, name: "windows-signing" }, wait_timer: 5, reviewers: [
             { type: "Team", reviewer: { slug: "release-team", name: "Release Team" } },
             { type: "User", reviewer: { login: "octo-maintainer" } },
           ] },
@@ -306,8 +306,19 @@ describe("reading a run", () => {
       runId: 8841207733, status: "waiting", attempt: 1, branch: "v2.4.1", checkedAt: 42,
       jobs: { total: 5, passed: 1, failed: 1, running: 1, waiting: 1, queued: 1, skipped: 0 },
       failedJobs: [{ name: "macOS tests", failedStep: "Unit tests", url: "https://github.com/example/app/actions/runs/8841207733/job/2" }],
-      gates: [{ environment: "windows-signing", reviewers: ["release-team", "octo-maintainer"], waitTimerMinutes: 5 }],
+      gates: [{ environment: "windows-signing", environmentId: 4410, reviewers: ["release-team", "octo-maintainer"], waitTimerMinutes: 5 }],
     });
+    // The delivered milestone carries what an in-app review re-checks: ids, attempt and commit.
+    const condition = ciRunCondition({ url: RUN_URL, on: ["approval_gate"] });
+    const evidence = evaluateCiRunCondition(condition, seen, undefined, 42);
+    const delivered: ThreadDependency = { id: "watch", backend: "codex", threadId: "release-thread", conditions: [condition],
+      mode: "all", onFailure: "notify", continuation: "Review signing", deliver: "operator", status: "delivered",
+      outcome: "success", evidence: [evidence], createdAt: 0, updatedAt: 42 };
+    expect(ciApprovalsForDependency(delivered)).toEqual([{ url: RUN_URL, runId: 8841207733, repository: "example/app",
+      environments: ["windows-signing"], environmentIds: [4410], attempt: 1, ref: "v2.4.1", headSha: "3f9c02e1aa" }]);
+    // A milestone saved before ids were read can still be reviewed on GitHub, not here.
+    const older = { ...delivered, evidence: [{ ...evidence, ciRun: { ...seen, gates: seen.gates!.map(({ environmentId: _id, ...gate }) => gate) } }] };
+    expect(ciApprovalsForDependency(older)[0]).not.toHaveProperty("environmentIds");
     get.mockClear();
     get.mockImplementation(async (_repository, path) => path.includes("/jobs?") ? { jobs: [] } : { id: 8841207733, status: "in_progress" });
     await readCiRun(get, parseCiRunUrl(RUN_URL)!, 43);

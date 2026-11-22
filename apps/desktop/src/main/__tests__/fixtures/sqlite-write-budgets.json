@@ -1,4 +1,8 @@
 {
+  "thread-todo-ci-approval-settled": {"commits": 1, "note": "The owner saw an approval card's gate cleared (approved anywhere) or its run end: the card is marked done.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "thread-todo-ci-approval-still-waiting": {"commits": 0, "note": "One reconciler check of an approval card's run that is still held at its gate.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-todo-ci-deployment-refused": {"commits": 1, "note": "One operator Approve that was refused: the refusal is saved on the open card.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "thread-todo-ci-deployment-approved": {"commits": 1, "note": "One operator Approve that GitHub accepted: the card is marked done.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "job-monitor-wake-acknowledged": {"commits": 1, "note": "acknowledge a loop alert once without rearming", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "job-monitor-wake-reviewed": {"commits": 2, "note": "claim one review and allow another tranche after differentiated work", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "job-monitor-wake-unsent-steer": {"commits": 1, "note": "release an owner claim for a definitively unsent steer", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},

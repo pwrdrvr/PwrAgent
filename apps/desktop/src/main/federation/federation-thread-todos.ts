@@ -37,6 +37,9 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   // Older owners do not answer them; the review then shows no Auto-fix state.
   readReviewAutoFix: "threadReviews.readAutoFix",
   disarmReviewAutoFix: "threadReviews.disarmAutoFix",
+  // Older owners do not answer it, and their cards carry no environment ids,
+  // so a viewer never offers Approve for one.
+  reviewCiDeployment: "threadTodos.reviewCiDeployment",
 } as const;
 
 export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapability> = {
@@ -53,6 +56,7 @@ export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapab
   [FEDERATION_THREAD_TODO_METHODS.raisePlan]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.readReviewAutoFix]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.disarmReviewAutoFix]: "turn_control",
+  [FEDERATION_THREAD_TODO_METHODS.reviewCiDeployment]: "turn_control",
 };
 
 export function registerFederationThreadTodoHandlers(router: FederationRouter, operations: Operations): void {

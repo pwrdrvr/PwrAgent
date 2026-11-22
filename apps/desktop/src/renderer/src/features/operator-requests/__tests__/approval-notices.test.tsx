@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import type { OperatorServerRequest } from "@pwragent/shared/contracts/operator-requests";
-import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoThreadKey, type ThreadTodo, type ThreadTodoCiApproval } from "@pwragent/shared/contracts/thread-todos";
 import { AppNoticeStack } from "../../notifications/AppNoticeStack";
 import type { AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { APPROVAL_STILL_OPEN_MESSAGE } from "../approval-choices";
@@ -132,6 +132,8 @@ function Harness(props: {
   otherNotices?: AppNoticeToastNotice[];
   onReview?: (wait: OperatorWait) => void;
   respond?: (wait: OperatorWait, response: unknown) => Promise<void>;
+  reviewCiDeployment?: (todo: ThreadTodo, approval: ThreadTodoCiApproval) => Promise<ThreadTodo | undefined>;
+  runningTodoIds?: ReadonlySet<string>;
 }) {
   const [waits, setWaits] = useState(props.initialWaits);
   const [selected, setSelected] = useState<string>();
@@ -142,6 +144,8 @@ function Harness(props: {
     threadTitleForKey: titleFor,
     onReview: props.onReview ?? (() => {}),
     ...(props.respond ? { respond: props.respond } : {}),
+    ...(props.reviewCiDeployment ? { reviewCiDeployment: props.reviewCiDeployment } : {}),
+    ...(props.runningTodoIds ? { runningTodoIds: props.runningTodoIds } : {}),
   });
   return (
     <>
@@ -191,6 +195,55 @@ describe("approval notice cards", () => {
     } finally {
       open.mockRestore();
     }
+  });
+
+  describe("approving a deployment gate from the notice", () => {
+    // Invented run and environment: no real release gate is involved.
+    const url = "https://github.com/example/app/actions/runs/88";
+    const reviewable: ThreadTodo = {
+      id: "remote-todo:release-owner:todo-88", backend: "codex", threadId: "thread-b", kind: "reminder", status: "open",
+      federationTarget: { scope: "remote", instanceId: "release-owner" },
+      title: "Review the signing gate", createdAt: 88, updatedAt: 88,
+      ciApprovals: [{ url, repository: "example/app", runId: 88, environments: ["windows-signing"], environmentIds: [301],
+        attempt: 2, headSha: "a".repeat(40), ref: "v2.4.1" }],
+    };
+
+    it("asks first, then sends exactly the card's gate once, and keeps Review on GitHub", async () => {
+      const review = vi.fn(async () => undefined);
+      render(<Harness initialWaits={[]} ciApprovalTodos={[reviewable]} reviewCiDeployment={review} />);
+      expect(screen.getByRole("button", { name: "Review on GitHub" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(review).not.toHaveBeenCalled();
+      expect(screen.getByText(/Approve windows-signing for example\/app run #88, attempt 2, aaaaaaaaaaaa\?/)).toBeInTheDocument();
+      expect(screen.getByText(/account signed in on the card's PwrAgent/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(review).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(review).toHaveBeenCalledExactlyOnceWith(reviewable, reviewable.ciApprovals![0]);
+    });
+
+    it("shows a running review and the owner's or GitHub's refusal on the notice", async () => {
+      const review = vi.fn(async () => { throw new Error("Error invoking remote method 'thread-todos:review-ci-deployment': Error: This card's deployment gate changed after you saw it. Review it again."); });
+      const { rerender } = render(<Harness initialWaits={[]} ciApprovalTodos={[reviewable]} reviewCiDeployment={review}
+        runningTodoIds={new Set([reviewable.id])} />);
+      expect(screen.getByText("Approving…")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+      const refused = { ...reviewable, error: "GitHub returned HTTP 422: Reviewer is not allowed to approve" };
+      rerender(<Harness initialWaits={[]} ciApprovalTodos={[refused]} reviewCiDeployment={review} />);
+      expect(screen.getByText(refused.error)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(await screen.findByText("Could not approve: This card's deployment gate changed after you saw it. Review it again."))
+        .toBeInTheDocument();
+    });
+
+    it("offers GitHub alone for a gate the owner cannot approve here", () => {
+      const older = { ...reviewable, ciApprovals: [{ ...reviewable.ciApprovals![0]!, environmentIds: undefined }] };
+      render(<Harness initialWaits={[]} ciApprovalTodos={[older]} reviewCiDeployment={vi.fn()} />);
+      expect(screen.getByRole("button", { name: "Review on GitHub" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    });
   });
 
   it("hides one card without answering it, and keeps it hidden", () => {

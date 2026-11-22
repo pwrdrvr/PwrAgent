@@ -1,13 +1,18 @@
 import { useCallback, useMemo, useState } from "react";
 import type { SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
-import { threadTodoThreadKey, type ThreadTodo, type ThreadTodoCiApproval } from "@pwragent/shared/contracts/thread-todos";
+import {
+  threadTodoCiDeploymentReviewRequest,
+  threadTodoThreadKey,
+  type ThreadTodo,
+  type ThreadTodoCiApproval,
+} from "@pwragent/shared/contracts/thread-todos";
 import { openExternalUrl } from "../../lib/open-external-url";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import type { TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
-import { threadTodoCiApprovals } from "../thread-todos/thread-todo-ci-approval";
+import { confirmCiApprovalText, threadTodoCiApprovals } from "../thread-todos/thread-todo-ci-approval";
 import {
   APPROVAL_STILL_OPEN_MESSAGE,
   approvalChoices,
@@ -17,6 +22,7 @@ import { operatorWaitLabel, type OperatorWait } from "./operator-waits";
 
 const APPROVAL_NOTICE_PREFIX = "operator-approval:";
 const NO_TODOS: readonly ThreadTodo[] = [];
+const NO_IDS: ReadonlySet<string> = new Set();
 
 /** Shown when the request leaves the thread open in its own card and To-dos. */
 export const APPROVAL_NOTICE_HIDE_LABEL =
@@ -172,6 +178,20 @@ function approvalNoticeText(
   return { message: wait.title };
 }
 
+/**
+ * The notice's in-app review: Approve asks first, in the notice, then sends
+ * what the card shows to its owner. Absent, the notice offers GitHub alone.
+ */
+type CiApprovalNoticeReview = {
+  confirming: boolean;
+  running: boolean;
+  /** A refusal before GitHub was asked; GitHub's own stays on the card. */
+  error?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onApprove: () => void;
+};
+
 function toCiApprovalNotice(
   key: string,
   todo: ThreadTodo,
@@ -179,20 +199,29 @@ function toCiApprovalNotice(
   titleFor: ApprovalNoticeInput["threadTitleForKey"],
   onHide: () => void,
   onHideAll: () => void,
+  review?: CiApprovalNoticeReview,
 ): AppNoticeToastNotice {
   const ownerTitle = todo.threadTitle?.trim();
+  const github = { label: "Review on GitHub", onClick: () => openExternalUrl(approval.url) };
+  const refusal = review?.error ?? todo.error;
   return {
     id: approvalNoticeId(key),
     // The one-shot watch saved a milestone. GitHub has the current gate state.
     title: "Deployment approval gate reached",
-    message: `${approval.repository} run #${approval.runId}`,
+    message: review?.confirming
+      ? confirmCiApprovalText(approval, todo.federationTarget !== undefined)
+      : `${approval.repository} run #${approval.runId}`,
     tone: "warning",
     autoDismiss: false,
     facts: [
       { label: "Environments", value: approval.environments.join(", ") },
       ...(approval.ref ? [{ label: "Ref", value: approval.ref }] : []),
+      ...(approval.attempt ? [{ label: "Attempt", value: String(approval.attempt) }] : []),
       ...(approval.headSha ? [{ label: "Commit", value: approval.headSha.slice(0, 12) }] : []),
     ],
+    ...(review?.running
+      ? { status: { label: "Approving…", state: "progress" as const } }
+      : refusal ? { status: { label: refusal, state: "error" as const } } : {}),
     threadLink: {
       backend: todo.backend,
       threadId: todo.threadId,
@@ -200,7 +229,16 @@ function toCiApprovalNotice(
       ...(ownerTitle ? { titleOrigin: "owner" as const } : {}),
       ...(todo.federationTarget ? { instanceId: todo.federationTarget.instanceId } : {}),
     },
-    actions: [{ label: "Review on GitHub", tone: "primary", onClick: () => openExternalUrl(approval.url) }],
+    actions: !review ? [{ ...github, tone: "primary" }]
+      : review.running ? [{ ...github, tone: "secondary" }]
+      : review.confirming ? [
+          { label: "Cancel", tone: "secondary", onClick: review.onCancel },
+          { label: "Approve", tone: "primary", onClick: review.onApprove },
+        ]
+      : [
+          { ...github, tone: "secondary" },
+          { label: "Approve", tone: "primary", onClick: review.onConfirm },
+        ],
     dismissLabel: "Hide notice. The reminder stays in To-dos.",
     dismissGroup: {
       key: "operator-approvals",
@@ -223,6 +261,13 @@ export function useApprovalNotices(
   > & {
     ciApprovalTodos?: readonly ThreadTodo[];
     /**
+     * Approves a card's deployment gate on its owner. Without it the
+     * deployment notices offer Review on GitHub alone.
+     */
+    reviewCiDeployment?: (todo: ThreadTodo, approval: ThreadTodoCiApproval) => Promise<ThreadTodo | undefined>;
+    /** Cards whose action is running in this window, from any surface. */
+    runningTodoIds?: ReadonlySet<string>;
+    /**
      * Sends an answer, then re-reads the owner queue before it resolves.
      * Without it the notices offer Review alone.
      */
@@ -232,9 +277,25 @@ export function useApprovalNotices(
     ) => Promise<void>;
   },
 ): AppNoticeToastNotice[] {
-  const { waits, ciApprovalTodos = NO_TODOS, selectedThreadKey, threadTitleForKey, onReview, respond } = input;
+  const {
+    waits, ciApprovalTodos = NO_TODOS, selectedThreadKey, threadTitleForKey, onReview, respond,
+    reviewCiDeployment, runningTodoIds = NO_IDS,
+  } = input;
+  const [confirmingKey, setConfirmingKey] = useState<string>();
+  const [ciErrors, setCiErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
   const ciApprovals = useMemo(() => ciApprovalTodos.flatMap((todo) => threadTodoCiApprovals(todo)
       .map((approval) => ({ key: `${operatorTodoItemKey(todo.id)}:${approval.url}`, todo, approval }))), [ciApprovalTodos]);
+  const ciKeys = useMemo(() => new Set(ciApprovals.map((entry) => entry.key)), [ciApprovals]);
+  // Each change also drops keys for cards that are gone, as answers do.
+  const setCiError = useCallback((key: string, error: string | undefined): void => {
+    setCiErrors((current) => {
+      if (current.get(key) === error && [...current.keys()].every((entry) => ciKeys.has(entry))) return current;
+      const next = new Map([...current].filter(([entry]) => ciKeys.has(entry)));
+      if (error === undefined) next.delete(key);
+      else next.set(key, error);
+      return next;
+    });
+  }, [ciKeys]);
   const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [answers, setAnswers] = useState<ReadonlyMap<string, ApprovalNoticeAnswer>>(
     () => new Map(),
@@ -298,11 +359,30 @@ export function useApprovalNotices(
         ...(onAnswer ? { onAnswer, answers } : {}),
       }),
       ...ciApprovals.filter(({ key }) => !hiddenKeys.has(key))
-        .map(({ key, todo, approval }) => toCiApprovalNotice(key, todo, approval, threadTitleForKey, () => hide([key]), onHideAll)),
+        .map(({ key, todo, approval }) => toCiApprovalNotice(key, todo, approval, threadTitleForKey, () => hide([key]), onHideAll,
+          reviewCiDeployment && threadTodoCiDeploymentReviewRequest(todo, approval)
+            ? {
+                confirming: confirmingKey === key,
+                running: runningTodoIds.has(todo.id),
+                ...(ciErrors.has(key) ? { error: ciErrors.get(key) } : {}),
+                onConfirm: () => {
+                  setCiError(key, undefined);
+                  setConfirmingKey(key);
+                },
+                onCancel: () => setConfirmingKey(undefined),
+                onApprove: () => {
+                  setConfirmingKey(undefined);
+                  void reviewCiDeployment(todo, approval).catch((cause: unknown) => {
+                    const reason = cleanComposerErrorMessage(cause instanceof Error ? cause.message : String(cause));
+                    setCiError(key, `Could not approve: ${reason}`);
+                  });
+                },
+              }
+            : undefined)),
     ],
     [
       waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
-      onAnswer, answers, ciApprovals, hide,
+      onAnswer, answers, ciApprovals, hide, reviewCiDeployment, confirmingKey, runningTodoIds, ciErrors, setCiError,
     ],
   );
 }

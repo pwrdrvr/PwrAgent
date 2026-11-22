@@ -108,6 +108,7 @@ import type {
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
+  ReviewThreadTodoCiDeploymentRequest,
   SetThreadTodoProjectRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
@@ -892,6 +893,7 @@ import {
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
+  THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
@@ -2861,6 +2863,10 @@ const desktopApi = Object.freeze({
     request: SetThreadTodoItemCheckedRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL, request),
+  reviewThreadTodoCiDeployment: async (
+    request: ReviewThreadTodoCiDeploymentRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL, request),
   onThreadTodosChanged: (
     callback: (event: ThreadTodosChangedEvent) => void,
   ): (() => void) => {

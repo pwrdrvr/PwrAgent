@@ -114,9 +114,49 @@ export async function readCiRun(get: CiRunGet, ref: CiRunRef, now: number): Prom
   return ref.repository.provider === "gitlab" ? await readGitlabPipeline(get, ref, now) : await readGithubRun(get, ref, now);
 }
 
+/** A waiting run's pending deployments that wait for a reviewer, not a timer alone. */
+async function readGithubGates(get: CiRunGet, ref: CiRunRef, base: string): Promise<NonNullable<ThreadDependencyCiRunObservation["gates"]>> {
+  const pending = await get(ref.repository, `${base}/pending_deployments`);
+  return (Array.isArray(pending) ? pending.map(record) : []).flatMap((entry) => {
+    const target = entry.environment ? record(entry.environment) : {};
+    const environment = label(target.name);
+    if (!environment) return [];
+    const environmentId = Number.isSafeInteger(target.id) && Number(target.id) > 0 ? { environmentId: Number(target.id) } : {};
+    const reviewers = (Array.isArray(entry.reviewers) ? entry.reviewers.map(record) : []).flatMap((reviewer) => {
+      const who = reviewer.reviewer && typeof reviewer.reviewer === "object" ? record(reviewer.reviewer) : {};
+      const name = label(who.login ?? who.slug ?? who.name, 80);
+      return name ? [name] : [];
+    });
+    const timer = typeof entry.wait_timer === "number" && entry.wait_timer > 0 ? { waitTimerMinutes: entry.wait_timer } : {};
+    return [{ environment, ...environmentId, reviewers: reviewers.slice(0, 8), ...timer }];
+  }).filter(needsGithubDeploymentReview).slice(0, 8);
+}
+
+/**
+ * GitHub: the run and, while it waits, its gates; no jobs. For a CI approval
+ * card, which needs only whether its gates are still held.
+ */
+export async function readGithubRunGates(get: CiRunGet, ref: CiRunRef, now: number): Promise<ThreadDependencyCiRunObservation> {
+  const base = githubRunPath(ref);
+  const run = record(await get(ref.repository, base));
+  if (run.id !== ref.runId || typeof run.status !== "string") throw new Error("GitHub returned a different run.");
+  const gates = run.status === "waiting" ? await readGithubGates(get, ref, base) : undefined;
+  return {
+    runId: ref.runId, status: run.status,
+    ...(typeof run.conclusion === "string" ? { conclusion: run.conclusion } : {}),
+    ...(typeof run.run_attempt === "number" ? { attempt: run.run_attempt } : {}),
+    ...(gates ? { gates } : {}),
+    checkedAt: now,
+  };
+}
+
+function githubRunPath(ref: CiRunRef): string {
+  return `repos/${encodeURIComponent(ref.repository.owner)}/${encodeURIComponent(ref.repository.repo)}/actions/runs/${ref.runId}`;
+}
+
 /** GitHub: the run, its latest attempt's jobs, and its pending deployments while it waits. */
 async function readGithubRun(get: CiRunGet, ref: CiRunRef, now: number): Promise<ThreadDependencyCiRunObservation> {
-  const base = `repos/${encodeURIComponent(ref.repository.owner)}/${encodeURIComponent(ref.repository.repo)}/actions/runs/${ref.runId}`;
+  const base = githubRunPath(ref);
   const run = record(await get(ref.repository, base));
   if (run.id !== ref.runId || typeof run.status !== "string") throw new Error("GitHub returned a different run.");
   const jobs: Record<string, unknown>[] = [];
@@ -144,21 +184,7 @@ async function readGithubRun(get: CiRunGet, ref: CiRunRef, now: number): Promise
     else if (job.status === "waiting") counts.waiting++;
     else counts.queued++;
   }
-  let gates: ThreadDependencyCiRunObservation["gates"];
-  if (run.status === "waiting") {
-    const pending = await get(ref.repository, `${base}/pending_deployments`);
-    gates = (Array.isArray(pending) ? pending.map(record) : []).flatMap((entry) => {
-      const environment = label(entry.environment && record(entry.environment).name);
-      if (!environment) return [];
-      const reviewers = (Array.isArray(entry.reviewers) ? entry.reviewers.map(record) : []).flatMap((reviewer) => {
-        const who = reviewer.reviewer && typeof reviewer.reviewer === "object" ? record(reviewer.reviewer) : {};
-        const name = label(who.login ?? who.slug ?? who.name, 80);
-        return name ? [name] : [];
-      });
-      const timer = typeof entry.wait_timer === "number" && entry.wait_timer > 0 ? { waitTimerMinutes: entry.wait_timer } : {};
-      return [{ environment, reviewers: reviewers.slice(0, 8), ...timer }];
-    }).filter(needsGithubDeploymentReview).slice(0, 8);
-  }
+  const gates = run.status === "waiting" ? await readGithubGates(get, ref, base) : undefined;
   return {
     runId: ref.runId, status: run.status,
     ...(label(run.name) ? { name: label(run.name) } : {}),
@@ -297,18 +323,48 @@ export function ciApprovalsForDependency(dependency: ThreadDependency | undefine
       || !threadDependencyCiRunOutcomes(ciRun).includes("approval_gate")) continue;
     const ref = parseCiRunUrl(ciRun.url, urls?.());
     if (ref?.repository.provider !== "github" || ref.runId !== observation.runId) continue;
-    const environments = matchingApprovalGates(ciRun, observation)
-      .filter(needsGithubDeploymentReview)
-      .map((gate) => gate.environment);
-    if (environments.length === 0) continue;
+    const gates = matchingApprovalGates(ciRun, observation).filter(needsGithubDeploymentReview);
+    if (gates.length === 0) continue;
     const existing = approvals.get(ref.url);
+    const merged = new Map<string, number | undefined>();
+    for (const [index, name] of (existing?.environments ?? []).entries()) merged.set(name, existing?.environmentIds?.[index]);
+    for (const gate of gates) merged.set(gate.environment, gate.environmentId ?? merged.get(gate.environment));
+    const environmentIds = [...merged.values()];
+    // Only a milestone that names every gate's id, attempt and commit can be
+    // approved from PwrAgent: those are what the owner checks again first.
+    const reviewable = environmentIds.every((id): id is number => id !== undefined)
+      && observation.attempt !== undefined && observation.headSha !== undefined;
     approvals.set(ref.url, {
       url: ref.url, runId: ref.runId, repository: `${ref.repository.owner}/${ref.repository.repo}`,
-      environments: [...new Set([...(existing?.environments ?? []), ...environments])],
+      environments: [...merged.keys()],
+      ...(reviewable ? { environmentIds: environmentIds as number[], attempt: observation.attempt } : {}),
       ref: observation.branch, headSha: observation.headSha,
     });
   }
   return [...approvals.values()];
+}
+
+/**
+ * Whether GitHub no longer holds a card's gates: the run finished, or none
+ * of the card's environments is pending any more. A rerun that stops at the
+ * same gate still needs a reviewer, so the card stays; its Approve then
+ * refuses the new attempt and Review on GitHub shows it. A failed check says
+ * nothing. Returns the card's result, or nothing while it still waits.
+ */
+export function ciApprovalSettled(
+  approval: Pick<ThreadTodoCiApproval, "environments">,
+  observation: ThreadDependencyCiRunObservation,
+): string | undefined {
+  if (observation.error) return undefined;
+  if (observation.status === "completed") {
+    return `Run finished${observation.conclusion ? `: ${observation.conclusion}` : ""}`;
+  }
+  const pending = new Set(observation.status === "waiting"
+    ? (observation.gates ?? []).map((gate) => gate.environment.toLowerCase())
+    : []);
+  return approval.environments.some((name) => pending.has(name.toLowerCase()))
+    ? undefined
+    : `Deployment review finished on GitHub: ${approval.environments.join(", ")}`;
 }
 
 /**

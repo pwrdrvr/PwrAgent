@@ -364,9 +364,57 @@ export type ThreadTodoCiApproval = {
   repository: string;
   runId: number;
   environments: string[];
+  /**
+   * GitHub's id for each of `environments`, in the same order. Present only
+   * when every environment has one, with the run's attempt and head commit:
+   * only then can the card approve the gate from PwrAgent. An owner that
+   * predates in-app review never sends them, so its cards offer Review on
+   * GitHub alone.
+   */
+  environmentIds?: number[];
+  attempt?: number;
   ref?: string;
   headSha?: string;
 };
+
+/**
+ * The operator approves a GitHub deployment gate from a CI approval card.
+ * Everything but `id` is what the card showed; the owner re-reads the run
+ * and its pending deployments and refuses unless they still match. There
+ * is no agent tool for this.
+ */
+export type ReviewThreadTodoCiDeploymentRequest = {
+  federationTarget?: FederationRemoteTarget;
+  id: string;
+  url: string;
+  repository: string;
+  runId: number;
+  attempt: number;
+  headSha: string;
+  environments: string[];
+  environmentIds: number[];
+};
+
+/** The approval card's in-app review, when the card can offer one. */
+export function threadTodoCiDeploymentReviewRequest(
+  todo: Pick<ThreadTodo, "id" | "federationTarget">,
+  approval: ThreadTodoCiApproval,
+): ReviewThreadTodoCiDeploymentRequest | undefined {
+  const { environmentIds, attempt, headSha } = approval;
+  if (!environmentIds || environmentIds.length !== approval.environments.length
+    || attempt === undefined || !headSha) return undefined;
+  return {
+    ...(todo.federationTarget ? { federationTarget: todo.federationTarget } : {}),
+    id: todo.id,
+    url: approval.url,
+    repository: approval.repository,
+    runId: approval.runId,
+    attempt,
+    headSha,
+    environments: [...approval.environments],
+    environmentIds: [...environmentIds],
+  };
+}
 
 export type ThreadTodo = {
   id: string;

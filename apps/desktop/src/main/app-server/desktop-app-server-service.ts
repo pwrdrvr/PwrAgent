@@ -80,7 +80,11 @@ import {
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { authorizeLocalFile, LocalFilePoller, readLocalFile } from "./thread-dependency-local-files";
-import { CI_RUN_URL_FORMS, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
+import { CI_RUN_URL_FORMS, ciApprovalSettled, parseCiRunUrl, readCiRun, readGithubRunGates, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
+import { approveGithubCiDeployment, CiDeploymentReviewRefusal } from "../thread-todos/ci-deployment-review";
+import { FORGE_AGENT_TOOL_GROUP_LABELS, resolveForgeAgentToolAccess } from "@pwragent/shared/contracts/forge-agent-tools";
+import type { ReviewThreadTodoCiDeploymentRequest } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadDependencyCiRunObservation } from "@pwragent/shared/contracts/thread-dependencies";
 import { mergeCommitOf, readMergeBuild } from "../app-server/thread-dependency-merge-builds";
 import {
   getProjectForgeAutomationIndex,
@@ -1307,6 +1311,10 @@ class DesktopAppServerService {
   private unsubscribeResourceCheckouts?: () => void;
   private threadDependencyCiRunPoller: ThreadDependencyCiRunPoller | undefined;
   private threadDependencyMergeBuildPoller: ThreadDependencyCiRunPoller<ThreadDependencyMergeBuildObservation> | undefined;
+  /** Open CI approval cards' runs, read until GitHub no longer holds their gates. */
+  private ciApprovalPoller: ThreadDependencyCiRunPoller | undefined;
+  /** The latest check of each run an approval card waits on. Memory only. */
+  private readonly ciApprovalRuns = new Map<string, ThreadDependencyCiRunObservation>();
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
   private unsubscribeRestartGate?: () => void;
@@ -3545,6 +3553,7 @@ class DesktopAppServerService {
 
   async startOwnerNavigation(): Promise<void> {
     this.ownerNavigationActive = true;
+    this.installCiDeploymentReviewer();
     // Continue After waits while a quiet restart's continuations go first.
     this.unsubscribeRestartGate ??= getDesktopBackendRegistry().onRestartGateChanged?.((closed) => {
       if (!closed && this.ownerNavigationActive) {
@@ -5670,6 +5679,7 @@ class DesktopAppServerService {
       // CI run and merge build waits are checked under the same switch as PR polling.
       this.threadDependencyCiRunPoller?.sync();
       this.threadDependencyMergeBuildPoller?.sync();
+      this.ciApprovalPoller?.sync();
       this.prAutoDispatchAllowed = prAutoDispatchAllowed;
       this.prAutoDispatchBudgetConfig = budgetConfig;
       if (budgetStatus?.paused) {
@@ -7923,6 +7933,7 @@ class DesktopAppServerService {
     if (projectAllowsPrWatches(previous) !== projectAllowsPrWatches(next)) {
       this.threadDependencyCiRunPoller?.sync();
       this.threadDependencyMergeBuildPoller?.sync();
+      this.ciApprovalPoller?.sync();
     }
     if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
       await this.getThreadDependencyCoordinator().handlePrEvent();
@@ -8349,6 +8360,14 @@ class DesktopAppServerService {
     this.threadDependencyCiRunPoller = undefined;
     this.threadDependencyMergeBuildPoller?.dispose();
     this.threadDependencyMergeBuildPoller = undefined;
+    this.ciApprovalPoller?.dispose();
+    this.ciApprovalPoller = undefined;
+    this.ciApprovalRuns.clear();
+    try {
+      getThreadTodoService().setCiDeploymentReviewer(undefined);
+    } catch {
+      // Profile state never opened; nothing was installed.
+    }
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
     this.prPollingSettingsSyncGeneration += 1;
@@ -8717,7 +8736,11 @@ class DesktopAppServerService {
         changed: async (dependency) => {
           // A wait that starts, fires or ends changes which runs need checks.
           // After close() the poller is gone; a late change must not rebuild it.
-          if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
+          if (dependency.conditions.some((condition) => condition.ciRun)) {
+            this.threadDependencyCiRunPoller?.sync();
+            // A delivered approval gate raised a card whose run the owner now follows.
+            this.ciApprovalPoller?.sync();
+          }
           if (dependency.conditions.some((condition) => condition.when === "merge_build")) this.threadDependencyMergeBuildPoller?.sync();
           if (dependency.conditions.some((condition) => condition.localFile)) this.syncLocalFileChecks();
           if (dependency.conditions.some((condition) => condition.resourceCheckout)) {
@@ -8833,6 +8856,91 @@ class DesktopAppServerService {
       ...Number.isFinite(mergedAt) ? { mergedAt } : {},
       // A build followed past a cancellation is read where it was left.
     }, Date.now(), this.getThreadDependencyCoordinator().mergeBuildObservation(prUrl));
+  }
+
+  /**
+   * Reconciles CI approval cards with GitHub. A card raised at a deployment
+   * gate stays open until the owner sees the gate cleared or the run end,
+   * whoever reviewed it and wherever: PwrAgent, GitHub, or another reviewer.
+   * Read under the same gate as CI waits; a check that still waits writes
+   * nothing.
+   */
+  private getCiApprovalPoller(): ThreadDependencyCiRunPoller {
+    this.ciApprovalPoller ??= new ThreadDependencyCiRunPoller({
+      urls: () => {
+        if (!this.backgroundPrPollingEnabled) return [];
+        const urls = getThreadTodoService().ciApprovalUrls((todo) => projectAllowsPrWatches(this.threadForgeAutomation(todo)));
+        for (const url of this.ciApprovalRuns.keys()) if (!urls.includes(url)) this.ciApprovalRuns.delete(url);
+        return urls;
+      },
+      read: async (url) => await this.readCiApprovalRun(url),
+      observe: async (url, observation) => this.observeCiApprovalRun(url, observation),
+    });
+    return this.ciApprovalPoller;
+  }
+
+  private observeCiApprovalRun(url: string, observation: ThreadDependencyCiRunObservation): void {
+    // A failed check keeps the last good one: it shows nothing settled.
+    if (observation.error) return;
+    this.ciApprovalRuns.set(url, observation);
+    // The poll syncs its runs when it ends, so a settled card drops out then.
+    getThreadTodoService().settleCiApprovals((approval) => {
+      const run = this.ciApprovalRuns.get(approval.url);
+      return run ? ciApprovalSettled(approval, run) : undefined;
+    });
+  }
+
+  /** The run and its gates only: an approval card needs no job counts. */
+  private async readCiApprovalRun(url: string): Promise<ThreadDependencyCiRunObservation> {
+    const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
+    if (!ref || ref.repository.provider !== "github") throw new Error(`Not a GitHub Actions run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
+    const client = this.getForgeCiClient();
+    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
+  }
+
+  /** Lets CI approval cards approve their gates on this owner's GitHub sign-in. */
+  private installCiDeploymentReviewer(): void {
+    let todos: ReturnType<typeof getThreadTodoService>;
+    try {
+      todos = getThreadTodoService();
+    } catch (error) {
+      appServerLog.debug("deployment reviews unavailable", { error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    todos.setCiDeploymentReviewer(async (reviewed) => await this.approveCiDeployment(reviewed));
+  }
+
+  /**
+   * The operator's Approve, on this owner. The click is the operator's
+   * consent, so Ask and Auto need no further card, but the forge policy
+   * still binds: forge tools off, or Approve and merge off, refuses it, and
+   * GitHub off in Settings → Git refuses it at admission. The run is read
+   * again on the same client and sign-in that will write.
+   */
+  private async approveCiDeployment(reviewed: ReviewThreadTodoCiDeploymentRequest): Promise<{ environments: string[] }> {
+    let resolution: ReturnType<typeof resolveForgeAgentToolAccess> | undefined;
+    try {
+      resolution = resolveForgeAgentToolAccess(getDesktopSettingsService().resolveForgeAgentToolPolicy(), "approve_merge", undefined, undefined);
+    } catch (error) {
+      // An unreadable policy must not widen access.
+      appServerLog.warn("could not read forge policy for a deployment review", { error: String(error) });
+    }
+    if (!resolution || resolution.level === "off") {
+      const setting = resolution?.source === "default"
+        ? `${FORGE_AGENT_TOOL_GROUP_LABELS.approve_merge} is Off`
+        : resolution ? "Forge tools are off" : "The forge tool setting could not be read";
+      throw new CiDeploymentReviewRefusal("not_allowed", `${setting} in Settings → Git → Agent forge tools, so PwrAgent does not approve deployments. Review it on GitHub, or change the setting.`);
+    }
+    const client = this.getForgeCiClient();
+    const approved = await approveGithubCiDeployment({
+      request: async (repository, request) => await client.requestGithub(repository, request),
+      reviewed,
+      urls: this.ciRunUrlOptions(),
+    });
+    appServerLog.info("approved a GitHub deployment gate from a card", {
+      repository: reviewed.repository, runId: reviewed.runId, attempt: reviewed.attempt, environments: approved.environments,
+    });
+    return approved;
   }
 
   private async readDependencyCiRun(url: string) {
@@ -9082,6 +9190,7 @@ class DesktopAppServerService {
     await this.getThreadDependencyCoordinator().reconcile();
     this.getThreadDependencyCiRunPoller().sync();
     this.getThreadDependencyMergeBuildPoller().sync();
+    this.getCiApprovalPoller().sync();
     this.syncLocalFileChecks(0);
     this.syncResourceCheckoutChecks(0);
   }

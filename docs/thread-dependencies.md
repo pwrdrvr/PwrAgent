@@ -352,7 +352,9 @@ URL, with `threadId: ""` and the waiting thread's `backend`:
   Any other conclusion, or a success when `finished` was not requested, fails
   the condition, because the milestone can no longer happen.
 - **One-shot.** A wake after a gate does not keep watching. Register a new
-  `ci_run` wait for the finish. PwrAgent never approves a deployment.
+  `ci_run` wait for the finish. An agent never approves a deployment; only
+  the operator can, from the card (see
+  [Approving a GitHub gate from its card](#approving-a-github-gate-from-its-card)).
 - **Registration reads the run once.** A URL it cannot read is refused. A run
   already at a requested milestone fires at once. A re-run is followed through
   its latest attempt.
@@ -393,6 +395,46 @@ GitHub run, so one rule decides every wait (`evaluateCiRunCondition`).
   deployments reports manual jobs only.
 - Deployment approvals need GitLab Premium or Ultimate. Without them only
   manual jobs are gates.
+
+### Approving a GitHub gate from its card
+
+A delivered `approval_gate` raises a reminder card and an approval notice.
+Both keep **Review on GitHub**. When the card's owner saved each gate's
+environment id with the run's attempt and head commit, they also offer
+**Approve**, which asks once more before it sends anything. No agent tool
+reaches this action, and it calls GitHub's
+[review pending deployments](https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run)
+endpoint only for a required-reviewer gate.
+
+- **The owner acts.** The request goes to the card's owning instance, over
+  `threadTodos.reviewCiDeployment` for a peer (`turn_control`), and uses
+  that owner's `gh` sign-in through its forge client. A viewer's card from an
+  owner that predates this has no environment ids and offers GitHub only.
+- **What the operator saw.** The request carries the card's repository, run,
+  attempt, head commit, environment names and ids. The owner refuses it
+  unless its stored card says the same, then approves its own stored copy.
+- **Fresh reads, gates first.** Immediately before writing, the owner reads
+  the pending deployments, then the run. Pending deployments name no attempt,
+  and a rerun keeps the environment ids, so the run read last proves the gates
+  still belong to the reviewed attempt. The write happens only when the run is
+  in the same repository, attempt and commit and still `waiting`, and every
+  reviewed environment is pending with the same id and name and
+  `current_user_can_approve: true`. Only those environment ids are approved.
+- **Policy.** The click is the operator's consent, so `ask` and `auto` need
+  no further card. Forge tools switched off, or **Approve and merge** set to
+  Off, refuses the approval, and so does GitHub turned off in Settings → Git.
+- **Refusals.** A refusal from the owner or GitHub stays on the card as its
+  error, and the notice shows it. The card stays open, and **Approve**
+  tries again. A request that no longer matches the card is refused before
+  GitHub is asked, and the surface that sent it says so.
+- **Reconciliation.** While an approval card is open, its owner keeps reading
+  the run and its gates (no jobs) on the CI-wait schedule and gate. The card
+  is marked done when the run finishes or none of its environments is still
+  pending, however that happened: from PwrAgent, on GitHub, or by another
+  reviewer. A rerun that stops at the same gate keeps the card open; its
+  Approve then refuses the new attempt, and Review on GitHub shows it.
+  A card that waits on two runs closes when both have settled. A check that
+  still waits writes nothing; settling commits once.
 
 ### GitHub Enterprise hosts
 

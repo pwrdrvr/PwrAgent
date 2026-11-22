@@ -5,6 +5,7 @@ import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
 import { TodoPullRequestChip, useTodoLivePullRequest } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext, type TodoDispatchChoices } from "./TodoDispatchProvider";
 import {
+  Fragment,
   useEffect,
   useId,
   useLayoutEffect,
@@ -38,6 +39,7 @@ import {
   THREAD_TODO_MERGE_METHOD_LABELS,
   resolveThreadTodoModelSettings,
   threadTodoBlockingItems,
+  threadTodoCiDeploymentReviewRequest,
   threadTodoItemNoun,
   threadTodoItemProgress,
   threadTodoOpenItems,
@@ -61,7 +63,7 @@ import {
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { openExternalUrl } from "../../lib/open-external-url";
-import { threadTodoCiApprovals, threadTodoCiApprovalTitle } from "./thread-todo-ci-approval";
+import { confirmCiApprovalText, threadTodoCiApprovals, threadTodoCiApprovalTitle } from "./thread-todo-ci-approval";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   ChipContextMenu,
@@ -139,6 +141,11 @@ export type ThreadTodoCardHandlers = {
   onSetItemChecked: (todo: ThreadTodo, item: ThreadTodoItem, checked: boolean) => void;
   /** Shows a review card's review in its thread's transcript. */
   onShowReview?: (todo: ThreadTodo) => void;
+  /**
+   * Approves a CI approval card's GitHub deployment gate on the card's
+   * owner. Absent, the card offers Review on GitHub alone.
+   */
+  onReviewCiDeployment?: (todo: ThreadTodo, approval: ThreadTodoCiApproval) => void;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -684,6 +691,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     pickOwnerModel: pickModel,
   });
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
+  const [confirmingApproval, setConfirmingApproval] = useState<ThreadTodoCiApproval>();
+  const canApprove = (approval: ThreadTodoCiApproval): boolean =>
+    props.onReviewCiDeployment !== undefined && threadTodoCiDeploymentReviewRequest(todo, approval) !== undefined;
   const [confirmingSteps, setConfirmingSteps] = useState<OpenStepsConfirmation>();
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -732,7 +742,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
   const hasFacts = action?.type === "merge_pull_request";
-  const runningLabel = sendingMessage ? "Sending…"
+  const runningLabel = ciTitle ? "Approving…"
+    : sendingMessage ? "Sending…"
     : action?.type === "merge_pull_request" ? mergeQueue ? "Adding to queue…" : "Merging…"
     : "Starting…";
   const progress = threadTodoItemProgress(todo);
@@ -865,18 +876,57 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     );
     switch (action?.type) {
       case undefined:
+        if (ciTitle && confirmingApproval) {
+          return (
+            <>
+              <button
+                type="button"
+                className="button thread-todo-card__button thread-todo-card__button--quiet"
+                aria-describedby={confirmTextId}
+                onClick={() => setConfirmingApproval(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button button--primary thread-todo-card__button"
+                aria-describedby={confirmTextId}
+                onClick={() => {
+                  const approval = confirmingApproval;
+                  setConfirmingApproval(undefined);
+                  props.onReviewCiDeployment?.(todo, approval);
+                }}
+              >
+                <CheckIcon size={12} />
+                Approve
+              </button>
+            </>
+          );
+        }
         if (ciTitle) return (
           <>
             {done}
             {ciApprovals.map((approval) => (
-              <button
-                key={approval.url}
-                type="button"
-                className="button button--primary thread-todo-card__button"
-                onClick={() => openExternalUrl(approval.url)}
-              >
-                {ciApprovals.length === 1 ? "Review on GitHub" : `Review run #${approval.runId} on GitHub`}
-              </button>
+              <Fragment key={approval.url}>
+                <button
+                  type="button"
+                  className={`button thread-todo-card__button${canApprove(approval) ? "" : " button--primary"}`}
+                  onClick={() => openExternalUrl(approval.url)}
+                >
+                  {ciApprovals.length === 1 ? "Review on GitHub" : `Review run #${approval.runId} on GitHub`}
+                </button>
+                {canApprove(approval) ? (
+                  <button
+                    type="button"
+                    className="button button--primary thread-todo-card__button"
+                    onClick={() => setConfirmingApproval(approval)}
+                  >
+                    <CheckIcon size={12} />
+                    {/* A refusal shows above; "Retry approval" would wrap the 340px footer. */}
+                    {ciApprovals.length === 1 ? "Approve" : `Approve run #${approval.runId}`}
+                  </button>
+                ) : null}
+              </Fragment>
             ))}
           </>
         );
@@ -1217,7 +1267,11 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         </div>
       ) : null}
 
-      {confirmingMerge && action?.type === "merge_pull_request" ? (
+      {confirmingApproval && ciTitle ? (
+        <p id={confirmTextId} className="thread-todo-card__confirm">
+          {confirmCiApprovalText(confirmingApproval, todo.federationTarget !== undefined)}
+        </p>
+      ) : confirmingMerge && action?.type === "merge_pull_request" ? (
         <p className="thread-todo-card__confirm">
           {openSteps > 0 ? `${openStepsText} ` : ""}
           {mergeQueue
@@ -1254,7 +1308,7 @@ function CiApprovalRunDetails({ approvals }: { approvals: readonly ThreadTodoCiA
         <p className="thread-todo-card__detail">{approval.environments.join(", ")}</p>
       ) : null}
       <p className="thread-todo-card__detail">{[approval.repository, approval.ref].filter(Boolean).join(" · ")}</p>
-      <p className="thread-todo-card__detail">{[`Run #${approval.runId}`, approval.headSha?.slice(0, 12)].filter(Boolean).join(" · ")}</p>
+      <p className="thread-todo-card__detail">{[`Run #${approval.runId}`, approval.attempt ? `attempt ${approval.attempt}` : undefined, approval.headSha?.slice(0, 12)].filter(Boolean).join(" · ")}</p>
     </div>
   ));
 }
