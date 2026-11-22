@@ -6,6 +6,7 @@ import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
+import { readProvenRemoteHeads } from "./pr-remote-heads";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
@@ -418,10 +419,11 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand,
     }, demand);
     remoteNames = uniqueNonEmpty(stdout.split(/\r?\n/));
   }
-  let confirmed = false;
+  const heads = await readProvenRemoteHeads(cwd, remoteNames, demand);
+  let confirmed = heads !== undefined;
   const defaults = await Promise.all(
     remoteNames.map(async (remote) => {
-      const remoteHead = await readGitLine(cwd, [
+      const remoteHead = heads?.get(remote) ?? await readGitLine(cwd, [
         "symbolic-ref",
         "--quiet",
         "--short",

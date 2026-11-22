@@ -8,7 +8,8 @@ import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, parseForgeRemote, readForgeRepositoryRemotes, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
-import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataGit } from "../pr-status/pr-metadata-process";
+import { readProvenRemoteHeads } from "../pr-status/pr-remote-heads";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -51,6 +52,43 @@ it("keeps a selected PR read moving when background paths cannot complete filesy
   }
 });
 
+it.skipIf(process.platform === "win32")("reserves owner filesystem capacity after background ref probes time out", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-stalled-refs-"));
+  const restoreEnv = isolateProcessGitEnvironment(root);
+  const { realpath } = await vi.importActual<typeof fs>("node:fs/promises");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let active = 0;
+  let peak = 0;
+  const probe = vi.spyOn(fs, "realpath").mockImplementation(async (cwd) => {
+    if (!path.basename(String(cwd)).startsWith("stalled-refs-")) return await realpath(cwd);
+    peak = Math.max(peak, ++active);
+    await held;
+    active--;
+    return await realpath(cwd);
+  });
+  onTestFinished(async () => {
+    release();
+    probe.mockRestore();
+    restoreEnv();
+    await rm(root, { recursive: true, force: true });
+  });
+  await runGitCommand(root, ["init", "-b", "main"]);
+
+  // Simulate libuv calls that remain blocked after the JS probe's deadline.
+  // Inventory can fall back and selected Git can run before the mount returns.
+  const wave = () => Promise.all(Array.from({ length: 12 }, (_, index) =>
+    readProvenRemoteHeads(path.join(root, `stalled-refs-${index}`), ["origin", "upstream"])));
+  await expect(wave()).resolves.toEqual(Array(12).fill(undefined));
+  const stillActive = active;
+  await expect(wave()).resolves.toEqual(Array(12).fill(undefined));
+  const { stdout } = await runPrMetadataGit(root, ["rev-parse", "--is-inside-work-tree"],
+    { purpose: "pr-discovery" }, { priority: () => PR_METADATA_PRIORITY.selected });
+  expect(stdout.trim()).toBe("true");
+  expect(peak).toBeLessThanOrEqual(3);
+  expect(active).toBe(stillActive);
+});
+
 it("keeps attachment history and skips forge discovery when a checkout vanishes after its config read", async () => {
   const restoreEnv = isolateProcessGitEnvironment();
   const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (_cwd, args) => {
@@ -87,7 +125,7 @@ it.each([8, 16])("shares a checkout's remote observation between attachment vali
   const git = (cwd: string, ...args: string[]) => runGitCommand(cwd, args);
   const repo = path.join(root, "repository");
   await mkdir(repo);
-  await git(repo, "init", "-b", "main");
+  await git(repo, "init", "-b", "main", "--ref-format=files", "--object-format=sha1");
   await git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "init");
   for (const remote of ["origin", "upstream"]) {
     await git(repo, "remote", "add", remote, `https://github.com/fixture/${remote}.git`);
@@ -113,13 +151,16 @@ it.each([8, 16])("shares a checkout's remote observation between attachment vali
   const owners = await Promise.all(directories.map((cwd) => resolveGitHubRepoForDirectory(cwd)));
   expect(owners).toEqual([...checkouts.map(() => ({ host: "github.com", owner: "fixture", repo: "origin" })), undefined, undefined]);
 
-  // Each real checkout needs one effective-config observation and one HEAD
-  // read per remote. Inconclusive paths cache a negative remote observation.
+  // The Git-confirmed files observation replaces both dangling HEAD reads
+  // on supported platforms. Inconclusive paths cache a negative remote answer.
+  const headReads = process.platform === "win32" ? ["symbolic-ref", "symbolic-ref"] : ["rev-parse"];
   const remoteStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-remotes");
   const discoveryStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-discovery");
-  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 3, discovery: size * 2 });
+  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 3, discovery: size * headReads.length });
   expect(remoteStarts.map(([cwd]) => cwd).sort()).toEqual([...directories, missing].sort());
-  expect(discoveryStarts.every(([, args]) => args[0] === "symbolic-ref")).toBe(true);
+  for (const cwd of checkouts) {
+    expect(discoveryStarts.filter(([directory]) => directory === cwd).map(([, args]) => args[0])).toEqual(headReads);
+  }
 });
 
 it("matches Git across effective config changes and overrides", async () => {
