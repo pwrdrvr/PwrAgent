@@ -41,7 +41,8 @@ test("default and dev contend for one durable machine allocation through preload
     expect(defaultView.viewer.machineId).toBeTruthy();
     expect(defaultView.viewer.machineId).toBe(devView.viewer.machineId);
     expect([defaultView.resources[0].condition, devView.resources[0].condition]).toEqual(["available", "available"]);
-    const [{ resourceId }] = defaultView.resources;
+    const [{ resourceId, sharing }] = defaultView.resources;
+    expect(sharing).toMatchObject({ mode: "counted", capacity: os.cpus().length || 1, unitLabel: "CPU slots" });
     expect(devView.resources.map((resource) => resource.resourceId)).toEqual([resourceId]);
     const [a, b] = await Promise.all([first.window, second.window].map((page, index) =>
       perform(page, { kind: "request", idempotencyKey: `hold-${index}`, resourceId,
@@ -66,6 +67,37 @@ test("default and dev contend for one durable machine allocation through preload
     expect(promoted.resources[0]).toMatchObject({
       queue: [], allocations: [{ allocationId: queued.queueEntryId, generation: granted.generation + 1, viewerOwns: true }],
     });
+    await expect(perform(waiter.window, {
+      kind: "release", resourceId, allocationId: queued.queueEntryId, generation: granted.generation + 1,
+      idempotencyKey: "release-promoted",
+    })).resolves.toMatchObject({ outcome: "accepted" });
+
+    if (sharing.mode === "counted" && sharing.capacity > 1) {
+      const request = (idempotencyKey: string, units?: number) => ({
+        kind: "request" as const, resourceId, idempotencyKey, purpose: idempotencyKey, expectedDurationMs: 120_000,
+        ...(units === undefined ? {} : { units }),
+      });
+      const lightA = await perform(reopened.window, request("light-default", 1));
+      const lightB = await perform(waiter.window, request("light-dev", 1));
+      const heavy = await perform(reopened.window, request("heavy"));
+      const late = await perform(waiter.window, request("late-light", 1));
+      if (lightA.outcome !== "granted" || lightB.outcome !== "granted" || heavy.outcome !== "queued" || late.outcome !== "queued") {
+        throw new Error("Expected two light grants followed by two FIFO waiters.");
+      }
+      const release = (page: Page, lease: typeof lightA) => perform(page, {
+        kind: "release", resourceId, allocationId: lease.allocationId, generation: lease.generation,
+        idempotencyKey: `release-${lease.allocationId}`,
+      });
+      await release(reopened.window, lightA);
+      expect((await read(waiter.window)).resources[0]).toMatchObject({
+        queue: [{ queueEntryId: heavy.queueEntryId }, { queueEntryId: late.queueEntryId }],
+        allocations: [{ allocationId: lightB.allocationId, units: 1 }],
+      });
+      await release(waiter.window, lightB);
+      expect((await read(reopened.window)).resources[0]).toMatchObject({
+        queue: [{ queueEntryId: late.queueEntryId }], allocations: [{ allocationId: heavy.queueEntryId, units: sharing.capacity }],
+      });
+    }
   } finally {
     try {
       await Promise.all(apps.map((app) => app.close()));

@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises";
+import { cpus } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { readMachineCheckoutEvidence } from "./checkout-machine-evidence";
 import type { ResourceAdvertisement } from "@pwragent/shared/contracts/resource-checkouts";
@@ -70,7 +71,8 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   }
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
-    machineStore, externalStore, bindings, allowAgentDrafts, approvedLabCheckouts, warn, bootId: evidence.hostBinding ? evidence.bootId : undefined,
+    machineStore, machineCpuCount: cpus().length, externalStore, bindings, allowAgentDrafts, approvedLabCheckouts, warn,
+    bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)
       .flatMap((entry) => findLiveProfileRuntimeMarkers(entry.name).map((marker): ResourceAdvertisement => ({

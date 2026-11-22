@@ -810,10 +810,12 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         },
       });
       try {
-        const window = app.window;
-        const profile = window.getByRole("button", { name: /^Open PwrAgent profile menu:/ });
+        const mainWindow = app.window;
+        const profile = mainWindow.getByRole("button", { name: /^Open PwrAgent profile menu:/ });
         await profile.click();
-        await window.getByTestId("profile-menu-resources").click();
+        const opened = app.electronApp.waitForEvent("window");
+        await mainWindow.getByTestId("profile-menu-resources").click();
+        const window = await opened;
         const resources = window.getByRole("region", { name: "Resources", exact: true });
         const row = (resourceId: string) => resources.locator(`li[data-resource-id="${resourceId}"]`);
         const chip = (resourceId: string, condition: string) =>
@@ -919,7 +921,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await dialog.getByRole("textbox", { name: /^Purpose / }).fill("Accessibility audit hold");
           await runAxe(window, "Request checkout dialog");
           await dialog.getByRole("button", { name: "Request checkout", exact: true }).click();
-          await expect(inspector.getByText("Accessibility audit hold", { exact: true })).toBeVisible();
+          await expect(inspector.getByText(/^Accessibility audit hold · /)).toBeVisible();
           await expect(chip(machineId, "busy")).toBeVisible();
         });
 
@@ -975,8 +977,10 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await runAxe(window, "Resources inspector, pending registration");
         });
 
-        await resources.getByRole("button", { name: "Exit Resources" }).click();
-        await expect(profile).toBeFocused();
+        await profile.click();
+        await mainWindow.getByTestId("profile-menu-resources").click();
+        expect(app.electronApp.windows().filter((page) => page.url().endsWith("#resources"))).toEqual([window]);
+        await expect(mainWindow.getByRole("region", { name: "Resources", exact: true })).toHaveCount(0);
       } finally {
         await app.close();
       }

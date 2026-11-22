@@ -23,13 +23,14 @@ work.
 | `src/renderer/src/features/resources/resource-checkouts-source.ts` | `ResourceCheckoutsSource`, and the production factory over `desktopApi`. |
 | `src/renderer/src/features/resources/resource-view-model.ts` | Presentation rules: conditions, gates, labels, filters. |
 | `src/renderer/src/features/resources/useResourceCheckouts.ts` | Reads, follows change events, and sends actions. |
-| `src/renderer/src/features/resources/ResourcesScreen.tsx` | The screen, mounted as a full-window layer like Automations. |
+| `src/renderer/src/features/resources/ResourcesScreen.tsx` | The screen, mounted in the standalone `ResourcesWindow`. |
 | `src/renderer/src/features/resources/preview/` | Invented fixtures, a simulated authority, and the dev-only preview window. |
 
 ## Entry points and gating
 
-The screen and every way into it stay hidden until the main process serves
-all three of these optional `DesktopApi` methods (`lib/desktop-api.ts`):
+The local profile menu exposes Resources once the owner serves
+`openResourceCheckoutsWindow`. The popout reads through these optional
+`DesktopApi` methods (`lib/desktop-api.ts`):
 
 ```ts
 readResourceCheckouts?: () => Promise<ResourceCheckoutsSnapshot>;
@@ -38,29 +39,23 @@ performResourceCheckoutAction?: (request: ResourceCheckoutActionRequest) => Prom
 ```
 
 `createDesktopResourceCheckoutsSource` returns `null` when any of them is
-missing. With a source:
+missing. The profile menu places **Resources** under Usage Activity. It
+opens or focuses one native utility window without covering the thread
+window. A stored view from the earlier in-window explorer opens the thread
+view. Clicking a holder opens that thread in the primary window.
 
-- The sidebar profile menu shows **Resources** under Usage Activity. The
-  masthead is not used: it is width-budgeted for five controls (see the
-  container queries above `.sidebar__masthead-automations` in `app.css`).
-- `App.tsx` adds the `"resources"` main view. It is a layer view, so the
-  sidebar and main go inert and focus returns to the opener on close. A
-  restored `"resources"` view without a source falls back to the thread view.
-- `"resources"` is an operator focus view (`OPERATOR_FOCUS_VIEWS`), so a
-  voice or Star Map turn can tell the operator is on this screen.
-
-Federation viewer windows don't show the profile menu, so they never offer
-Resources. The screen always shows the local instance's view, which includes
-Federation resources this instance can see.
+The popout shows the local instance's catalog, including external resources
+it can see over Federation. Remote viewer windows have no checkout UI.
+The popout shares the local owner's existing service and monitor.
 
 ## Owner wiring
 
 The owner starts the [resource checkout authority](resource-checkout-authority.md)
 for an active profile and returns it to the Electron shell. The local main
-window exposes the three preload methods through `resource-checkout-ipc.ts`.
-The authority derives the operator identity after the handler verifies the
-sender is the local main frame. Change events are scoped to that window
-through `main-window-channels.ts`.
+and Resources windows expose the checkout preload methods through
+`resource-checkout-ipc.ts`. The authority derives the operator identity
+after the handler verifies the sender is the top frame of a permitted local
+window. Only the popout subscribes to checkout change events.
 
 Do not import the preview fixtures or `createPreviewResourceCheckoutsSource`
 from production code. Production never shows invented availability or
@@ -111,6 +106,9 @@ simulated results.
 - Grant-scoped actions (`release`, `extend`, `fence`, `verify_cleanup`,
   `administrative_release`) carry the `allocationId` and `generation` the
   operator saw. Reject a stale generation with `stale_generation`.
+- The authority supplies recovery evidence and gates for each failed
+  allocation. The recovery dialog stays bound to the selected allocation
+  even as other jobs enter or leave recovery.
 - `request` comes from the operator, and its holder is the operator. It
   never names a thread as owner. On counted resources the operator selects
   the unit count. Agents request through their own tools.

@@ -22,6 +22,7 @@ type Store = CheckoutStore & { close(): void };
 type Options = {
   viewer: ResourceViewer;
   machineStore?: Store;
+  machineCpuCount?: number;
   externalStore?: Store;
   bindings: ExternalBinding[];
   allowAgentDrafts?: boolean;
@@ -73,13 +74,13 @@ export class DesktopResourceCheckoutService {
     const machineKey = `machine:${viewer.machineId ?? "unresolved"}:cpu`;
     this.machineDefinition = {
       resourceId: machineKey, canonicalKey: machineKey, displayName: "This machine", kindLabel: "Machine compute",
-      scope: "machine", capacity: 1, counted: false, authorityId: machineKey, epoch: 1,
-      maxHoldMs: MAX_CHECKOUT_HOLD_MS, publication: "published", revision: 1, updatedAt: this.now(),
+      scope: "machine", capacity: Math.max(1, options.machineCpuCount ?? 1), counted: true, authorityId: machineKey, epoch: 1,
+      maxHoldMs: MAX_CHECKOUT_HOLD_MS, publication: "published", revision: 2, updatedAt: this.now(),
     };
     if (machineStore) {
       try {
         this.machine = new ResourceCheckoutAuthority(machineStore, this.now, randomUUID);
-        this.machine.ensure(this.machineDefinition);
+        this.machine.ensure(this.machineDefinition, { machineCpuPool: true });
         if (options.bootId) this.machine.reconcilePriorMachineBoot(machineKey, options.bootId);
       } catch (error) {
         this.machineConflict = true;

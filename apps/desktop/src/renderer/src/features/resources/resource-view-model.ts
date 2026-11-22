@@ -8,6 +8,8 @@ import type {
   ResourceCondition,
   ResourceDomain,
   ResourceQueueEntry,
+  ResourceRecoveryActionGates,
+  ResourceRecoveryStatus,
 } from "@pwragent/shared/contracts/resource-checkouts";
 
 /**
@@ -203,6 +205,23 @@ export function viewerAllocation(resource: ResourceDomain): ResourceAllocation |
 
 export function viewerQueueEntry(resource: ResourceDomain): ResourceQueueEntry | undefined {
   return resource.queue.find((entry) => entry.viewerOwns);
+}
+
+export function resourceRecoveries(resource: ResourceDomain): ResourceRecoveryStatus[] {
+  return resource.recoveries ?? (resource.recovery ? [resource.recovery] : []);
+}
+
+export function resourceRecoveryGates(
+  resource: ResourceDomain,
+  authority: ResourceAuthority | undefined,
+  recovery: ResourceRecoveryStatus,
+): ResourceRecoveryActionGates {
+  const scoped = { ...resource, recovery, actions: recovery.actions ?? resource.actions };
+  return {
+    fence: effectiveGate(scoped, authority, "fence"),
+    verify_cleanup: effectiveGate(scoped, authority, "verify_cleanup"),
+    administrative_release: effectiveGate(scoped, authority, "administrative_release"),
+  };
 }
 
 export type ResourceActionDescriptor = {

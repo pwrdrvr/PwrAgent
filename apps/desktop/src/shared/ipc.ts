@@ -273,6 +273,8 @@ export const THREAD_TODOS_SNAPSHOT_CHANNEL = "thread-todos:snapshot";
 /** One revision of change to the window's open cards. */
 export const THREAD_TODOS_DELTA_EVENT_CHANNEL = "thread-todos:delta";
 export const RESOURCE_CHECKOUTS_READ_CHANNEL = "resource-checkouts:read";
+export const RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL = "resource-checkouts:open-window";
+export const RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL = "resource-checkouts:open-thread";
 export const RESOURCE_CHECKOUTS_PERFORM_CHANNEL = "resource-checkouts:perform";
 export const RESOURCE_CHECKOUTS_CHANGED_CHANNEL = "resource-checkouts:changed";
 

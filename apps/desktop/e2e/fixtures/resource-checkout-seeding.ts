@@ -14,6 +14,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import { cpus } from "node:os";
 import path from "node:path";
 import type { ResourceCondition } from "@pwragent/shared/contracts/resource-checkouts";
 import { readMachineCheckoutEvidence } from "../../src/main/resource-checkouts/checkout-machine-evidence";
@@ -74,6 +75,7 @@ function auditService(seed: ResourcesAuditSeed): DesktopResourceCheckoutService 
         instanceLabel: "Audit host",
       },
       machineStore,
+      machineCpuCount: cpus().length,
       externalStore,
       bindings: readExternalCheckoutBindings(seed.root).bindings,
       bootId: seed.bootId,
