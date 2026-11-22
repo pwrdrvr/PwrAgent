@@ -13,6 +13,7 @@ import type {
   ThreadDependencyCondition,
   ThreadDependencyEvidence,
   ThreadDependencyLocalFile,
+  ThreadDependencyMergeBuildObservation,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
@@ -29,6 +30,7 @@ import {
   THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS,
   THREAD_DEPENDENCY_CI_RUN_OUTCOMES,
   summarizeThreadDependencyCiRun,
+  summarizeThreadDependencyMergeBuild,
   threadDependencyCiRunId,
   threadDependencyCiRunOutcomes,
   threadDependencyConditionName,
@@ -50,6 +52,12 @@ import {
 import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
 import { CI_RUN_URL_FORMS, describeCiRunObservation, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, type CiRunUrlOptions } from "./thread-dependency-ci-runs";
+import {
+  describeMergeBuildObservation,
+  evaluateMergeBuildCondition,
+  MERGE_BUILD_WAITING_REASON,
+  mergeMergeBuildCheck,
+} from "./thread-dependency-merge-builds";
 
 export type DependencyThreadSnapshot = {
   activeTurnId?: string;
@@ -177,6 +185,11 @@ export class ThreadDependencyCoordinator {
   private readonly ciRuns = new Map<string, ThreadDependencyCiRunObservation>();
   /** When each run's latest check was last announced to windows. */
   private readonly ciRunAnnouncedAt = new Map<string, number>();
+  /** The latest check of each merged PR's build, by PR URL. Memory only. */
+  private readonly mergeBuilds = new Map<string, ThreadDependencyMergeBuildObservation>();
+  private readonly mergeBuildAnnouncedAt = new Map<string, number>();
+  /** The merged PR each build check reads, from its latest evaluation. */
+  private readonly mergeBuildPrs = new Map<string, PrSummary>();
 
   constructor(private readonly options: Options) {}
 
@@ -187,10 +200,37 @@ export class ThreadDependencyCoordinator {
     return result;
   }
 
+  /**
+   * PwrAgent saw `prUrl` merge on `target`'s thread: watch its merge build,
+   * waking the thread only on failure. Any earlier merge build registration
+   * for that PR on the thread wins, including one the operator cancelled, so
+   * stopping a watch also stops this one. Returns whether it armed one.
+   */
+  async armMergeBuild(target: { backend: AppServerBackendKind; threadId: string }, pr: { url: string; title?: string }): Promise<boolean> {
+    const url = this.canonicalizePrUrl(pr.url);
+    const covered = this.options.store.listWithCondition(target.backend, target.threadId, "merge_build").some((item) => item.conditions.some((condition) => {
+      if (condition.when !== "merge_build") return false;
+      const named = condition.prUrl ?? evidenceFor(item, condition)?.prUrl;
+      // An active wait for "this thread's PR" covers whichever PR it finds.
+      if (!named) return item.status === "waiting" || item.status === "ready" || item.status === "dispatching";
+      return this.canonicalizePrUrl(named) === url;
+    }));
+    if (covered) return false;
+    await this.manage({
+      action: "create", backend: target.backend, threadId: target.threadId,
+      // The URL the thread's PR chips show, so windows can match it; the
+      // check above compares canonical forms.
+      conditions: [{ backend: target.backend, threadId: target.threadId, when: "merge_build", prUrl: pr.url,
+        ...(pr.title ? { title: pr.title.slice(0, 200) } : {}) }],
+      wakeOn: "failure",
+    }, undefined, "operator", { automatic: true });
+    return true;
+  }
+
   /** `actor` names who marks a prerequisite done: "operator", "agent:…" or "peer:…". */
   manage(request: ManageThreadDependenciesRequest & { backend: AppServerBackendKind; threadId: string },
     provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
-    actor = "operator"): Promise<ManageThreadDependenciesResponse> {
+    actor = "operator", registration: { automatic?: boolean } = {}): Promise<ManageThreadDependenciesResponse> {
     return this.serialize(async () => {
       if (request.action === "list") {
         // Opening Continue After rechecks a wait parked behind a busy refusal.
@@ -286,6 +326,8 @@ export class ThreadDependencyCoordinator {
         ...(request.steps?.length ? { steps: request.steps.map((step) => step.trim()) } : {}),
         ...(request.holdMerge ? { holdMerge: true } : {}),
         ...(request.repeat ? { repeat: true } : {}),
+        ...(request.wakeOn === "failure" ? { wakeOn: "failure" as const } : {}),
+        ...(registration.automatic ? { automatic: true } : {}),
         status: "waiting",
         evidence: conditions.flatMap((condition) => condition.localFile
           ? [{ condition, state: "waiting" as const, reason: "Waiting for the watcher result", observedAt: now }]
@@ -416,14 +458,70 @@ export class ThreadDependencyCoordinator {
     return [...wanted];
   }
 
-  /** Adds each waiting run's latest check to its evidence, in memory only. */
+  /**
+   * One check of a merged PR's build from the owner's poller. Evaluation
+   * reads it from memory, so an unchanged check writes nothing.
+   */
+  handleMergeBuildObservation(prUrl: string, observation: ThreadDependencyMergeBuildObservation): Promise<void> {
+    return this.serialize(async () => {
+      const previous = this.mergeBuilds.get(prUrl);
+      const current = mergeMergeBuildCheck(previous, observation);
+      this.mergeBuilds.set(prUrl, current);
+      const last = this.mergeBuildAnnouncedAt.get(prUrl);
+      const announce = !previous || summarizeThreadDependencyMergeBuild(previous) !== summarizeThreadDependencyMergeBuild(current)
+        || last === undefined || current.checkedAt - last >= CI_RUN_ANNOUNCE_MS;
+      if (announce) this.mergeBuildAnnouncedAt.set(prUrl, current.checkedAt);
+      for (const item of this.options.store.active()) {
+        if (!item.evidence.some((entry) => entry.condition.when === "merge_build" && entry.prUrl === prUrl)) continue;
+        await this.evaluate(item);
+        const after = this.options.store.get(item.backend, item.threadId, item.id);
+        if (announce && after && JSON.stringify(after) === JSON.stringify(item)) await this.options.changed(after);
+      }
+    });
+  }
+
+  /**
+   * The merged PRs whose builds waiting prerequisites still need checked. A
+   * PR not merged yet needs none: its PR status events evaluate it. Forgets
+   * the observations of builds nothing waits for.
+   */
+  mergeBuildUrls(eligible: (dependency: ThreadDependency) => boolean = () => true): string[] {
+    const waiting = new Set<string>();
+    const wanted = new Set<string>();
+    for (const item of this.options.store.active()) {
+      if (item.status !== "waiting") continue;
+      for (const entry of item.evidence) {
+        if (entry.condition.when !== "merge_build" || entry.state !== "waiting"
+          || entry.reason !== MERGE_BUILD_WAITING_REASON || !entry.prUrl) continue;
+        waiting.add(entry.prUrl);
+        if (eligible(item)) wanted.add(entry.prUrl);
+      }
+    }
+    for (const url of new Set([...this.mergeBuilds.keys(), ...this.mergeBuildPrs.keys()])) {
+      if (waiting.has(url)) continue;
+      this.mergeBuilds.delete(url);
+      this.mergeBuildAnnouncedAt.delete(url);
+      this.mergeBuildPrs.delete(url);
+    }
+    return [...wanted];
+  }
+
+  /** The merged PR a build check reads, as its waiting prerequisite last saw it. */
+  mergeBuildPullRequest(prUrl: string): PrSummary | undefined {
+    return this.mergeBuildPrs.get(prUrl);
+  }
+
+  /** Adds each waiting run's or merge build's latest check to its evidence, in memory only. */
   withCiRunObservations(dependencies: ThreadDependency[]): ThreadDependency[] {
-    if (!this.ciRuns.size) return dependencies;
-    return dependencies.map((item) => !item.conditions.some((condition) => condition.ciRun) ? item : {
+    if (!this.ciRuns.size && !this.mergeBuilds.size) return dependencies;
+    return dependencies.map((item) => !item.conditions.some((condition) => condition.ciRun || condition.when === "merge_build") ? item : {
       ...item,
       evidence: item.evidence.map((entry) => {
-        const observation = entry.state === "waiting" && entry.condition.ciRun ? this.ciRuns.get(entry.condition.ciRun.url) : undefined;
-        return observation ? { ...entry, ciRun: observation } : entry;
+        if (entry.state !== "waiting") return entry;
+        const observation = entry.condition.ciRun ? this.ciRuns.get(entry.condition.ciRun.url) : undefined;
+        if (observation) return { ...entry, ciRun: observation };
+        const build = entry.condition.when === "merge_build" && entry.prUrl ? this.mergeBuilds.get(entry.prUrl) : undefined;
+        return build ? { ...entry, mergeBuild: build } : entry;
       }),
     });
   }
@@ -646,7 +744,7 @@ export class ThreadDependencyCoordinator {
             && [...observed!].some((entry) => isSameNumberInAnotherRepository(entry, current)));
       };
       for (const item of this.options.store.active()) {
-        if (item.conditions.some((condition) => ["pr_attached", "ci_passed", "pr_merged"].includes(condition.when))
+        if (item.conditions.some((condition) => ["pr_attached", "ci_passed", "pr_merged", "merge_build"].includes(condition.when))
           && (!observed || item.conditions.some((condition) => named(condition.prUrl))
             || item.evidence.some((entry) => named(entry.prUrl)))) await this.evaluate(item);
       }
@@ -724,6 +822,11 @@ export class ThreadDependencyCoordinator {
         evidence.push(evaluateCiRunCondition(condition, condition.ciRun ? this.ciRuns.get(condition.ciRun.url) : undefined, previous, this.now()));
         continue;
       }
+      // A merge build that reported is final: the wait is one-shot.
+      if (condition.when === "merge_build" && previous && previous.state !== "waiting") {
+        evidence.push(previous);
+        continue;
+      }
       // A judgement: nothing observed ends it, and Mark Done is final.
       if (condition.when === "marked_done") {
         evidence.push(previous?.state === "satisfied"
@@ -760,13 +863,27 @@ export class ThreadDependencyCoordinator {
         const pinned = !condition.prUrl && previous?.prUrl ? { ...condition, prUrl: previous.prUrl } : undefined;
         const resolvingPinned = pinned && this.currentPrCondition(pinned, snapshot);
         const selector = pinned ? (resolvingPinned && await resolvingPinned) ?? this.canonicalPrCondition(pinned) : condition;
-        const observed = { ...evaluateCondition(selector, snapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };
+        // A merge build waits for the merge exactly as pr_merged does.
+        const prSelector = selector.when === "merge_build" ? { ...selector, when: "pr_merged" as const } : selector;
+        const observed = { ...evaluateCondition(prSelector, snapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };
         if (!observed.prUrl && previous?.prUrl) {
           observed.prUrl = previous.prUrl;
           observed.headSha = previous.headSha;
         }
+        if (condition.when === "merge_build") {
+          const pr = observed.prUrl ? snapshot.prs.find((entry) => entry.pr.url === observed.prUrl)?.pr : undefined;
+          if (pr && observed.state === "satisfied") this.mergeBuildPrs.set(pr.url, pr);
+          evidence.push(evaluateMergeBuildCondition(condition, observed,
+            observed.prUrl ? this.mergeBuilds.get(observed.prUrl) : undefined, previous, this.now()));
+          continue;
+        }
         evidence.push(observed);
       } catch (error) {
+        // A merged PR's build keeps being checked through a failed thread read.
+        if (condition.when === "merge_build" && previous?.reason === MERGE_BUILD_WAITING_REASON) {
+          evidence.push(previous);
+          continue;
+        }
         evidence.push({
           condition, state: "waiting", reason: `Prerequisite unavailable: ${error instanceof Error ? error.message : String(error)}`, observedAt: this.now(),
           ...(previous?.prUrl ? { prUrl: previous.prUrl, headSha: previous.headSha } : {}),
@@ -787,14 +904,16 @@ export class ThreadDependencyCoordinator {
         && previous?.state === "satisfied" && previous.prUrl === entry.prUrl && previous.headSha === entry.headSha
         ? previous : entry;
     });
+    // Only a failure wakes a `wakeOn: "failure"` wait; success ends it here.
+    const quiet = success && item.wakeOn === "failure";
     const next: ThreadDependency = {
       ...item, conditions, evidence: persistedEvidence,
-      status: success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
+      status: quiet ? "delivered" : success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
       outcome: success ? "success" : failure ? "failure" : staleOnly && item.status === "ready" ? item.outcome : undefined,
       error: undefined,
     };
     const current = await this.save(item, next);
-    if (!success && !failure) return;
+    if (quiet || (!success && !failure)) return;
     if (!current || current.status !== "ready" || this.options.canDispatch?.(current) === false) return;
     // onFailure=wait tolerates repairable CI failures; closure/cancellation
     // still surfaces as terminal rather than silently waiting forever.
@@ -995,6 +1114,8 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
   if (request.onFailure !== undefined && request.onFailure !== "notify" && request.onFailure !== "wait") throw new Error("onFailure must be notify or wait.");
   if (request.continuation !== undefined && (typeof request.continuation !== "string" || request.continuation.length > 8000)) throw new Error("continuation must be text of at most 8000 characters.");
   if (request.holdMerge !== undefined && typeof request.holdMerge !== "boolean") throw new Error("holdMerge must be true or false.");
+  if (request.wakeOn !== undefined && request.wakeOn !== "failure") throw new Error("wakeOn must be failure, or omitted to wake on either outcome.");
+  if (request.wakeOn === "failure" && request.deliver === "operator") throw new Error("wakeOn: failure resumes the thread; it cannot be used with deliver: operator.");
   if (request.steps !== undefined) {
     if (request.deliver !== "operator") throw new Error("steps require deliver: operator; a resumed thread gets the continuation.");
     if (!Array.isArray(request.steps) || request.steps.length > THREAD_DEPENDENCY_MAX_STEPS
@@ -1054,6 +1175,8 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (condition.when === "turn_completed" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for a turn completion condition.");
     if (condition.when === "marked_done" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for a marked_done condition.");
     if (condition.when === "compaction_completed" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for compaction recovery.");
+    if (condition.when === "merge_build" && condition.headSha) throw new Error("A merge build follows the PR's merge commit; omit headSha.");
+    if (condition.when === "merge_build" && request.holdMerge) throw new Error("A merge build wait cannot hold the merge it waits for.");
     if (condition.when !== "turn_completed" && condition.turnId) throw new Error("turnId is only valid for turn completion.");
   }
 }
@@ -1101,6 +1224,7 @@ export function supersedesRegistration(existing: ThreadDependency, candidate: Th
   const shape = (item: ThreadDependency) => JSON.stringify([
     item.backend, item.threadId, item.mode, item.onFailure, item.continuation ?? "",
     threadDependencyDeliveryTarget(item), item.handoff ?? false, item.steps ?? [], item.holdMerge ?? false,
+    item.wakeOn ?? "",
   ]);
   if (shape(existing) !== shape(candidate) || existing.conditions.length !== candidate.conditions.length) return false;
   const key = (condition: ThreadDependencyCondition) => JSON.stringify([condition.backend, condition.threadId, condition.when,
@@ -1170,6 +1294,7 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       return [
         `- ${name} ${threadDependencyConditionPhrase(entry.condition)}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}${entry.condition.ciRun ? `; run: ${entry.condition.ciRun.url}` : ""}`,
         ...entry.ciRun && entry.state !== "waiting" ? describeCiRunObservation(entry.ciRun) : [],
+        ...entry.mergeBuild && entry.state !== "waiting" ? describeMergeBuildObservation(entry.mergeBuild) : [],
       ];
     }),
     "",
@@ -1190,6 +1315,9 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
     ...item.conditions.some((condition) => condition.ciRun)
       ? ["A CI run wait is one-shot. To continue after the run's next milestone, register a new ci_run wait. PwrAgent never approves a deployment; the operator does."]
       : [],
+    ...item.conditions.some((condition) => condition.when === "merge_build") && !satisfied
+      ? ["The merge build ran on the target branch after the PR merged, so a failure there may come from this PR combined with others merged before it. Read the failed checks' logs, compare with the target branch's previous build, and report what broke and which change likely caused it. Fix it only in a new branch and PR, and only if the operator already authorized that."]
+      : [],
     `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => condition.ciRun
       ? `${condition.ciRun.url} (${condition.when})`
       : condition.localFile ? `${condition.localFile.path} (${condition.when})`
@@ -1209,6 +1337,7 @@ const MET_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
   ci_run: "reached its milestone",
   local_file: "reported a result",
   resource_checkout: "was promoted",
+  merge_build: "merge build passed",
 };
 
 export function buildCompactionRecoveryPrompt(item: ThreadDependency): string {
@@ -1247,7 +1376,7 @@ export function buildDependencyTodo(item: ThreadDependency): DependencyTodoCard 
   const summary = shown.length > 2
     ? `${shown.length} prerequisites ${success ? "met" : "failed"}`
     : shown.map((entry) => success
-      ? entry.condition.ciRun ? `${prerequisiteLabel(entry)}: ${entry.reason}` : `${prerequisiteLabel(entry)} ${MET_PHRASES[entry.condition.when]}`
+      ? entry.condition.ciRun || entry.condition.when === "merge_build" ? `${prerequisiteLabel(entry)}: ${entry.reason}` : `${prerequisiteLabel(entry)} ${MET_PHRASES[entry.condition.when]}`
       : `${prerequisiteLabel(entry)} failed: ${entry.reason}`).join(success ? " and " : "; ");
   const continuation = item.continuation?.trim();
   // With steps, the title names the first and the card lists them all.

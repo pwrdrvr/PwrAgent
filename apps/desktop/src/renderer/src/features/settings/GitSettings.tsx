@@ -18,6 +18,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DEFAULT_WATCH_MERGE_BUILDS,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -63,6 +64,11 @@ const DEFAULT_PR_AUTO_DISPATCH_ALLOWED_VALUE = {
 
 const DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE = {
   value: DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  source: "default" as const,
+};
+
+const DEFAULT_WATCH_MERGE_BUILDS_VALUE = {
+  value: DEFAULT_WATCH_MERGE_BUILDS,
   source: "default" as const,
 };
 
@@ -119,6 +125,7 @@ export function GitSettings(props: {
   onBackgroundPrPollingChange: (enabled: boolean) => Promise<void>;
   onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
   onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
+  onWatchMergeBuildsChange?: (enabled: boolean) => Promise<void>;
   onPrAutoDispatchBudgetCapacityChange: (capacity: number) => Promise<void>;
   onPrAutoDispatchBudgetRefillPerMinuteChange: (
     refillPerMinute: number,
@@ -167,6 +174,9 @@ export function GitSettings(props: {
   const defaultPrAutoDispatchEnabled =
     props.snapshot.git?.defaultPrAutoDispatchEnabled ??
     DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
+  const watchMergeBuilds =
+    props.snapshot.git?.watchMergeBuilds ??
+    DEFAULT_WATCH_MERGE_BUILDS_VALUE;
   const agentTools = props.snapshot.git?.agentTools ?? DEFAULT_AGENT_TOOLS_VALUE;
   const agentToolRules = props.snapshot.git?.agentTools?.rules;
   const agentToolPolicy = useMemo<ForgeAgentToolPolicy>(() => ({
@@ -397,6 +407,18 @@ export function GitSettings(props: {
             onChange={(enabled) => {
               return props.onPrAutoDispatchAllowedChange(enabled);
             }}
+          />
+          <ToggleField
+            checked={watchMergeBuilds.value}
+            disabled={props.saving || !backgroundPrPolling.value || !props.onWatchMergeBuildsChange}
+            label="Watch merge builds"
+            sub={
+              backgroundPrPolling.value
+                ? "When a thread's pull request merges, PwrAgent watches the build of the merge commit on the branch it merged into, and wakes the thread if that build fails. A pass ends the watch quietly. Watch Merge Build in a thread's PR menu also reports a pass."
+                : "Turn on background pull request status above to watch merge builds."
+            }
+            source={sourceBadge(watchMergeBuilds)}
+            onChange={(enabled) => props.onWatchMergeBuildsChange?.(enabled) ?? Promise.resolve()}
           />
           <ToggleField
             checked={defaultPrAutoDispatchEnabled.value}

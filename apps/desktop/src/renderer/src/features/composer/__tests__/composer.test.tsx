@@ -664,6 +664,21 @@ function choosePullRequest(url: string): void {
   fireEvent.click(input);
 }
 
+/** The PR button opens a menu; Auto-fix is its first item. */
+function toggleAutoFix(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+  fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }));
+}
+
+/** Opens the PR menu, reads whether Auto-fix can change, and closes it again. */
+function autoFixMenuItemDisabled(): string | null {
+  const trigger = screen.getByRole("button", { name: "Pull request automation" });
+  fireEvent.click(trigger);
+  const value = screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }).getAttribute("aria-disabled");
+  fireEvent.click(trigger);
+  return value;
+}
+
 describe("Composer", () => {
   it.each(["$", "/"])("checks skill freshness once per %s picker opening, across query and summary updates", (prefix) => {
     const refresh = vi.fn();
@@ -1305,13 +1320,13 @@ describe("Composer", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const toggle = screen.getByRole("button", { name: "Pull request automation" });
+    expect(toggle).toHaveClass("is-active");
     expect(toggle).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );
-    fireEvent.click(toggle);
+    toggleAutoFix();
     await waitFor(() => {
       expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
     });
@@ -1325,12 +1340,9 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(autoFixMenuItemDisabled()).toBe("true");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveClass("is-active");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("paused"),
     );
@@ -1345,8 +1357,8 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(autoFixMenuItemDisabled()).toBe("true");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("globally"),
     );
@@ -1371,7 +1383,7 @@ describe("Composer", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Auto-fix PR" }),
+      screen.queryByRole("button", { name: "Pull request automation" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1400,7 +1412,7 @@ describe("Composer", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Auto-fix PR" }),
+      screen.queryByRole("button", { name: "Pull request automation" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1439,7 +1451,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
@@ -1477,13 +1489,13 @@ describe("Composer", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    const toggle = screen.getByRole("button", { name: "Pull request automation" });
     expect(toggle).toHaveClass("is-active", "is-idle");
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveClass("is-active");
     const idle = "Auto-fix PR is on, but #3204 merged. It starts again when an open PR is linked.";
     expect(toggle).toHaveAttribute("data-tooltip", idle);
     expect(toggle).toHaveAttribute("aria-description", idle);
-    fireEvent.click(toggle);
+    toggleAutoFix();
     expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
 
     // One open PR is enough for Auto-fix to have work.
@@ -1496,8 +1508,8 @@ describe("Composer", () => {
         thread={thread([pr(3204, "merged"), pr(3210, "open")])}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-idle");
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveClass("is-idle");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveAttribute("aria-description");
   });
 
   it("mutes Auto-fix PR while its project pauses forge activity, without changing the thread's value", () => {
@@ -1539,9 +1551,9 @@ describe("Composer", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    const toggle = screen.getByRole("button", { name: "Pull request automation" });
     expect(toggle).toHaveClass("is-project-overridden");
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveClass("is-active");
     expect(toggle).toHaveAttribute(
       "data-tooltip",
       "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
@@ -1568,7 +1580,7 @@ describe("Composer", () => {
         }}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveClass("is-project-overridden");
 
     rerender(
       <Composer
@@ -1580,8 +1592,8 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-project-overridden");
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix skips merge conflicts in openclaw.",
     );
@@ -1596,11 +1608,11 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveAttribute("aria-description");
   });
 
   it("shows Auto-fix PR when main resolved the primary repository for a worktree", () => {
@@ -1639,7 +1651,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
@@ -1686,7 +1698,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );

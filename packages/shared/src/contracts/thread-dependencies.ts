@@ -8,7 +8,50 @@ export const THREAD_DEPENDENCIES_CHANNEL = "thread:dependencies";
  */
 export const THREAD_DEPENDENCY_CONDITIONS = [
   "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed", "ci_run", "local_file", "resource_checkout",
+  "merge_build",
 ] as const;
+
+/**
+ * `merge_build`: the prerequisite thread's PR merges, then the checks on its
+ * merge commit, on the branch it merged into, finish. PwrAgent finds the merge
+ * commit and checks it from the main process; no model polls it.
+ */
+export type ThreadDependencyMergeBuildObservation = {
+  /** The commit the merge put on the target branch (the squash commit for a squash merge). */
+  mergeCommitSha?: string;
+  baseBranch?: string;
+  /** Epoch milliseconds. */
+  mergedAt?: number;
+  /**
+   * `no_checks`: nothing has reported on the merge commit yet. `running`:
+   * at least one check has not finished. `completed`: every check finished.
+   */
+  status: "unknown" | "no_checks" | "running" | "completed";
+  /** `cancelled` when nothing failed but a check was cancelled, as a newer push to the branch does. */
+  conclusion?: "success" | "failure" | "cancelled";
+  checks?: { total: number; passed: number; failed: number; cancelled: number; running: number; queued: number; skipped: number };
+  failedChecks?: { name: string; url: string }[];
+  /** The check failed; the wait keeps the last good observation's meaning. */
+  error?: string;
+  errorCode?: string;
+  errorChecks?: number;
+  failingSince?: number;
+  checkedAt: number;
+};
+
+/** Merge build checks fold into one line: "Running · 4 passed, 2 running". */
+export function summarizeThreadDependencyMergeBuild(observation: ThreadDependencyMergeBuildObservation): string {
+  const state = observation.status === "completed"
+    ? `Finished: ${observation.conclusion ?? "unknown"}`
+    : observation.status === "no_checks" ? "No checks yet"
+      : observation.status === "running" ? "Running" : "Could not read the build";
+  const checks = observation.checks;
+  const counts = checks
+    ? ([["passed", checks.passed], ["failed", checks.failed], ["cancelled", checks.cancelled], ["running", checks.running], ["queued", checks.queued]] as const)
+      .filter(([, count]) => count > 0).map(([name, count]) => `${count} ${name}`).join(", ")
+    : "";
+  return [state, counts, observation.error ? "last check failed" : ""].filter(Boolean).join(" · ");
+}
 
 /**
  * What wakes a `ci_run` prerequisite: the run pausing at a deployment
@@ -156,6 +199,7 @@ export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD
   ci_run: "reaches an approval gate, has a failed job, or finishes",
   local_file: "writes its result marker",
   resource_checkout: "is promoted",
+  merge_build: "merges and its merge build finishes",
 };
 
 /**
@@ -207,6 +251,15 @@ export type ThreadDependencyCondition = {
   resourceCheckout?: { resourceId: string; requestKey: string };
 };
 
+/**
+ * True for a prerequisite that waits on a PR rather than on its thread's
+ * work. A `merge_build` wait may name the waiting thread itself: the PR
+ * merges on the forge, so it can never wait on its own progress.
+ */
+export function isThreadDependencyMergeBuildCondition(condition: Pick<ThreadDependencyCondition, "when">): boolean {
+  return condition.when === "merge_build";
+}
+
 /** True for a prerequisite that names a thread, on any machine. */
 export function isThreadDependencyThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "ciRun" | "localFile" | "resourceCheckout">): boolean {
   return condition.subject === undefined && condition.ciRun === undefined && condition.localFile === undefined && condition.resourceCheckout === undefined;
@@ -231,6 +284,8 @@ export type ThreadDependencyEvidence = {
    * its latest check to list responses in memory; that copy is never stored.
    */
   ciRun?: ThreadDependencyCiRunObservation;
+  /** `merge_build` only, kept the same way as `ciRun`. */
+  mergeBuild?: ThreadDependencyMergeBuildObservation;
 };
 
 export type ThreadDependency = {
@@ -256,6 +311,13 @@ export type ThreadDependency = {
   steps?: string[];
   /** Merge cards and agent merges of this thread refuse while it waits. */
   holdMerge?: boolean;
+  /**
+   * `failure`: only a failed prerequisite wakes the thread; success ends the
+   * wait quietly as delivered, with no turn. Absent: both outcomes wake it.
+   */
+  wakeOn?: "failure";
+  /** Armed by PwrAgent when it saw the PR merge, not by a person or an agent. */
+  automatic?: boolean;
   status: "waiting" | "ready" | "dispatching" | "delivered" | "cancelled" | "dismissed";
   outcome?: "success" | "failure";
   evidence: ThreadDependencyEvidence[];
@@ -328,6 +390,8 @@ export type ManageThreadDependenciesRequest = {
   /** With `deliver: "operator"`, a checklist on the reminder card. */
   steps?: string[];
   holdMerge?: boolean;
+  /** Only a failure wakes the thread; a success ends the wait quietly. */
+  wakeOn?: "failure";
   dependencyId?: string;
   /**
    * `dismiss` from the desktop's reviewed cleanup: several uncertain

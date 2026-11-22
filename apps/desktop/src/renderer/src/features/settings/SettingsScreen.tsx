@@ -1558,6 +1558,11 @@ function SettingsSectionBody(props: {
             git: { defaultPrAutoDispatchEnabled: enabled },
           });
         }}
+        onWatchMergeBuildsChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            git: { watchMergeBuilds: enabled },
+          });
+        }}
         onPrAutoDispatchBudgetCapacityChange={async (capacity: number) => {
           await props.settings.writeConfig({
             git: { prAutoDispatchBudgetCapacity: capacity },

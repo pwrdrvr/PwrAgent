@@ -56106,6 +56106,24 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   width: 260px;
 }
 
+/* The composer's PR menu: each item's name reads in full and its note
+   gives way instead. */
+.todo-fact-menu.composer-pr-menu {
+  width: 340px;
+}
+
+.composer-pr-menu .todo-split__item-label {
+  flex: none;
+}
+
+.composer-pr-menu .todo-model-picker__detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .todo-dispatch__pending {
   color: var(--text-muted);
   font-family: var(--font-sans);
