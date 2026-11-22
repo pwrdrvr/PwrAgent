@@ -15,6 +15,8 @@ import {
   MERGE_BUILD_WAITING_FOR_MERGE_REASON,
   MERGE_BUILD_WAITING_REASON,
   evaluateMergeBuildCondition,
+  mergeCommitOf,
+  mergeMergeBuildCheck,
   readMergeBuild,
   type MergeBuildTarget,
 } from "../app-server/thread-dependency-merge-builds";
@@ -135,6 +137,42 @@ describe("merge build evaluation", () => {
   });
 });
 
+describe("merge build checks", () => {
+  it("never ends the wait on its first check when the forge gave no merge time", () => {
+    // Without a merge time, the settle and no-checks windows run from the
+    // first check: neither an empty build nor one fast finished check ends it.
+    fc.assert(fc.property(
+      fc.constantFrom("no_checks" as const, "completed" as const),
+      fc.constantFrom("success" as const, "failure" as const, "cancelled" as const),
+      fc.integer({ min: 0, max: 10 ** 12 }),
+      (status, conclusion, checkedAt) => {
+        const first = mergeMergeBuildCheck(undefined, {
+          mergeCommitSha: MERGE_SHA, status, ...status === "completed" ? { conclusion } : {}, checkedAt,
+          checks: { total: status === "completed" ? 1 : 0, passed: 0, failed: 0, cancelled: 0, running: 0, queued: 0, skipped: 0 },
+        });
+        expect(evaluateMergeBuildCondition(condition, mergedPr, first, undefined, checkedAt).state).toBe("waiting");
+        // Later checks keep the first check's time.
+        const later = mergeMergeBuildCheck(first, { status: "no_checks", checkedAt: checkedAt + MERGE_BUILD_NO_CHECKS_MS });
+        expect(later.mergedAt).toBe(checkedAt);
+        expect(evaluateMergeBuildCondition(condition, mergedPr, later, undefined, later.checkedAt).state).toBe("failed");
+      },
+    ));
+  });
+
+  it("treats a failed merge details lookup as a read to retry, not a missing commit", () => {
+    expect(mergeCommitOf({ mergeCommitSha: MERGE_SHA })).toBe(MERGE_SHA);
+    const thrown = (details: Parameters<typeof mergeCommitOf>[0]) => {
+      try { mergeCommitOf(details); } catch (error) { return error as Error & { code?: string }; }
+      throw new Error("mergeCommitOf returned");
+    };
+    // Rate limits and network failures leave no cached details; three of them
+    // in a row must not end the wait as gone.
+    expect(thrown({ detailsUnavailableReason: "The forge lookup for merge details failed: rate limited" }).code).toBeUndefined();
+    expect(thrown({}).code).toBe("not_found");
+    expect(thrown(undefined).code).toBe("not_found");
+  });
+});
+
 describe("reading a merge build", () => {
   it("reads every page of check runs and the commit statuses, and links failed checks", async () => {
     const checks: RawCheck[] = [
@@ -209,8 +247,9 @@ describe("Continue After a merge build", () => {
   const coordinator = () => new ThreadDependencyCoordinator({
     store,
     readThread: async (target) => {
-      if (target.threadId !== "feature") throw new Error("Thread not found");
-      return { turns: [], prs: [{ pr, fetchedAt: now }] };
+      if (target.threadId === "feature") return { turns: [], prs: [{ pr, fetchedAt: now }] };
+      if (target.threadId === "other" || target.threadId === "review") return { turns: [], prs: [] };
+      throw new Error("Thread not found");
     },
     submit, changed: async () => undefined, now: () => now,
     hasDeliveryReceipt: (item) => store.hasDeliveryReceipt(item),
@@ -294,6 +333,40 @@ describe("Continue After a merge build", () => {
     await agent.manage({ action: "cancel", backend: "codex", threadId: "feature", dependencyId: store.active()[0]!.id });
     expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe(false);
     expect(store.active()).toHaveLength(0);
+  });
+
+  it("remembers an operator's stopped watch behind any amount of later history", async () => {
+    const agent = coordinator();
+    merge();
+    await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL });
+    await agent.manage({ action: "cancel", backend: "codex", threadId: "feature", dependencyId: store.active()[0]!.id });
+    // More ended registrations than a thread's list shows.
+    for (let index = 0; index < 140; index++) {
+      now += 1;
+      const [created] = (await agent.manage({
+        action: "create", backend: "codex", threadId: "feature",
+        conditions: [{ backend: "codex", threadId: "other", when: "marked_done" }], continuation: `step ${index}`,
+      })).dependencies;
+      await agent.manage({ action: "cancel", backend: "codex", threadId: "feature", dependencyId: created!.id });
+    }
+    expect(store.list("codex", "feature").some((item) => item.conditions[0]!.when === "merge_build")).toBe(false);
+    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe(false);
+  });
+
+  it("lists another thread's merge build wait as a dependent and refuses a cycle through it", async () => {
+    const agent = coordinator();
+    // Waiting on its own merge build is no cycle.
+    await watch(agent);
+    expect(store.dependents("codex", "feature")).toEqual([]);
+    await agent.manage({
+      action: "create", backend: "codex", threadId: "review",
+      conditions: [{ backend: "codex", threadId: "feature", when: "merge_build" }], continuation: "Check main.",
+    });
+    expect(store.dependents("codex", "feature").map((item) => item.threadId)).toEqual(["review"]);
+    await expect(agent.manage({
+      action: "create", backend: "codex", threadId: "feature",
+      conditions: [{ backend: "codex", threadId: "review", when: "marked_done" }], continuation: "x",
+    })).rejects.toThrow(/cycle/);
   });
 
   it("refuses a merge build that would hold its own merge", async () => {

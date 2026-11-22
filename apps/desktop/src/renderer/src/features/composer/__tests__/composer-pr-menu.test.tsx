@@ -1,14 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type {
   ManageThreadDependenciesRequest,
   ManageThreadDependenciesResponse,
   ThreadDependency,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { ComposerPrMenu, describeMergeBuildWatch } from "../ComposerPrMenu";
+import { ComposerPrMenu, describeMergeBuildWatch, mergeBuildPullRequestUrl } from "../ComposerPrMenu";
 
 const PR_URL = "https://github.com/example/app/pull/41";
 
@@ -69,6 +69,25 @@ describe("composer PR menu", () => {
     const { onToggle } = renderMenu([]);
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }));
     expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
+  it("names the newest open PR, else the one merged most recently", () => {
+    const pr = (number: number, patch: Partial<PrSummary>): PrSummary => ({
+      provider: "github.com", org: "example", repo: "app", number, url: `https://github.com/example/app/pull/${number}`,
+      title: `PR ${number}`, state: "passing", lifecycleState: "open", ...patch,
+    });
+    const merged = (number: number, mergedAt: number) => pr(number, { state: "merged", lifecycleState: "merged", mergedAt });
+    expect(mergeBuildPullRequestUrl([merged(40, 1), pr(41, { createdAt: 5 }), pr(42, { createdAt: 9 })])).toMatch(/\/42$/);
+    // After the merge the menu still names that PR, not none.
+    expect(mergeBuildPullRequestUrl([merged(39, 1), merged(41, 7), pr(43, { state: "closed", lifecycleState: "closed" })])).toMatch(/\/41$/);
+    expect(mergeBuildPullRequestUrl([])).toBeUndefined();
+  });
+
+  it("matches a stopped watch to its PR whatever the URL's case, and ignores other waits", () => {
+    const stopped = wait({ status: "cancelled", conditions: [{ backend: "codex", threadId: "feature", when: "merge_build", prUrl: PR_URL.toUpperCase() }] });
+    expect(describeMergeBuildWatch({ waits: [stopped], defaultOn: true, prUrl: PR_URL }).detail).toBe("Off for this PR");
+    const older = wait({ status: "cancelled", conditions: [{ backend: "codex", threadId: "feature", when: "merge_build", prUrl: "https://github.com/example/app/pull/7" }] });
+    expect(describeMergeBuildWatch({ waits: [older], defaultOn: true, prUrl: PR_URL }).detail).toBe("Default: wakes if it fails");
   });
 
   it("describes the watch from the thread's own waits and the default", () => {

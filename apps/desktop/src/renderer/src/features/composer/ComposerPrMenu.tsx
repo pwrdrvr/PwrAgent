@@ -1,6 +1,6 @@
 import { useCallback, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { CheckIcon, PullRequestIcon } from "../../icons";
@@ -19,6 +19,18 @@ export function ownMergeBuildWaits(dependencies: readonly ThreadDependency[], th
 }
 
 /**
+ * The PR a new merge build watch names: the newest open PR, else the one
+ * merged most recently, whose build may still be running.
+ */
+export function mergeBuildPullRequestUrl(prs: readonly PrSummary[]): string | undefined {
+  const merged = (pr: PrSummary) => pr.lifecycleState === "merged" || pr.state === "merged";
+  const open = prs.filter((pr) => !merged(pr) && pr.lifecycleState !== "closed" && pr.state !== "closed");
+  const newest = (list: PrSummary[], at: (pr: PrSummary) => number | undefined) =>
+    [...list].sort((left, right) => (at(right) ?? 0) - (at(left) ?? 0))[0];
+  return (newest(open, (pr) => pr.createdAt) ?? newest(prs.filter(merged), (pr) => pr.mergedAt))?.url;
+}
+
+/**
  * What Watch Merge Build says for a thread. A thread with an active wait shows
  * it checked, with what will wake it. Without one, the default for every
  * merge (`[git] watch_merge_builds`) applies, unless the operator stopped this
@@ -31,8 +43,11 @@ export function describeMergeBuildWatch(params: {
 }): { checked: boolean; detail: string } {
   const active = params.waits.find(isActive);
   if (active) return { checked: true, detail: active.wakeOn === "failure" ? "Wakes if it fails" : "Wakes on pass or fail" };
+  // Forge owner and repository names are case-insensitive.
+  const prUrl = params.prUrl?.toLowerCase();
   const stopped = params.waits.some((dependency) => dependency.status === "cancelled"
-    && dependency.conditions.some((condition) => !params.prUrl || !condition.prUrl || condition.prUrl === params.prUrl));
+    && dependency.conditions.some((condition) => condition.when === "merge_build"
+      && (!prUrl || !condition.prUrl || condition.prUrl.toLowerCase() === prUrl)));
   if (stopped) return { checked: false, detail: "Off for this PR" };
   return { checked: false, detail: params.defaultOn ? "Default: wakes if it fails" : "Off" };
 }
@@ -48,7 +63,7 @@ export function ComposerPrMenu(props: {
   desktopApi?: DesktopApi;
   /** `[git] watch_merge_builds`. */
   watchMergeBuildsDefault: boolean;
-  /** The newest open PR on the primary workspace, which a new wait names. */
+  /** The PR on the primary workspace a new wait names (`mergeBuildPullRequestUrl`). */
   prUrl?: string;
   className: string;
   tooltip: string;

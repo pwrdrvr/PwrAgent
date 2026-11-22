@@ -76,6 +76,18 @@ function link(value: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The merge commit a merged PR's terminal details name. A lookup that failed
+ * is not cached and is asked again at the next check, so it is an ordinary
+ * read failure. Only a forge answer without a merge commit is `not_found`,
+ * which ends the wait after a few checks.
+ */
+export function mergeCommitOf(details: { mergeCommitSha?: string; detailsUnavailableReason?: string } | undefined): string {
+  if (details?.mergeCommitSha) return details.mergeCommitSha;
+  if (details?.detailsUnavailableReason) throw new Error(details.detailsUnavailableReason);
+  throw Object.assign(new Error("The forge has not reported the merge commit."), { code: "not_found" });
+}
+
 type Check = { name: string; url: string; state: "passed" | "failed" | "cancelled" | "skipped" | "running" | "queued" };
 
 /** Every check on the merge commit, in the one vocabulary `evaluateMergeBuildCondition` reads. */
@@ -236,7 +248,12 @@ export function describeMergeBuildObservation(observation: ThreadDependencyMerge
  */
 export function mergeMergeBuildCheck(previous: ThreadDependencyMergeBuildObservation | undefined,
   observation: ThreadDependencyMergeBuildObservation): ThreadDependencyMergeBuildObservation {
-  if (!observation.error) return observation;
+  if (!observation.error) {
+    // Without the forge's merge time, the first check stands in for it, so
+    // the settle and no-checks windows still run instead of passing at once.
+    return observation.mergedAt !== undefined ? observation
+      : { ...observation, mergedAt: previous?.mergedAt ?? observation.checkedAt };
+  }
   const streak = previous?.error && observation.checkedAt - previous.checkedAt <= STREAK_GAP_MS ? previous : undefined;
   const base: ThreadDependencyMergeBuildObservation = { ...previous ?? observation };
   delete base.errorCode;

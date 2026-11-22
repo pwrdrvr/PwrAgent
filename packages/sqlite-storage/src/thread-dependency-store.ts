@@ -41,14 +41,14 @@ function signature(dependency: ThreadDependency): string {
 }
 
 /** A prerequisite thread on this machine; one on a peer or a subject is no edge here. */
-function localThreadKey(condition: ThreadDependency["conditions"][number]): string | undefined {
+function localThreadKey(condition: ThreadDependency["conditions"][number], consumer: string): string | undefined {
   // A compaction subscription observes the consumer itself; it never waits
   // for another thread to make progress and contributes no wait-cycle edge.
-  // A merge build waits on the forge (the merge and its checks), so it may
-  // name the consumer itself and adds no edge either.
-  return condition.when !== "compaction_completed" && !isThreadDependencyMergeBuildCondition(condition)
-    && isThreadDependencyLocalThreadCondition(condition)
-    ? key(condition.backend, condition.threadId) : undefined;
+  if (condition.when === "compaction_completed" || !isThreadDependencyLocalThreadCondition(condition)) return undefined;
+  const target = key(condition.backend, condition.threadId);
+  // A thread may wait on its own PR's merge build: the forge, not the thread,
+  // ends it. Another thread's merge build is an edge like its merge.
+  return isThreadDependencyMergeBuildCondition(condition) && target === consumer ? undefined : target;
 }
 
 type RecoveryGuard = {
@@ -75,6 +75,17 @@ export class ThreadDependencyStore {
     ).all(backend, threadId));
   }
 
+  /**
+   * Every registration on a thread, active or ended, with a condition of one
+   * kind. Unlike `list`, history is not capped: an operator's old choice still
+   * counts. Only conditions of rare kinds should be read this way.
+   */
+  listWithCondition(backend: string, threadId: string, when: ThreadDependency["conditions"][number]["when"]): ThreadDependency[] {
+    return this.decode(this.db.prepare(
+      "SELECT payload FROM thread_dependencies WHERE backend = ? AND thread_id = ? AND EXISTS (SELECT 1 FROM json_each(payload, '$.conditions') WHERE json_extract(value, '$.when') = ?) ORDER BY created_at DESC",
+    ).all(backend, threadId, when));
+  }
+
   /** Active wakes plus only the requested ended rows; never read history for a badge. */
   listPendingWakes(backend: string, threadId: string, endedLimit: number): ThreadDependency[] {
     const active = this.decode(this.db.prepare(
@@ -90,7 +101,7 @@ export class ThreadDependencyStore {
   dependents(backend: string, threadId: string): ThreadDependency[] {
     const target = key(backend, threadId);
     return this.active()
-      .filter((item) => item.conditions.some((condition) => localThreadKey(condition) === target))
+      .filter((item) => item.conditions.some((condition) => localThreadKey(condition, key(item.backend, item.threadId)) === target))
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
@@ -262,7 +273,7 @@ export class ThreadDependencyStore {
         const consumer = key(item.backend, item.threadId);
         const targets = edges.get(consumer) ?? new Set<string>();
         item.conditions.forEach((condition) => {
-          const target = localThreadKey(condition);
+          const target = localThreadKey(condition, consumer);
           if (target) targets.add(target);
         });
         edges.set(consumer, targets);
@@ -275,7 +286,7 @@ export class ThreadDependencyStore {
         return [...(edges.get(node) ?? [])].some((target) => reachesConsumer(target, seen));
       };
       if (candidate.conditions.some((condition) => {
-        const target = localThreadKey(condition);
+        const target = localThreadKey(condition, consumer);
         return target !== undefined && reachesConsumer(target, new Set());
       })) {
         throw new Error("This dependency would create a thread dependency cycle.");

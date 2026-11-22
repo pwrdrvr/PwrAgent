@@ -77,7 +77,7 @@ import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { authorizeLocalFile, LocalFilePoller, readLocalFile } from "./thread-dependency-local-files";
 import { CI_RUN_URL_FORMS, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
-import { readMergeBuild } from "../app-server/thread-dependency-merge-builds";
+import { mergeCommitOf, readMergeBuild } from "../app-server/thread-dependency-merge-builds";
 import {
   getProjectForgeAutomationIndex,
   summarizeProjectHeldWakeup,
@@ -8576,16 +8576,14 @@ class DesktopAppServerService {
     if (!pr || !repository) throw Object.assign(new Error("The merged PR is no longer known."), { code: "not_found" });
     // Cached per merge, so the forge is asked for the merge commit once.
     const details = await this.getPrStatusWatchCoordinator().resolveTerminalDetails(pr);
-    if (!details?.mergeCommitSha) {
-      throw Object.assign(new Error(details?.detailsUnavailableReason ?? "The forge has not reported the merge commit."), { code: "not_found" });
-    }
-    const mergedAt = details.mergedAt ? Date.parse(details.mergedAt) : pr.mergedAt ?? Number.NaN;
+    const mergeCommitSha = mergeCommitOf(details);
+    const mergedAt = details?.mergedAt ? Date.parse(details.mergedAt) : pr.mergedAt ?? Number.NaN;
     const client = this.getForgeCiClient();
     return await readMergeBuild(async (target, path) => target.provider === "gitlab"
       ? await client.readGitlab(target, path)
       : await client.requestGithub(target, { path }), {
-      repository, mergeCommitSha: details.mergeCommitSha,
-      ...details.baseBranch ?? pr.baseRefName ? { baseBranch: details.baseBranch ?? pr.baseRefName } : {},
+      repository, mergeCommitSha,
+      ...details?.baseBranch ?? pr.baseRefName ? { baseBranch: details?.baseBranch ?? pr.baseRefName } : {},
       ...Number.isFinite(mergedAt) ? { mergedAt } : {},
     }, Date.now());
   }

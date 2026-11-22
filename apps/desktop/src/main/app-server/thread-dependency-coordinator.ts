@@ -208,7 +208,7 @@ export class ThreadDependencyCoordinator {
    */
   async armMergeBuild(target: { backend: AppServerBackendKind; threadId: string }, pr: { url: string; title?: string }): Promise<boolean> {
     const url = this.canonicalizePrUrl(pr.url);
-    const covered = this.options.store.list(target.backend, target.threadId).some((item) => item.conditions.some((condition) => {
+    const covered = this.options.store.listWithCondition(target.backend, target.threadId, "merge_build").some((item) => item.conditions.some((condition) => {
       if (condition.when !== "merge_build") return false;
       const named = condition.prUrl ?? evidenceFor(item, condition)?.prUrl;
       // An active wait for "this thread's PR" covers whichever PR it finds.
@@ -218,7 +218,9 @@ export class ThreadDependencyCoordinator {
     if (covered) return false;
     await this.manage({
       action: "create", backend: target.backend, threadId: target.threadId,
-      conditions: [{ backend: target.backend, threadId: target.threadId, when: "merge_build", prUrl: url,
+      // The URL the thread's PR chips show, so windows can match it; the
+      // check above compares canonical forms.
+      conditions: [{ backend: target.backend, threadId: target.threadId, when: "merge_build", prUrl: pr.url,
         ...(pr.title ? { title: pr.title.slice(0, 200) } : {}) }],
       wakeOn: "failure",
     }, undefined, "operator", { automatic: true });

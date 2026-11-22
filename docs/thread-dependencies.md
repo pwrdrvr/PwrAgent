@@ -480,14 +480,19 @@ The checks decide the outcome once none is queued or running:
 - Cancelled checks with nothing failed count as a pass: a newer push to the
   branch usually cancelled them, and that merge's own watch covers it.
 - A finished build is believed only a minute after the merge, because a slow
-  workflow can register its first check after a fast one finished.
+  workflow can register its first check after a fast one finished. Without a
+  merge time from the forge, these windows run from the first check.
 - No check within 20 minutes of the merge, a closed PR, a merge commit the
-  forge cannot report for three reads, or a day of unreadable checks fails it.
+  forge answers without for three reads, or a day of unreadable checks fails
+  it. A merge details lookup that fails (a rate limit, a network error) is an
+  unreadable check, not a missing commit.
 
 Waiting evidence is constant (`PR merged; waiting for its merge build`), and
 the latest check lives in memory and decorates list responses, as `ci_run`
 does, so checks write nothing. A merge build never holds a merge
-(`holdMerge` is refused) and adds no wait-cycle edge.
+(`holdMerge` is refused). A thread waiting on its own merge build adds no
+wait-cycle edge; a wait on another thread's merge build is an edge, and lists
+the waiting thread as that thread's dependent, as a merge wait does.
 
 `wakeOn: "failure"` ends a wait quietly, as delivered with no turn, when its
 prerequisites are met; only a failure wakes the thread. It applies to any

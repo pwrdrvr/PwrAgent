@@ -163,7 +163,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
-import { ComposerPrMenu } from "./ComposerPrMenu";
+import { ComposerPrMenu, mergeBuildPullRequestUrl } from "./ComposerPrMenu";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -15927,7 +15927,7 @@ function useComposerController(props: ComposerProps) {
               thread={props.thread}
               desktopApi={props.desktopApi}
               watchMergeBuildsDefault={props.watchMergeBuildsDefault ?? DEFAULT_WATCH_MERGE_BUILDS}
-              prUrl={newestOpenPrimaryPullRequestUrl(props.thread)}
+              prUrl={mergeBuildPullRequestUrl(primaryWorkspacePullRequests(props.thread))}
               className={`composer__toggle${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
               }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${
@@ -18060,16 +18060,6 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   }
 
   return undefined;
-}
-
-/** The newest open PR on the primary workspace, for a new merge build watch to name. */
-function newestOpenPrimaryPullRequestUrl(
-  thread: NavigationThreadSummary,
-): string | undefined {
-  const open = primaryWorkspacePullRequests(thread).filter((pr) =>
-    pr.lifecycleState !== "merged" && pr.lifecycleState !== "closed"
-    && pr.state !== "merged" && pr.state !== "closed");
-  return open.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))[0]?.url;
 }
 
 function hasPrimaryWorkspacePullRequest(
