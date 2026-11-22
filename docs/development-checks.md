@@ -43,9 +43,9 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Run desktop E2E from the repository root with `pnpm test:desktop-e2e`.
 - The package command `pnpm --filter @pwragent/desktop test:e2e` is also safe.
 - Both commands build `apps/desktop/out/` before Playwright starts.
-- Do not run the desktop Playwright suite on the operator's Mac. Use native
-  CI or the matching lab route. An approved Boat sandbox can run Linux
-  desktop E2E when the prerequisites in the Boat skill are met.
+- For macOS desktop Playwright, follow the [VM preference and host exceptions](../AGENTS.md#verification-and-platform-constraints).
+  Native CI is also available for verification. An approved Boat sandbox can
+  run Linux desktop E2E when the prerequisites in the Boat skill are met.
 - For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
   [the macOS VM E2E lab skill](../.agents/skills/macos-vm-e2e-lab/SKILL.md). It uses PwrSuiteLab Control MCP's
   current schemas and served skills when connected. Use the
