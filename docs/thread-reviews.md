@@ -108,6 +108,11 @@ The shared dynamic-tool and MCP catalog exposes four thread-scoped tools:
 | `update_review_item` | Settle a finding as `addressed`, `declined`, or `deferred` (with `todoId`), or reopen it, with a `note` and optional `url` documenting the outcome. |
 | `update_review` | Dismiss, reopen, or document a handled review with a `note` and optional `url`. |
 
+A review that names a pull request also decides when PwrAgent offers to
+merge it. Settling the last finding records the reviewed checkout's HEAD as
+the commit the findings were fixed through, so commit a fix before marking
+it addressed. See [PR review readiness](pr-review-readiness.md).
+
 The trusted calling context supplies backend and thread identity. An agent
 cannot inspect or mutate another thread's review by passing its id. Reusing a
 source key returns the existing record and never reopens settled findings.

@@ -73,6 +73,13 @@ export type ThreadReview = ThreadReviewIdentity & {
   createdAt: number;
   updatedAt: number;
   resolution?: ThreadReviewResolution;
+  /**
+   * The commit this review's findings were fixed through: the reviewed
+   * checkout's HEAD, on the reviewed branch, when its findings were last
+   * settled. Commits from `context.headCommit` up to it are review fixes, so
+   * they do not make the pull request need another review. Owner-local.
+   */
+  fixedThroughCommit?: string;
 };
 
 export type RecordThreadReviewInput = Pick<ThreadReview, "sourceKey" | "sourceUrl" | "title" | "summary" | "context"> & {

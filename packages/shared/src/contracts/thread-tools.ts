@@ -503,7 +503,30 @@ export type ThreadPullRequestAutomationStatus = {
   autoFixActive: boolean;
   autoFixPending?: ThreadPrAutoDispatchPending;
   watches?: ThreadPullRequestWatchSummary[];
+  /**
+   * Where each primary attached PR stands on the way to merge: reviewed at
+   * its head or not, findings settled, CI green. See
+   * docs/pr-review-readiness.md.
+   */
+  reviewReadiness?: ThreadPullRequestReviewReadiness[];
   guidance: string;
+};
+
+export type ThreadPullRequestReviewReadiness = {
+  prUrl: string;
+  prNumber: number;
+  /**
+   * `needs_review` and `ready_to_merge` are when PwrAgent offers a review or
+   * a merge. The rest wait: `findings_open`, `ci_pending`, `ci_failing`,
+   * `ci_untested`, `conflicting`, `draft`, `queued`, `no_head`, `closed`.
+   */
+  readiness: string;
+  headSha?: string;
+  /** A review covers this head's change, whatever CI says. */
+  reviewed: boolean;
+  /** The newest review covering the head, and its unsettled findings. */
+  reviewId?: string;
+  openFindings?: number;
 };
 
 /**

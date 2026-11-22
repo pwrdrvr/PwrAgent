@@ -1,0 +1,467 @@
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
+import type { ThreadTodo, ThreadTodoAction } from "@pwragent/shared/contracts/thread-todos";
+import type { PrChangeIdentitySource } from "./pr-change-identity";
+import {
+  derivePrReviewReadiness,
+  PR_OFFER_WITHDRAWN_RESULTS,
+  desiredPrOffer,
+  parsePrOfferId,
+  planPrOffer,
+  prGateReadiness,
+  prOfferCardKey,
+  PR_OFFER_RETIRE_RESULTS,
+  type OpenPrOffer,
+  type PrOffer,
+  type PrReviewCoverage,
+  type PrReviewReadiness,
+} from "./pr-review-readiness";
+import type { PrStatusTransition } from "./pr-transitions";
+
+export type PrReviewOfferThread = { backend: AppServerBackendKind; threadId: string };
+
+/** The to-do service surface the coordinator writes through. */
+export type PrOfferCardPort = {
+  findOpenByKey(params: PrReviewOfferThread & { key: string }): ThreadTodo | undefined;
+  reconcileOffer(params: PrReviewOfferThread & {
+    retire?: { id: string; result: string };
+    raise?: {
+      offerId: string;
+      key: string;
+      title: string;
+      detail?: string;
+      action: Extract<ThreadTodoAction, { type: "start_review" | "merge_pull_request" }>;
+      cwd?: string;
+      /** Results this coordinator gives a card it withdraws; such a card can reopen. */
+      withdrawnResults?: readonly string[];
+    };
+  }): { retired?: ThreadTodo; raised?: ThreadTodo };
+};
+
+export type PrReviewOfferPorts = {
+  /**
+   * The live thread that owns this PR's automation, when one does: the PR is
+   * its primary attached PR, the thread is not archived, and its project's
+   * forge activity is not paused. One thread per PR, so a PR shown by a
+   * parent and its sub-thread is offered once.
+   */
+  ownerThread(prKey: string): Promise<PrReviewOfferThread | undefined>;
+  /** The primary attached PR keys of one thread, for review events. */
+  threadPrKeys(thread: PrReviewOfferThread): string[];
+  /** The status registry's current PR. No forge request is made. */
+  getPr(prKey: string): PrSummary | undefined;
+  /** Checkouts where Git can read this PR's commits; the first one is used. */
+  directories(thread: PrReviewOfferThread, pr: PrSummary): string[];
+  /** Every review this thread recorded, any status. */
+  listReviews(thread: PrReviewOfferThread): ThreadReview[];
+  recordFixedThrough(reviewId: string, commit: string): void;
+  cards: PrOfferCardPort;
+  identity: PrChangeIdentitySource;
+  log?: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/** A review count past this is history; the newest decide. */
+const MAX_REVIEWS_CONSIDERED = 8;
+
+/** The fields that can move a PR's readiness. Title and others cannot. */
+const READINESS_FIELDS = [
+  "checkState",
+  "headSha",
+  "lifecycleState",
+  "mergeState",
+  "mergeQueueState",
+  "reviewState",
+] as const;
+
+/** Where one PR stands for one thread. */
+export type PrReviewAssessment = {
+  readiness: PrReviewReadiness;
+  headSha?: string;
+  /** A review covers the head, whatever CI says. */
+  headCovered: boolean;
+  /**
+   * The newest review covering the head, or the latest review with open
+   * findings when none covers it. Absent while CI holds readiness back.
+   */
+  reviewId?: string;
+  openFindings?: number;
+  headContentId?: string;
+};
+
+export type PrReviewOfferEvaluation = {
+  readiness: PrReviewReadiness;
+  reviewId?: string;
+  raised?: PrOffer["kind"];
+  retired?: boolean;
+  /** Git processes this evaluation started; zero unless CI was green. */
+  gitProcesses: number;
+};
+
+/**
+ * Raises "review this PR" and "merge this PR" offers as to-do cards, in that
+ * order, from events PwrAgent already receives: a PR status transition from
+ * polling or a refresh, and a change to one of the thread's reviews. It never
+ * polls, never asks the forge, and never scans PRs at startup. Git runs only
+ * when CI is green, in the thread's own checkout, and caches by commit.
+ */
+export class PrReviewOfferCoordinator {
+  private readonly inFlight = new Map<string, { again: boolean; done: Promise<void> }>();
+  private readonly pending = new Set<Promise<void>>();
+  private closed = false;
+
+  constructor(private readonly ports: PrReviewOfferPorts) {}
+
+  /** A PR field moved. Only fields that can change readiness count. */
+  handleTransition(transition: PrStatusTransition): void {
+    if (this.closed) return;
+    if (!READINESS_FIELDS.some((field) => transition.changed[field] !== undefined)) return;
+    this.track((async () => {
+      const thread = await this.ports.ownerThread(transition.prKey);
+      if (thread) this.schedule(thread, transition.prKey);
+    })());
+  }
+
+  /** A review on a thread was recorded, settled, or reopened. */
+  handleReviewChanged(review: ThreadReview): void {
+    if (this.closed) return;
+    const thread = { backend: review.backend, threadId: review.threadId };
+    const prKeys = this.ports.threadPrKeys(thread).filter((prKey) => {
+      const pr = this.ports.getPr(prKey);
+      return pr !== undefined && reviewMatchesPr(review, pr);
+    });
+    if (prKeys.length === 0) return;
+    this.track((async () => {
+      const owned: string[] = [];
+      for (const prKey of prKeys) {
+        const owner = await this.ports.ownerThread(prKey);
+        if (owner?.backend === thread.backend && owner.threadId === thread.threadId) owned.push(prKey);
+      }
+      if (owned.length === 0) return;
+      await this.captureFixedThrough(review);
+      for (const prKey of owned) this.schedule(thread, prKey);
+    })());
+  }
+
+  /** Settles when every event and scheduled evaluation has finished. */
+  async idle(): Promise<void> {
+    while (this.pending.size > 0 || this.inFlight.size > 0) {
+      await Promise.all([
+        ...this.pending,
+        ...[...this.inFlight.values()].map((entry) => entry.done),
+      ]);
+    }
+  }
+
+  private track(work: Promise<void>): void {
+    const tracked = work.catch((error: unknown) => {
+      this.ports.log?.("pr review offer event failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      this.pending.delete(tracked);
+    });
+    this.pending.add(tracked);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  /**
+   * One evaluation per thread and PR at a time. Events that arrive while one
+   * runs fold into a single rerun, so a burst of transitions costs at most
+   * two evaluations.
+   */
+  private schedule(thread: PrReviewOfferThread, prKey: string): void {
+    if (this.closed) return;
+    const key = JSON.stringify([thread.backend, thread.threadId, prKey]);
+    const running = this.inFlight.get(key);
+    if (running) {
+      running.again = true;
+      return;
+    }
+    const entry = { again: false, done: Promise.resolve() };
+    entry.done = (async () => {
+      try {
+        do {
+          entry.again = false;
+          try {
+            await this.evaluate(thread, prKey);
+          } catch (error) {
+            this.ports.log?.("pr review offer evaluation failed", {
+              prKey,
+              threadId: thread.threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } while (entry.again && !this.closed);
+      } finally {
+        this.inFlight.delete(key);
+      }
+    })();
+    this.inFlight.set(key, entry);
+  }
+
+  async evaluate(thread: PrReviewOfferThread, prKey: string): Promise<PrReviewOfferEvaluation | undefined> {
+    const pr = this.ports.getPr(prKey);
+    if (!pr) return undefined;
+    const gitBefore = this.ports.identity.gitProcessCount;
+    const cardKey = prOfferCardKey(prKey);
+    const card = this.ports.cards.findOpenByKey({ ...thread, key: cardKey });
+    const parsed = parsePrOfferId(card?.dependencyId);
+    const open: OpenPrOffer | undefined = card && parsed?.prKey === prKey
+      ? {
+          cardId: card.id,
+          kind: parsed.kind,
+          offerId: card.dependencyId!,
+          ...(parsed.headSha ? { headSha: parsed.headSha } : {}),
+        }
+      : undefined;
+
+    // Git runs only when CI is green, or to withdraw an open review offer
+    // that a review started some other way has answered.
+    const assessment = await this.assessPr(thread, pr, open?.kind === "review", true);
+    const { readiness, reviewId, headContentId, headCovered } = assessment;
+    const desired = desiredPrOffer({
+      prKey,
+      readiness,
+      ...(pr.headSha ? { headSha: pr.headSha } : {}),
+      ...(headContentId ? { headContentId } : {}),
+    });
+    const plan = planPrOffer({
+      open,
+      desired,
+      readiness,
+      headCovered,
+      ...(pr.headSha ? { headSha: pr.headSha } : {}),
+    });
+    let raised: PrOffer["kind"] | undefined;
+    let retired = false;
+    if (plan.raise || plan.retire) {
+      const directory = this.ports.directories(thread, pr)[0];
+      const result = this.ports.cards.reconcileOffer({
+        ...thread,
+        ...(plan.retire
+          ? { retire: { id: plan.retire.cardId, result: PR_OFFER_RETIRE_RESULTS[plan.retire.reason] } }
+          : {}),
+        ...(plan.raise ? { raise: offerCard(plan.raise, pr, cardKey, directory) } : {}),
+      });
+      raised = result.raised ? plan.raise?.kind : undefined;
+      retired = Boolean(result.retired);
+    }
+    const evaluation: PrReviewOfferEvaluation = {
+      readiness,
+      ...(reviewId ? { reviewId } : {}),
+      ...(raised ? { raised } : {}),
+      ...(retired ? { retired } : {}),
+      gitProcesses: this.ports.identity.gitProcessCount - gitBefore,
+    };
+    this.ports.log?.("pr review offer evaluated", {
+      prKey,
+      threadId: thread.threadId,
+      ...evaluation,
+    });
+    return evaluation;
+  }
+
+  /**
+   * Where a PR stands for this thread, without touching cards. With
+   * `coverage`, reviews are read even while CI is not green (never for a
+   * closed PR or one without a head), which can start Git processes.
+   */
+  async assess(
+    thread: PrReviewOfferThread,
+    prKey: string,
+    options: { coverage?: boolean } = {},
+  ): Promise<PrReviewAssessment | undefined> {
+    const pr = this.ports.getPr(prKey);
+    return pr ? await this.assessPr(thread, pr, options.coverage === true, false) : undefined;
+  }
+
+  /**
+   * `forOffer` also reads the head's change identity when no review covers
+   * it, because a review offer is keyed by change. A read-only assessment
+   * skips that Git work.
+   */
+  private async assessPr(
+    thread: PrReviewOfferThread,
+    pr: PrSummary,
+    coverageWhileWaiting: boolean,
+    forOffer: boolean,
+  ): Promise<PrReviewAssessment> {
+    const gate = prGateReadiness(pr);
+    const head = pr.headSha;
+    if (gate && (!coverageWhileWaiting || !head || gate === "closed" || gate === "no_head")) {
+      return { readiness: gate, ...(head ? { headSha: head } : {}), headCovered: false };
+    }
+    const coverage = await this.reviewCoverage(thread, pr, forOffer && !gate);
+    const derived = derivePrReviewReadiness({ pr, reviews: coverage.reviews });
+    return {
+      readiness: derived.readiness,
+      headSha: head!,
+      headCovered: coverage.reviews.some((review) => review.coversHead),
+      ...(derived.reviewId ? { reviewId: derived.reviewId } : {}),
+      ...(derived.openFindings !== undefined ? { openFindings: derived.openFindings } : {}),
+      ...(coverage.headContentId ? { headContentId: coverage.headContentId } : {}),
+    };
+  }
+
+  /**
+   * Which of this PR's reviews cover its head. An exact commit match needs no
+   * Git. Otherwise the head's change identity is compared with each review's
+   * reviewed and fixed-through commits.
+   */
+  private async reviewCoverage(
+    thread: PrReviewOfferThread,
+    pr: PrSummary,
+    keyUncoveredHead: boolean,
+  ): Promise<{ reviews: PrReviewCoverage[]; headContentId?: string }> {
+    const head = pr.headSha!.toLowerCase();
+    const reviews = this.ports.listReviews(thread)
+      .filter((review) => reviewMatchesPr(review, pr) && review.context?.headCommit)
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, MAX_REVIEWS_CONSIDERED);
+    const cwd = this.ports.directories(thread, pr)[0];
+    const identity = this.ports.identity;
+    let targetTip: string | undefined | null = null;
+    const tip = async (): Promise<string | undefined> => {
+      if (targetTip === null) {
+        targetTip = cwd
+          ? await identity.resolveTargetTip({
+              cwd,
+              ...(pr.baseSha ? { baseSha: pr.baseSha } : {}),
+              ...(pr.baseRefName ? { baseRefName: pr.baseRefName } : {}),
+            })
+          : undefined;
+      }
+      return targetTip;
+    };
+    const changeOf = async (sha: string): Promise<string | undefined> => {
+      const target = await tip();
+      if (!cwd || !target) return undefined;
+      return await identity.changeIdentity({
+        cwd,
+        sha,
+        targetTip: target,
+        ...(pr.baseRefName ? { targetName: pr.baseRefName } : {}),
+      });
+    };
+    let headContentId: string | undefined;
+    let headContentRead = false;
+    const headChange = async (): Promise<string | undefined> => {
+      if (!headContentRead) {
+        headContentRead = true;
+        headContentId = await changeOf(head);
+      }
+      return headContentId;
+    };
+    const coverage: PrReviewCoverage[] = [];
+    for (const review of reviews) {
+      const covered = [review.context!.headCommit!, review.fixedThroughCommit]
+        .filter((sha): sha is string => Boolean(sha))
+        .map((sha) => sha.toLowerCase());
+      let coversHead = covered.includes(head);
+      if (!coversHead) {
+        const current = await headChange();
+        if (current) {
+          for (const sha of covered) {
+            if (await changeOf(sha) === current) {
+              coversHead = true;
+              break;
+            }
+          }
+        }
+      }
+      coverage.push({
+        reviewId: review.id,
+        createdAt: review.createdAt,
+        coversHead,
+        openFindings: openFindingCount(review),
+      });
+    }
+    // A review offer is keyed by change, so a rebase does not ask again.
+    const anyCovers = coverage.some((entry) => entry.coversHead);
+    if (!anyCovers && keyUncoveredHead) await headChange();
+    return { reviews: coverage, ...(headContentId ? { headContentId } : {}) };
+  }
+
+  /**
+   * When a review's findings are settled, the reviewed checkout's HEAD is the
+   * commit they were fixed through: commits made while findings were open
+   * are review fixes. At most two Git processes and one commit, once per
+   * settlement.
+   */
+  private async captureFixedThrough(review: ThreadReview): Promise<void> {
+    const reviewed = review.context?.headCommit;
+    const workspace = review.context?.workspacePath;
+    if (review.status === "open" || !reviewed || !workspace) return;
+    const head = await this.ports.identity.readReviewedBranchHead(workspace, {
+      sha: reviewed,
+      ...(review.context?.gitBranch ? { branch: review.context.gitBranch } : {}),
+    });
+    if (!head || head === reviewed.toLowerCase() || head === review.fixedThroughCommit) return;
+    this.ports.recordFixedThrough(review.id, head);
+  }
+}
+
+/** Findings still waiting. An open review with no structured findings counts as one. */
+export function openFindingCount(review: Pick<ThreadReview, "status" | "items">): number {
+  if (review.status !== "open") return 0;
+  const open = review.items.filter((item) => item.status === "open").length;
+  return Math.max(open, 1);
+}
+
+/**
+ * A review is of this PR when it names the PR, or when it ran on the PR's
+ * branch before any PR existed for it.
+ */
+export function reviewMatchesPr(review: Pick<ThreadReview, "context">, pr: PrSummary): boolean {
+  const context = review.context;
+  if (!context) return false;
+  const named = context.pullRequests?.length
+    ? context.pullRequests
+    : context.pullRequest ? [context.pullRequest] : [];
+  if (named.length > 0) {
+    return named.some((candidate) =>
+      candidate.provider === pr.provider
+      && candidate.org.toLowerCase() === pr.org.toLowerCase()
+      && candidate.repo.toLowerCase() === pr.repo.toLowerCase()
+      && candidate.number === pr.number
+    );
+  }
+  return Boolean(pr.headRefName && context.gitBranch === pr.headRefName);
+}
+
+function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
+
+function offerCard(
+  offer: PrOffer,
+  pr: PrSummary,
+  key: string,
+  cwd: string | undefined,
+): NonNullable<Parameters<PrOfferCardPort["reconcileOffer"]>[0]["raise"]> {
+  const name = `#${pr.number}`;
+  const title = pr.title ? `${name} ${pr.title}` : name;
+  return offer.kind === "review"
+    ? {
+        offerId: offer.offerId,
+        key,
+        withdrawnResults: PR_OFFER_WITHDRAWN_RESULTS,
+        title: `Review ${title}`.slice(0, 120),
+        detail: `CI is green at ${shortSha(offer.headSha)}, and no review covers this change yet.`,
+        action: { type: "start_review" },
+        ...(cwd ? { cwd } : {}),
+      }
+    : {
+        offerId: offer.offerId,
+        key,
+        withdrawnResults: PR_OFFER_WITHDRAWN_RESULTS,
+        title: `Merge ${title}`.slice(0, 120),
+        detail: `Reviewed, every finding settled, and CI green at ${shortSha(offer.headSha)}.`,
+        action: { type: "merge_pull_request", pullRequest: pr.url },
+        ...(cwd ? { cwd } : {}),
+      };
+}

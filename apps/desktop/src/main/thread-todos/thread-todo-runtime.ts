@@ -78,6 +78,20 @@ let feed: ThreadTodoFeed | null = null;
 let unsubscribeArchive: (() => void) | undefined;
 let readDefaultMergeMethod: (() => ThreadTodoMergeMethod) | undefined;
 let listProjectCandidates: (() => Promise<ThreadTodoProjectCandidate[]>) | undefined;
+/**
+ * Says why a thread may not offer a merge for a pull request yet, or nothing
+ * when it may. Set by the PR review-offer coordinator; see
+ * docs/pr-review-readiness.md.
+ */
+type MergeOfferGate = (
+  thread: { backend: AppServerBackendKind; threadId: string },
+  pullRequest: string,
+) => Promise<string | undefined>;
+let mergeOfferGate: MergeOfferGate | undefined;
+
+export function setThreadTodoMergeOfferGate(gate: MergeOfferGate | undefined): void {
+  mergeOfferGate = gate;
+}
 
 export function getThreadTodoService(): ThreadTodoService {
   if (!service) {
@@ -553,6 +567,14 @@ export function installThreadTodoRuntime(params: {
     },
     add: async (context, rawInput) => {
       const input = await settleAddInput(context, rawInput);
+      if (input.action?.type === "merge_pull_request" && mergeOfferGate) {
+        // A gate that cannot read the PR does not block the card.
+        const refusal = await mergeOfferGate(
+          { backend: context.backend, threadId: context.threadId },
+          input.action.pullRequest,
+        ).catch(() => undefined);
+        if (refusal) throw new ThreadTodoError("conflict", refusal);
+      }
       const [cwd, primaryDirectory, projects] = await Promise.all([
         registry.resolveThreadWorkspaceCwd(context.backend, context.threadId)
           .catch(() => undefined),

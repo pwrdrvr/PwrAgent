@@ -424,6 +424,103 @@ export class ThreadTodoService {
     }).todo;
   }
 
+  /** The open card a thread holds under `key`, if any. */
+  findOpenByKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    key: string;
+  }): ThreadTodo | undefined {
+    return this.store.findOpenByKey(params);
+  }
+
+  /**
+   * Swaps the review or merge offer PwrAgent holds for one pull request, in
+   * one commit: withdraws the card it replaces, then raises the new offer.
+   * See docs/pr-review-readiness.md.
+   *
+   * Like a dependency card, each offer has one card for its lifetime:
+   * `offerId` is stored as the card's dependency id, so an offer the
+   * operator dismissed or ran is not raised again. A card PwrAgent itself
+   * withdrew (its result is one of `withdrawnResults`) reopens instead. The
+   * open-card cap does not apply: a thread holds at most one offer card per
+   * pull request.
+   */
+  reconcileOffer(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    retire?: { id: string; result: string };
+    raise?: {
+      offerId: string;
+      key: string;
+      title: string;
+      detail?: string;
+      action: Extract<ThreadTodoAction, { type: "start_review" | "merge_pull_request" }>;
+      cwd?: string;
+      sourceProject?: ThreadTodoProject;
+      withdrawnResults?: readonly string[];
+    };
+  }): { retired?: ThreadTodo; raised?: ThreadTodo } {
+    const changed = this.store.transaction(() => {
+      const result: { retired?: ThreadTodo; raised?: ThreadTodo } = {};
+      const retiring = params.retire ? this.store.get(params.retire.id) : undefined;
+      // A card whose merge is running finishes on its own.
+      if (retiring?.status === "open" && !this.running.has(retiring.id)) {
+        result.retired = this.store.setStatus({
+          id: retiring.id,
+          status: "dismissed",
+          now: this.now(),
+          result: { result: params.retire!.result },
+        });
+      }
+      const raise = params.raise;
+      const earlier = raise ? this.store.findByDependency(raise.offerId) : undefined;
+      if (
+        raise
+        && earlier?.status === "dismissed"
+        && earlier.result !== undefined
+        && raise.withdrawnResults?.includes(earlier.result)
+        && !this.store.findOpenByKey({ backend: params.backend, threadId: params.threadId, key: raise.key })
+      ) {
+        this.store.setStatus({ id: earlier.id, status: "open", now: this.now() });
+        result.raised = this.store.replaceContent({
+          id: earlier.id,
+          kind: threadTodoKindForAction(raise.action),
+          title: raise.title,
+          detail: raise.detail,
+          items: earlier.items,
+          action: raise.action,
+          cwd: raise.cwd,
+          sourceProject: raise.sourceProject,
+          now: this.now(),
+        });
+      } else if (raise && !earlier) {
+        const keyed = this.store.findOpenByKey({
+          backend: params.backend,
+          threadId: params.threadId,
+          key: raise.key,
+        });
+        result.raised = this.store.insert({
+          id: this.newId(),
+          backend: params.backend,
+          threadId: params.threadId,
+          ...(keyed ? {} : { key: raise.key }),
+          kind: threadTodoKindForAction(raise.action),
+          title: raise.title,
+          detail: raise.detail,
+          action: raise.action,
+          cwd: raise.cwd,
+          sourceProject: raise.sourceProject,
+          dependencyId: raise.offerId,
+          now: this.now(),
+        });
+      }
+      return result;
+    });
+    const todo = changed.raised ?? changed.retired;
+    if (todo) this.emit(todo);
+    return changed;
+  }
+
   /** Announce a card written outside the service's own mutations. */
   publish(todo: ThreadTodo): void {
     this.emit(todo);

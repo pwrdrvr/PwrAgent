@@ -172,3 +172,7 @@ have:
   Peer observations suppress local subscription results in every window,
   including pinned peers in the main window. An ownership change must notify
   subscribers even if the visible PR metadata did not change.
+- Review and merge offers consume `PrStatusTransition`s and never poll or ask
+  the forge. They act only for the one live thread that owns the PR. Read
+  [PR review readiness](../../docs/pr-review-readiness.md) before changing
+  `PrReviewOfferCoordinator`, its triggers, or its Git work.

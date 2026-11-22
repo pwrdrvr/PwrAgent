@@ -2,7 +2,8 @@ import { createHmac, randomBytes } from "node:crypto";
 
 export type GitSubprocessPurpose =
   | "unspecified" | "directory-enrichment" | "directory-status"
-  | "working-state" | "pr-remotes" | "pr-discovery" | "pr-local-head";
+  | "working-state" | "pr-remotes" | "pr-discovery" | "pr-local-head"
+  | "pr-review-coverage";
 
 type Command =
   | "remote-list" | "remote-url" | "remote-other" | "refs" | "symbolic-ref"
