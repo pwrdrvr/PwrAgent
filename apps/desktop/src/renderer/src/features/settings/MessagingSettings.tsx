@@ -48,6 +48,7 @@ import {
 } from "@pwragent/shared/contracts/settings";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
+  type GenerateMessagingPairingTokenResponse,
   type MessagingChannelKind,
   type MessagingPairingApprovalTarget,
   type MessagingPairingEntry,
@@ -102,6 +103,7 @@ import {
 } from "../messaging/SlackPairSteps";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import { slackCredentialProblem } from "../messaging/slack-token-shape";
+import { MessagingDmPairingLink } from "./MessagingDmPairingLink";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { GuidedSetupButton } from "./guided-setup/GuidedSetupLauncher";
 import {
@@ -3013,8 +3015,9 @@ function PairingTokenField(props: {
   actions?: ReactNode;
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
-  const [message, setMessage] = useState<string | undefined>(undefined);
-  const [messageEntryId, setMessageEntryId] = useState<string | undefined>(undefined);
+  const [generated, setGenerated] = useState<GenerateMessagingPairingTokenResponse>();
+  const message = generated?.message;
+  const messageEntryId = generated?.entry.id;
   const messageEntryIdRef = useRef<string | undefined>(undefined);
   const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
   const [busyId, setBusyId] = useState<string | undefined>(undefined);
@@ -3032,10 +3035,9 @@ function PairingTokenField(props: {
   );
 
   const setGeneratedMessage = useCallback(
-    (nextMessage: string | undefined, nextEntryId: string | undefined) => {
-      messageEntryIdRef.current = nextEntryId;
-      setMessage(nextMessage);
-      setMessageEntryId(nextEntryId);
+    (next: GenerateMessagingPairingTokenResponse | undefined) => {
+      messageEntryIdRef.current = next?.entry.id;
+      setGenerated(next);
     },
     [],
   );
@@ -3053,7 +3055,7 @@ function PairingTokenField(props: {
     return props.desktopApi?.onMessagingPairingChanged?.((event) => {
       if (event.entry.platform !== props.platform) return;
       if (event.entry.id === messageEntryIdRef.current && event.entry.status !== "pending") {
-        setGeneratedMessage(undefined, undefined);
+        setGeneratedMessage(undefined);
       }
       void refresh();
     });
@@ -3061,7 +3063,7 @@ function PairingTokenField(props: {
 
   const selectScope = (nextScope: MessagingPairingScope) => {
     setScope(nextScope);
-    setGeneratedMessage(undefined, undefined);
+    setGeneratedMessage(undefined);
   };
 
   const observedEntries = entries.filter((entry) => entry.status === "observed");
@@ -3082,7 +3084,7 @@ function PairingTokenField(props: {
         platform: props.platform,
         scope: selectedScope,
       });
-      setGeneratedMessage(result.message, result.entry.id);
+      setGeneratedMessage(result);
       // Auto-copy the freshly generated code so the operator can paste it
       // straight into chat; best-effort, so a clipboard failure here is
       // silent and the Copy button remains as a manual fallback.
@@ -3111,7 +3113,7 @@ function PairingTokenField(props: {
           ...(consume === false ? { consume: false } : {}),
         });
         if (result?.entry.id === messageEntryId) {
-          setGeneratedMessage(undefined, undefined);
+          setGeneratedMessage(undefined);
         }
         if (result) {
           await props.onSettingsChanged?.();
@@ -3119,7 +3121,7 @@ function PairingTokenField(props: {
       } else {
         const result = await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
         if (result?.entry.id === messageEntryId) {
-          setGeneratedMessage(undefined, undefined);
+          setGeneratedMessage(undefined);
         }
       }
       await refresh();
@@ -3150,7 +3152,7 @@ function PairingTokenField(props: {
         await props.onSettingsChanged?.();
       }
       if (entry.id === messageEntryId) {
-        setGeneratedMessage(undefined, undefined);
+        setGeneratedMessage(undefined);
       }
       await refresh();
     } catch (caught) {
@@ -3228,6 +3230,13 @@ function PairingTokenField(props: {
             </button>
             {props.actions}
           </div>
+          {generated?.dmLink ? (
+            <MessagingDmPairingLink
+              link={generated.dmLink}
+              expiresAt={generated.expiresAt}
+              onExpire={() => setGeneratedMessage(undefined)}
+            />
+          ) : null}
           {message ? (
             <div className="settings-pairing__message">
               <code>{message}</code>

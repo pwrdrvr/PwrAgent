@@ -10,6 +10,7 @@ const runtimeMock = vi.hoisted(() => ({
   notifyBindingsChanged: vi.fn(),
   onBindingsChanged: vi.fn(() => vi.fn()),
   onPairingChanged: vi.fn(() => vi.fn()),
+  isPairingAccountCurrent: vi.fn(() => true),
   onPlatformStatus: vi.fn(() => vi.fn()),
   stop: vi.fn(async () => undefined),
 }));

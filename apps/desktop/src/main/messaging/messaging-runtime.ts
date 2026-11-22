@@ -3,6 +3,8 @@ import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-o
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
 import { randomBytes, randomUUID } from "node:crypto";
+import { renderSVG } from "uqr";
+import type { MessagingDmPairingAddress } from "@pwragent/messaging-interface";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import type {
@@ -126,6 +128,7 @@ import type {
 } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
+  readDmPairingAddress?(): MessagingDmPairingAddress | undefined;
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   authorizedActorIds: readonly string[];
@@ -344,6 +347,7 @@ class AdapterStartTimeoutError extends Error {
 
 const messagingLog = getMainLogger("pwragent:messaging");
 const PAIRING_INSTANCE_ID = "default";
+const PAIRING_ACCOUNT_PREFIX = "account:";
 const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
 const MIN_PAIRING_TTL_MS = 60 * 1000;
 const MAX_PAIRING_TTL_MS = 30 * 60 * 1000;
@@ -1229,7 +1233,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): GenerateMessagingPairingTokenResponse {
     const now = Date.now();
     const ttlMs = clampPairingTtlMs(request.ttlMs);
-    const instanceId = request.instanceId ?? PAIRING_INSTANCE_ID;
+    const defaultInstance = request.instanceId === undefined || request.instanceId === PAIRING_INSTANCE_ID;
+    const address = request.scope === "user_dm" && defaultInstance
+      ? this.runningAdapters.get(request.platform)?.adapter.readDmPairingAddress?.()
+      : undefined;
+    const instanceId = address
+      ? `${PAIRING_ACCOUNT_PREFIX}${address.accountId}`
+      : request.instanceId ?? PAIRING_INSTANCE_ID;
     const store = getDesktopMessagingPairingStore();
     const outstanding = store.countOutstanding({
       platform: request.platform,
@@ -1242,6 +1252,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       );
     }
     const token = generatePairingToken();
+    const url = address?.linkForToken(token);
+    const dmLink = url ? {
+      url,
+      qrImage: `data:image/svg+xml,${encodeURIComponent(renderSVG(url, { border: 4 }))}`,
+    } : undefined;
     const entry = store.create({
       token,
       platform: request.platform,
@@ -1257,6 +1272,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       token,
       expiresAt: entry.expiresAt,
       message: `${MESSAGING_PAIRING_COMMAND} ${token}`,
+      ...(dmLink ? { dmLink } : {}),
     };
   }
 
@@ -1278,7 +1294,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options?: { text?: string },
   ): Promise<void> {
     const running = this.runningAdapters.get(entry.platform);
-    if (!running || !entry.observedActor || !entry.observedChat) return;
+    if (!running || !entry.observedActor || !entry.observedChat || !this.isPairingAccountCurrent(entry)) return;
     const text = options?.text
       ?? (outcome === "approved"
         ? "PwrAgent pairing approved."
@@ -1311,6 +1327,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         occurredAt: Date.now(),
       },
     });
+  }
+
+  isPairingAccountCurrent(entry: MessagingPairingEntry): boolean {
+    if (!entry.instanceId.startsWith(PAIRING_ACCOUNT_PREFIX)) return true;
+    const address = this.runningAdapters.get(entry.platform)?.adapter.readDmPairingAddress?.();
+    return address !== undefined && entry.instanceId === `${PAIRING_ACCOUNT_PREFIX}${address.accountId}`;
   }
 
   /**
@@ -2980,12 +3002,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     const now = Date.now();
     const store = getDesktopMessagingPairingStore();
-    const entry = store.findMatchingPending({
-      token,
-      platform: adapter.channel,
-      instanceId: PAIRING_INSTANCE_ID,
-      now,
+    const address = adapter.readDmPairingAddress?.();
+    const lookup = { token, platform: adapter.channel, now };
+    const accountEntry = address && store.findMatchingPending({
+      ...lookup,
+      instanceId: `${PAIRING_ACCOUNT_PREFIX}${address.accountId}`,
     });
+    const entry = accountEntry ?? store.findMatchingPending({ ...lookup, instanceId: PAIRING_INSTANCE_ID });
     if (!entry) {
       await this.deliverPairingReply(
         adapter,

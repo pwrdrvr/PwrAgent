@@ -721,6 +721,9 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
+      if (!runtime.isPairingAccountCurrent(pairing)) {
+        throw new Error("This pairing request belongs to a different bot. Generate a code for the connected bot.");
+      }
       // For a Slack team approval, resolve the workspace name best-effort so the
       // saved row carries a label (blank on failure/timeout), mirroring how the
       // channel name is captured at observe time.

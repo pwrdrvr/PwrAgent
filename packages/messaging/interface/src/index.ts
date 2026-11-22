@@ -2335,6 +2335,12 @@ export type MessagingCallbackHandleStore = {
   ): Promise<MessagingCallbackHandleRecord>;
 };
 
+/** An authenticated provider account that can carry a DM pairing token in a link. */
+export type MessagingDmPairingAddress = {
+  accountId: string;
+  linkForToken(token: string): string;
+};
+
 /* -----------------------------------------------------------------
  * Credential validation (Settings → Connection test)
  * -----------------------------------------------------------------

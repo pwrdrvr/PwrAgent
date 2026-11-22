@@ -7086,7 +7086,7 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("clears a generated pairing message after the token is observed", async () => {
+  it("offers Telegram desktop and phone pairing and clears both when the token is observed", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({
       ...snapshot,
@@ -7099,6 +7099,8 @@ describe("SettingsScreen", () => {
       },
     });
     const pairingMessage = "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const url = "https://t.me/example_fixture_bot?start=pair_123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const expiresAt = Date.now() + 60_000;
     const entry: MessagingPairingEntry = {
       id: "pairing-1",
       platform: "telegram",
@@ -7106,7 +7108,7 @@ describe("SettingsScreen", () => {
       scope: "user_dm",
       status: "pending",
       generatedAt: 1,
-      expiresAt: 2,
+      expiresAt,
     };
     const pairingChangedCallbacks: Array<
       (event: { at: number; entry: MessagingPairingEntry }) => void
@@ -7114,9 +7116,10 @@ describe("SettingsScreen", () => {
     const desktopApi = {
       generateMessagingPairingToken: vi.fn(async () => ({
         entry,
-        expiresAt: 2,
+        expiresAt,
         message: pairingMessage,
         token: "123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        dmLink: { url, qrImage: "data:image/svg+xml,%3Csvg/%3E" },
       })),
       listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
       onMessagingPairingChanged: vi.fn((callback) => {
@@ -7138,6 +7141,10 @@ describe("SettingsScreen", () => {
     const initialPairingChangedCallbacks = [...pairingChangedCallbacks];
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+    const desktopLink = screen.getByRole("link", { name: "Open in Telegram" });
+    expect(desktopLink).toHaveAttribute("href", url);
+    expect(desktopLink).toHaveAttribute("target", "_blank");
+    const qr = screen.getByRole("img", { name: "QR code for Telegram pairing" });
     expect(pairingChangedCallbacks).toHaveLength(initialPairingChangedCallbacks.length);
 
     act(() => {
@@ -7154,6 +7161,8 @@ describe("SettingsScreen", () => {
         });
       }
     });
+    expect(desktopLink).not.toBeInTheDocument();
+    expect(qr).not.toBeInTheDocument();
 
     // Bumped from the default 1000ms because CI runners under load take
     // ~1600ms+ for the pairingChanged → React state update → DOM removal

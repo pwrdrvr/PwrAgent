@@ -518,6 +518,7 @@ export type GenerateMessagingPairingTokenResponse = {
   message: string;
   token: string;
   expiresAt: number;
+  dmLink?: { url: string; qrImage: string };
 };
 
 export type ListMessagingPairingRequestsRequest = {
