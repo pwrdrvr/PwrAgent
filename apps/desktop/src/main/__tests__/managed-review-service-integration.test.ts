@@ -684,7 +684,7 @@ describe("DesktopBackendRegistry", () => {
       claudeBackendOptions: {
         store,
         getSessionInfo: vi.fn().mockResolvedValue(undefined),
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
         query: ({ options = {} }) => {
           async function* messages(): AsyncGenerator<ClaudeMessage> {
@@ -4096,7 +4096,7 @@ describe("DesktopBackendRegistry", () => {
         claudeBackendOptions: {
           store,
           getSessionInfo: vi.fn().mockResolvedValue(undefined),
-          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
           discoverModels: async () => [],
           query: () => {
             async function* messages(): AsyncGenerator<ClaudeMessage> {

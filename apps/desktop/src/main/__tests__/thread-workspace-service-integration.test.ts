@@ -274,7 +274,7 @@ describe("DesktopBackendRegistry", () => {
         claudeBackendOptions: {
           store: new ClaudeSessionStore(path.join(root, "sessions")),
           getSessionInfo: async () => undefined,
-          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
           discoverModels: async () => [],
           query: ({ options = {} }) => {
             const threadId = options.sessionId!;

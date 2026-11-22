@@ -28,7 +28,7 @@ it("completes every released turn exactly once, wherever the release lands", asy
   copyFileSync(FIXTURE, path.join(workspace, "claude.js"));
   const releases = await openClaudeOwnerCliReleases(workspace);
   // One process serves every turn, as one Claude session does.
-  const child = spawn(process.execPath, [path.join(workspace, "claude.js")], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [path.join(workspace, "claude.js"), "--await-initialize"], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr += String(chunk); });
   const frames = new PassThrough({ objectMode: true });
@@ -42,6 +42,12 @@ it("completes every released turn exactly once, wherever the release lands", asy
   };
   let index = 0;
   try {
+    child.stdin.write(JSON.stringify({ type: "control_request", request_id: "fixture-init", request: {
+      subtype: "initialize", mcpServers: { test: { type: "stdio", command: "fixture-helper" } },
+    } }) + "\n");
+    expect(await next()).toMatchObject({ type: "control_response", response: {
+      request_id: "fixture-init", subtype: "success", response: { mcp_servers_applied: true },
+    } });
     // beforePrompt: the conformance test's drain after a failed acceptance.
     // atInit: the tightest point after the provider reports the turn, usually
     // before the fixture's connection lands.

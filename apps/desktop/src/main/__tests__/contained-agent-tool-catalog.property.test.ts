@@ -280,7 +280,7 @@ it("gives a live Claude session the new role's tools at its next turn, and refus
       query: listingClaudeQuery(launches, turnTools),
       getSessionInfo: vi.fn().mockResolvedValue(undefined),
       discoverModels: vi.fn().mockResolvedValue([]),
-      inspectInstallation: vi.fn(async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const })),
+      inspectInstallation: vi.fn(async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" as const })),
       resolveEnv: async () => ({ PATH: "/fixture" }),
       emit: async (event: AgentEvent) => {
         if (event.notification.method === "turn/completed") completedTurns += 1;

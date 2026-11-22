@@ -20,9 +20,12 @@ if (process.argv.includes("--version")) {
   input.on("line", (line) => {
     const message = JSON.parse(line);
     if (message.type === "control_request") {
+      const mcpServersApplied = process.argv.includes("--await-initialize")
+        && message.request.subtype === "initialize" && Boolean(message.request.mcpServers);
       send({ type: "control_response", response: { subtype: "success", request_id: message.request_id,
         response: { commands: [], agents: [], models: [{ value: "fable", displayName: "Fixture Fable", description: "Fixture" }],
-          account: {}, mcpServers: [], output_style: "default", available_output_styles: ["default"] },
+          account: {}, mcpServers: [], mcp_servers_applied: mcpServersApplied,
+          output_style: "default", available_output_styles: ["default"] },
         pending_permission_requests: [] } });
     } else if (message.type === "user") {
       fs.appendFileSync(requests, line + "\n");
