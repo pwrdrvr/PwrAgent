@@ -10613,7 +10613,7 @@ describe("CodexAppServerClient", () => {
     },
   );
 
-  it("consumes Codex native goal notifications without changing normalized thread state", async () => {
+  it("projects Codex Goal updates and clears onto the normalized notification stream", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
@@ -10625,23 +10625,28 @@ describe("CodexAppServerClient", () => {
         method: "thread/status/changed",
         params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
       };
+      const goal = {
+        threadId: "thread-2", objective: "Finish the fixture task", status: "active",
+        tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, updatedAt: 2,
+      };
       codexClientLogWarn.mockClear();
       transport.emitInbound({
         jsonrpc: "2.0",
         method: "thread/goal/updated",
         params: {
           threadId: "thread-2",
-          goal: {
-            threadId: "thread-2", objective: "Finish the fixture task", status: "active",
-            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0,
-          },
+          goal: { ...goal, createdAt: 1 },
         },
       });
       transport.emitInbound({ jsonrpc: "2.0", method: "thread/goal/cleared", params: { threadId: "thread-2" } });
       transport.emitInbound({ jsonrpc: "2.0", ...status });
 
       await vi.waitFor(() => expect(notifications).toContainEqual(status));
-      expect(notifications).toEqual([status]);
+      expect(notifications).toEqual([
+        { method: "thread/goal/updated", params: { threadId: "thread-2", goal } },
+        { method: "thread/goal/cleared", params: { threadId: "thread-2" } },
+        status,
+      ]);
       expect(codexClientLogWarn).not.toHaveBeenCalled();
     } finally {
       await client.close();

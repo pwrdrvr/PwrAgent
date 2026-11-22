@@ -246,6 +246,8 @@ export type ThreadTurnQueueOptions = {
 type ThreadTurnQueueSteer = (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult | "retry" | undefined>;
 
 export class ThreadTurnQueueDispatchRefused extends Error {}
+/** The owning feature withdrew this delivery before it reached the provider. */
+export class ThreadTurnQueueDispatchCancelled extends Error {}
 
 /** An entry about to start, or a thread a new entry would start on. */
 export type ThreadTurnQueueDispatchCandidate = {
@@ -1524,6 +1526,11 @@ export class ThreadTurnQueue {
       // Publication cannot put native-accepted guidance back in the FIFO.
       if (accepted) return "started";
       for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
+      if (error instanceof ThreadTurnQueueDispatchCancelled) {
+        await this.emitForMembers(members, (entry) => ({ type: "cancelled", entry, reason: error.message }));
+        if (this.queueFor(key).length > 0) this.scheduleDrain(key);
+        return "none";
+      }
       // A rejected start says nothing about whether this thread can safely
       // accept a different queued request. Keep these entries at the FIFO
       // head and require an explicit retry instead of looping on idle signals.

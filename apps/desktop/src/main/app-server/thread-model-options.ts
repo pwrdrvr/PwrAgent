@@ -1,4 +1,5 @@
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { CODEX_GOAL_METHODS } from "@pwragent/shared/contracts/thread-goal";
 import {
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
@@ -395,6 +396,7 @@ export function buildCapabilities(
 export function backendMethodCommands(
   backend: AppServerBackendKind,
   methods: string[],
+  goalAvailable = false,
 ): AppServerAvailableCommandSummary[] {
   if (backend !== "codex") {
     return [];
@@ -408,6 +410,17 @@ export function backendMethodCommands(
     commands.push({
       name: "compact",
       description: "Compact this thread's context.",
+      backend,
+      scope: "backend",
+      source: "provider",
+    });
+  }
+
+  if (goalAvailable && (assumeCodexAppServerSurface || CODEX_GOAL_METHODS.every((method) => supported.has(method)))) {
+    commands.push({
+      name: "goal",
+      description: "Set, pause, resume, or clear this thread’s goal",
+      argumentHint: "[objective | pause | resume | clear]",
       backend,
       scope: "backend",
       source: "provider",

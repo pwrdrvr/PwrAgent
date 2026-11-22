@@ -2494,7 +2494,11 @@ export class DesktopFederationRuntime {
       throw new Error("Federation peer is not enrolled.");
     }
     const revokedAt = Date.now();
-    store.revokePeer(peerId, revokedAt);
+    if (peer.capabilities.includes("turn_control")) {
+      await getDesktopBackendRegistry().withGoalTurnControlRevocation(() => store.revokePeer(peerId, revokedAt));
+    } else {
+      store.revokePeer(peerId, revokedAt);
+    }
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
     this.remotePeerDirectory.delete(peerId);
@@ -7294,7 +7298,7 @@ export class DesktopFederationRuntime {
   }
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
-    if (!this.router) return;
+    if (!this.router || event.notification.method.startsWith("thread/goal/")) return;
     const invalidation = navigationInvalidationForLocalEvent(event);
     if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();

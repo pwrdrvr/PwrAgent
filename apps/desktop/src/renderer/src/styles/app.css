@@ -44587,6 +44587,99 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
+.composer-goal {
+  gap: 6px;
+  min-height: 32px;
+  padding: 3px 6px;
+}
+
+.composer-goal[data-status="active"] {
+  border-inline-start: 2px solid var(--accent-border);
+}
+
+.composer-goal[data-status="paused"] {
+  border-inline-start-style: dashed;
+}
+
+.composer-goal[data-warning] .composer__queued-label {
+  color: var(--status-warning-text);
+}
+
+.composer-goal__summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.composer-goal__summary .composer__queued-label {
+  flex: none;
+}
+
+.composer-goal__summary .composer__queued-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-goal__summary[aria-expanded="true"] .composer__queued-env-action-chevron {
+  transform: rotate(90deg);
+}
+
+.composer-goal__usage {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.composer-goal__actions {
+  display: flex;
+  grid-column: 3;
+  gap: 4px;
+}
+
+.composer-goal__detail {
+  grid-column: 1 / -1;
+  padding: 5px 8px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.composer-goal__detail[data-show] {
+  animation: composer-goal-show 600ms ease-out;
+}
+
+@keyframes composer-goal-show {
+  from { background: var(--accent-soft); }
+  to { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-goal__detail[data-show] {
+    animation: none;
+    background: var(--accent-soft);
+  }
+}
+
+.composer-goal-dialog dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.composer-goal-dialog dd {
+  margin: 3px 0 10px;
+  overflow-wrap: anywhere;
+}
+
 /* A queued message is one line: chevron, short state label, title. Actions
    float over the line's right end on hover or focus, and anything longer — an
    error, the opened message — takes a line of its own below. Twenty queued

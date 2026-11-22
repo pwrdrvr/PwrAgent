@@ -292,6 +292,7 @@ export const OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL =
 export const OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL = "operator-requests:changed";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
+export const AGENT_CONTROL_THREAD_GOAL_CHANNEL = "agent:control-thread-goal";
 export const AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL =
   "agent:list-thread-mcp-servers";
 export const AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL =

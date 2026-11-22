@@ -2987,7 +2987,8 @@ export const ComposerTiptapInput = forwardRef<
           : {}),
         "aria-autocomplete": "list",
         "aria-label": props.label,
-        ...(props.readOnly ? { "aria-readonly": "true", tabindex: "0" } : {}),
+        ...(props.readOnly ? { "aria-readonly": "true" } : {}),
+        ...(!props.disabled || props.readOnly ? { tabindex: "0" } : {}),
         class: `composer-tiptap-input__editor${props.disabled ? " is-disabled" : ""}`,
         "data-placeholder": props.placeholder,
         id: props.id,
@@ -3341,10 +3342,15 @@ export const ComposerTiptapInput = forwardRef<
     editor.view.dom.setAttribute("aria-label", props.label);
     if (props.readOnly) {
       editor.view.dom.setAttribute("aria-readonly", "true");
-      editor.view.dom.setAttribute("tabindex", "0");
     } else {
       editor.view.dom.removeAttribute("aria-readonly");
+    }
+    // A long draft scrolls inside the wrapper. Keep the active editor a
+    // named Tab stop so keyboard users can reach and scroll that content.
+    if (props.disabled && !props.readOnly) {
       editor.view.dom.removeAttribute("tabindex");
+    } else {
+      editor.view.dom.setAttribute("tabindex", "0");
     }
     // aria-expanded is deliberately NOT set on the textbox role — see
     // the editorProps.attributes block above for the rationale. The

@@ -12,6 +12,13 @@ import type {
   DirectoryEnrichmentCaller,
 } from "./host";
 import type { NativeVoiceNotification } from "./native-voice-protocol";
+import { CODEX_GOAL_METHODS, type ThreadGoalView } from "@pwragent/shared/contracts/thread-goal";
+import type {
+  ThreadGoal,
+  ThreadGoalClearParams,
+  ThreadGoalGetParams,
+  ThreadGoalSetParams,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   ListBackgroundTerminalsResponse,
@@ -636,6 +643,8 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "thread/unarchived",
   "skills/changed",
   "thread/name/updated",
+  "thread/goal/updated",
+  "thread/goal/cleared",
   "thread/status/changed",
   "thread/tokenUsage/updated",
   "account/updated",
@@ -1612,6 +1621,35 @@ type LiveAgentMessagePhase = {
   turnId?: string;
   phase: AppServerTranscriptPhase;
 };
+
+function decodeThreadGoal(value: unknown, threadId: string): ThreadGoalView {
+  const goal = asRecord(value) as Partial<ThreadGoal> | null;
+  if (!goal || goal.threadId !== threadId || typeof goal.objective !== "string"
+    || (goal.status !== "active" && goal.status !== "paused" && goal.status !== "blocked"
+      && goal.status !== "usageLimited" && goal.status !== "budgetLimited" && goal.status !== "complete")
+    || (goal.tokenBudget !== null && typeof goal.tokenBudget !== "number")
+    || typeof goal.tokensUsed !== "number" || typeof goal.timeUsedSeconds !== "number"
+    || typeof goal.updatedAt !== "number") {
+    throw new Error("Codex returned an invalid thread goal.");
+  }
+  const { objective, status, tokenBudget, tokensUsed, timeUsedSeconds, updatedAt } = goal;
+  return { threadId, objective, status, tokenBudget, tokensUsed, timeUsedSeconds, updatedAt };
+}
+
+function normalizeGoalNotification(
+  method: "thread/goal/updated" | "thread/goal/cleared",
+  params: unknown,
+): AppServerNotification | null {
+  const record = asRecord(params);
+  if (typeof record?.threadId !== "string") return null;
+  const { threadId } = record;
+  if (method === "thread/goal/cleared") return { method, params: { threadId } };
+  try {
+    return { method, params: { threadId, goal: decodeThreadGoal(record.goal, threadId) } };
+  } catch {
+    return null;
+  }
+}
 
 function normalizeServerNotification(
   method: string,
@@ -8086,6 +8124,7 @@ export class CodexAppServerClient {
   private tokenMiserActivationNegotiated = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
+  private threadGoalSupport: "unknown" | "available" | "unavailable" = "unknown";
   private availableHelperModels: BackendModelOption[] = [];
   private readonly realtimeListeners = new Set<(event: NativeVoiceNotification) => void>();
   private readonly realtimeDisconnectListeners = new Set<() => void>();
@@ -8280,11 +8319,6 @@ export class CodexAppServerClient {
         });
         return;
       }
-      if (method === "thread/goal/updated" || method === "thread/goal/cleared") {
-        // Codex-native goals are not supported by this adapter. Do not forward
-        // their lifecycle as normalized PwrAgent thread-state notifications.
-        return;
-      }
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       // Realtime is routed to live voice below, never logged: its payloads
       // carry the operator's spoken words and session SDP, which stay memory
@@ -8355,7 +8389,11 @@ export class CodexAppServerClient {
         });
         return;
       }
-      const normalized = modelRouting ?? normalizeServerNotification(
+      const goalEvent = method === "thread/goal/updated" || method === "thread/goal/cleared"
+        ? normalizeGoalNotification(method, params)
+        : undefined;
+      if (goalEvent === null) return;
+      const normalized = goalEvent ?? modelRouting ?? normalizeServerNotification(
         method,
         params,
         this.liveMessagePhases,
@@ -9120,6 +9158,7 @@ export class CodexAppServerClient {
     this.liveMessagePhases.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
+    this.threadGoalSupport = "unknown";
     this.availableHelperModels = [];
     this.helperModelsRead = false;
     this.rejectHelperTurnWaiters(helperTurnError);
@@ -9511,6 +9550,47 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  async readThreadGoal(params: ThreadGoalGetParams): Promise<ThreadGoalView | null | undefined> {
+    const initialization = asRecord(await this.getInitializeResult());
+    const methods = initialization?.methods;
+    const knownMethods = Array.isArray(methods)
+      ? CODEX_GOAL_METHODS.every((method) => methods.includes(method))
+      : this.getProtocolCompatibility().supportsThreadGoals;
+    if (!knownMethods || this.threadGoalSupport === "unavailable") {
+      return undefined;
+    }
+    let result: unknown;
+    try {
+      // Stock app-server does not advertise methods in initialize. Read the
+      // stable goal endpoint itself without resuming or starting the thread.
+      result = await this.connection.request("thread/goal/get", params, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    } catch (error) {
+      if (!isMethodUnavailableError(error, "thread/goal/get")
+        && !(error instanceof Error && error.message.includes("goals feature is disabled"))) throw error;
+      this.threadGoalSupport = "unavailable";
+      return undefined;
+    }
+    const goal = asRecord(result)?.goal;
+    const decoded = goal === null ? null : decodeThreadGoal(goal, params.threadId);
+    this.threadGoalSupport = "available";
+    return decoded;
+  }
+
+  async setThreadGoal(params: Omit<ThreadGoalSetParams, "origin">): Promise<ThreadGoalView> {
+    await this.ensureInitialized();
+    const payload: ThreadGoalSetParams = { ...params, origin: "user" };
+    const result = await this.connection.request("thread/goal/set", payload, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    return decodeThreadGoal(asRecord(result)?.goal, params.threadId);
+  }
+
+  async clearThreadGoal(params: Omit<ThreadGoalClearParams, "origin">): Promise<boolean> {
+    await this.ensureInitialized();
+    const payload: ThreadGoalClearParams = { ...params, origin: "user" };
+    const result = asRecord(await this.connection.request("thread/goal/clear", payload, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+    if (typeof result?.cleared !== "boolean") throw new Error("Codex returned an invalid goal clearance.");
+    return result.cleared;
   }
 
   isTokenMiserActivationNegotiated(): boolean {

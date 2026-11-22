@@ -3,6 +3,7 @@ import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
+import type { ThreadGoalState, ThreadGoalView } from "./thread-goal";
 import type {
   AutomationRunFailureReason,
   AutomationRunOutputDecision,
@@ -2807,6 +2808,9 @@ export type AppServerNotification =
         configPath?: string;
       };
     }
+  | { method: "thread/goal/updated"; params: { threadId: string; goal: ThreadGoalView } }
+  | { method: "thread/goal/cleared"; params: { threadId: string } }
+  | { method: "thread/goal/controlChanged"; params: { threadId: string; state: ThreadGoalState } }
   | {
       method: "thread/name/updated";
       params: {
