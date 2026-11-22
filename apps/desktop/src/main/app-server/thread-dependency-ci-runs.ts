@@ -104,6 +104,11 @@ function label(value: unknown, max = 120): string | undefined {
   return clean ? clean.slice(0, max) : undefined;
 }
 
+/** GitHub also reports environments held by a wait timer alone. */
+function needsGithubDeploymentReview(gate: NonNullable<ThreadDependencyCiRunObservation["gates"]>[number]): boolean {
+  return !gate.waitTimerMinutes || gate.reviewers.length > 0;
+}
+
 /** One check of a run on its forge, in the one vocabulary `evaluateCiRunCondition` reads. */
 export async function readCiRun(get: CiRunGet, ref: CiRunRef, now: number): Promise<ThreadDependencyCiRunObservation> {
   return ref.repository.provider === "gitlab" ? await readGitlabPipeline(get, ref, now) : await readGithubRun(get, ref, now);
@@ -152,7 +157,7 @@ async function readGithubRun(get: CiRunGet, ref: CiRunRef, now: number): Promise
       });
       const timer = typeof entry.wait_timer === "number" && entry.wait_timer > 0 ? { waitTimerMinutes: entry.wait_timer } : {};
       return [{ environment, reviewers: reviewers.slice(0, 8), ...timer }];
-    }).slice(0, 8);
+    }).filter(needsGithubDeploymentReview).slice(0, 8);
   }
   return {
     runId: ref.runId, status: run.status,
@@ -292,7 +297,9 @@ export function ciApprovalsForDependency(dependency: ThreadDependency | undefine
       || !threadDependencyCiRunOutcomes(ciRun).includes("approval_gate")) continue;
     const ref = parseCiRunUrl(ciRun.url, urls?.());
     if (ref?.repository.provider !== "github" || ref.runId !== observation.runId) continue;
-    const environments = matchingApprovalGates(ciRun, observation).map((gate) => gate.environment);
+    const environments = matchingApprovalGates(ciRun, observation)
+      .filter(needsGithubDeploymentReview)
+      .map((gate) => gate.environment);
     if (environments.length === 0) continue;
     const existing = approvals.get(ref.url);
     approvals.set(ref.url, {

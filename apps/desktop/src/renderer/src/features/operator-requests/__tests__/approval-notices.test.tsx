@@ -179,13 +179,15 @@ describe("approval notice cards", () => {
       const { rerender } = render(<Harness initialWaits={[]} ciApprovalTodos={[]} threadAKey={threadAKey} />);
       fireEvent.click(screen.getByRole("button", { name: "Open thread A" }));
       rerender(<Harness initialWaits={[]} ciApprovalTodos={[todo]} threadAKey={threadAKey} />);
-      expect(screen.getByText("Deployment approval needed")).toBeInTheDocument();
+      // A saved, one-shot milestone can be delivered after GitHub advances the run.
+      expect(screen.getByText("Deployment approval gate reached")).toBeInTheDocument();
+      expect(screen.queryByText("Deployment approval needed")).not.toBeInTheDocument();
       expect(screen.getByText("apple-signing")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Review on GitHub" }));
       expect(open).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
-      expect(screen.getByText("Deployment approval needed")).toBeInTheDocument();
+      expect(screen.getByText("Deployment approval gate reached")).toBeInTheDocument();
       rerender(<Harness initialWaits={[]} ciApprovalTodos={[]} threadAKey={threadAKey} />);
-      expect(screen.queryByText("Deployment approval needed")).not.toBeInTheDocument();
+      expect(screen.queryByText("Deployment approval gate reached")).not.toBeInTheDocument();
     } finally {
       open.mockRestore();
     }

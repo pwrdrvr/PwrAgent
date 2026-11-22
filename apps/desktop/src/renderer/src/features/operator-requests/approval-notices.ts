@@ -183,7 +183,8 @@ function toCiApprovalNotice(
   const ownerTitle = todo.threadTitle?.trim();
   return {
     id: approvalNoticeId(key),
-    title: "Deployment approval needed",
+    // The one-shot watch saved a milestone. GitHub has the current gate state.
+    title: "Deployment approval gate reached",
     message: `${approval.repository} run #${approval.runId}`,
     tone: "warning",
     autoDismiss: false,

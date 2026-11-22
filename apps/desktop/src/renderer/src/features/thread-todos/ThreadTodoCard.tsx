@@ -1043,7 +1043,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
 
   // Under what it opens: the step window when steps are hidden, else the
   // description. Below the whole body it read as the prompt's control.
-  const toggleLabel = resting.toggleLabel ?? (ciTitle && todo.detail ? "Show details" : undefined);
+  const toggleLabel = resting.toggleLabel ?? (ciTitle ? "Show details" : undefined);
   const restingToggle = toggleLabel ? (
     <button
       type="button"
@@ -1102,6 +1102,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
         >
           {ciTitle ? <CiApprovalRunDetails approvals={ciApprovals} /> : null}
+          {ciTitle && resting.expanded ? (
+            <p className="thread-todo-card__detail">{todo.title}</p>
+          ) : null}
           {todo.detail && (!ciTitle || resting.expanded) ? (
             <p
               ref={resting.detailRef}

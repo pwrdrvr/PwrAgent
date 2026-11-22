@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
@@ -87,6 +88,35 @@ it("puts the signing gate, release facts and GitHub review action on the resting
   expect(screen.getByText(detail)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Mark done" }));
   expect(handlers.onResolve).toHaveBeenCalledWith(todo, "done", undefined, undefined);
+});
+
+function expectStoredApprovalTitleInDetails(instruction: string, hasDetail: boolean): void {
+  const title = `Run 42: Needs approval: windows-signing: ${instruction}`;
+  const todo = card([], {
+    title, detail: hasDetail ? "• Run 42 (met): Needs approval: windows-signing" : undefined, items: undefined,
+    ciApprovals: [{ url: "https://github.com/example/app/actions/runs/42", repository: "example/app", runId: 42,
+      environments: ["windows-signing"] }],
+  });
+  const view = render(<ThreadTodoCard {...props(todo)} />);
+  try {
+    expect(screen.queryByText(title)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText(title)).toBeTruthy();
+  } finally {
+    view.unmount();
+  }
+}
+
+it("reveals short instructions that were saved only in the original title", () => {
+  expectStoredApprovalTitleInDetails("Wait for the smoke test before approving.", true);
+});
+
+it("preserves the original title in the details of any decorated signing reminder", () => {
+  const action = fc.constantFrom("Confirm", "Read", "Wait for", "Check");
+  const subject = fc.constantFrom("the smoke test", "the signed manifest", "release team approval", "the release notes");
+  fc.assert(fc.property(action, subject, fc.boolean(), (verb, target, hasDetail) => {
+    expectStoredApprovalTitleInDetails(`${verb} ${target} before approving.`, hasDetail);
+  }), { numRuns: 24 });
 });
 
 const HANDOFF: ThreadTodo["action"] = {
