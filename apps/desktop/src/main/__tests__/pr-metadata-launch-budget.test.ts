@@ -14,6 +14,7 @@ import {
   readForgeRepositoryRemotes,
   resolveGitHubRepoForDirectory,
 } from "../pr-status/git-remote";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 const execFileAsync = promisify(execFile);
 // Every async launch reaches this method; Node's public typings omit it.
@@ -22,12 +23,15 @@ const originConfig = ["local", "remote.origin.url\nhttps://github.com/fixture/pr
 
 describe("PR metadata launch budgets", () => {
   let root: string;
+  let restoreGitEnv: () => void;
   beforeEach(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-launch-budget-"));
+    restoreGitEnv = isolateProcessGitEnvironment(root);
     clearGitHubRemoteCache();
   });
   afterEach(async () => {
     vi.restoreAllMocks();
+    restoreGitEnv();
     clearGitHubRemoteCache();
     await rm(root, { recursive: true, force: true });
   });
@@ -48,9 +52,9 @@ describe("PR metadata launch budgets", () => {
     for (let round = 0; round < 5; round++) {
       expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([pr]);
     }
-    // Proven non-repositories launch nothing. A real local-only checkout
-    // still asks Git once and caches the negative identity.
-    const expected = kind === "local-only" ? ["config"] : [];
+    // A missing checkout also reaches the compatibility fallback. All the
+    // negative answers are cached, so subsequent sweeps launch nothing.
+    const expected = kind === "missing" ? ["config", "remote"] : ["config"];
     expect(runner.mock.calls.map(([, args]) => args[0])).toEqual(expected);
     expect(launches).toHaveBeenCalledTimes(expected.length);
   });

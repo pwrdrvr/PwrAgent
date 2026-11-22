@@ -61,6 +61,7 @@ import {
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
 import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { resolvePwragentRoot } from "../profile";
 import type { DirectoryGitStatusEntry } from "../app-server/git-directory-service";
 
@@ -2487,6 +2488,7 @@ describe("app server ipc", () => {
   });
 
   it.each([20, 40])("validates only demanded PR rows from a mounted query over %i stored checkouts", async (size) => {
+    onTestFinished(isolateProcessGitEnvironment());
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     const git = await import("../app-server/git-executable");
@@ -2562,7 +2564,9 @@ describe("app server ipc", () => {
     const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
       await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-git-budget-"));
+    const restoreGitEnv = isolateProcessGitEnvironment(root);
     onTestFinished(async () => {
+      restoreGitEnv();
       clearGitHubRemoteCache();
       await rm(root, { recursive: true, force: true });
     });

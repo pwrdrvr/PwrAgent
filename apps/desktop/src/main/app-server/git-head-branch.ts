@@ -74,7 +74,9 @@ const NEUTRAL_ENVIRONMENT_CONFIG_KEYS = new Set(["safe.directory", "core.autocrl
 
 function hasGitEnvironmentOverride(): boolean {
   const env = new Map(Object.entries(process.env).map(([key, value]) => [key.toUpperCase(), value]));
-  if (hasGitDiscoveryOverride([...env.keys()])) return true;
+  if ([...env.keys()].some((key) =>
+    /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM))$/.test(key)
+  )) return true;
 
   const configKeys = [...env.keys()].filter((key) => key.startsWith("GIT_CONFIG"));
   if (configKeys.length === 0) return false;
@@ -92,12 +94,6 @@ function hasGitEnvironmentOverride(): boolean {
     allowed.add(value);
   }
   return configKeys.some((key) => !allowed.has(key));
-}
-
-function hasGitDiscoveryOverride(keys: string[]): boolean {
-  return keys.some((key) =>
-    /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM))$/.test(key)
-  );
 }
 
 function safeBranchName(branch: string): boolean {
@@ -161,46 +157,26 @@ export async function probeCurrentGitBranch(
 ): Promise<GitHeadBranchProbe | typeof NOT_A_GIT_REPOSITORY | undefined> {
   signal?.throwIfAborted();
   if (hasGitEnvironmentOverride()) return undefined;
-  const location = await findGitDirectory(cwd, false, signal);
-  if (!location || location === NOT_A_GIT_REPOSITORY) return location;
-  const { current, dotGit, dotGitInfo } = location;
-
-  let gitDir = dotGit;
-  if (!dotGitInfo.isDirectory()) {
-    const link = await readSmallFile(dotGit, 4096, signal);
-    if (link?.kind !== "text") return undefined;
-    const match = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(link.text);
-    if (!match) return undefined;
-    gitDir = path.resolve(current, match[1]);
-  }
-  return await probeGitDirectoryHead(gitDir, signal);
-}
-
-/** Git cannot read configuration from a missing cwd or a proven non-repository. */
-export async function isDefinitelyOutsideGitRepository(cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<boolean> {
-  if (!path.isAbsolute(cwd) || hasGitDiscoveryOverride(Object.keys(env).map((key) => key.toUpperCase()))) return false;
-  return await findGitDirectory(cwd, true, signal) === NOT_A_GIT_REPOSITORY;
-}
-
-async function findGitDirectory(cwd: string, missingIsNegative: boolean, signal?: AbortSignal) {
   let current: string;
   try {
     current = await realpath(cwd);
     const currentInfo = await stat(current);
     signal?.throwIfAborted();
-    if (!currentInfo.isDirectory()) return missingIsNegative ? NOT_A_GIT_REPOSITORY : undefined;
-  } catch (error) {
+    if (!currentInfo.isDirectory()) return undefined;
+  } catch {
     signal?.throwIfAborted();
-    return missingIsNegative && isMissing(error) ? NOT_A_GIT_REPOSITORY : undefined;
+    return undefined;
   }
 
+  let dotGit: string;
+  let dotGitInfo: Awaited<ReturnType<typeof stat>>;
   while (true) {
     signal?.throwIfAborted();
-    const dotGit = path.join(current, ".git");
+    dotGit = path.join(current, ".git");
     try {
-      const dotGitInfo = await stat(dotGit);
+      dotGitInfo = await stat(dotGit);
       signal?.throwIfAborted();
-      return { current, dotGit, dotGitInfo };
+      break;
     } catch (error) {
       signal?.throwIfAborted();
       if (!isMissing(error)) return undefined;
@@ -215,9 +191,15 @@ async function findGitDirectory(cwd: string, missingIsNegative: boolean, signal?
       current = parent;
     }
   }
-}
 
-async function probeGitDirectoryHead(gitDir: string, signal?: AbortSignal): Promise<GitHeadBranchProbe | undefined> {
+  let gitDir = dotGit;
+  if (!dotGitInfo.isDirectory()) {
+    const link = await readSmallFile(dotGit, 4096, signal);
+    if (link?.kind !== "text") return undefined;
+    const match = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(link.text);
+    if (!match) return undefined;
+    gitDir = path.resolve(current, match[1]);
+  }
   signal?.throwIfAborted();
   const adminInfo = await stat(gitDir).catch(() => undefined);
   signal?.throwIfAborted();

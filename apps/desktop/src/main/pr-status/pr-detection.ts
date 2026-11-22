@@ -374,11 +374,20 @@ async function readTrackedRemoteBranch(params: {
 
 async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand, remoteNames?: string[]): Promise<DefaultBranchInfo> {
   try {
-    const { defaultsByRemote, remotes } = await readRemoteDefaultBranches(cwd, demand, remoteNames);
+    const { defaultsByRemote, remotes, confirmed } = await readRemoteDefaultBranches(cwd, demand, remoteNames);
     const names = new Set(defaultsByRemote.values());
 
     if (names.size === 0) {
-      const fallbackDefaultBranch = await readFallbackDefaultBranchName(cwd, demand);
+      const refs = await readGitLine(cwd, [
+        "for-each-ref",
+        "--format=%(refname)",
+        ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
+      ], demand);
+      // A successful empty ref read still confirms that Git can read the
+      // checkout. After only failures, revalidate the previously sampled names.
+      if (remoteNames && !confirmed && refs === undefined) return await readDefaultBranchInfo(cwd, demand);
+      const localRefs = new Set(refs?.split(/\r?\n/));
+      const fallbackDefaultBranch = FALLBACK_DEFAULT_BRANCHES.find((branch) => localRefs.has(`refs/heads/${branch}`));
       if (fallbackDefaultBranch) {
         names.add(fallbackDefaultBranch);
       }
@@ -398,6 +407,7 @@ async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand, rem
 async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand, remoteNames?: string[]): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
+  confirmed: boolean;
 }> {
   if (!remoteNames) {
     const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
@@ -408,6 +418,7 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand,
     }, demand);
     remoteNames = uniqueNonEmpty(stdout.split(/\r?\n/));
   }
+  let confirmed = false;
   const defaults = await Promise.all(
     remoteNames.map(async (remote) => {
       const remoteHead = await readGitLine(cwd, [
@@ -416,6 +427,7 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand,
         "--short",
         `refs/remotes/${remote}/HEAD`,
       ], demand);
+      if (remoteHead !== undefined) confirmed = true;
       const prefix = `${remote}/`;
       return remoteHead?.startsWith(prefix)
         ? ([remote, remoteHead.slice(prefix.length)] as const)
@@ -429,20 +441,8 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand,
       ),
     ),
     remotes: new Set(remoteNames),
+    confirmed,
   };
-}
-
-async function readFallbackDefaultBranchName(
-  cwd: string,
-  demand?: PrMetadataDemand,
-): Promise<string | undefined> {
-  const refs = await readGitLine(cwd, [
-    "for-each-ref",
-    "--format=%(refname)",
-    ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
-  ], demand);
-  const names = new Set(refs?.split(/\r?\n/));
-  return FALLBACK_DEFAULT_BRANCHES.find((branch) => names.has(`refs/heads/${branch}`));
 }
 
 async function readGitLine(
@@ -457,7 +457,7 @@ async function readGitLine(
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
     }, demand);
-    return stdout.trim() || undefined;
+    return stdout.trim();
   } catch {
     demand?.signal?.throwIfAborted();
     return undefined;

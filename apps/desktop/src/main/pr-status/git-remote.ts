@@ -2,10 +2,8 @@ import { FORGE_PRODUCTS, forgeKindForRemoteHost, type ForgeKind } from "@pwragen
 import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { isDefinitelyOutsideGitRepository } from "../app-server/git-head-branch";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { getConfiguredGitCommand } from "../git-command";
 import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
 import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
@@ -316,12 +314,6 @@ async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promis
     maxBuffer: 64 * 1024,
     timeout: GIT_REMOTE_TIMEOUT_MS,
   };
-  // Keep filesystem discovery bounded and let a selected reader promote its
-  // shared probe ahead of queued inventory reads.
-  if (!getConfiguredGitCommand() && await runPrMetadataProcess(
-    () => isDefinitelyOutsideGitRepository(cwd, childEnv, demand.signal), demand,
-  )) return { names: [], remotes: [] };
-
   // GIT_CONFIG affects the config subcommand, while remote reads the standard
   // hierarchy. Keep the original Git commands in this case and for unusual
   // configuration. `remote --verbose` prints only the first fetch URL.

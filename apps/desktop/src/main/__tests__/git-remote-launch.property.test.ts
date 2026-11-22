@@ -1,19 +1,84 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { runGitCommand } from "../app-server/git-executable";
+import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, parseForgeRemote, readForgeRepositoryRemotes, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
-import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
+import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
+import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return { ...actual, realpath: vi.fn(actual.realpath) };
+});
+
+const { runGitCommand } = gitExecutable;
+const originConfig = ["local", "remote.origin.url\nhttps://github.com/fixture/project.git", ""].join("\0");
+
+it("keeps a selected PR read moving when background paths cannot complete filesystem discovery", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-unresponsive-"));
+  const restoreEnv = isolateProcessGitEnvironment(root);
+  await runGitCommand(root, ["init", "-b", "main"]);
+  const { realpath } = await vi.importActual<typeof fs>("node:fs/promises");
+  let release!: () => void;
+  const unresponsive = new Promise<void>((resolve) => { release = resolve; });
+  const probe = vi.spyOn(fs, "realpath").mockImplementation(async (cwd) => {
+    if (String(cwd).includes("unresponsive-checkout")) await unresponsive;
+    return await realpath(cwd);
+  });
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockResolvedValue({ stdout: originConfig, stderr: "" });
+  onTestFinished(async () => {
+    probe.mockRestore();
+    runner.mockRestore();
+    restoreEnv();
+    clearGitHubRemoteCache();
+    await rm(root, { recursive: true, force: true });
+  });
+  const background = Array.from({ length: 16 }, (_, index) =>
+    resolveGitHubRepoForDirectory(path.join(root, `unresponsive-checkout-${index}`)));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const selected = resolveGitHubRepoForDirectory(root, { demand: { priority: () => PR_METADATA_PRIORITY.selected } });
+  try {
+    const result = await Promise.race([selected, new Promise<void>((resolve) => setImmediate(resolve))]);
+    expect(result).toEqual({ host: "github.com", owner: "fixture", repo: "project" });
+  } finally {
+    release();
+    await Promise.all([...background, selected]);
+  }
+});
+
+it("keeps attachment history and skips forge discovery when a checkout vanishes after its config read", async () => {
+  const restoreEnv = isolateProcessGitEnvironment();
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (_cwd, args) => {
+    if (args[0] === "config") return { stdout: originConfig, stderr: "" };
+    throw new Error("checkout vanished");
+  });
+  onTestFinished(() => { runner.mockRestore(); restoreEnv(); clearGitHubRemoteCache(); });
+  const pr: PrSummary = {
+    provider: "github.com", org: "old", repo: "project", number: 1, state: "merged",
+    headRefName: "topic", url: "https://github.com/old/project/pull/1", linkedDirectoryPaths: ["vanished-history"],
+  };
+  const fetchAllPullRequestsForBranch = vi.fn(async () => []);
+  const [history, discovered] = await Promise.all([
+    filterStoredDiscoveredPullRequests([pr]),
+    detectPullRequestsForThread({ fetcher: { fetchAllPullRequestsForBranch }, branch: "topic", directoryPaths: ["vanished-discovery"] }),
+  ]);
+  expect({ history, discovered, forgeLookups: fetchAllPullRequestsForBranch.mock.calls.length }).toEqual({
+    history: [pr], discovered: [], forgeLookups: 0,
+  });
+  for (const cwd of ["vanished-history", "vanished-discovery"]) {
+    expect(runner.mock.calls.filter(([path]) => path === cwd).map(([, args]) => args[0]))
+      .toEqual(["config", "symbolic-ref", "for-each-ref", "remote"]);
+  }
+});
 
 it.each([8, 16])("shares a checkout's remote observation between attachment validation and ownership for %i worktrees", async (size) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-wave-"));
-  const restore = isolateProcessGitEnvironment();
-  process.env.GIT_CONFIG_GLOBAL = path.join(root, "nonexistent-global-config");
-  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  const restore = isolateProcessGitEnvironment(root);
   onTestFinished(async () => {
     restore();
     clearGitHubRemoteCache();
@@ -49,19 +114,17 @@ it.each([8, 16])("shares a checkout's remote observation between attachment vali
   expect(owners).toEqual([...checkouts.map(() => ({ host: "github.com", owner: "fixture", repo: "origin" })), undefined, undefined]);
 
   // Each real checkout needs one effective-config observation and one HEAD
-  // read per remote. Inconclusive paths preserve history without a Git launch.
+  // read per remote. Inconclusive paths cache a negative remote observation.
   const remoteStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-remotes");
   const discoveryStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-discovery");
-  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size, discovery: size * 2 });
-  expect(remoteStarts.map(([cwd]) => cwd).sort()).toEqual([...checkouts].sort());
+  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 3, discovery: size * 2 });
+  expect(remoteStarts.map(([cwd]) => cwd).sort()).toEqual([...directories, missing].sort());
   expect(discoveryStarts.every(([, args]) => args[0] === "symbolic-ref")).toBe(true);
 });
 
 it("matches Git across effective config changes and overrides", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-config-"));
-  const restore = isolateProcessGitEnvironment();
-  process.env.GIT_CONFIG_GLOBAL = path.join(root, "global-config");
-  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  const restore = isolateProcessGitEnvironment(root);
   onTestFinished(async () => {
     restore();
     clearGitHubRemoteCache();
