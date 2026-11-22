@@ -45,6 +45,7 @@ type TrustApi = Pick<DesktopApi, "readThreadAgentTrustPolicy" | "setThreadAgentT
 type DraftRule = { id: number; rule: AgentTrustRule };
 
 export function AgentMessagingTrust(props: {
+  agentName: string;
   target: ThreadAgentTrustPolicyTarget;
   revision: number;
   api: TrustApi;
@@ -81,7 +82,7 @@ export function AgentMessagingTrust(props: {
         <p className="context-list__meta" title={error}>{status}</p>
       </div>
       <button className="context-list__action" type="button" disabled={!snapshot || !!error} onClick={() => setOpen(true)}>Edit access</button>
-      {open ? <TrustDialog policy={policy} listActivity={props.api.listMessagingActivity} target={props.target}
+      {open ? <TrustDialog agentName={props.agentName} policy={policy} listActivity={props.api.listMessagingActivity} target={props.target}
         onClose={() => setOpen(false)} onSave={async (next) => {
           const saved = await save({ backend, threadId, policy: next });
           setSnapshot({ policy: saved ?? undefined });
@@ -93,6 +94,7 @@ export function AgentMessagingTrust(props: {
 }
 
 function TrustDialog(props: {
+  agentName: string;
   policy: unknown;
   target: ThreadAgentTrustPolicyTarget;
   listActivity: TrustApi["listMessagingActivity"];
@@ -117,6 +119,9 @@ function TrustDialog(props: {
   const listActivity = props.listActivity;
   const unreadable = props.policy !== undefined && !valid;
   const draft: AgentTrustPolicy = { version: 1, denialResponse, rules: rules.map(({ rule }) => rule) };
+  const unchanged = mode === "inherited" ? props.policy === undefined
+    : valid !== undefined && denialResponse === valid.denialResponse && rules.length === valid.rules.length
+      && rules.every((entry, index) => entry.rule === valid.rules[index]);
 
   useEffect(() => {
     if (!listActivity) return;
@@ -146,7 +151,10 @@ function TrustDialog(props: {
     <div className="subagent-modal" role="dialog" aria-modal="true" aria-labelledby={title}>
       <div ref={contentRef} className="subagent-modal__content agent-trust-dialog">
         <div className="subagent-modal__head">
-          <h2 className="subagent-modal__title" id={title}>Messaging access</h2>
+          <div className="subagent-modal__identity">
+            <h2 className="subagent-modal__title" id={title}>Messaging access</h2>
+            <p className="context-list__meta">{props.agentName}</p>
+          </div>
         </div>
         <div className="subagent-modal__body agent-trust-dialog__body">
           <Field label="Invocation policy">
@@ -190,9 +198,10 @@ function TrustDialog(props: {
           {savingError ? <p role="alert">{savingError}</p> : null}
         </div>
         <div className="decisions-setup__foot">
-          <button ref={closeRef} className="button button--ghost" type="button" disabled={busy} onClick={props.onClose}>Cancel</button>
-          <button className="button button--primary" type="button" disabled={busy || (mode === "restricted" && (!isAgentTrustPolicy(draft) || unreadable && !replaceUnreadable))}
-            onClick={() => void save()}>{busy ? "Saving…" : confirmInherit ? "Restore inherited access" : "Save"}</button>
+          <button ref={closeRef} className="button button--ghost" type="button" disabled={busy} onClick={props.onClose}>{unchanged ? "Close" : "Cancel"}</button>
+          {unchanged && mode === "inherited" ? null : <button className="button button--primary" type="button"
+            disabled={busy || unchanged || (mode === "restricted" && (!isAgentTrustPolicy(draft) || unreadable && !replaceUnreadable))}
+            onClick={() => void save()}>{busy ? "Saving…" : confirmInherit ? "Restore inherited access" : "Save"}</button>}
         </div>
       </div>
     </div>, document.body,

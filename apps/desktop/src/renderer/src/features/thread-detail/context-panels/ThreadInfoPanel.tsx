@@ -138,7 +138,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
           </div>
         )}
         {props.thread.agent && props.desktopApi && !federation && !readRendererFederationTarget() ? (
-          <AgentMessagingTrust key={JSON.stringify([source, id])} target={{ backend: source, threadId: id }}
+          <AgentMessagingTrust key={JSON.stringify([source, id])} agentName={props.thread.agent.name} target={{ backend: source, threadId: id }}
             revision={props.thread.agent.updatedAt} api={props.desktopApi} refresh={props.onRefreshNavigation} />
         ) : null}
         {memoryAccess && props.thread.agent ? (
