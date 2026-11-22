@@ -199,7 +199,10 @@ export class DesktopAutomationService {
    * at automation scale. Best-effort, not banking: a crash inside the flush
    * window loses at most the last in-flight snapshot of a cost estimate.
    */
-  private readonly pendingRunUsage = new Map<string, AutomationRunUsage>();
+  private readonly pendingRunUsage = new Map<string, {
+    usage: AutomationRunUsage;
+    lateAutomationId?: string;
+  }>();
   private runOwnerRecheckTimer: NodeJS.Timeout | undefined;
   private readonly unconfirmedStartupOwnerIds = new Set<string>();
   /** Runs already handed to a report pass in this process. */
@@ -503,12 +506,7 @@ export class DesktopAutomationService {
     };
   }
 
-  /**
-   * Summed run cost since `sinceMs`, from retained runs. This is honest only
-   * within the run-history window — a lifetime total needs a denormalized
-   * counter that survives pruning, which is a schema change deferred on
-   * purpose.
-   */
+  /** Cost in the requested window from retained runs. */
   private sumRunCostSince(automationId: string, sinceMs: number): number | undefined {
     let total = 0;
     let sawCost = false;
@@ -1169,17 +1167,30 @@ export class DesktopAutomationService {
     const lines = params?.pricing?.lines;
     if (!Array.isArray(lines)) return;
     const turnLines = lines.filter((line): line is Record<string, unknown> & { turnId: string } =>
-      line.scope === "turn" && typeof line.turnId === "string");
+      line.scope === "turn"
+      && line.status !== "superseded"
+      && line.turnUsageAttributed !== false
+      && typeof line.turnId === "string");
     // The event carries the thread's whole ledger. Resolve its turn ids in
     // one batched lookup.
     const store = this.options.store;
+    const backendTurnIds = [...new Set(turnLines.map((line) => line.turnId))];
     const runs = typeof store.findRunsByBackendTurnIds === "function"
       ? store.findRunsByBackendTurnIds({
           backend: event.backend,
-          backendTurnIds: [...new Set(turnLines.map((line) => line.turnId))],
+          backendTurnIds,
         })
       : undefined;
+    const pruned = store.findPrunedRunCostsByBackendTurnIds?.({
+      backend: event.backend,
+      backendTurnIds: backendTurnIds.filter((id) => !runs?.has(id)),
+    });
     for (const line of turnLines) {
+      const total = line.totalCostMicros;
+      const cost = line.priceStatus !== "unpriced"
+        && (line.currency === undefined || line.currency === "USD")
+        && typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+        ? total : undefined;
       const run = runs
         ? runs.get(line.turnId)
         : store.findRunningRunByBackendTurnId({
@@ -1190,7 +1201,17 @@ export class DesktopAutomationService {
             backend: event.backend,
             backendTurnId: line.turnId,
           });
-      if (!run) continue;
+      if (!run) {
+        const archived = pruned?.get(line.turnId);
+        if (archived && cost !== undefined) {
+          this.bufferRunUsage(
+            { id: archived.runId, usage: { totalCostMicros: archived.totalCostMicros } },
+            { totalCostMicros: cost },
+            archived.automationId,
+          );
+        }
+        continue;
+      }
       const usage: AutomationRunUsage = {
         ...(typeof line.model === "string" ? { model: line.model } : {}),
         ...(typeof line.reasoningEffort === "string"
@@ -1211,12 +1232,11 @@ export class DesktopAutomationService {
         ...(typeof line.totalTokens === "number"
           ? { totalTokens: line.totalTokens }
           : {}),
-        ...(typeof line.totalCostMicros === "number"
-          ? { totalCostMicros: line.totalCostMicros }
-          : {}),
+        ...(cost !== undefined ? { totalCostMicros: cost } : {}),
         ...(typeof line.currency === "string" ? { currency: line.currency } : {}),
       };
-      this.bufferRunUsage(run, usage);
+      const ended = run.completedAt !== undefined;
+      this.bufferRunUsage(run, usage, ended && cost !== undefined ? run.automationId : undefined);
     }
   }
 
@@ -1226,10 +1246,20 @@ export class DesktopAutomationService {
    * row — so identical snapshots are dropped, changed ones wait out one flush
    * window, and terminal events drain their run immediately.
    */
-  private bufferRunUsage(run: AutomationRunSummary, usage: AutomationRunUsage): void {
-    const current = this.pendingRunUsage.get(run.id) ?? run.usage;
+  private bufferRunUsage(
+    run: Pick<AutomationRunSummary, "id" | "usage">,
+    snapshot: AutomationRunUsage,
+    lateAutomationId?: string,
+  ): void {
+    const pending = this.pendingRunUsage.get(run.id);
+    const current = pending?.usage ?? run.usage;
+    // An unpriced snapshot can update token counts but supplies no replacement
+    // for the last known price, including a price pending its first flush.
+    const usage = snapshot.totalCostMicros === undefined && current?.totalCostMicros !== undefined
+      ? { ...snapshot, totalCostMicros: current.totalCostMicros, currency: current.currency }
+      : snapshot;
     if (current && automationRunUsageEquals(current, usage)) return;
-    this.pendingRunUsage.set(run.id, usage);
+    this.pendingRunUsage.set(run.id, { usage, lateAutomationId: lateAutomationId ?? pending?.lateAutomationId });
     if (this.pendingRunUsageTimer) return;
     const timer = setTimeout(() => {
       this.pendingRunUsageTimer = undefined;
@@ -1241,16 +1271,24 @@ export class DesktopAutomationService {
 
   private flushPendingRunUsage(runId?: string): void {
     if (runId !== undefined) {
-      const usage = this.pendingRunUsage.get(runId);
-      if (!usage) return;
-      this.pendingRunUsage.delete(runId);
-      this.options.store.setRunUsage({ runId, usage });
+      const pending = this.pendingRunUsage.get(runId);
+      if (pending) {
+        this.options.store.setRunUsage({ runId, usage: pending.usage });
+        this.pendingRunUsage.delete(runId);
+      }
       return;
     }
-    const entries = [...this.pendingRunUsage.entries()];
-    this.pendingRunUsage.clear();
-    for (const [id, usage] of entries) {
-      this.options.store.setRunUsage({ runId: id, usage });
+    const changed = new Set<string>();
+    for (const [id, pending] of this.pendingRunUsage) {
+      this.options.store.setRunUsage({ runId: id, usage: pending.usage });
+      this.pendingRunUsage.delete(id);
+      if (pending.lateAutomationId) changed.add(pending.lateAutomationId);
+    }
+    // The terminal run event refreshed the list before these prices arrived.
+    for (const id of changed) {
+      const automation = this.options.store.getAutomation(id);
+      if (!automation) continue;
+      void this.notifyThreadAutomationsUpdated(automation).catch(() => {});
     }
   }
 
@@ -2028,6 +2066,7 @@ function toAutomationDetail(
     executionProfile: record.executionProfile,
     priorRunLookback: record.priorRunLookback,
     ...(costTodayMicros !== undefined ? { costTodayMicros } : {}),
+    ...(record.lifetimeCost ? { lifetimeCost: record.lifetimeCost } : {}),
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     maxRunsPerHour: record.maxRunsPerHour,

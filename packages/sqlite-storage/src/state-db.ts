@@ -46,7 +46,7 @@ import {
 import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
-export const CURRENT_STATE_DB_USER_VERSION = 86;
+export const CURRENT_STATE_DB_USER_VERSION = 87;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -557,6 +557,18 @@ CREATE TABLE IF NOT EXISTS automation_run_artifacts (
 );
 CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
   ON automation_run_artifacts(automation_id, updated_at DESC);
+`;
+
+const AUTOMATION_PRUNED_RUN_COST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS automation_pruned_run_costs (
+  run_id            TEXT PRIMARY KEY,
+  automation_id     TEXT NOT NULL REFERENCES automations(automation_id) ON DELETE CASCADE,
+  backend           TEXT NOT NULL,
+  backend_turn_id   TEXT NOT NULL,
+  total_cost_micros INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_automation_pruned_run_costs_turn
+  ON automation_pruned_run_costs(backend, backend_turn_id);
 `;
 
 const SCHEDULED_THREAD_ACTION_SCHEMA = `
@@ -2281,6 +2293,21 @@ export class StateDb {
         db.transaction(() => {
           if (!hasScheduledActionProjectionSchema(db)) db.exec(SCHEDULED_ACTION_PROJECTION_SCHEMA);
           if ((db.pragma("user_version", { simple: true }) as number) < 86) db.pragma("user_version = 86");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 87
+        || !tableColumnExists(db, "automations", "cost_since")) {
+        db.transaction(() => {
+          if (!tableColumnExists(db, "automations", "cost_since")) {
+            db.exec(`ALTER TABLE automations ADD COLUMN cost_since INTEGER;
+                     ALTER TABLE automations ADD COLUMN total_cost_micros INTEGER;
+                     ALTER TABLE automation_runs ADD COLUMN accounted_cost_micros INTEGER;`);
+            // Retained history is a partial sample. Start a prospective
+            // total at migration time for automations that already exist.
+            db.prepare("UPDATE automations SET cost_since = ?").run(Date.now());
+          }
+          db.exec(AUTOMATION_PRUNED_RUN_COST_SCHEMA);
+          if ((db.pragma("user_version", { simple: true }) as number) < 87) db.pragma("user_version = 87");
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
@@ -4564,6 +4591,7 @@ function tableColumnExists(
   tableName:
     | "app_runtime_instances"
     | "automation_runs"
+    | "automations"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4606,6 +4634,7 @@ function readTableInfo(
   tableName:
     | "app_runtime_instances"
     | "automation_runs"
+    | "automations"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4635,6 +4664,8 @@ function readTableInfo(
       return db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{
         name: string;
       }>;
+    case "automations":
+      return db.prepare("PRAGMA table_info(automations)").all() as Array<{ name: string }>;
     case "pr_lookup_cache":
       return db.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
         name: string;

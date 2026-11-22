@@ -19,7 +19,7 @@ import {
   formatAutomationStatus,
   formatAutomationTimestamp,
   formatBacklogPolicy,
-  formatCostTodayMicros,
+  formatAutomationCost,
   formatRunStatus,
   formatWorkspacePathLabel,
 } from "./automation-format";
@@ -220,7 +220,7 @@ function AutomationSummary(props: {
   const scheduleTriggered = props.automation.triggers.some(
     (trigger) => trigger.kind === "schedule",
   );
-  const costToday = formatCostTodayMicros(props.automation.costTodayMicros);
+  const cost = formatAutomationCost(props.automation);
   return (
     <article className="automation-row">
       <div className="automation-row__main">
@@ -269,7 +269,7 @@ function AutomationSummary(props: {
               .join(" · ")}
           </p>
         ) : null}
-        {costToday ? <p className="automation-row__meta">{costToday}</p> : null}
+        {cost ? <p className="automation-row__meta">{cost}</p> : null}
         {props.automation.pendingRunCount || props.automation.coalescedWindowCount ? (
           <p className="automation-row__meta">
             {props.automation.pendingRunCount ?? 0} queued -{" "}

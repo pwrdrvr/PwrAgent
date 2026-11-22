@@ -4,6 +4,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   AutomationBacklogPolicy,
+  AutomationDetail,
   AutomationExecutionProfile,
   AutomationPriorRunLookback,
   AutomationRunUsage,
@@ -55,6 +56,7 @@ export type AutomationRecord = {
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
+  lifetimeCost?: AutomationDetail["lifetimeCost"];
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;
@@ -296,6 +298,10 @@ export interface AutomationStorage {
     backend: AppServerBackendKind;
     backendTurnIds: readonly string[];
   }): Map<string, AutomationRunSummary>;
+  findPrunedRunCostsByBackendTurnIds(params: {
+    backend: AppServerBackendKind;
+    backendTurnIds: readonly string[];
+  }): Map<string, { runId: string; automationId: string; totalCostMicros?: number }>;
   upsertRunArtifact(input: UpsertAutomationRunArtifactInput): AutomationRunArtifact | undefined;
   appendRunTranscriptEvent(params: {
     runId: string;

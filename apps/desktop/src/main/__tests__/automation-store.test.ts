@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AutomationStore } from "../storage/automation-store";
 import { StateDb } from "../state/state-db";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: AutomationStore;
@@ -29,6 +29,68 @@ function createRun() {
 }
 
 describe("AutomationStore", () => {
+  it("rolls back the lifetime total if recording operation usage fails", () => {
+    createRun();
+    const usage = { totalCostMicros: 100 };
+    store.setRunUsage({ runId: "run-1", usage });
+    stateDb.raw.exec(`
+      CREATE TRIGGER reject_run_usage BEFORE UPDATE ON automation_runs
+      BEGIN SELECT RAISE(ABORT, 'run usage rejected'); END;
+    `);
+    expect(() => store.setRunUsage({ runId: "run-1", usage: { totalCostMicros: 20 } }))
+      .toThrow("run usage rejected");
+    expect(store.getRun("run-1")?.usage).toEqual(usage);
+    expect(store.getAutomation("automation-1")?.lifetimeCost).toEqual({ since: 0, totalMicros: 100 });
+  });
+
+  it("starts coverage at migration and preserves it across reopen", () => {
+    const { dbPath, tempDir } = createTempStateDb("pwragent-automation-cost-");
+    let db = StateDb.open(dbPath);
+    try {
+      let migrated = new AutomationStore(db, { runHistoryLimit: 1 });
+      const automation = migrated.createAutomation({
+        backend: "codex", threadId: "thread-1", name: "Legacy automation", taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 5, unit: "minutes" }, now: 1,
+      });
+      const oldRun = migrated.createRun({ automationId: automation.id, trigger: "manual", now: 2 })!;
+      migrated.markRunStarted({ runId: oldRun.id, backendTurnId: "old-turn", now: 3 });
+      migrated.markRunTerminal({ runId: oldRun.id, status: "completed", now: 4 });
+      migrated.setRunUsage({ runId: oldRun.id, usage: { totalCostMicros: 900 }, now: 4 });
+      db.raw.exec(`
+        DROP TABLE automation_pruned_run_costs;
+        ALTER TABLE automation_runs DROP COLUMN accounted_cost_micros;
+        ALTER TABLE automations DROP COLUMN total_cost_micros;
+        ALTER TABLE automations DROP COLUMN cost_since;
+        PRAGMA user_version = 86;
+      `);
+      db.close();
+      const migrationStarted = Date.now();
+      db = StateDb.open(dbPath);
+      const migrationEnded = Date.now();
+      migrated = new AutomationStore(db, { runHistoryLimit: 1 });
+      expect(migrated.getRun(oldRun.id)?.usage?.totalCostMicros).toBe(900);
+      migrated.setRunUsage({ runId: oldRun.id, usage: { totalCostMicros: 850 }, now: migrationEnded });
+      expect(migrated.getAutomation(automation.id)?.lifetimeCost).toBeUndefined();
+
+      const now = migrationEnded + 1;
+      const covered = migrated.createRun({ automationId: automation.id, trigger: "manual", now })!;
+      migrated.markRunStarted({ runId: covered.id, backendTurnId: "covered-turn", now });
+      migrated.setRunUsage({ runId: covered.id, usage: { totalCostMicros: 123 }, now });
+      const lifetime = migrated.getAutomation(automation.id)?.lifetimeCost;
+      expect(lifetime?.totalMicros).toBe(123);
+      expect(lifetime?.since).toBeGreaterThanOrEqual(migrationStarted);
+      expect(lifetime?.since).toBeLessThanOrEqual(migrationEnded);
+      expect(migrated.findPrunedRunCostsByBackendTurnIds({ backend: "codex", backendTurnIds: ["old-turn"] }).size).toBe(0);
+
+      db.close();
+      db = StateDb.open(dbPath);
+      expect(new AutomationStore(db).getAutomation(automation.id)?.lifetimeCost).toEqual(lifetime);
+    } finally {
+      if (db.raw.open) db.close();
+      removeTempStateDbDir(tempDir);
+    }
+  });
+
   it("keeps a run running when its queued acknowledgement arrives late", () => {
     createRun();
     store.markRunStarted({ runId: "run-1", backendTurnId: "turn-1", now: 100 });
