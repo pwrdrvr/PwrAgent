@@ -73,6 +73,19 @@ it("removes an empty owner registration and pin atomically", async () => {
     note: "Owner membership check and removal: one transaction deletes registration and clears pin; 100 removals/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes" });
 });
 
+it("rejects removal by an alternate spelling that navigation has folded into a project", async () => {
+  const alias = "directory:/REPO";
+  const legacy = { directoryKey: alias, directoryKind: "directory", directoryLabel: "REPO", directoryPath: "/REPO",
+    backend: "codex", workMode: "local", executionMode: "default", prompt: "Unsent legacy draft",
+    createdAt: 1, updatedAt: 1, registeredAt: 1 } as const;
+  await mocks.store!.upsertDirectoryLaunchpad(legacy);
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], directoryCaseAliases: { [key]: [alias] } });
+
+  await expect(removeLocalNavigationDirectory({ directoryKey: alias })).rejects.toThrow("shown under another spelling");
+  expect((await mocks.store!.getDirectoryLaunchpad({ directoryKey: alias }))?.prompt).toBe(legacy.prompt);
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
 it("removes folded worktree registrations in the same commit as their empty project", async () => {
   const alias = "directory:/elsewhere/linked-checkout";
   await mocks.store!.upsertDirectoryLaunchpad({ directoryKey: alias, directoryKind: "directory", directoryLabel: "linked-checkout",

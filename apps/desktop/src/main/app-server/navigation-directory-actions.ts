@@ -48,6 +48,9 @@ export async function removeLocalNavigationDirectory(
     const index = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory" });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
     if (changedDuringRead) throw new Error("Owner state changed during the directory check. Refresh navigation and try again.");
+    if (Object.values(index.directoryCaseAliases ?? {}).some((aliases) => aliases.includes(request.directoryKey))) {
+      throw new Error("This directory is shown under another spelling. Choose the project from Directories.");
+    }
     const directory = index.directories.find((candidate) => directoryIncludesCheckout(candidate, request.directoryKey));
     if (directory && directory.key !== request.directoryKey) {
       throw new Error("This checkout belongs to a group. Choose the project from Directories.");
