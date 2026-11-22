@@ -2,7 +2,8 @@ import type {
   ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
-import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
+import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
+import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type {
   ResearchThread,
   ResearchUpdateRequest,
@@ -3536,6 +3537,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
       request,
     ),
+  manageAgentPresets: (request: ManageAgentPresetsRequest): Promise<AgentPreset[]> =>
+    ipcRenderer.invoke(AGENT_PRESETS_CHANNEL, request),
   recordModelSettingsRecent: async (
     request: RecordModelSettingsRecentRequest,
   ): Promise<void> =>

@@ -1,5 +1,7 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
-import { AGENT_MEMORY_CHANNEL } from "../../../shared/ipc";
+import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../../../shared/ipc";
+import type { ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
+import { manageDesktopAgentPresets } from "../../storage/desktop-agent-presets";
 import type { OwnerNavigationRequest } from "../../../shared/owner-request";
 import { LocalOwnerNavigationTransport } from "../../federation/local-owner-navigation-transport";
 
@@ -352,6 +354,13 @@ const transcriptPrCleanupSenderIds = new Set<number>();
 
 
 export function registerAppServerIpcHandlers(): void {
+  ipcMain.removeHandler(AGENT_PRESETS_CHANNEL);
+  ipcMain.handle(AGENT_PRESETS_CHANNEL, (event, request: ManageAgentPresetsRequest) => {
+    if (isFederationWindowWebContents(event.sender)) {
+      throw new Error("Agent presets are available in this profile's local window.");
+    }
+    return manageDesktopAgentPresets(request);
+  });
   ipcMain.removeHandler(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL);
   ipcMain.handle(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL, (event) => {
     if (subscribersForChannel(BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL).includes(event.sender)) {
@@ -1769,6 +1778,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL);
   ipcMain.removeHandler(AGENT_MEMORY_CHANNEL);
+  ipcMain.removeHandler(AGENT_PRESETS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);

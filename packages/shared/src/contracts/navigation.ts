@@ -1401,6 +1401,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    * default for each new draft.
    */
   agent?: NavigationLaunchpadAgent;
+  /** The saved preset copied into this draft, if any. Never part of an Agent thread. */
+  agentPresetId?: string;
   /** MCP connections selected for the thread created from this launchpad. */
   mcpConnectionIds?: string[];
   /**
@@ -2730,6 +2732,7 @@ export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "directoryLabel"
   | "directoryPath"
   | "agent"
+  | "agentPresetId"
   | "mcpConnectionIds"
   | "registeredAt"
   | "settingsTouchedAt"

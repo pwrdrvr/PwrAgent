@@ -443,6 +443,9 @@ export function launchpadForMessagingProject(params: {
 
   return {
     ...base,
+    // A one-off desktop preset belongs to that draft, even if the messenger
+    // chooses the same project while the draft is still open.
+    ...(base.agentPresetId || base.agent ? { agent: undefined, agentPresetId: undefined, mcpConnectionIds: undefined } : {}),
     backend: params.backend,
     acpRuntime: params.acpRuntime ?? params.options.acpRuntime,
     codexEnvironmentId:

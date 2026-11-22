@@ -5656,6 +5656,52 @@ describe("MessagingController", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([false, true])("starts only a currently available messaging Agent preset (withdrawn %s)", async (withdrawn) => {
+    const preset = { id: "fixture-review", name: "Release reviewer", instructions: "Check the change log.",
+      mcpConnectionIds: ["ready", "missing"], availableInMessaging: true as const };
+    let available = true;
+    const harness = await createHarness({ backendOverrides: {
+      listAgentPresets: () => available ? [preset] : [],
+      listAgentPresetConnections: async () => [{ id: "ready", displayName: "Release notes", enabled: true, configured: true, state: "ready" }],
+    } });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+      directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+    } }));
+    expect(harness.delivered.at(-1)).toMatchObject({ actions: expect.arrayContaining([expect.objectContaining({ id: "browse:new:preset" })]) });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:preset" }));
+    expect(harness.delivered.at(-1)).toMatchObject({ title: "Start from an Agent preset" });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:preset:set", value: { presetId: preset.id } }));
+    expect(harness.delivered.at(-1)).toMatchObject({ body: expect.stringContaining("Agent: Release reviewer\nConnections: Release notes\nSkipped: missing") });
+
+    available = !withdrawn;
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+    if (withdrawn) {
+      expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+      expect(harness.delivered.at(-1)).toMatchObject({ title: "Agent preset unavailable" });
+    } else {
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        agent: { name: preset.name, instructions: preset.instructions },
+        launchpad: expect.objectContaining({ mcpConnectionIds: ["ready"] }),
+      }), expect.anything());
+    }
+  });
+
+  it("admits an Agent's first prompt only while thread creation permission is current", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("/agent --new", "/resume --new"), async (keepGrant, command) => {
+      const permissions: MessagingPermissionId[] = ["thread.resume", "message.reply", "thread.new"];
+      const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions) });
+      await harness.controller.handleInboundEvent(buildCommandEvent(command));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+        directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+      } }));
+      expect(harness.delivered.at(-1)).toMatchObject({ title: "Ready to start" });
+      if (!keepGrant) permissions.pop();
+      await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledTimes(keepGrant ? 1 : 0);
+    }), { numRuns: 12 });
+  });
+
   it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
     const harness = await createHarness();
 

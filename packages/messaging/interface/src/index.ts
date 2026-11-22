@@ -2019,6 +2019,8 @@ export type MessagingBrowseSessionRecord = {
   launchAction: MessagingBrowseLaunchAction;
   defaultAgentScope?: MessagingDefaultAgentScope;
   mode: MessagingBrowseMode;
+  /** Profile-local preset chosen for this new Agent. Resolved again before starting. */
+  agentPresetId?: string;
   pageIndex: number;
   pageSize: number;
   preferences?: MessagingBindingPreferences;

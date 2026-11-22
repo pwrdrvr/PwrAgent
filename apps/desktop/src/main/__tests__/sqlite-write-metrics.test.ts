@@ -50,6 +50,7 @@ import {
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
+import { deleteAgentPreset, listAgentPresets, saveAgentPreset } from "@pwragent/sqlite-storage/agent-preset-store";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 import {
@@ -128,6 +129,22 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets explicit Agent preset changes and read-only listing", async () => {
+    const { result: preset, writes: save } = await measureSqliteWrites(() => saveAgentPreset(stateDb, {
+      name: "Release reviewer",
+      instructions: "Check the change log.",
+      mcpConnectionIds: ["docs"],
+    }));
+    expectSqliteWriteBudget({ scenario: "agent-preset-save", note: "One explicit preset save.", writes: save });
+
+    const { writes: remove } = await measureSqliteWrites(() => {
+      listAgentPresets(stateDb);
+      deleteAgentPreset(stateDb, preset.id);
+      deleteAgentPreset(stateDb, preset.id);
+    });
+    expectSqliteWriteBudget({ scenario: "agent-preset-delete", note: "One explicit delete. Listing and retrying the delete commit nothing.", writes: remove });
+  });
+
   it("budgets Claude branch adoption and unchanged Git monitoring", async () => {
     const cwd = path.join(tempDir, "repo");
     mkdirSync(cwd);

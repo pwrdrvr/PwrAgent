@@ -159,8 +159,19 @@ type AssistantImageRequest = Parameters<
   NonNullable<MessagingBackendBridge["resolveAssistantMessageImages"]>
 >[0];
 
+import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { manageDesktopAgentPresets } from "../storage/desktop-agent-presets";
+
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   readonly ownsTurnQueue = true;
+
+  listAgentPresets() {
+    return manageDesktopAgentPresets({ action: "list" }).filter((preset) => preset.availableInMessaging === true);
+  }
+
+  listAgentPresetConnections() {
+    return getMcpConnectionGatewayService().listConnections({ cachedLocalStatus: true });
+  }
 
   async readQueuedTurn(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse> {
     const remote = this.remoteBackend(request.federationTarget);

@@ -229,6 +229,7 @@ export class NavigationDetailService {
       directoryLabel: storedLaunchpad.directoryLabel,
       directoryPath: storedLaunchpad.directoryPath,
       agent: storedLaunchpad.agent,
+      agentPresetId: storedLaunchpad.agentPresetId,
       mcpConnectionIds: storedLaunchpad.mcpConnectionIds,
       registeredAt: storedLaunchpad.registeredAt,
       settingsTouchedAt: storedLaunchpad.settingsTouchedAt,

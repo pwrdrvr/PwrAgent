@@ -15608,6 +15608,91 @@ a.button {
   flex-direction: column;
 }
 
+.agent-preset-row {
+  border-top: 1px solid var(--border-subtle);
+  padding: 12px 18px;
+}
+
+.agent-preset-row__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  overflow-wrap: anywhere;
+}
+
+.agent-preset-row__header > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.agent-preset-row__header strong + span {
+  margin-inline-start: 8px;
+}
+
+.agent-preset-preview {
+  margin: 4px 0;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-preset-connections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-preset-editor .settings-field,
+.agent-preset-dialog .settings-field {
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr);
+  padding: 8px 0;
+  gap: 8px;
+}
+
+.agent-preset-editor {
+  padding: 12px 18px;
+}
+
+.agent-preset-row .agent-preset-editor {
+  padding-inline: 0;
+}
+
+.settings-input.agent-preset-instructions {
+  height: auto;
+  min-height: 84px;
+  padding-block: 8px;
+  resize: vertical;
+}
+
+.settings-confirm-dialog.agent-preset-dialog {
+  width: min(580px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.agent-preset-dialog .select-trigger.settings-select {
+  padding-inline: 10px;
+  background-image: none;
+}
+
+.composer-agent-preset-chip {
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-preset-name-field {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-preset-save {
+  margin-inline-start: 4px;
+}
+
 /* Field row — 220px label column, label + sub-line stack on left,
    control + help stack on right. */
 .settings-field {

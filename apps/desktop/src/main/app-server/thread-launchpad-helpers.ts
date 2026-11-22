@@ -116,6 +116,12 @@ export async function resetLaunchpadAfterMaterialize(params: {
       imageAttachments: [],
       fileAttachments: [],
       editorDocument: undefined,
+      agent: undefined,
+      ...(launchpad.agentPresetId ? {
+        agentPresetId: undefined,
+        mcpConnectionIds: undefined,
+        mcpConnectionIdsFromDefaults: undefined,
+      } : {}),
       updatedAt: Date.now(),
     });
     return;

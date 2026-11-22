@@ -463,6 +463,7 @@ export const NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL =
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
 export const AGENT_MEMORY_CHANNEL = "agent-memory:access";
+export const AGENT_PRESETS_CHANNEL = "agent-presets:manage";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =

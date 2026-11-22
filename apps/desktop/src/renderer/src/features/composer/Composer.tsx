@@ -285,6 +285,7 @@ import {
 } from "../../lib/useFederatedThreadSearch";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { AgentPresetDialog } from "./AgentPresetDialog";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
@@ -646,6 +647,9 @@ export type ComposerProps = {
         | "imageAttachments"
         | "fileAttachments"
         | "agent"
+        | "agentPresetId"
+        | "mcpConnectionIds"
+        | "mcpConnectionIdsFromDefaults"
       >
     >,
     options?: {
@@ -2222,6 +2226,7 @@ function ComposerThreadOptionsMenu(props: {
    */
   mcpConnectionCount?: number;
   onAgentThreadChange?: (agentThread: boolean) => void;
+  onAgentPresets?: () => void;
   onShowMcpInventory?: () => void;
   /** Whose own MCP config the inventory row opens. */
   mcpInventoryAgent?: "codex" | "claude";
@@ -2373,6 +2378,12 @@ function ComposerThreadOptionsMenu(props: {
               </span>
             </button>
           </div>
+          {props.onAgentPresets ? (
+            <button className="composer-dropdown__option" disabled={props.disabled} role="menuitem" type="button"
+              onClick={() => { hideMenuTooltip(); setOpen(false); props.onAgentPresets?.(); }}>
+              Start from preset…
+            </button>
+          ) : null}
           {props.onMonitorJobSuggestionsChange ? (
             <>
               <button
@@ -3297,6 +3308,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 });
 
 function useComposerController(props: ComposerProps) {
+  const [agentPresetScope, setAgentPresetScope] = useState<string>();
   // These unconditional local hooks keep the original controller lifetime
   // and hook order. Their snapshots belong to this render; JSX runs after
   // the controller returns.
@@ -15316,6 +15328,8 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerToolbar(): ReactNode {
+    const localPresetLaunchpad = props.desktopApi?.manageAgentPresets && props.onUpdateLaunchpad
+      && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
       props.launchpad || props.thread ? (
         <div
@@ -16072,6 +16086,7 @@ function useComposerController(props: ComposerProps) {
                     }
                   : undefined
             }
+            onAgentPresets={localPresetLaunchpad ? () => setAgentPresetScope(localPresetLaunchpad.directoryKey) : undefined}
             mcpInventoryAgent={mcpInventoryAgent}
             onShowMcpInventory={
               mcpInventoryAgent
@@ -16110,6 +16125,21 @@ function useComposerController(props: ComposerProps) {
             mcpConnectionCount={props.mcpConnectionCount}
             onShowMcpAccess={props.onShowMcpAccess}
           />
+          {localPresetLaunchpad?.agent ? (
+            <button className="button button--ghost composer-agent-preset-chip" disabled={launchpadSubmitting} type="button"
+              onClick={() => setAgentPresetScope(localPresetLaunchpad.directoryKey)}>Agent · {localPresetLaunchpad.agent.name}</button>
+          ) : null}
+          {localPresetLaunchpad && props.desktopApi && agentPresetScope === localPresetLaunchpad.directoryKey ? (
+            <AgentPresetDialog key={agentPresetScope} launchpad={localPresetLaunchpad} desktopApi={props.desktopApi}
+              onClose={() => setAgentPresetScope(undefined)} onApply={async (values, agentPresetId) => {
+                await props.onUpdateLaunchpad?.(localPresetLaunchpad.directoryKey, {
+                  agent: { name: values.name, instructions: values.instructions },
+                  agentPresetId,
+                  mcpConnectionIds: values.mcpConnectionIds,
+                  mcpConnectionIdsFromDefaults: false,
+                }, { owner: { scope: "local" } });
+              }} />
+          ) : null}
         </div>
       ) : null
     );
