@@ -14,7 +14,7 @@ export function acpDiscoveryActionRequiredMessage(
     registryId === "gemini"
     && /(?:^|:\s*)This client is no longer supported for Gemini Code Assist for individuals\.(?:\s|$)/.test(error ?? "")
   ) {
-    return "Google ended Gemini CLI access for consumer Google accounts. Use Antigravity CLI in your terminal, or run /auth in Gemini CLI to switch to an eligible Code Assist Standard or Enterprise account or a paid Gemini API key. After switching, click Refresh under Re-probe.";
+    return "Google ended Gemini CLI access for consumer Google accounts. Set up Antigravity CLI in AI Providers, or run /auth in Gemini CLI to switch to an eligible Code Assist Standard or Enterprise account or a paid Gemini API key. After switching, click Refresh under Re-probe.";
   }
   return undefined;
 }

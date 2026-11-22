@@ -662,7 +662,8 @@ function AcpAgentSection(props: {
                         path={instance.command}
                         chips={chips}
                         selected={active}
-                        selectedLabel="Using"
+                        selectedLabel={entry.unavailableReason ? "Selected" : "Using"}
+                        selectedTone={entry.unavailableReason ? "muted" : "ok"}
                         useLabel="Use"
                         disabled={pathControlsDisabled}
                         onUse={
