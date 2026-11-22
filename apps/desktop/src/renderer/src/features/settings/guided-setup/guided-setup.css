@@ -324,7 +324,7 @@
   top: 10px;
   right: 10px;
   font: 600 10px/1 var(--font-sans, sans-serif);
-  color: var(--accent);
+  color: var(--accent-bright);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   background: var(--accent-soft);
@@ -505,13 +505,12 @@
 .guided-setup__codex-node-text {
   min-width: 0;
 }
-/* Fade the words, not the node: a node-level opacity would also fade the
-   Codex mark, and OpenAI's guidelines forbid altering it. */
+/* A muted node reads as faded through its transparent fill, dashed border,
+   and muted words. No opacity: the muted text token is already as light as
+   AA contrast allows, and a node-level opacity would also fade the Codex
+   mark, which OpenAI's guidelines forbid altering. */
 .guided-setup__codex-node.is-muted {
   background: transparent;
-}
-.guided-setup__codex-node.is-muted .guided-setup__codex-node-text {
-  opacity: 0.7;
 }
 .guided-setup__codex-node.is-muted .guided-setup__codex-label,
 .guided-setup__codex-node.is-muted .guided-setup__codex-meta {
