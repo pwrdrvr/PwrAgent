@@ -5,11 +5,13 @@ import type {
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
   ThreadTodoModelSettings,
+  ThreadTodoPlacement,
   ThreadTodoWorkMode,
 } from "@pwragent/shared/contracts/thread-todos";
 import { CODEX_SPEED_LABELS, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
+  THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
   resolveThreadTodoModelSettings,
   threadTodoActionProject,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -21,6 +23,8 @@ import {
   LightningIcon,
   ServerIcon,
   ShieldIcon,
+  SubthreadIcon,
+  ThreadIcon,
   WorktreeIcon,
 } from "../../icons";
 import { TodoFactMenu, type TodoFactMenuEntry } from "./TodoFactMenu";
@@ -31,9 +35,11 @@ import {
   fitTodoDispatchSettings,
   formatTodoDispatchSettings,
   todoDispatchMachines,
+  todoDispatchPlacement,
   todoDispatchSpeed,
   type TodoDispatchFit,
   type TodoDispatchMachine,
+  type TodoDispatchPlacement,
 } from "./todo-dispatch-model";
 import type { ThreadTodoInstance, ThreadTodoLocalMachine, ThreadTodoRunOptions } from "./thread-todos-view";
 
@@ -63,11 +69,13 @@ export type TodoDispatchTarget = {
   speed?: ReturnType<typeof todoDispatchSpeed> & { changed: boolean };
   workMode: ThreadTodoWorkMode;
   workModeChanged: boolean;
+  placement: TodoDispatchPlacement;
   environment: EnvironmentState & { selected?: string; changed: boolean };
   setMachine: (key: string) => void;
   pickModel: (settings: ThreadTodoModelSettings) => void;
   setSpeed: (speed: CodexSpeed) => void;
   setWorkMode: (workMode: ThreadTodoWorkMode) => void;
+  setPlacement: (placement: ThreadTodoPlacement) => void;
   setEnvironment: (environment: string) => void;
   /** A dispatch provider holds the choices, so every mounted copy of the card shares them. */
   choicesShared: boolean;
@@ -139,6 +147,11 @@ export function useTodoDispatchTarget(params: {
   const defaultWorkMode: ThreadTodoWorkMode = action?.workMode ?? "local";
   const workMode = choices.workMode ?? defaultWorkMode;
 
+  const placement = todoDispatchPlacement({
+    todo, ...(choices.placement ? { picked: choices.placement } : {}), onOwner,
+    ownerHonorsPlacement: owner.placement, ownerMakesSiblings: owner.placementSibling,
+  });
+
   const legacy = !owner.dispatchTarget;
   const environmentState = useDispatchEnvironments({ todo, machine, onOwner, enabled: isHandoff && !legacy });
   const environmentDefault = environmentState.status === "ready"
@@ -161,17 +174,22 @@ export function useTodoDispatchTarget(params: {
       model: ownerSelection,
       workMode: defaultWorkMode,
       workModeChanged: false,
+      placement,
       environment: { status: "loading", changed: false },
       setMachine: () => {},
       pickModel: params.pickOwnerModel,
       setSpeed: () => {},
       setWorkMode: () => {},
+      setPlacement: () => {},
       setEnvironment: () => {},
       choicesShared: context.provided,
       // Model and Where alone already fit the grid.
       settingsExpanded: true,
       setSettingsExpanded: () => {},
-      runOptions: () => ({ modelSettings: ownerSelection.settings }),
+      runOptions: () => ({
+        modelSettings: ownerSelection.settings,
+        ...(placement.send ? { placement: placement.send } : {}),
+      }),
     };
   }
   return {
@@ -186,6 +204,7 @@ export function useTodoDispatchTarget(params: {
     ...(speed ? { speed } : {}),
     workMode,
     workModeChanged: workMode !== defaultWorkMode,
+    placement,
     environment: {
       ...environmentState,
       ...(environmentSelected ? { selected: environmentSelected } : {}),
@@ -201,6 +220,7 @@ export function useTodoDispatchTarget(params: {
     },
     setSpeed: (next) => choose((current) => ({ ...current, speeds: { ...current.speeds, [machine.key]: next } })),
     setWorkMode: (next) => choose((current) => ({ ...current, workMode: next })),
+    setPlacement: (next) => choose((current) => ({ ...current, placement: next })),
     setEnvironment: (next) => choose((current) => ({
       ...current, environments: { ...current.environments, [machine.key]: next },
     })),
@@ -215,6 +235,7 @@ export function useTodoDispatchTarget(params: {
       ...(speed && (!onOwner || speed.changed) ? { speed: speed.speed } : {}),
       // Another machine's project preset must not replace what the chip says.
       ...(!onOwner || workMode !== defaultWorkMode ? { workMode } : {}),
+      ...(placement.send ? { placement: placement.send } : {}),
       ...(environmentSelected ? { environment: environmentSelected } : {}),
     }),
   };
@@ -496,6 +517,46 @@ export function TodoDispatchFacts(props: {
         : {})}
     />
   );
+  const placement = target.placement;
+  const placementProject = (target.onOwner ? project?.label : ready?.projectLabel ?? project?.label) ?? "the project";
+  const placementDefaultDetail = placement.proposed ? "Proposed" : "Default";
+  const placementWords: Record<ThreadTodoPlacement, { menu: string; chip: string }> = {
+    sibling: { menu: "Sibling of this thread", chip: "Sibling" },
+    sub_thread: { menu: "Sub-thread of this thread", chip: "Sub-thread" },
+    top_level: { menu: `New thread in ${placementProject}`, chip: "Top-level" },
+  };
+  const placementEntries: TodoFactMenuEntry[] = placement.options.map((option) => ({
+    kind: "item",
+    key: option,
+    label: placementWords[option].menu,
+    ...(placement.defaultValue === option ? { detail: placementDefaultDetail } : {}),
+    checked: placement.value === option,
+    onSelect: () => target.setPlacement(option),
+  }));
+  const placementValue = placementWords[placement.value].chip;
+  const placementDescription = placement.value === "sibling"
+    ? "Sibling of this thread, under its parent"
+    : placementWords[placement.value].menu;
+  const placementTooltip = placement.lock === "owner"
+    ? `Update PwrAgent on ${target.owner.label} to choose where the new thread is filed.`
+    : placement.lock ? THREAD_TODO_PLACEMENT_LOCK_MESSAGES[placement.lock] : undefined;
+  const threadChip = (
+    <TodoFactMenu
+      label="Where the new thread is filed"
+      value={placementValue}
+      entries={placementEntries}
+      changed={placement.changed}
+      disabled={props.disabled || placement.lock !== undefined}
+      testId="todo-dispatch-placement"
+      {...(compact
+        ? {
+            // Each placement is named: none of them is a quiet default.
+            icon: placement.value === "sub_thread" ? SubthreadIcon : ThreadIcon,
+            tooltip: placementTooltip ?? `Thread: ${placementDescription}`,
+          }
+        : placementTooltip ? { tooltip: placementTooltip } : {})}
+    />
+  );
   const env = target.legacy ? null : (
     <TodoFactMenu
       label="Environment for the new thread"
@@ -534,6 +595,7 @@ export function TodoDispatchFacts(props: {
               <span className="todo-dispatch-chips__static-label">{props.access}</span>
             </span>
           ) : null}
+          {threadChip}
           {where}
           {env}
           {toggle}
@@ -569,6 +631,10 @@ export function TodoDispatchFacts(props: {
               <dd>{props.access}</dd>
             </div>
           ) : null}
+          <div className="thread-todo-card__fact thread-todo-card__fact--model">
+            <dt>Thread</dt>
+            <dd>{threadChip}</dd>
+          </div>
           <div className={`thread-todo-card__fact${target.legacy ? "" : " thread-todo-card__fact--model"}`}>
             <dt>Where</dt>
             <dd>{where}</dd>

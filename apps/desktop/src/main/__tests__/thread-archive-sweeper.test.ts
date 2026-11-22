@@ -15,6 +15,7 @@ import {
   THREAD_ARCHIVE_SWEEP_START_DELAY_MS,
   type ThreadArchiveCandidate,
 } from "../app-server/thread-archive-sweeper";
+import type { DesktopThreadArchiveSweepStatus } from "@pwragent/shared/thread-archive-policy";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60_000;
 afterEach(() => {
@@ -112,7 +113,7 @@ describe("ThreadArchiveSweeper", () => {
 
   it("publishes a running status, then deletion, hibernation and failure counts", async () => {
     const { deps, hibernate } = harness([candidate("failed"), candidate("hibernated"), candidate("kept")]);
-    const statuses: unknown[] = [];
+    const statuses: DesktopThreadArchiveSweepStatus[] = [];
     const sweeper = new ThreadArchiveSweeper({
       ...deps,
       cleanupRetention: async (onFailure) => {
@@ -126,7 +127,8 @@ describe("ThreadArchiveSweeper", () => {
       return item.thread.id === "kept" ? "Rebase in progress" : true;
     });
     await sweeper.sweep();
-    expect(statuses).toEqual([
+    // Hibernation progress between these two has its own test.
+    expect([statuses[0], statuses.at(-1)]).toEqual([
       { running: true, startedAt: expect.any(Number), deleted: 0, failed: 0 },
       {
         running: false, startedAt: expect.any(Number), finishedAt: expect.any(Number),
@@ -141,6 +143,73 @@ describe("ThreadArchiveSweeper", () => {
     // Retention logs its own failures; only the hibernation failure is logged here.
     expect(deps.onError).toHaveBeenCalledTimes(1);
     await sweeper.stop();
+  });
+
+  it("reports each inspected checkout while the hibernation pass runs", async () => {
+    const ids = ["a", "b", "c", "d"];
+    const { deps, hibernate } = harness(ids.map((id) => candidate(id)));
+    const running: Array<NonNullable<DesktopThreadArchiveSweepStatus["hibernation"]>> = [];
+    const sweeper = new ThreadArchiveSweeper({
+      ...deps,
+      hibernation: {
+        ...deps.hibernation,
+        inspectWorkspace: async (target: string) => target.endsWith("/b") ? "Rebase in progress" : undefined,
+      },
+      onStatus: (status) => { if (status.running && status.hibernation) running.push(status.hibernation); },
+    });
+    hibernate.mockImplementation(async (item: ThreadArchiveCandidate) => item.thread.id === "c" ? "Open terminal" : true);
+    await sweeper.sweep();
+    // The pass announces itself, then one status per inspected checkout, kept
+    // or hibernated, each a snapshot rather than the live tally.
+    expect(running).toEqual([
+      { checked: 0, hibernated: 0, kept: {} },
+      { checked: 1, hibernated: 1, kept: {} },
+      { checked: 2, hibernated: 1, kept: { "Rebase in progress": 1 } },
+      { checked: 3, hibernated: 1, kept: { "Rebase in progress": 1, "Open terminal": 1 } },
+      { checked: 4, hibernated: 2, kept: { "Rebase in progress": 1, "Open terminal": 1 } },
+    ]);
+    expect(sweeper.getStatus()).toMatchObject({ running: false, hibernation: { checked: 4, hibernated: 2 } });
+    await sweeper.stop();
+  });
+
+  it("publishes, after every inspected checkout, the counts of every checkout read so far", async () => {
+    // A long pass must never sit on "Running" while it inspects checkouts:
+    // each inspection, whatever its outcome, is followed by a status whose
+    // counts cover every checkout read up to and including it.
+    const outcome = fc.constantFrom("no-target", "kept-on-state", "kept-in-workspace", "hibernated", "kept-by-hibernate", "throws");
+    await fc.assert(fc.asyncProperty(fc.array(outcome, { maxLength: 12 }), async (outcomes) => {
+      const items = outcomes.map((_, index) => candidate(`t${index}`));
+      const of = (item: ThreadArchiveCandidate) => outcomes[Number(item.thread.id.slice(1))];
+      const { deps, hibernate } = harness(items);
+      const running: Array<NonNullable<DesktopThreadArchiveSweepStatus["hibernation"]>> = [];
+      const sweeper = new ThreadArchiveSweeper({
+        ...deps,
+        hibernation: {
+          ...deps.hibernation,
+          keepReason: (item: ThreadArchiveCandidate) => of(item) === "no-target" ? {}
+            : { target: `/worktrees/${item.thread.id}`, ...(of(item) === "kept-on-state" ? { keep: "Pinned thread" } : {}) },
+          inspectWorkspace: async (target: string) =>
+            of(items.find((item) => target.endsWith(`/${item.thread.id}`))!) === "kept-in-workspace" ? "Rebase in progress" : undefined,
+        },
+        onStatus: (status) => { if (status.running && status.hibernation) running.push(status.hibernation); },
+      });
+      hibernate.mockImplementation(async (item: ThreadArchiveCandidate) => {
+        if (of(item) === "throws") throw new Error("snapshot mismatch");
+        return of(item) === "hibernated" ? true : "Open terminal";
+      });
+      await sweeper.sweep();
+      const expected = [{ checked: 0, hibernated: 0 }];
+      let checked = 0;
+      let hibernated = 0;
+      for (const result of outcomes) {
+        if (result !== "no-target") checked += 1;
+        if (result === "hibernated") hibernated += 1;
+        if (result !== "no-target" && result !== "kept-on-state") expected.push({ checked, hibernated });
+      }
+      expect(running.map(({ checked: c, hibernated: h }) => ({ checked: c, hibernated: h }))).toEqual(expected);
+      expect(sweeper.getStatus()).toMatchObject({ running: false, hibernation: { checked, hibernated } });
+      await sweeper.stop();
+    }), { numRuns: 60 });
   });
 
   it("reports a failed thread listing and still reports worktree and retention results", async () => {

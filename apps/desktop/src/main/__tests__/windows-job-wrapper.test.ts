@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS,
   WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS,
   WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS,
+  windowsJobCleanupVerified,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
 import { runGitCommand } from "../app-server/git-executable";
@@ -64,6 +65,39 @@ async function runWrappedCommand(params: {
 }
 
 describe("wrapCommandInWindowsJob", () => {
+  it.each([
+    [[], false],
+    [["failed"], false],
+    [["helper-ready", "target-not-created", "failed"], true],
+    [["target-created-suspended", "failed"], false],
+    [["target-created-suspended", "target-not-created", "failed"], false],
+    [["target-created-suspended", "job-drained"], true],
+  ] as const)("requires positive cleanup evidence for journal %j", (phases, verified) => {
+    const wrapper = wrapCommandInWindowsJob({ command: "fixture.exe", args: [], env: {} });
+    try {
+      writeFileSync(wrapper.startupStatusFilePath, phases.map((phase, i) => `${i}\t${phase}\t\n`).join(""));
+      expect(windowsJobCleanupVerified(wrapper)).toBe(verified);
+    } finally {
+      wrapper.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")("journals that a failed native launch created no target", async () => {
+    const wrapper = wrapCommandInWindowsJob({ command: "pwragent-absent-fixture.exe", args: [], env: process.env });
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(wrapper.command, wrapper.args, { env: wrapper.env, stdio: "ignore", windowsHide: true });
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      expect(code).toBe(127);
+      expect(readWindowsJobStartupTelemetry(wrapper).phases.map(({ phase }) => phase)).toContain("target-not-created");
+      expect(windowsJobCleanupVerified(wrapper)).toBe(true);
+    } finally {
+      wrapper.cleanup();
+    }
+  }, 30_000);
+
   it("retires descendants after driver exit only when the finite-build caller requests it", () => {
     for (const enabled of [undefined, true]) {
       const wrapped = wrapCommandInWindowsJob({
@@ -85,6 +119,62 @@ describe("wrapCommandInWindowsJob", () => {
       } finally { wrapped.cleanup(); }
     }
   });
+
+  it.each([true, false])("scopes the cooperative stop request to wrappers that need drain evidence (%s)", (enabled) => {
+    const job = wrapCommandInWindowsJob({
+      command: "C:\\tools\\fixture.exe", args: [], env: {}, keepDrainEvidenceOnStop: enabled,
+    });
+    try {
+      const marker = job.env.PWRAGENT_JOB_WRAPPER_STOP_FILE!;
+      expect(Boolean(job.requestStop)).toBe(enabled);
+      expect(Boolean(marker)).toBe(enabled);
+      if (enabled) {
+        expect(existsSync(marker)).toBe(false);
+        job.requestStop?.();
+        job.requestStop?.();
+        expect(existsSync(marker)).toBe(true);
+        const script = readFileSync(job.args.at(-1)!, "utf8");
+        const beforeResume = script.indexOf("bool stopped = StopJobIfRequested(job, stopFile)");
+        const resume = script.indexOf("if (ResumeThread");
+        const draining = script.indexOf("if (!stopped) stopped = StopJobIfRequested(job, stopFile)");
+        const drained = script.indexOf('"job-drained"');
+        expect(beforeResume).toBeGreaterThan(0);
+        expect(beforeResume).toBeLessThan(resume);
+        expect(draining).toBeGreaterThan(resume);
+        expect(drained).toBeGreaterThan(draining);
+      }
+    } finally {
+      job.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")("records kernel drain after a stop while Job descendants outlive the target", async () => {
+    const job = wrapCommandInWindowsJob({
+      command: resolveWindowsBashShell(),
+      args: ["-lc", "sleep 45 </dev/null >/dev/null 2>&1 & exit 0"],
+      env: process.env,
+      keepDrainEvidenceOnStop: true,
+    });
+    const child = spawn(job.command, job.args, { env: job.env, windowsHide: true });
+    const closed = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+    try {
+      await expect.poll(() => readWindowsJobStartupTelemetry(job).phases.map(({ phase }) => phase),
+        { timeout: WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS }).toContain("target-exited");
+      expect(readWindowsJobStartupTelemetry(job).phases.map(({ phase }) => phase)).not.toContain("job-drained");
+      job.requestStop?.();
+      await closed;
+      expect(readWindowsJobStartupTelemetry(job).phases.map(({ phase }) => phase)).toContain("job-drained");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+        await closed.catch(() => undefined);
+      }
+      job.cleanup();
+    }
+  }, 35_000);
 
   it("bounds host launch, phase progress, and overall readiness", () => {
     expect(WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS).toBe(20_000);

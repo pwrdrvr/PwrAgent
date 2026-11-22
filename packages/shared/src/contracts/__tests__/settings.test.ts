@@ -71,6 +71,7 @@ describe("desktop settings contracts", () => {
           value: 15,
           source: "default",
         },
+        hotCpuProfilingCaptureChromiumTrace: { value: false, source: "default" },
         hotCpuProfilingCaptureHeapSnapshot: {
           value: false,
           source: "default",
@@ -126,10 +127,6 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
-        liveTranscriptEventFiltering: {
-          value: false,
-          source: "default",
-        },
         threadPricingSummary: {
           value: true,
           source: "default",
@@ -150,10 +147,6 @@ describe("desktop settings contracts", () => {
           value: true,
           source: "default",
         },
-        threadToolAccounting: {
-          value: false,
-          source: "default",
-        },
         codexDefaultModeRequestUserInput: {
           value: false,
           source: "default",
@@ -161,9 +154,6 @@ describe("desktop settings contracts", () => {
         codexSkillQuestionsWarningDismissed: {
           value: false,
           source: "default",
-        },
-        diffCondensation: {
-          enabled: { value: false, source: "default" },
         },
       },
       imageUploads: {

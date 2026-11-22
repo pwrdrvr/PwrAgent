@@ -64,13 +64,30 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
 
+function normalizedNavigationPullRequestKey(value: string): string | undefined {
+  const match = /^([^/#]+)\/([^/#]+(?:\/[^/#]+)+)#(\d+)$/.exec(value.trim().toLowerCase());
+  if (!match) return undefined;
+  const [, provider, repository, number] = match;
+  const host = provider === "github" || provider === "gitlab" ? `${provider}.com` : provider;
+  return `${host}/${repository}#${number}`;
+}
+
+/** PR numbers identify a request only within its repository. */
+export function navigationPullRequestKeysMayMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  const leftKey = normalizedNavigationPullRequestKey(left);
+  const rightKey = normalizedNavigationPullRequestKey(right);
+  // Unknown wire formats cannot exclude an attachment.
+  return !leftKey || !rightKey || leftKey === rightKey;
+}
+
 // Only these events are known to leave group membership unchanged. Creation,
 // archive, reparenting, provider refreshes and unknown future events retain
 // discovery coverage even when the new child's identity is not subscribed yet.
 const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/dependencies/updated", "thread/scheduledAction/updated",
   "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
-  "thread/pullRequests/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
+  "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/turnQueue/updated", "thread/turnQueue/reordered",

@@ -125,7 +125,9 @@ export function DataTooltipLayer() {
     };
 
     // Leaving a hovered control falls back to the one holding keyboard focus,
-    // as the `:focus-visible` rule kept that one showing underneath.
+    // as the `:focus-visible` rule kept that one showing underneath. Only a
+    // data-tooltip control comes back: a focused surface tooltip that this one
+    // displaced (one plain tooltip per window) stays closed.
     const closeOrRestoreFocus = (): void => {
       const focused = document.activeElement;
       const focusTarget = tooltipTargetAt(focused);

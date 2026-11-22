@@ -8,6 +8,7 @@ import type {
 } from "../../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "../../diagnostics/hot-cpu-profile-session";
+import type { ChromiumTrace } from "../../diagnostics/chromium-trace";
 import { getMainLogger } from "../../log";
 import { joinCpuProfiles } from "../../diagnostics/cpu-profile-history";
 import { acquireDebuggerLease, type DebuggerLease } from "../../diagnostics/debugger-lease";
@@ -25,6 +26,7 @@ type CpuUsageReading = {
   cpuPercent: number;
   electronCpuPercent: number;
   cumulativeCpuDeltaSeconds?: number;
+  recorderRotationCpuSeconds?: number;
   wallDeltaSeconds?: number;
 };
 
@@ -35,6 +37,8 @@ type ActiveProfileTrigger = Pick<
   | "triggerMode"
   | "triggerThresholdPercent"
 >;
+type ProfileTriggerTime = { capturedAt: string; monotonicMs: number };
+type ProfileCommandTime = { requestedAtMs: number; acknowledgedAtMs: number };
 
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -42,6 +46,40 @@ function serializeError(error: unknown): string {
 
 function artifactFilename(filePath: string): string {
   return path.basename(filePath);
+}
+
+function capturedProfileTiming(
+  profile: Profiler.Profile,
+  trigger: ProfileTriggerTime | undefined,
+  start: ProfileCommandTime,
+  stop: ProfileCommandTime,
+): Record<string, unknown> {
+  if (!trigger) return {};
+  const triggeredAt = trigger.capturedAt;
+  const profileDurationMs = (profile.endTime - profile.startTime) / 1_000;
+  if (!Number.isFinite(profileDurationMs) || profileDurationMs < 0) return { triggeredAt };
+
+  // V8 and the app can use different monotonic clock origins. Use V8's
+  // elapsed recording time to narrow the app's start-command bounds.
+  const earliestStartMs = Math.max(start.requestedAtMs, stop.requestedAtMs - profileDurationMs);
+  const latestStartMs = Math.min(start.acknowledgedAtMs, stop.acknowledgedAtMs - profileDurationMs);
+  if (earliestStartMs > latestStartMs) {
+    // The clocks may account for suspend differently. Keep the raw duration
+    // without mapping it to the app's trigger timestamp.
+    return { triggeredAt, profileDurationMs };
+  }
+  const recordingStartMs = (earliestStartMs + latestStartMs) / 2;
+  const preTriggerDurationMs = trigger.monotonicMs - recordingStartMs;
+  return {
+    triggeredAt,
+    profileDurationMs,
+    recordingStartedAt: new Date(Date.parse(triggeredAt) - preTriggerDurationMs).toISOString(),
+    preTriggerDurationMs,
+    recordingStartUncertaintyMs: Math.max(
+      recordingStartMs - start.requestedAtMs,
+      start.acknowledgedAtMs - recordingStartMs,
+    ),
+  };
 }
 
 export class HotCpuProfiler {
@@ -63,6 +101,7 @@ export class HotCpuProfiler {
   };
 
   private readonly config: Extract<HotCpuProfileConfig, { enabled: true }>;
+  private readonly chromiumTrace?: ChromiumTrace;
   private readonly getAppMetrics: () => ProcessMetric[];
   private readonly logger: Logger;
   private readonly now: () => Date;
@@ -76,10 +115,8 @@ export class HotCpuProfiler {
 
   private startPromise: Promise<void> | null = null;
   private recording = false;
-  private recordingStartedAtMs = 0;
-  private recordingStartedAtMonotonicMs = 0;
-  private previousRecording: Profiler.Profile | null = null;
-  private previousRecordingStartedAtMs = 0;
+  private recordingStart: ProfileCommandTime = { requestedAtMs: 0, acknowledgedAtMs: 0 };
+  private previousRecording: { profile: Profiler.Profile; start: ProfileCommandTime } | null = null;
   private consecutiveHotSamples = 0;
   private debuggerLease: DebuggerLease | undefined;
   private heapSnapshotLimitReached = false;
@@ -90,6 +127,7 @@ export class HotCpuProfiler {
   private lastProfileAtMs: number | null = null;
   private previousCumulativeCpuSeconds: number | null = null;
   private previousSampleAtMs: number | null = null;
+  private recorderRotationCpuMicros = 0;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
   private shutdownPromise: Promise<void> | null = null;
@@ -97,6 +135,7 @@ export class HotCpuProfiler {
   private profiling = false;
   private samplingPausedForProfile = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
+  private activeProfileTime: ProfileTriggerTime | undefined;
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
@@ -104,6 +143,7 @@ export class HotCpuProfiler {
 
   constructor(options: {
     config: Extract<HotCpuProfileConfig, { enabled: true }>;
+    chromiumTrace?: ChromiumTrace;
     getAppMetrics: () => ProcessMetric[];
     session: HotCpuProfileSession;
     target: HotCpuTarget;
@@ -124,6 +164,7 @@ export class HotCpuProfiler {
     onSampleCaptured?: () => void;
   }) {
     this.config = options.config;
+    this.chromiumTrace = options.chromiumTrace;
     this.getAppMetrics = options.getAppMetrics;
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
@@ -167,9 +208,11 @@ export class HotCpuProfiler {
         captureHeapSnapshot: this.config.captureHeapSnapshot,
         heapSnapshotLimit: this.config.heapSnapshotLimit,
         recordingWindowMs: this.recordingWindowMs(),
+        cpuProfileSamplingIntervalUs: this.target.cpuProfileSamplingIntervalUs,
       },
     });
     await this.ensureRecording(startedAt.getTime());
+    if (!this.stopped) await this.chromiumTrace?.arm(this);
     await this.setListingDiagnosticsEnabled(true);
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
       target: this.session.target ?? "renderer",
@@ -190,7 +233,10 @@ export class HotCpuProfiler {
     }
 
     this.stopped = true;
-    this.shutdownPromise = this.stopInner(reason).finally(() => this.setListingDiagnosticsEnabled(false));
+    this.shutdownPromise = this.stopInner(reason).finally(async () => {
+      await this.chromiumTrace?.release(this);
+      await this.setListingDiagnosticsEnabled(false);
+    });
     await this.shutdownPromise;
   }
 
@@ -268,6 +314,7 @@ export class HotCpuProfiler {
     }
 
     const capturedAtDate = this.now();
+    const capturedAtMonotonicMs = performance.now();
     const capturedAt = capturedAtDate.toISOString();
     const capturedAtMs = capturedAtDate.getTime();
     try {
@@ -308,6 +355,9 @@ export class HotCpuProfiler {
         ...(cumulativeCpuSeconds !== undefined
           ? { cumulativeCpuSeconds }
           : {}),
+        ...(cpuUsage.recorderRotationCpuSeconds !== undefined
+          ? { recorderRotationCpuSeconds: cpuUsage.recorderRotationCpuSeconds }
+          : {}),
         ...(cpuUsage.wallDeltaSeconds !== undefined
           ? { wallDeltaSeconds: cpuUsage.wallDeltaSeconds }
           : {}),
@@ -320,6 +370,7 @@ export class HotCpuProfiler {
       if (this.shouldStartProfile(cpuPercent, capturedAt)) {
         await this.startProfile({
           capturedAt,
+          capturedAtMonotonicMs,
           cpuPercent,
           pid,
         });
@@ -350,6 +401,8 @@ export class HotCpuProfiler {
     cumulativeCpuSeconds?: number;
     electronCpuPercent: number;
   }): CpuUsageReading {
+    const recorderRotationCpuSeconds = this.recorderRotationCpuMicros / 1_000_000;
+    this.recorderRotationCpuMicros = 0;
     if (options.cumulativeCpuSeconds === undefined) {
       this.previousCumulativeCpuSeconds = null;
       this.previousSampleAtMs = null;
@@ -381,10 +434,13 @@ export class HotCpuProfiler {
       };
     }
 
+    // The process counter and thread counter can have different granularity.
+    const applicationCpuDeltaSeconds = Math.max(0, cumulativeCpuDeltaSeconds - recorderRotationCpuSeconds);
     return {
-      cpuPercent: (cumulativeCpuDeltaSeconds / wallDeltaSeconds) * 100,
+      cpuPercent: (applicationCpuDeltaSeconds / wallDeltaSeconds) * 100,
       electronCpuPercent: options.electronCpuPercent,
       cumulativeCpuDeltaSeconds,
+      recorderRotationCpuSeconds: recorderRotationCpuSeconds || undefined,
       wallDeltaSeconds,
     };
   }
@@ -434,9 +490,9 @@ export class HotCpuProfiler {
     await this.ensureRecording(startedAtMs);
     if (
       this.recording
-      && performance.now() - this.recordingStartedAtMonotonicMs >= this.recordingWindowMs()
+      && performance.now() - this.recordingStart.acknowledgedAtMs >= this.recordingWindowMs()
     ) {
-      await this.rotateRecording(startedAtMs);
+      await this.rotateRecording();
     }
   }
 
@@ -455,11 +511,12 @@ export class HotCpuProfiler {
       }
       await this.target.debugger.sendCommand("Profiler.enable");
       if (this.stopped) return;
-      await this.target.debugger.sendCommand("Profiler.start");
-      if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
-      this.recording = true;
-      this.recordingStartedAtMs = startedAtMs;
-      this.recordingStartedAtMonotonicMs = performance.now();
+      const interval = this.target.cpuProfileSamplingIntervalUs;
+      if (interval !== undefined) {
+        await this.target.debugger.sendCommand("Profiler.setSamplingInterval", { interval });
+        if (this.stopped) return;
+      }
+      await this.startRecording();
     } catch (error) {
       this.recording = false;
       this.previousRecording = null;
@@ -472,25 +529,57 @@ export class HotCpuProfiler {
     }
   }
 
-  private async finishRecording(): Promise<Profiler.Profile> {
+  private sendRecordingCommand(method: "Profiler.start" | "Profiler.stop", rotating: boolean): Promise<unknown> {
+    const readCpuMicros = this.target.readProfilerThreadCpuMicros;
+    if (!rotating || !readCpuMicros) return this.target.debugger.sendCommand(method);
+
+    // Session.post dispatches and decodes the response inline. Measure only
+    // that thread and end the measurement before yielding to other JS work.
+    const before = this.tryReadThreadCpuMicros(readCpuMicros);
+    if (before === undefined) return this.target.debugger.sendCommand(method);
+    try {
+      return this.target.debugger.sendCommand(method);
+    } finally {
+      const after = this.tryReadThreadCpuMicros(readCpuMicros);
+      if (after !== undefined) {
+        // Windows libuv's thread CPU counter can wrap at 24 CPU-hours.
+        this.recorderRotationCpuMicros += Math.max(0, after - before);
+      }
+    }
+  }
+
+  private tryReadThreadCpuMicros(readCpuMicros: () => number): number | undefined {
+    try {
+      return readCpuMicros();
+    } catch {
+      // An unavailable OS counter should only affect sample accounting.
+      return undefined;
+    }
+  }
+
+  private async startRecording(rotating = false): Promise<void> {
+    const requestedAtMs = performance.now();
+    await this.sendRecordingCommand("Profiler.start", rotating);
+    if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
+    this.recording = true;
+    this.recordingStart = { requestedAtMs, acknowledgedAtMs: performance.now() };
+  }
+
+  private async finishRecording(rotating = false): Promise<Profiler.Profile> {
     if (!this.recording) throw new Error("CPU recorder is not armed");
-    const result = await this.target.debugger.sendCommand("Profiler.stop") as {
+    const result = await this.sendRecordingCommand("Profiler.stop", rotating) as {
       profile: Profiler.Profile;
     };
     this.recording = false;
     return result.profile;
   }
 
-  private async rotateRecording(startedAtMs: number): Promise<void> {
+  private async rotateRecording(): Promise<void> {
     try {
-      this.previousRecording = await this.finishRecording();
-      this.previousRecordingStartedAtMs = this.recordingStartedAtMs;
+      const profile = await this.finishRecording(true);
+      this.previousRecording = { profile, start: this.recordingStart };
       if (this.stopped) return;
-      await this.target.debugger.sendCommand("Profiler.start");
-      if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
-      this.recording = true;
-      this.recordingStartedAtMs = startedAtMs;
-      this.recordingStartedAtMonotonicMs = performance.now();
+      await this.startRecording(true);
     } catch (error) {
       this.recording = false;
       this.previousRecording = null;
@@ -512,6 +601,7 @@ export class HotCpuProfiler {
 
   private async startProfile(options: {
     capturedAt: string;
+    capturedAtMonotonicMs: number;
     cpuPercent: number;
     pid: number;
   }): Promise<void> {
@@ -543,6 +633,7 @@ export class HotCpuProfiler {
         return;
       }
       this.activeProfileHeapSnapshots = [];
+      this.activeProfileTime = { capturedAt: options.capturedAt, monotonicMs: options.capturedAtMonotonicMs };
       this.activeProfileTrigger = {
         triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
         triggerCpuPercent: options.cpuPercent,
@@ -563,12 +654,6 @@ export class HotCpuProfiler {
           triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
           pid: options.pid,
           durationMs: this.config.profileDurationMs,
-          recordingStartedAt: new Date(this.previousRecording
-            ? this.previousRecordingStartedAtMs
-            : this.recordingStartedAtMs).toISOString(),
-          preTriggerDurationMs: Date.parse(options.capturedAt) - (this.previousRecording
-            ? this.previousRecordingStartedAtMs
-            : this.recordingStartedAtMs),
         },
       });
       this.logger.warn("[pwragent:hot-cpu] CPU profile started", {
@@ -595,6 +680,7 @@ export class HotCpuProfiler {
       );
     } catch (error) {
       this.activeProfileTrigger = null;
+      this.activeProfileTime = undefined;
       this.profiling = false;
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
@@ -604,6 +690,7 @@ export class HotCpuProfiler {
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to start", error);
       await this.discardRecording();
       this.detachDebugger();
+      if (this.profileCount >= this.config.maxProfiles) await this.chromiumTrace?.release(this);
     }
   }
 
@@ -641,6 +728,24 @@ export class HotCpuProfiler {
     }
   }
 
+  private async writeChromiumTrace(profilePath: string): Promise<string | undefined> {
+    if (!this.chromiumTrace || !this.activeProfileTime) return;
+    const tracePath = profilePath.replace(/\.cpuprofile$/, ".trace.json");
+    const filename = artifactFilename(tracePath);
+    try {
+      const result = await this.chromiumTrace.capture(this, tracePath, this.activeProfileTime.monotonicMs);
+      if (result.status === "written") await this.session.registerArtifact(filename);
+      await this.session.appendEvent({
+        capturedAt: this.now().toISOString(),
+        type: `chromium-trace-${result.status}`,
+        detail: { filename, triggeredAt: this.activeProfileTime.capturedAt, ...result },
+      });
+      if (result.status === "written") return tracePath;
+    } catch {
+      this.logger.warn("[pwragent:hot-cpu] Chromium trace bookkeeping failed");
+    }
+  }
+
   private async stopProfileInner(reason: string): Promise<void> {
     this.profiling = false;
     this.clearProfileDurationTimer();
@@ -657,16 +762,25 @@ export class HotCpuProfiler {
       };
 
     try {
+      const requestedAtMs = performance.now();
       const current = await this.finishRecording();
+      const stop = { requestedAtMs, acknowledgedAtMs: performance.now() };
       const profile = joinCpuProfiles(this.previousRecording
-        ? [this.previousRecording, current]
+        ? [this.previousRecording.profile, current]
         : [current]);
+      const timing = capturedProfileTiming(
+        profile,
+        this.activeProfileTime,
+        this.previousRecording?.start ?? this.recordingStart,
+        stop,
+      );
       await fs.writeFile(
         profilePath,
         `${JSON.stringify(profile)}\n`,
         "utf8",
       );
       await this.session.registerArtifact(profileFilename);
+      const chromiumTracePath = await this.writeChromiumTrace(profilePath);
       await this.writeDiagnostics(profilePath);
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
@@ -674,6 +788,7 @@ export class HotCpuProfiler {
         detail: {
           filename: profileFilename,
           reason,
+          ...timing,
         },
       });
 
@@ -688,6 +803,7 @@ export class HotCpuProfiler {
       await this.drainActiveHeapSnapshotCaptures();
       await this.onProfileWritten?.({
         capturedAt: this.now().toISOString(),
+        ...(chromiumTracePath ? { chromiumTracePath } : {}),
         heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
         profileFilename,
         profilePath,
@@ -709,11 +825,17 @@ export class HotCpuProfiler {
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
       this.activeProfileTrigger = null;
+      this.activeProfileTime = undefined;
       this.activeProfileHeapSnapshots = [];
       this.activeProfileHeapSnapshotCaptures.clear();
       this.previousRecording = null;
       this.recording = false;
       this.detachDebugger();
+      if (!this.stopped && this.profileCount < this.config.maxProfiles) {
+        await this.chromiumTrace?.arm(this);
+      } else {
+        await this.chromiumTrace?.release(this);
+      }
       await this.ensureRecording(this.now().getTime());
       this.resumeSamplingAfterProfile();
     }
@@ -727,6 +849,7 @@ export class HotCpuProfiler {
     this.samplingPausedForProfile = false;
     this.previousCumulativeCpuSeconds = null;
     this.previousSampleAtMs = null;
+    this.recorderRotationCpuMicros = 0;
     if (this.stopped || this.intervalTimer || this.isTargetDestroyed()) {
       return;
     }

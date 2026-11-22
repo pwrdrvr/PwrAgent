@@ -664,6 +664,21 @@ function choosePullRequest(url: string): void {
   fireEvent.click(input);
 }
 
+/** The PR button opens a menu; Auto-fix is its first item. */
+function toggleAutoFix(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+  fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }));
+}
+
+/** Opens the PR menu, reads whether Auto-fix can change, and closes it again. */
+function autoFixMenuItemDisabled(): string | null {
+  const trigger = screen.getByRole("button", { name: "Pull request automation" });
+  fireEvent.click(trigger);
+  const value = screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }).getAttribute("aria-disabled");
+  fireEvent.click(trigger);
+  return value;
+}
+
 describe("Composer", () => {
   it.each(["$", "/"])("checks skill freshness once per %s picker opening, across query and summary updates", (prefix) => {
     const refresh = vi.fn();
@@ -1305,13 +1320,13 @@ describe("Composer", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const toggle = screen.getByRole("button", { name: "Pull request automation" });
+    expect(toggle).toHaveClass("is-active");
     expect(toggle).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );
-    fireEvent.click(toggle);
+    toggleAutoFix();
     await waitFor(() => {
       expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
     });
@@ -1325,12 +1340,9 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(autoFixMenuItemDisabled()).toBe("true");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveClass("is-active");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("paused"),
     );
@@ -1345,8 +1357,8 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(autoFixMenuItemDisabled()).toBe("true");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("globally"),
     );
@@ -1371,7 +1383,7 @@ describe("Composer", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Auto-fix PR" }),
+      screen.queryByRole("button", { name: "Pull request automation" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1400,7 +1412,7 @@ describe("Composer", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Auto-fix PR" }),
+      screen.queryByRole("button", { name: "Pull request automation" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1439,7 +1451,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
@@ -1477,13 +1489,13 @@ describe("Composer", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    const toggle = screen.getByRole("button", { name: "Pull request automation" });
     expect(toggle).toHaveClass("is-active", "is-idle");
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveClass("is-active");
     const idle = "Auto-fix PR is on, but #3204 merged. It starts again when an open PR is linked.";
     expect(toggle).toHaveAttribute("data-tooltip", idle);
     expect(toggle).toHaveAttribute("aria-description", idle);
-    fireEvent.click(toggle);
+    toggleAutoFix();
     expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
 
     // One open PR is enough for Auto-fix to have work.
@@ -1496,8 +1508,8 @@ describe("Composer", () => {
         thread={thread([pr(3204, "merged"), pr(3210, "open")])}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-idle");
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveClass("is-idle");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveAttribute("aria-description");
   });
 
   it("mutes Auto-fix PR while its project pauses forge activity, without changing the thread's value", () => {
@@ -1539,9 +1551,9 @@ describe("Composer", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    const toggle = screen.getByRole("button", { name: "Pull request automation" });
     expect(toggle).toHaveClass("is-project-overridden");
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveClass("is-active");
     expect(toggle).toHaveAttribute(
       "data-tooltip",
       "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
@@ -1568,7 +1580,7 @@ describe("Composer", () => {
         }}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveClass("is-project-overridden");
 
     rerender(
       <Composer
@@ -1580,8 +1592,8 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-project-overridden");
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix skips merge conflicts in openclaw.",
     );
@@ -1596,11 +1608,11 @@ describe("Composer", () => {
         thread={thread}
       />,
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+    expect(screen.getByRole("button", { name: "Pull request automation" })).not.toHaveAttribute("aria-description");
   });
 
   it("shows Auto-fix PR when main resolved the primary repository for a worktree", () => {
@@ -1639,7 +1651,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
@@ -1686,7 +1698,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Pull request automation" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );
@@ -5682,6 +5694,61 @@ describe("Composer", () => {
     expect(chip?.querySelector(".pr-chip__draft-bar")).not.toBeNull();
   });
 
+  it("sends the GitHub Actions failures pasted into an empty rewound code block", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "rewound-paste-thread",
+      title: "Rewound paste test",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+      backend: "codex" as const,
+      threadId: thread.id,
+      turnId: "turn-1",
+    }));
+    const original = "Did our change cause this?\n\n```\n\n```";
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        draftRestore={{
+          id: 1,
+          threadId: thread.id,
+          backend: "codex",
+          text: original,
+          kind: "rewound-prompt",
+        }}
+        draftStore={createComposerDraftStore()}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement;
+    expect(textbox.querySelector("pre code")?.textContent).toBe("");
+    const codeStart = original.indexOf("```\n") + "```\n".length;
+    act(() => textbox.setSelectionRange(codeStart, codeStart));
+    const pasted = Array.from({ length: 17 }, (_, index) => [
+      `FAIL  src/example-${index}.test.ts > retries > preserves state`,
+      "AssertionError: expected received value to deeply equal expected value",
+      "  at src/example.test.ts:120:13",
+      "",
+    ].join("\n")).join("\n");
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+        files: [],
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+    await clickButton("Send");
+    expect(startTurn.mock.calls[0]?.[0].input).toEqual([{
+      type: "text",
+      text: original.slice(0, codeStart) + pasted + original.slice(codeStart),
+    }]);
+  });
+
   it.each(["code block", "blockquote"])("preserves the draft when pasting a PR reference into a %s", async (target) => {
     const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
       backend: "codex" as const,
@@ -8858,6 +8925,136 @@ describe("Composer", () => {
       target: { type: "pullRequests", pullRequests: [{ url: prs[1].url }, { url: prs[2].url }] },
     });
     expect(request).not.toHaveProperty("reviewBackend");
+  });
+
+  /**
+   * Rule: a bare /code-review on a Claude thread that reviews as Claude Code
+   * opens the same review panel as /review, whether it is typed and sent or
+   * picked from the command menu. With arguments, or on a thread that does
+   * not review as Claude Code, it is Claude Code's own command and is sent.
+   */
+  describe("bare /code-review", () => {
+    const codeReviewComposer = (codeReviewCapable: boolean, reasoningEffort?: string) => {
+      const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: "thread-1", turnId: "turn-1" }));
+      const claude = backendSummary("claude");
+      claude.capabilities = { ...claude.capabilities, reviewRunMode: true, reviewAutoFix: true,
+        reviewPullRequestSet: true, reviewClaudeCodeReview: codeReviewCapable };
+      render(<Composer
+        backends={[claude]}
+        desktopApi={{ ...createScheduledActionApi(), onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false} skills={[]}
+        providerCommands={[{
+          name: "code-review", description: "Review the current diff.", argumentHint: "[low|medium|high] [--fix]",
+          backend: "claude", scope: "backend", source: "provider",
+        }]}
+        thread={{
+          id: "thread-1", title: "Code review", titleSource: "explicit", source: "claude",
+          executionMode: "default", inbox: { inInbox: false }, projectKey: "/repo/project",
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
+        }}
+      />);
+      return { startTurn };
+    };
+    const send = async (text: string): Promise<void> => {
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText("Reply"), { target: { value: text } });
+        fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+      });
+    };
+
+    it.each(["/code-review", "/code-review ", "  /CODE-REVIEW"])("opens the review panel for %j", async (text) => {
+      const { startTurn } = codeReviewComposer(true);
+      await send(text);
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(screen.getByText(/^\/code-review high --fix$/)).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Rule: the review starts at the thread's own effort when /code-review
+     * takes it, so a medium thread is not reviewed at high; an effort the
+     * command has no level for falls back to high.
+     */
+    it.each([["medium", "medium"], ["max", "max"], ["ultra", "high"]])(
+      "starts a %s thread's review at %s",
+      async (threadEffort, level) => {
+        codeReviewComposer(true, threadEffort);
+        await send("/code-review");
+        expect(screen.getByText(`/code-review ${level} --fix`)).toBeInTheDocument();
+      },
+    );
+
+    /**
+     * Rule: Auto-fix in Claude Code mode is Claude Code's own `--fix`, so the
+     * command shows it exactly while the switch is on.
+     */
+    it("shows --fix in the command exactly while Auto-fix is on", async () => {
+      codeReviewComposer(true);
+      await send("/code-review");
+      expect(screen.getByText("/code-review high --fix")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("switch", { name: "Auto-fix findings" }));
+      expect(screen.getByText("/code-review high")).toBeInTheDocument();
+      expect(screen.queryByText("/code-review high --fix")).not.toBeInTheDocument();
+    });
+
+    /**
+     * Rule: Enter on /code-review in the command menu runs it and opens the
+     * panel; Tab or a click only completes it, so arguments can follow.
+     */
+    it("opens the review panel when /code-review is run from the command menu", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      await send("/code-r");
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["Tab", "click"])("completes /code-review on %s so arguments can follow", async (input) => {
+      const { startTurn } = codeReviewComposer(true);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/code-r" } });
+      const commands = screen.getByRole("listbox", { name: "Commands" });
+      await act(async () => {
+        if (input === "Tab") fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Tab" });
+        else fireEvent.click(within(commands).getByRole("option", { name: /\/code-review/ }));
+      });
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      // Sending it with no arguments still opens the panel.
+      await act(async () => { fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" }); });
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    /** Rule: scheduling a bare /code-review opens the panel, as for /review. */
+    it("opens the review panel with the time armed when a bare /code-review is scheduled", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/code-review" } });
+        fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Send in 30m" }));
+      });
+      const reviewTarget = screen.getByRole("group", { name: "Review target" });
+      expect(within(reviewTarget).getByRole("button", { name: /^Send in \d+m/ })).toBeEnabled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("sends /code-review with arguments as Claude Code's own command", async () => {
+      const { startTurn } = codeReviewComposer(true);
+      await send("/code-review ultra 12");
+      await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    });
+
+    it("sends a bare /code-review on an owner that does not review as Claude Code", async () => {
+      const { startTurn } = codeReviewComposer(false);
+      // The first Enter completes the command from the menu; the next sends it.
+      await send("/code-review");
+      await act(async () => { fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" }); });
+      await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    });
   });
 
   /**
@@ -22288,7 +22485,8 @@ describe("Composer", () => {
     const input = screen.getByLabelText("Reply");
     fireEvent.change(input, { target: { value: "Hand off to @mac" } });
     const option = await screen.findByRole("option", { name: /Mini 1 \/ dev/ });
-    expect(screen.getByRole("option", { name: /Mini 1 \/ default/ })).toBeInTheDocument();
+    const defaultOption = screen.getByRole("option", { name: /^Mini 1Federation/ });
+    expect(defaultOption).toHaveAttribute("title", "Lab-Mac-Mini-1 · connected");
     expect(option.textContent).not.toContain("Lab-Mac-Mini-1");
     expect(option).toHaveAttribute("title", "Lab-Mac-Mini-1 / dev · disconnected");
     // The 160px name column suits a folder beside its path; an instance's

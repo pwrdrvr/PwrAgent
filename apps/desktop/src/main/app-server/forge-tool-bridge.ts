@@ -913,12 +913,14 @@ export class ForgeToolBridge {
 
   /**
    * The thread's project, as a forge rule names it: its primary repository.
-   * The resolver reads a thread no navigation refresh has listed yet.
+   * Policy checks resolve the workspace on demand. Navigation's cached
+   * repository only describes where the owner's status observations came from.
    */
   async threadProjectRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
     try {
-      const primary = this.threadPrimaryGitRepositoryReader?.(backend, threadId)
-        ?? await this.threadProjectRepositoryResolver?.(backend, threadId);
+      const primary = this.threadProjectRepositoryResolver
+        ? await this.threadProjectRepositoryResolver(backend, threadId)
+        : this.threadPrimaryGitRepositoryReader?.(backend, threadId);
       return primary ? normalizeForgeRuleRepository(primary) : undefined;
     } catch (error) {
       backendRegistryLog.warn("could not read a thread's project for MCP tool approval", { threadId, error: String(error) });
@@ -1377,10 +1379,7 @@ export class ForgeToolBridge {
     demand?: PrMetadataDemand,
     verifyAttachments = true,
   ): Promise<NavigationSnapshot["threads"]> {
-    const primaryRepository = this.threadPrimaryGitRepositoryReader;
-    if (primaryRepository) threads = threads.map((thread) => ({
-      ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
-    }));
+    threads = this.withNavigationPrimaryGitRepositories(threads);
     const canonicalizer = this.threadPullRequestCanonicalizer;
     if (!canonicalizer) return threads;
     try {
@@ -1393,6 +1392,13 @@ export class ForgeToolBridge {
       this.logNavigationPrProjectionFailure(error);
       return threads;
     }
+  }
+
+  withNavigationPrimaryGitRepositories(threads: NavigationSnapshot["threads"]): NavigationSnapshot["threads"] {
+    const primaryRepository = this.threadPrimaryGitRepositoryReader;
+    return primaryRepository ? threads.map((thread) => ({
+      ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
+    })) : threads;
   }
 
   async canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,

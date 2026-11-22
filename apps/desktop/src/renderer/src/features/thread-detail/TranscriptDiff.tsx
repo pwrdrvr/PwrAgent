@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
-import {
-  buildDiffView,
-  getFocusedDiffEligibility,
-  parseUnifiedDiff,
-  summarizeHunksForFocus,
-  type DiffView
-} from "../../../../shared/diff-focus";
+import { parseUnifiedDiff } from "../../../../shared/unified-diff";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { useTranscriptScrollportHeight } from "./transcript-scroll-fit";
 
@@ -16,14 +10,12 @@ type TranscriptDiffProps = {
    * When the parent already shows the file path and additions/removals
    * stats (e.g. the LiveWorkRail's expanded file row), pass `true` to
    * hide the redundant `transcript-diff__path` + stats in the diff
-   * header. The zoom toggle still renders.
+   * header.
    */
   compact?: boolean;
 };
 
 export function TranscriptDiff(props: TranscriptDiffProps) {
-  const [isZoomedIn, setIsZoomedIn] = useState(false);
-  const [focusedView, setFocusedView] = useState<DiffView | null>(null);
   const [fetchedDiff, setFetchedDiff] = useState<{
     refKey?: string;
     diff?: string;
@@ -44,15 +36,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   );
   const diffText = shouldFetchDiff ? fetchedDiff.diff ?? "" : inlineDiffText;
   const omittedReason = diff?.omittedReason ?? fetchedDiff.omittedReason;
-  const parsed = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
-  const eligibility = useMemo(() => getFocusedDiffEligibility(parsed), [parsed]);
-  const hunkSummaries = useMemo(() => summarizeHunksForFocus(parsed), [parsed]);
-  const fullView = useMemo(() => buildDiffView(parsed, { mode: "full" }), [parsed]);
-
-  useEffect(() => {
-    setIsZoomedIn(false);
-    setFocusedView(null);
-  }, [diffText, diffRefKey, props.detail.path]);
+  const rows = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
 
   useEffect(() => {
     if (diffRefs.length === 0 || !shouldFetchDiff) {
@@ -106,51 +90,6 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     };
   }, [desktopApi, diffRefKey, diffRefs, shouldFetchDiff]);
 
-  useEffect(() => {
-    if (!diff || omittedReason || !diffText || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
-      return;
-    }
-
-    let active = true;
-
-    void desktopApi
-      .analyzeFocusedDiff({
-        filePath: props.detail.path,
-        diff: diffText,
-        hunks: hunkSummaries
-      })
-      .then((response) => {
-        if (!active || response.mode !== "focused" || response.hiddenHunkIndices.length === 0) {
-          return;
-        }
-
-        setFocusedView(
-          buildDiffView(parsed, {
-            mode: "condensed",
-            hiddenHunkIndices: response.hiddenHunkIndices
-          })
-        );
-      })
-      .catch(() => {
-        if (!active) {
-          return;
-        }
-        setFocusedView(null);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [desktopApi, diff, diffText, eligibility.eligible, hunkSummaries, omittedReason, parsed, props.detail.path]);
-
-  const defaultView = useMemo(() => {
-    if (!eligibility.eligible) {
-      return fullView;
-    }
-
-    return focusedView ?? buildDiffView(parsed, { mode: "condensed" });
-  }, [eligibility.eligible, focusedView, fullView, parsed]);
-  const visibleView = isZoomedIn ? fullView : defaultView;
   // The rows mount only once the diff has loaded.
   useTranscriptScrollportHeight(
     rowsRef,
@@ -158,7 +97,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
       diff
         && !omittedReason
         && !(shouldFetchDiff && fetchedDiff.loading)
-        && fullView.rows.length > 0,
+        && rows.length > 0,
     ),
   );
 
@@ -192,11 +131,9 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     );
   }
 
-  if (fullView.rows.length === 0) {
+  if (rows.length === 0) {
     return null;
   }
-
-  const hiddenSummary = !isZoomedIn ? formatHiddenSummary(defaultView) : null;
 
   return (
     <div className={`transcript-diff${props.compact ? " transcript-diff--compact" : ""}`}>
@@ -206,34 +143,18 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
         </p>
       ) : null}
 
-      <div className="transcript-diff__toolbar">
-        <div className="transcript-diff__meta">
-          {props.compact ? null : (
-            <div className="transcript-diff__stats" aria-label="Diff summary">
-              <span className="transcript-diff__stat transcript-diff__stat--removed">
-                -{diff.removals}
-              </span>
-              <span className="transcript-diff__stat transcript-diff__stat--added">
-                +{diff.additions}
-              </span>
-            </div>
-          )}
-          {hiddenSummary ? (
-            <span className="transcript-diff__summary">{hiddenSummary}</span>
-          ) : null}
+      {!props.compact ? (
+        <div className="transcript-diff__toolbar">
+          <div className="transcript-diff__stats" aria-label="Diff summary">
+            <span className="transcript-diff__stat transcript-diff__stat--removed">
+              -{diff.removals}
+            </span>
+            <span className="transcript-diff__stat transcript-diff__stat--added">
+              +{diff.additions}
+            </span>
+          </div>
         </div>
-        {defaultView.hasHiddenContent ? (
-          <button
-            type="button"
-            className="button button--ghost transcript-diff__toggle"
-            onClick={() => {
-              setIsZoomedIn((current) => !current);
-            }}
-          >
-            {isZoomedIn ? "Zoom out" : "Zoom in"}
-          </button>
-        ) : null}
-      </div>
+      ) : null}
 
       <div
         ref={rowsRef}
@@ -242,19 +163,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
         aria-label={`${props.detail.label} diff`}
         tabIndex={0}
       >
-        {visibleView.rows.map((row, index) => {
-          if (row.kind === "separator") {
-            return (
-              <div
-                key={`separator-${index}`}
-                className="transcript-diff__separator"
-                role="row"
-              >
-                {row.count} unmodified line{row.count === 1 ? "" : "s"} skipped
-              </div>
-            );
-          }
-
+        {rows.map((row, index) => {
           if (row.kind === "hunk") {
             return (
               <div key={`hunk-${index}`} className="transcript-diff__hunk" role="row">
@@ -295,20 +204,4 @@ function formatLineNumber(value: number | undefined): string {
     return "";
   }
   return String(value);
-}
-
-function formatHiddenSummary(view: DiffView): string | null {
-  const parts: string[] = [];
-
-  if (view.hiddenHunkCount > 0) {
-    parts.push(`${view.hiddenHunkCount} hunk${view.hiddenHunkCount === 1 ? "" : "s"} hidden`);
-  }
-
-  if (view.hiddenContextLineCount > 0) {
-    parts.push(
-      `${view.hiddenContextLineCount} line${view.hiddenContextLineCount === 1 ? "" : "s"} skipped`
-    );
-  }
-
-  return parts.length > 0 ? parts.join(", ") : null;
 }

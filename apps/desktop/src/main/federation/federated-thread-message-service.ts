@@ -134,7 +134,7 @@ async function resolveRemoteThread(
         (candidate) => candidate.id === targetInstanceId,
       );
       const instanceLabel = knownPeer
-        ? formatFederationPeerDisplayLabel(knownPeer, health.peers)
+        ? formatFederationPeerDisplayLabel(knownPeer)
         : rememberedTargets[0]?.instanceLabel ?? targetInstanceId;
       const status = knownPeer?.status ?? "not enrolled";
       throw new PwrAgentFederatedThreadMessageError(
@@ -266,6 +266,7 @@ async function sendToRemoteThread(
   if (request.replaceQueueEntryId && !match.backend.replaceQueuedMessage) {
     throw new Error("Queued message replacement is unavailable on this instance.");
   }
+  await request.beforeDelivery?.();
   const turn = request.replaceQueueEntryId
     ? await match.backend.replaceQueuedMessage!({
         backend: request.backend,

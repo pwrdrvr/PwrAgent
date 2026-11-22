@@ -1,20 +1,16 @@
 ---
 name: sandboxer-verification
 description: >-
-  Dormant Sandboxer verification procedure, retained for explicit reference
-  while a replacement provider is evaluated. Do not automatically invoke
-  or route development checks to this workflow; use local or CI verification.
+  Historical Sandboxer verification procedure and measurements, superseded
+  by boat-verification. Read only for historical reference.
 ---
 
-# Verify on Sandboxer (dormant)
+# Sandboxer verification (superseded)
 
-> **Status: dormant pending a replacement provider.** The process, helper and
-> measurements below are preserved for reference; they are not active
-> development instructions. Do not automatically provision or invoke Sandboxer
-> for repository checks. Use local `pnpm test`, `pnpm lint`, `pnpm typecheck`
-> and `pnpm test:desktop-e2e`, or repository CI. Platform-specific verification
-> still uses the corresponding native CI or PwrSuiteLab routes in `AGENTS.md`.
-> This status does not change the product integration or installed MCP settings.
+> **Historical reference only.** The [Boat verification skill](../boat-verification/SKILL.md)
+> supersedes this procedure. For repository checks, follow
+> [development verification](../../../docs/development-checks.md#verification).
+> The original procedure, helper and measurements are preserved below.
 
 Sandboxer gives this thread an Ubuntu 24.04 x64 VM with root, Git, Docker,
 Node, and Python. The checks here mirror the CI `Lint`, `Test`, and

@@ -9,13 +9,16 @@ import { buildThreadIdentityKey, type NavigationQueryRequest } from "@pwragent/s
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
-import { createNavigationQuerySnapshot, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, navigationDirectoryGitRevisions, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
+import { attachRemoteThreadsToLocalDirectories } from "../app-server/navigation-viewer-pins";
+import { DesktopDirectoryGitStatus } from "../app-server/desktop-directory-git-status";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederationRouter } from "../federation/federation-router";
 import { navigationRequestForOwner } from "../federation/federation-navigation-query";
 import { readFederationPinnedSnapshot } from "../federation/federation-collection-client";
+import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
@@ -211,6 +214,195 @@ it("matches complete owner counts and retains ordered rows for generated off-pag
     }), { numRuns: 25 });
 });
 
+it.each([3, 6])("reads only changed sidebar projections for directory Git metadata with %i mounted directories", async (groups) => {
+  const requests = demand(groups);
+  const store = new NavigationQueryStore();
+  const source = population(groups);
+  for (const [i, dir] of source.directories.entries()) dir.path = `/fixture/${i}`;
+  for (const thread of source.threads) {
+    const group = thread.id.split("-")[0]!;
+    const path = `/fixture/${group}`;
+    thread.linkedDirectories = [{ id: group, kind: "local", label: group, path }];
+  }
+  const baselines = new RemoteNavigationPageBaselines();
+  const key = directoryKey(groups - 1);
+  let index = createNavigationQuerySnapshot(source);
+  const loadIndex = vi.fn(async () => index);
+  const release = vi.fn(async () => undefined);
+  let held: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+  const dispatch = vi.fn(async (sent: NavigationQueryRequest) => {
+    const page = await baselines.read(sent, (ownerRequest) =>
+      store.readPage({ request: navigationRequestForOwner(ownerRequest, target), scopeKey: "viewer", loadIndex }));
+    if (held) await held.promise;
+    return expandNavigationRemoteOwner({ ...page, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+  });
+  const window = new NavigationWindowQueries({ getNavigationQueryPage: dispatch, releaseNavigationQuery: release });
+  let refreshed: Promise<void> | undefined;
+  const wire = connect((event) => {
+    if (!navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) return;
+    window.invalidate(undefined, [target], event);
+    refreshed = window.refresh(undefined, [target], true);
+  });
+  const publish = vi.fn(async (event: AgentEvent) => {
+    index = createNavigationQuerySnapshot({ ...source, directories: source.directories.map((directory) => owner.applyCachedStatus(directory)) });
+    wire.emit(event);
+  });
+  const owner = new DesktopDirectoryGitStatus({
+    getOverlayStore: () => ({ readDirectoryGitStatusCache: async () => ({}), writeDirectoryGitStatusCacheEntry: async () => {} }),
+    publishLocalEvent: publish, logDebug: () => {}, findDirectory: () => undefined, releaseNavigationPage: () => {},
+    getNavigationQueryPage: async () => { throw new Error("Unexpected directory discovery"); },
+    readDirectoryStatusEntries: async function* () {},
+  });
+  const revisions = () => [...window.getSnapshot().resources.values()].map(({ state }) => state.page!.countsRevision);
+  const visibleData = () => [...window.getSnapshot().resources.values()].map(({ state }) => {
+    const { counts, entries, selectionDirectory, directories } = state.page!;
+    return JSON.stringify([counts, entries, selectionDirectory, directories]);
+  });
+  try {
+    await owner.writeDirectoryGitStatusEntry({ directoryKey: key, gitStatus: { currentBranch: "main" }, fetchedAt: 1 });
+    window.setDemand(requests);
+    await until(() => idle(window));
+    const metrics = [];
+    for (const [i, currentBranch, branches] of [[2, "feature", ["feature"]], [3, "feature", ["feature"]],
+      [4, "feature", ["feature", "main"]], [5, "main", ["feature", "main"]]] as const) {
+      const before = revisions();
+      const beforeData = visibleData();
+      dispatch.mockClear();
+      loadIndex.mockClear();
+      release.mockClear();
+      publish.mockClear();
+      await owner.writeDirectoryGitStatusEntry({ directoryKey: key, fetchedAt: i, gitStatus: { currentBranch, branches: [...branches] } });
+      await refreshed;
+      const after = revisions();
+      expect(visibleData().map((data, i) => data !== beforeData[i])).toEqual(after.map((revision, i) => revision !== before[i]));
+      expect(window.getSnapshot().resources.get("index")!.state.page!.directories!.find((dir) => dir.key === key)?.gitStatus?.currentBranch)
+        .toBe(currentBranch);
+      metrics.push({ published: publish.mock.calls.length, dispatches: dispatch.mock.calls.length, cancellations: release.mock.calls.length,
+        ownerReads: loadIndex.mock.calls.length, revisions: after.filter((revision, i) => revision !== before[i]).length });
+      if (i === 2) {
+        dispatch.mockClear();
+        loadIndex.mockClear();
+        wire.emit(publish.mock.calls[0]![0]);
+        await refreshed;
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(loadIndex).not.toHaveBeenCalled();
+        expect(revisions()).toEqual(after);
+        expect(release).not.toHaveBeenCalled();
+      }
+    }
+    // Only the index and the five directory/tray descriptors for this project
+    // expose the branch. The branch-picker list belongs to launchpad detail.
+    expect(metrics).toEqual([6, 0, 0, 6].map((reads, i) => ({
+      published: Number(i !== 1), dispatches: reads, cancellations: 0, ownerReads: reads, revisions: reads,
+    })));
+    // The second event matches the settled page while an earlier read holds
+    // a different branch. It must fence the in-flight sample before it lands.
+    dispatch.mockClear();
+    held = Promise.withResolvers<void>();
+    await owner.writeDirectoryGitStatusEntry({ directoryKey: key, fetchedAt: 6, gitStatus: { currentBranch: "intermediate" } });
+    await until(() => dispatch.mock.calls.length > 0);
+    await owner.writeDirectoryGitStatusEntry({ directoryKey: key, fetchedAt: 7, gitStatus: { currentBranch: "main" } });
+    held.resolve();
+    held = undefined;
+    await refreshed;
+    await until(() => idle(window));
+    const descriptors = [...window.getSnapshot().resources.values()].flatMap(({ state }) => [
+      ...(state.page!.directories ?? []), ...(state.page!.selectionDirectory ? [state.page!.selectionDirectory] : []),
+    ]).filter((dir) => dir.key === key);
+    expect(descriptors).toHaveLength(6);
+    expect(descriptors.every((dir) => dir.gitStatus?.currentBranch === "main")).toBe(true);
+  } finally { held?.resolve(); window.dispose(); }
+});
+
+it("keeps a settled partial directory index's exclusions across range acknowledgments", async () => {
+  const store = new NavigationQueryStore();
+  const index = createNavigationQuerySnapshot(population(2));
+  const loadIndex = vi.fn(async () => index);
+  const read = vi.fn(async (sent: NavigationQueryRequest) => store.readPage({
+    request: navigationRequestForOwner(sent, target), scopeKey: "viewer", loadIndex,
+  }));
+  const window = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const unrelated: AgentEvent = { backend: "codex", federationTarget: target, notification: { method: "navigation/invalidated",
+    params: { directoryKey: directoryKey(2), sourceMethod: "navigation/directoryGitStatus/updated",
+      directoryGitRevisions: navigationDirectoryGitRevisions({ currentBranch: "feature" }) } } };
+  try {
+    window.setDemand(new Map([["index", request({ kind: "directory-index" }, 1)]]));
+    await until(() => idle(window));
+    for (let i = 0; i < 2; i++) {
+      const before = read.mock.calls.length;
+      window.invalidate(undefined, [target], unrelated);
+      await window.refresh(undefined, [target], true);
+      expect(read.mock.calls.length).toBe(before);
+      await window.refresh("index");
+      const ack = await read.mock.results.at(-1)!.value;
+      expect(ack.rangeUnchanged).toEqual({ start: 0, count: 1 });
+      expect(ack.directoryGitProof).toBeUndefined();
+    }
+  } finally { window.dispose(); }
+});
+
+it("places a mounted pin under the same repository as the fresh owner row after an origin change", async () => {
+  const raw = population(1);
+  const path = "/owner/checkout";
+  const key = directoryKey(0);
+  const paths = ["old", "new"];
+  const local = paths.map((repo) => ({ ...raw.directories[0]!, key: `directory:/viewer/${repo}`, path: `/viewer/${repo}`,
+    label: repo, threadKeys: [], gitStatus: { originRepository: repo } }));
+  raw.threads[0]!.linkedDirectories = [{ id: "checkout", path, kind: "local", label: "checkout" }];
+  const snapshot = (origin: string) => createNavigationQuerySnapshot({ ...raw, directories: [{ ...raw.directories[0]!,
+    path, checkoutPaths: [path], gitStatus: { originRepository: origin } }] });
+  let index = snapshot("old");
+  const store = new NavigationQueryStore();
+  const backend = { getNavigationQueryPage: async (sent: NavigationQueryRequest) => {
+    const page = await store.readPage({ request: sent, scopeKey: "peer", loadIndex: async () => index });
+    return expandNavigationRemoteOwner({ ...page, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+  } } as FederationBackendOperations;
+  const refreshed = vi.fn();
+  const fetchPinnedSnapshot = vi.fn<NonNullable<ConstructorParameters<typeof RemoteThreadSummaryCache>[0]["fetchPinnedSnapshot"]>>(
+    (_owner, keys, options, baseline) => readFederationPinnedSnapshot(backend, keys, options, baseline));
+  const cache = new RemoteThreadSummaryCache({ peers: () => [{ target, label: "Owner", capabilities }], peerStatus: () => ({ status: "connected" }),
+    hasNavigationSubscription: () => true, fetchPinnedSnapshot, fetchSnapshot: async () => { throw new Error("Unexpected legacy snapshot"); },
+    fetchArchivedThreads: async () => [], onPinnedSummariesRefreshed: refreshed });
+  const wire = connect(() => {}, cache);
+  const pin = { ref: buildFederatedThreadRef({ backend: "codex", instanceId: target.instanceId, threadId: raw.threads[0]!.id }),
+    instanceLabel: "Owner", addedAt: 1 };
+  const home = (rows: typeof raw.threads) => attachRemoteThreadsToLocalDirectories(local, rows).find((dir) => dir.threadKeys.length)?.key;
+  const publish = (origin: string, branch: string) => {
+    const gitStatus = { originRepository: origin, currentBranch: branch };
+    wire.emit({ backend: "codex", notification: { method: "navigation/directoryGitStatus/updated", params: {
+      directoryKey: key, gitStatus, directoryGitRevisions: navigationDirectoryGitRevisions(gitStatus), fetchedAt: 1 } } });
+  };
+  try {
+    await cache.resolvePinnedThreads([pin]);
+    await until(() => refreshed.mock.calls.length > 0);
+    expect(home((await cache.resolvePinnedThreads([pin])).threads)).toBe(local[0]!.key);
+    fetchPinnedSnapshot.mockClear();
+    refreshed.mockClear();
+    publish("old", "feature");
+    expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+    index = snapshot("new");
+    publish("new", "feature");
+    await until(() => refreshed.mock.calls.length > 0);
+    const fresh = await readFederationPinnedSnapshot(backend, [buildThreadIdentityKey("codex", pin.ref.threadId)]);
+    expect(home(fresh.threads)).toBe(local[1]!.key);
+    expect(home((await cache.resolvePinnedThreads([pin])).threads)).toBe(home(fresh.threads));
+    publish("new", "main");
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+
+    // A failed owner read leaves the viewer serving a fallback. Even a
+    // notice matching the last successful revision must retry that read.
+    refreshed.mockClear();
+    fetchPinnedSnapshot.mockRejectedValueOnce(new Error("fixture owner unavailable"));
+    cache.invalidate(target.instanceId);
+    await until(() => refreshed.mock.calls.length > 0);
+    refreshed.mockClear();
+    publish("new", "main");
+    await until(() => refreshed.mock.calls.length > 0);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(3);
+    expect(home((await cache.resolvePinnedThreads([pin])).threads)).toBe(home(fresh.threads));
+  } finally { cache.dispose(); }
+});
+
 it("keeps a large owner row on its original page when the optional proof does not fit", async () => {
   const data = population(3);
   data.threads[0] = { ...data.threads[0]!, title: "x".repeat(230_000), projectKey: `/${"p".repeat(18_000)}` };
@@ -305,6 +497,10 @@ it("publishes the owner's discovered rows after late reads while an independent 
     const wire = connect((event) => {
       if (!navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) return;
       for (const window of [first, second]) window.invalidate(undefined, [target], event);
+      if (event.notification.method === "navigation/invalidated" && event.notification.params.sourceMethod === "navigation/directoryGitStatus/updated") {
+        viewer.invalidate(undefined, [target, { scope: "local" }], event);
+        void viewer.refresh(undefined, undefined, true);
+      }
     }, cache);
     const ids = (window: NavigationWindowQueries) => window.getSnapshot().resources.get("tray")?.state.page?.entries.map(({ row }) => row.id);
     const required = ["0-0-1", "0-0-0"];
@@ -317,6 +513,19 @@ it("publishes the owner's discovered rows after late reads while an independent 
       await Promise.all([first.loadMore("tray"), second.loadMore("tray")]);
       await until(() => idle(viewer));
       for (const window of [first, second, viewer]) expect(ids(window)).toEqual(required);
+      // The peer's checkout chip changes on its own pages. This viewer's
+      // three mounted pins can only change through the local summary publication.
+      const priorBuilds = viewerBuilds;
+      const priorPinPages = pinPages;
+      for (const branch of ["feature", "feature", "main"]) {
+        const gitStatus = { currentBranch: branch };
+        wire.emit({ backend: "codex", notification: { method: "navigation/directoryGitStatus/updated",
+          params: { directoryKey: directoryKey(0), gitStatus, fetchedAt: 1, directoryGitRevisions: navigationDirectoryGitRevisions(gitStatus) } } });
+        await until(() => idle(viewer));
+        expect(ids(viewer)).toEqual(required);
+      }
+      expect(viewerBuilds - priorBuilds).toBe(0);
+      expect(pinPages - priorPinPages).toBe(0);
       first.subscribe(() => published.push(ids(first)!));
       wire.select("0-0");
       await until(() => idle(viewer));

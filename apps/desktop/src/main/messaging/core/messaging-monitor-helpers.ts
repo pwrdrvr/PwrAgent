@@ -241,10 +241,9 @@ export function formatTopicCleanupProposalBody(
 export function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
   return (
     result.outcome === "failed" &&
-    Boolean(
-      result.errorMessage?.match(
-        /\bUnknown Channel\b|chat not found|message thread not found/i,
-      ),
+    (
+      result.failureReason === "target_not_found" ||
+      Boolean(result.errorMessage?.match(/\bUnknown Channel\b|chat not found|message thread not found/i))
     )
   );
 }

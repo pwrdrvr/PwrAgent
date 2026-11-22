@@ -46,11 +46,18 @@ export type AcpSessionMetadata = {
   lastError?: string;
 };
 
+export type AcpSessionInventoryGroup = {
+  backendId: AcpBackendId;
+  sessions: AcpSessionMetadata[];
+};
+
 export interface AcpSessionStorage {
   /** Stored sessions retain ownership even after an agent is uninstalled. */
   listBackendIds?(): AcpBackendId[];
   /** Complete local metadata discovery, including archives and uninstalled backends. */
   listAllSessions(params?: { includeHidden?: boolean }): AcpSessionMetadata[];
+  /** Ordered visible sessions for the requested archive state, grouped by listing backend. */
+  listInventorySessions(options?: { archived?: boolean }): AcpSessionInventoryGroup[];
   upsertSession(metadata: AcpSessionMetadata): void;
   listSessions(
     backendId: AcpBackendId,

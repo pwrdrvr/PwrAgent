@@ -12,13 +12,16 @@ import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sql
 const oraclePath = path.join(import.meta.dirname, "fixtures/shared-sqlite-schema-oracle.json");
 const hosts = [DesktopStateDb, SharedStateDb, StateDb];
 
-function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string; objects: number; userVersion: number } {
+function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersion: number } {
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
-  // recovery guard, automatic wake guard, research, request-pricing, and
-  // sub-agent dismissal changes that followed it.
-  const compared = beforeAdditiveMigrations ? rows.filter(row =>
+  // recovery and automatic wake guards, research, request-pricing, sub-agent dismissal,
+  // operator-request scope, pricing summary, gate pricing, usage completion,
+  // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
+  // action projections and targeted managed membership.
+  // Restore the v80 SQL for the indexes replaced by v83 and v84.
+  const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_compaction_recovery_guards"
@@ -33,13 +36,70 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.tbl_name !== "research_deliveries"
     && row.tbl_name !== "thread_sub_agent_failure_dismissals"
     && row.name !== "idx_thread_usage_lines_identity"
-  ).map(row => row.name === "thread_usage_lines"
-    ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
-    : row) : rows;
+    && row.name !== "idx_operator_open_questions_backend"
+    && row.name !== "idx_operator_open_questions_thread"
+    && row.name !== "idx_thread_todos_backend"
+    && row.name !== "idx_thread_todos_thread_backend"
+    && row.name !== "idx_thread_reviews_backend"
+    && row.name !== "idx_thread_reviews_thread_backend"
+    && row.name !== "idx_thread_pricing_summaries_thread"
+    && row.name !== "idx_thread_usage_lines_assumed_thread"
+    && row.name !== "idx_thread_usage_lines_assumed_parent"
+    && row.name !== "idx_thread_usage_lines_gate_child_source"
+    && row.name !== "idx_thread_usage_lines_gate_usage_turn"
+    && row.name !== "idx_thread_usage_lines_completion_turn"
+    && row.name !== "idx_automation_runs_backend_turn"
+    && row.name !== "idx_pr_status_watches_retry"
+    && row.name !== "idx_pr_status_watches_history"
+    && row.name !== "thread_pricing_summary_delta_insert"
+    && row.name !== "thread_pricing_summary_delta_update"
+    && row.name !== "thread_pricing_summary_delta_delete"
+    && !row.name.startsWith("scheduled_action_projection_")
+    && !row.name.startsWith("thread_managed_legacy_")
+    && row.name !== "thread_sub_agents_padded_child"
+    && row.name !== "idx_scheduled_thread_actions_projection_order"
+    && row.name !== "idx_scheduled_thread_actions_terminal_updated"
+  ).map(row => {
+    switch (row.name) {
+      case "thread_usage_lines":
+        return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
+      case "thread_pricing_summaries":
+        return { ...row, sql: row.sql?.replace(", ledger_delta_ready INTEGER NOT NULL DEFAULT 0", "") };
+      case "idx_thread_usage_lines_turn":
+        return {
+          ...row,
+          sql: row.sql?.replace(
+            "ON thread_usage_lines(backend, thread_id, turn_id, provider)",
+            "ON thread_usage_lines(provider, backend, thread_id, turn_id)",
+          ),
+        };
+      case "idx_thread_usage_lines_source":
+        return {
+          ...row,
+          sql: row.sql?.replace(
+            "ON thread_usage_lines(backend, thread_id, source_item_id)\n"
+              + "  WHERE status != 'superseded' AND source_item_id IS NOT NULL",
+            "ON thread_usage_lines(provider, backend, thread_id, source, source_item_id)",
+          ),
+        };
+      case "idx_thread_usage_turns_turn":
+        return {
+          ...row,
+          sql: row.sql?.replace(
+            "(backend, thread_id, turn_id)\n  WHERE turn_id IS NOT NULL",
+            "(provider, backend, thread_id, turn_id)",
+          ),
+        };
+      case "idx_thread_usage_lines_read_parent":
+        return { ...row, sql: row.sql?.replace("parent_thread_id IS NOT NULL AND ", "") };
+      default:
+        return row;
+    }
+  });
   return {
     sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
     objects: compared.length,
-    userVersion: beforeAdditiveMigrations ? 80 : db.raw.pragma("user_version", { simple: true }) as number,
+    userVersion: 80,
   };
 }
 
@@ -61,10 +121,10 @@ function schemaDefinition(db: StateDb): unknown {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("retains the exact pre-extraction SQLite schema beneath the additive migrations", () => {
+it("retains the exact pre-extraction SQLite schema beneath later migrations", () => {
   const db = openFreshStateDb(":memory:");
   try {
-    const actual = schema(db, true);
+    const actual = schemaAtV80(db);
     expect(db.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     if (process.env.UPDATE_SHARED_SQLITE_SCHEMA_ORACLE === "1") {
       writeFileSync(oraclePath, JSON.stringify(actual, null, 2) + "\n");
@@ -90,6 +150,7 @@ const upgrades = [
   { version: 77, sql: "DROP INDEX idx_thread_todos_dependency; ALTER TABLE thread_todos DROP COLUMN dependency_id" },
   { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
   { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing; DROP TABLE thread_automatic_wake_guards; DROP TABLE thread_automatic_wake_admissions; DROP TABLE thread_automatic_wake_reviews" },
+  { version: CURRENT_STATE_DB_USER_VERSION, sql: "DROP INDEX idx_pr_status_watches_retry; DROP INDEX idx_pr_status_watches_history" },
 ] as const;
 
 describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {

@@ -243,4 +243,20 @@ export class PullRequestRepositoryAliases {
     const canonical = this.canonicalizeRepositoryKey(prefix);
     return canonical === prefix ? key : `${canonical}${key.slice(hashIndex)}`;
   }
+
+  /** Other keys a local renderer may still hold for the same request. */
+  equivalentStatusKeys(key: string): string[] {
+    if (this.canonicalByKey.size === 0) return [];
+    const hashIndex = key.lastIndexOf("#");
+    if (hashIndex <= 0) return [];
+    const repository = key.slice(0, hashIndex);
+    const canonical = this.canonicalizeRepositoryKey(repository);
+    const suffix = key.slice(hashIndex);
+    const aliases = new Set<string>();
+    if (canonical !== repository) aliases.add(`${canonical}${suffix}`);
+    for (const alias of this.canonicalByKey.keys()) {
+      if (alias !== repository && this.canonicalizeRepositoryKey(alias) === canonical) aliases.add(`${alias}${suffix}`);
+    }
+    return [...aliases];
+  }
 }

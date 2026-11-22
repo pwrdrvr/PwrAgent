@@ -18,6 +18,9 @@ input schema for argument details and result semantics.
 | A time: "check again in two hours", "look at this tomorrow at 9" | `schedule_follow_up`. Never a polling monitor, a sleep, or a backend `/loop`. |
 | A long job or repeatable check that no workflow above covers | `create_monitor_delegation`. |
 
+Use `create_monitor_delegation` if the operator specifically asks for a Job
+Monitor. A request to watch or wait for CI uses the applicable CI workflow.
+
 ## This thread's PR
 
 Check status once and follow the returned `prAutomation.guidance`. Attach the PR
@@ -137,9 +140,11 @@ waits indefinitely. This uses no additional provider polling or Job Monitor.
 
 ## A CI run with no PR
 
-A release or deploy workflow started by a tag push or a manual dispatch has
-no PR, so a PR watch cannot see it. Wait on the run itself with a `ci_run`
-condition. PwrAgent checks the run from its own process; no model polls it.
+A tag-push release, manually dispatched deploy, or main-branch CI run that
+gates a release can be a standalone run. Register its URL with
+`manage_thread_dependencies` and a `ci_run` condition. For a release that
+only needs the final conclusion, set `ciRun.on: ["finished"]`. Confirm the
+registration and end the turn. PwrAgent checks the run from its own process.
 
 ```json
 {

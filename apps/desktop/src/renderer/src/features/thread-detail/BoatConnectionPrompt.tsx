@@ -4,6 +4,7 @@ import {
   BOAT_MCP_CONNECTION_ID,
   backendLoadsMcpConnections,
   withMcpConnection,
+  type BoatAccountSummary,
 } from "@pwragent/shared/contracts/mcp-connections";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import boatMark from "../../assets/boat/boat-mark.svg";
@@ -107,7 +108,7 @@ export function BoatConnectionPrompt(props: {
   } else if (!connection.enabled) {
     [line, tone] = ["Turned off for every thread", "state"];
   } else if (account?.canStart === false) {
-    [line, tone] = ["Boat can’t start new sandboxes for this account", "state"];
+    [line, tone] = [boatBlockedLine(account), "state"];
   } else if (!backendSupported) {
     [line, tone] = ["Choose Codex, Claude, or an ACP agent to use it here", "state"];
   } else {
@@ -172,6 +173,29 @@ export function BoatConnectionPrompt(props: {
       action={action}
     />
   );
+}
+
+/**
+ * The tile's one line when Boat will not start a sandbox: the block and what
+ * frees the next start, as Settings and the agent's tools say it at length.
+ */
+export function boatBlockedLine(account: BoatAccountSummary): string {
+  switch (account.startBlock) {
+    case "concurrent_limit": {
+      const { activeSandboxes: active, maxActiveSandboxes: max } = account;
+      return active !== undefined && max !== undefined && active >= max
+        ? `${active} of ${max} sandboxes running · stop one to start another`
+        : "Sandbox limit reached · stop one to start another";
+    }
+    case "trial_compute_used":
+      return "Trial compute used · choose a plan in Boat";
+    case "billing_required":
+      return "Boat needs billing set up to start sandboxes";
+    case "start_rate_limit":
+      return "Start limit reached · try again shortly";
+    default:
+      return "Boat can’t start new sandboxes for this account";
+  }
 }
 
 /** Composes onto the thread's existing list, like the other tiles. */

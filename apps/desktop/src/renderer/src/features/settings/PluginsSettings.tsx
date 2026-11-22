@@ -97,6 +97,8 @@ import {
   type GithubConnectionDraft,
 } from "./GithubConnectionForm";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { FormSecretInput } from "./FormSecretInput";
+import { describeFormSecret, secretStoreState } from "./secret-field-state";
 import { sourceBadge } from "./settings-fields";
 import { shortenCodexHome } from "./shorten-codex-home";
 import { getHomeDir } from "../../lib/tildify-path";
@@ -171,6 +173,20 @@ const STORE_TILE_TEXT = {
 
 /** How long a row the store pointed at keeps its highlight. */
 const REVEAL_HIGHLIGHT_MS = 2_400;
+/** Space left between a revealed row and its section's pinned header. */
+const REVEAL_SCROLL_GAP_PX = 12;
+
+/**
+ * Scroll a revealed row to the top of the pane, below its section's pinned
+ * header, so its whole drawer reads down from there. `nearest` stopped as
+ * soon as the row's bottom edge entered view.
+ */
+function scrollRowToTop(row: HTMLElement) {
+  const header = row.closest(".settings-panel")
+    ?.querySelector<HTMLElement>(":scope > .settings-section__header-button");
+  row.style.scrollMarginTop = `${(header?.getBoundingClientRect().height ?? 0) + REVEAL_SCROLL_GAP_PX}px`;
+  row.scrollIntoView?.({ block: "start" });
+}
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -391,6 +407,15 @@ export function PluginsSettings(props: {
   const [connectionEditTest, setConnectionEditTest] =
     useState<TestMcpStdioConnectionResponse>();
   const [connectionEdit, setConnectionEdit] = useState<ConnectionEditDraft>();
+  /**
+   * The owner's answer to "is a session bearer token stored?" for the IPC
+   * connection being edited. Kept beside the draft, not in it, so a keystroke
+   * that spreads an older draft cannot drop it.
+   */
+  const [ipcBearerTokenState, setIpcBearerTokenState] = useState<{
+    connectionId: string;
+    stored: boolean;
+  }>();
   const [connectionRemoveCandidate, setConnectionRemoveCandidate] =
     useState<McpConnectionStatus>();
   const [activeCodexHome, setActiveCodexHome] = useState<string>();
@@ -676,6 +701,53 @@ export function PluginsSettings(props: {
     ),
     [loadConnections, props.desktopApi],
   );
+
+  // Asked when the edit dialog opens for a local IPC connection, again each
+  // time it reopens (a save may have replaced or removed the token), and
+  // whenever this machine changes the connection while the dialog is open.
+  const editingIpcConnectionId = connectionEdit
+    && !connectionEdit.local
+    && !connectionEdit.github
+    && isMcpIpcUrl(connectionEdit.originalServerUrl)
+    ? connectionEdit.connectionId
+    : undefined;
+  useEffect(() => {
+    const api = props.desktopApi;
+    const read = api?.readMcpIpcBearerTokenState;
+    if (!editingIpcConnectionId || !read) return;
+    const connectionId = editingIpcConnectionId;
+    let current = true;
+    let latest = 0;
+    const ask = () => {
+      const asked = ++latest;
+      read({ connectionId }).then(
+        ({ stored }) => {
+          if (!current || asked !== latest) return;
+          setIpcBearerTokenState({ connectionId, stored });
+          // Remove is offered before the answer arrives. With nothing
+          // stored, a removal marked meanwhile has nothing to remove.
+          if (!stored) {
+            setConnectionEdit((draft) =>
+              draft?.connectionId === connectionId && draft.ipcBearerToken === ""
+                ? { ...draft, ipcBearerToken: undefined }
+                : draft,
+            );
+          }
+        },
+        // Unanswered (an older owner), the line claims neither.
+        () => undefined,
+      );
+    };
+    ask();
+    const unsubscribe = api?.onMcpConnectionsChanged?.((event) => {
+      if (event.connectionIds.includes(connectionId)) ask();
+    });
+    return () => {
+      current = false;
+      unsubscribe?.();
+      setIpcBearerTokenState(undefined);
+    };
+  }, [editingIpcConnectionId, props.desktopApi]);
 
   useEffect(() => {
     const signIns = codexSignInsRef.current;
@@ -1290,6 +1362,12 @@ export function PluginsSettings(props: {
       ?.focus();
   }, [pluginStoreDialogRef, storeView]);
 
+  /**
+   * A revealed row to scroll up again once the Codex list below loads, and
+   * where the settings pane stood just after the reveal scrolled it.
+   */
+  const realignRevealedRowRef = useRef<{ row: HTMLElement; scrollTop: number | undefined }>(undefined);
+
   // Declared after the store's dialog hook, whose cleanup returns focus to
   // the Plugin store button when the store closes; this then moves it on to
   // the row the store added or pointed at. Every caller reloads the list
@@ -1303,11 +1381,31 @@ export function PluginsSettings(props: {
     setRevealConnectionId(undefined);
     if (!row) return;
     setHighlightConnectionId(revealConnectionId);
-    row.scrollIntoView?.({ block: "nearest" });
+    scrollRowToTop(row);
     // The row's own next step when it marks one, else its first control.
     (row.querySelector<HTMLElement>("[data-reveal-focus]:not(:disabled)")
       ?? row.querySelector<HTMLElement>("button"))?.focus();
-  }, [connections, revealConnectionId, storeView]);
+    if (loading) {
+      realignRevealedRowRef.current = {
+        row,
+        scrollTop: row.closest(".settings-content")?.scrollTop,
+      };
+    }
+  }, [connections, loading, revealConnectionId, storeView]);
+
+  // While the Codex section below still reads "Loading", the pane can be too
+  // short to bring a low row up to the top, and the scroll above stops at
+  // the bottom edge. Once that list fills in, finish the scroll, unless the
+  // operator has already scrolled the pane or moved focus out of the row.
+  useEffect(() => {
+    const pending = realignRevealedRowRef.current;
+    if (loading || !pending) return;
+    realignRevealedRowRef.current = undefined;
+    const { row } = pending;
+    if (!row.isConnected || !row.contains(document.activeElement)) return;
+    if (row.closest(".settings-content")?.scrollTop !== pending.scrollTop) return;
+    scrollRowToTop(row);
+  }, [loading]);
 
   // Sandboxer's store page closes onto its row once it works, as adding
   // GitHub or a custom server does.
@@ -1466,7 +1564,13 @@ export function PluginsSettings(props: {
             connectionId: draft.connectionId,
             displayName: draft.displayName,
             serverUrl: draft.serverUrl,
-            ...(draft.ipcBearerToken === undefined ? {} : { ipcBearerToken: draft.ipcBearerToken }),
+            // Blank keeps the stored token, as the line under the box says;
+            // only an explicit Remove ("") or a real token changes it. Main
+            // trims, so spaces alone would otherwise delete it.
+            ...(draft.ipcBearerToken === undefined
+              || (draft.ipcBearerToken !== "" && !draft.ipcBearerToken.trim())
+              ? {}
+              : { ipcBearerToken: draft.ipcBearerToken }),
           });
       closeConnectionEdit();
       // A failed sign-in describes the server it was attempted against.
@@ -1937,6 +2041,7 @@ export function PluginsSettings(props: {
         </label>
       </div>
       <GithubConnectionFields
+        commit="add the connection"
         cliUsedBy={githubConnections
           .filter((connection) => connection.github?.account === "gh_cli")
           .map((connection) => connection.displayName)}
@@ -2478,9 +2583,18 @@ export function PluginsSettings(props: {
                     {isMcpIpcUrl(connectionUrl) ? (
                       <label>
                         <span>Session bearer token (optional)</span>
-                        <input className="settings-input" type="password" autoComplete="off"
-                          disabled={Boolean(connectionPending)} value={ipcBearerToken}
-                          onChange={(event) => setIpcBearerToken(event.target.value)} />
+                        <FormSecretInput
+                          disabled={Boolean(connectionPending)}
+                          label="Session bearer token (optional)"
+                          value={ipcBearerToken}
+                          view={describeFormSecret(
+                            // A connection being added has nothing stored yet.
+                            secretStoreState(false),
+                            { dirty: ipcBearerToken.trim().length > 0 },
+                            "add the connection",
+                          )}
+                          onChange={setIpcBearerToken}
+                        />
                       </label>
                     ) : null}
                     {probe ? (
@@ -2569,6 +2683,7 @@ export function PluginsSettings(props: {
                       </label>
                     </div>
                     <LocalCommandFields
+                      commit="add the connection"
                       desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
                       draft={localDraft}
@@ -2792,12 +2907,32 @@ export function PluginsSettings(props: {
               )}
               {!connectionEdit.local && !connectionEdit.github && isMcpIpcUrl(connectionEdit.serverUrl) ? (
                 <label>
-                  <span>New session bearer token (leave blank to keep)</span>
-                  <input className="settings-input" type="password" autoComplete="off"
-                    disabled={Boolean(connectionPending)} value={connectionEdit.ipcBearerToken ?? ""}
-                    onChange={(event) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: event.target.value || undefined })} />
-                  <button type="button" className="button button--secondary" disabled={Boolean(connectionPending)}
-                    onClick={() => setConnectionEdit({ ...connectionEdit, ipcBearerToken: "" })}>Clear saved token</button>
+                  <span>Session bearer token</span>
+                  <FormSecretInput
+                    disabled={Boolean(connectionPending)}
+                    label="Session bearer token"
+                    valueName="session bearer token"
+                    removing={connectionEdit.ipcBearerToken === ""}
+                    value={connectionEdit.ipcBearerToken ?? ""}
+                    view={describeFormSecret(
+                      // A changed URL drops the token. Until the owner says
+                      // whether one is stored, the words claim neither.
+                      editDraftRepointsServer(connectionEdit)
+                        ? secretStoreState(false)
+                        : ipcBearerTokenState?.connectionId === connectionEdit.connectionId
+                          ? secretStoreState(ipcBearerTokenState.stored)
+                          : undefined,
+                      {
+                        dirty: Boolean(connectionEdit.ipcBearerToken?.trim()),
+                        removing: connectionEdit.ipcBearerToken === "",
+                      },
+                    )}
+                    onChange={(value) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: value || undefined })}
+                    onRemove={(remove) => setConnectionEdit({
+                      ...connectionEdit,
+                      ipcBearerToken: remove ? "" : undefined,
+                    })}
+                  />
                 </label>
               ) : null}
             </div>

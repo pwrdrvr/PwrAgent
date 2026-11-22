@@ -42,6 +42,98 @@ export type ThreadTodoKind = "reminder" | "review" | "merge" | "handoff";
 export type ThreadTodoWorkMode = "local" | "worktree";
 
 /**
+ * Where a start-thread card files the thread it starts. `sibling` files it
+ * beside the raising thread, under that thread's parent, or top-level when
+ * the raising thread has none. `sub_thread` files it under the raising
+ * thread. `top_level` starts a thread of its own in the project. The agent
+ * proposes one on the card; the operator can pick another before starting.
+ */
+export const THREAD_TODO_PLACEMENTS = ["sibling", "sub_thread", "top_level"] as const;
+
+export type ThreadTodoPlacement = (typeof THREAD_TODO_PLACEMENTS)[number];
+
+export function isThreadTodoPlacement(value: unknown): value is ThreadTodoPlacement {
+  return (
+    typeof value === "string"
+    && (THREAD_TODO_PLACEMENTS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Why a start cannot be nested: its parent must be on the same machine and
+ * in the same project.
+ */
+export type ThreadTodoPlacementLock = "project" | "machine";
+
+/**
+ * The placement a start uses. A start for another project, or on another
+ * machine, is always top-level. Otherwise the operator's pick, then the
+ * agent's proposal, then a sibling. An owner that predates siblings
+ * (`legacyDefault`) made a sub-thread when nothing was named, so its default
+ * stays that. `refused` is set when the operator asked for a sub-thread that
+ * cannot exist, so the owner can refuse instead of quietly ignoring it. A
+ * sibling there is just top-level: a sibling of a top-level thread is one.
+ */
+export function resolveThreadTodoPlacement(params: {
+  requested?: ThreadTodoPlacement;
+  proposed?: ThreadTodoPlacement;
+  crossProject: boolean;
+  otherMachine: boolean;
+  legacyDefault?: boolean;
+}): { placement: ThreadTodoPlacement; lock?: ThreadTodoPlacementLock; refused?: true } {
+  const lock: ThreadTodoPlacementLock | undefined = params.crossProject
+    ? "project"
+    : params.otherMachine ? "machine" : undefined;
+  if (lock) {
+    return {
+      placement: "top_level",
+      lock,
+      ...(params.requested === "sub_thread" ? { refused: true as const } : {}),
+    };
+  }
+  return { placement: params.requested ?? params.proposed ?? (params.legacyDefault ? "sub_thread" : "sibling") };
+}
+
+/** A thread a started thread is filed under. */
+export type ThreadTodoParentThread = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Set when the parent lives on another federation instance. */
+  instanceId?: string;
+};
+
+/**
+ * The parent a settled placement files the new thread under: the raising
+ * thread for a sub-thread, the raising thread's own parent for a sibling,
+ * and none for top-level or for a sibling of a top-level thread.
+ */
+export function threadTodoPlacementParent(
+  placement: ThreadTodoPlacement,
+  source: ThreadTodoParentThread,
+  sourceParent: ThreadTodoParentThread | undefined,
+): ThreadTodoParentThread | undefined {
+  if (placement === "sub_thread") return source;
+  if (placement === "sibling") return sourceParent;
+  return undefined;
+}
+
+/**
+ * What a placement amounts to, for display and for comparing picks: a
+ * sibling of a thread with no parent is a top-level thread.
+ */
+export function effectiveThreadTodoPlacement(
+  placement: ThreadTodoPlacement,
+  sourceHasParent: boolean,
+): ThreadTodoPlacement {
+  return placement === "sibling" && !sourceHasParent ? "top_level" : placement;
+}
+
+export const THREAD_TODO_PLACEMENT_LOCK_MESSAGES: Record<ThreadTodoPlacementLock, string> = {
+  project: "Work for another project always starts as a top-level thread there.",
+  machine: "A thread on another machine starts at the top of its project there.",
+};
+
+/**
  * How the operator lands a PR. The operator picks it when clicking, not the
  * agent: the default comes from Settings, and a pick from the card's menu
  * sticks for that project.
@@ -187,6 +279,13 @@ export type ThreadTodoAction =
       /** The new thread's permissions. Absent inherits the source's mode. */
       executionMode?: ThreadExecutionMode;
       workMode?: ThreadTodoWorkMode;
+      /**
+       * Sibling of the raising thread, sub-thread of it, or a new top-level
+       * thread in the project. Absent is a sibling on an owner that
+       * advertises `thread_todo_placement_sibling`, else a sub-thread. A
+       * start for another project or on another machine is always top-level.
+       */
+      placement?: ThreadTodoPlacement;
     };
 
 export type ThreadTodoActionType = ThreadTodoAction["type"];
@@ -273,6 +372,8 @@ export type ThreadTodo = {
     lastDispatch?: ThreadTodoModelSettings;
     /** The raising thread's speed, which a same-provider start inherits. */
     threadSpeed?: { serviceTier?: string; fastMode?: boolean };
+    /** The raising thread's parent, which a sibling is filed under. */
+    threadParent?: ThreadTodoParentThread;
   };
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -644,6 +745,14 @@ export type RunThreadTodoActionRequest = {
   modelSettings?: ThreadTodoModelSettings;
   /** Handoff cards only: the operator's Where, replacing the card's. */
   workMode?: ThreadTodoWorkMode;
+  /**
+   * Handoff cards only: the operator's placement, replacing the card's.
+   * A viewer sends it only to an owner that advertises
+   * `thread_todo_placement`, and a sibling only to one that also advertises
+   * `thread_todo_placement_sibling`. The owner refuses a sub-thread it
+   * cannot make.
+   */
+  placement?: ThreadTodoPlacement;
   /**
    * Handoff cards only: an environment id on the instance that starts the
    * thread, or `none`. Absent keeps that instance's default.

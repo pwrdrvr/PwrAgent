@@ -43,7 +43,10 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
-import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopAppearanceDensity,
+  DesktopPwrAgentProfileSummary,
+} from "@pwragent/shared/contracts/settings";
 import type {
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
@@ -163,7 +166,7 @@ import {
   isProjectForgeActivityPaused,
   withProjectForgePause,
 } from "../forge-automation/forge-automation-view";
-import { ProjectIndexToggle } from "./ProjectIndexToggle";
+import { SidebarViewMenu } from "./SidebarViewMenu";
 import type { ThreadRowRef } from "./ThreadRow";
 import {
   findThreadRowElement,
@@ -356,6 +359,13 @@ type SidebarProps = {
    */
   projectIndexHidden?: boolean;
   onProjectIndexHiddenChange?: (hidden: boolean) => void;
+  /**
+   * Thread row density (`[general.appearance] density`). With a handler the
+   * lens row's view menu offers the three row styles.
+   */
+  density?: DesktopAppearanceDensity;
+  onDensityChange?: (density: DesktopAppearanceDensity) => void;
+  onOpenAppearanceSettings?: () => void;
   /** A dragged index width (`[ui] project_index_width`); `null` is natural. */
   projectIndexWidth?: number | null;
   onProjectIndexWidthChange?: (width: number | null) => void;
@@ -456,6 +466,12 @@ type SidebarProps = {
   onOpenProfile?: (profile: string) => Promise<void>;
   /** Opens the Usage Activity window: account limits and spend across instances. */
   onOpenUsageActivity?: () => void;
+  /**
+   * Opens the Resources screen. Present only while this build serves
+   * resource checkouts, so the menu never offers a screen with nothing
+   * behind it.
+   */
+  onOpenResources?: () => void;
   /**
    * `focusComposer` is set only for a plain click from a real mouse or
    * trackpad. A keyboard or assistive-technology activation leaves focus on
@@ -771,6 +787,7 @@ export function Sidebar(props: SidebarProps) {
     onOpenLaunchpad: useEventCallback(props.onOpenLaunchpad),
     onOpenSettings: useStableRowCallback(props.onOpenSettings),
     onOpenUsageActivity: useStableRowCallback(props.onOpenUsageActivity),
+    onOpenResources: useStableRowCallback(props.onOpenResources),
     onSelectThread: useEventCallback(props.onSelectThread),
     onThreadJumpOpenChange: useStableRowCallback(props.onThreadJumpOpenChange),
     onJumpToProject: useStableRowCallback(props.onJumpToProject),
@@ -3673,6 +3690,28 @@ function SidebarContent(props: SidebarProps) {
                     </button>
                   </>
                 ) : null}
+                {props.onOpenResources ? (
+                  <>
+                    {props.onOpenUsageActivity ? null : (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    )}
+                    <button
+                      className="sidebar__menu-item"
+                      data-testid="profile-menu-resources"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        props.onOpenResources?.();
+                      }}
+                    >
+                      <span className="sidebar__menu-item-title">Resources</span>
+                      <span className="sidebar__menu-item-detail">
+                        Open the checkout and queue window
+                      </span>
+                    </button>
+                  </>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -3731,12 +3770,21 @@ function SidebarContent(props: SidebarProps) {
                 ),
               )}
             </div>
-            {projectIndexEnabled ? (
-              <ProjectIndexToggle
-                hidden={props.projectIndexHidden ?? false}
-                unavailableReason={projectIndexUnavailableReason}
-                onToggle={() =>
-                  props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
+            {projectIndexEnabled || props.onDensityChange ? (
+              <SidebarViewMenu
+                density={props.density}
+                onDensityChange={props.onDensityChange}
+                onOpenAppearanceSettings={props.onOpenAppearanceSettings}
+                projectIndex={
+                  projectIndexEnabled
+                    ? {
+                        hidden: props.projectIndexHidden ?? false,
+                        unavailableReason: projectIndexUnavailableReason,
+                        onToggle: () =>
+                          props.onProjectIndexHiddenChange?.(!props.projectIndexHidden),
+                      }
+                    : undefined
+                }
               />
             ) : null}
           </div>

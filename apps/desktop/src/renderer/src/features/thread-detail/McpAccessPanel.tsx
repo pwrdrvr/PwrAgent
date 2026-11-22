@@ -13,6 +13,7 @@ import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigat
 import { CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+import { ThreadBoatSandboxes } from "./ThreadBoatSandboxes";
 
 export function supportsThreadMcpAccess(
   federation: NavigationThreadSummary["federation"],
@@ -390,6 +391,14 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
             federationTarget={props.federationTarget}
             // Names are not known until the connections are read.
             selected={connections === undefined ? [] : selected}
+            token={props.verifyToken ?? 0}
+          />
+        ) : null}
+        {props.threadId && !props.federationTarget ? (
+          <ThreadBoatSandboxes
+            backend={props.backend}
+            desktopApi={props.desktopApi}
+            threadId={props.threadId}
             token={props.verifyToken ?? 0}
           />
         ) : null}

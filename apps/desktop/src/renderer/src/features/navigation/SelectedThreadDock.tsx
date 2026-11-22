@@ -23,8 +23,11 @@ import { formatRelativeTime } from "./thread-time";
 // or Pinned header, and a project's Directory threads divider below it.
 const STICKY_HEADER = ".directory-row__header";
 const STICKY_DIVIDER = ".directory-row__thread-divider";
-// Nothing sticks lower than this, so a row further down needs no header scan.
+// The project header and divider fit in this strip at supported densities.
 const STICKY_REACH_PX = 160;
+const DRAGGING = ".is-pointer-dragging, .is-folding-directories";
+const STICKY_MEMBERS = `${STICKY_HEADER}, ${STICKY_DIVIDER}`;
+const TARGET_MEMBERS = ".thread-row-shell, .thread-row, .directory-row";
 // The top dock's band: the card, 6px of plate above it and 6px below.
 const DOCK_PLATE_PX = 6;
 // The card's height before it has been drawn once: two lines at the default
@@ -128,27 +131,32 @@ function speaksForThread(holder: Element): boolean {
     || holder.querySelector(".directory-row__summary[aria-expanded='false']") !== null;
 }
 
+type DockElements = {
+  dragging?: boolean;
+  rows?: HTMLElement[];
+  lane?: HTMLElement;
+  holders?: HTMLElement[];
+  sticky?: { lane: HTMLElement; headers: Element[]; dividers: Element[] };
+};
+
 /**
- * Reads the list as it lies with no top dock: the caller lifts the dock's
- * reserve first, so the sticky headers are where they would be without it.
- * One rule in one layout cannot alternate with the headers it moves, and it
- * lets the dock go as soon as the row would show. Measured under the shifted
- * headers, a row at the very start of the list stayed covered by them with
- * nowhere left to scroll, and the dock never left.
+ * Cache the list's members, whose identity can survive many commits. Read
+ * extents fresh because even a commit with the same members can move rows.
  */
 function measure(
   region: HTMLElement,
   threadKey: string,
   holders: Holders,
+  elements: DockElements,
+  liftReserve: () => void,
 ): { state: DockState; row: HTMLElement | undefined } | undefined {
   // A drag reads the list's edges for auto-scroll and drop targets.
-  if (region.querySelector(".is-pointer-dragging, .is-folding-directories")) {
+  elements.dragging ??= region.querySelector(DRAGGING) !== null;
+  if (elements.dragging) {
     return undefined;
   }
-  // A row kept mounted at no height is not a row the operator can find.
-  const rows = threadRows(region, threadKey)
-    .filter((row) => row.getBoundingClientRect().height > 0);
-  const lane = rows[0] ? sidebarLaneOf(rows[0]) : laneOf(region);
+  const candidates = elements.rows ??= threadRows(region, threadKey);
+  const lane = elements.lane ??= candidates[0] ? sidebarLaneOf(candidates[0]) : laneOf(region);
   if (!lane) {
     return undefined;
   }
@@ -157,21 +165,40 @@ function measure(
   if (view.height <= 0) {
     return undefined;
   }
-  const held = rows.length === 0 ? holdersOf(region, holders) : [];
-  const targets = held.length > 0 ? held : rows;
-  const extents = targets.map(extentOf);
+  const rows: HTMLElement[] = [];
+  const extents: DockExtent[] = [];
+  for (const row of candidates) {
+    const extent = extentOf(row);
+    // A row kept mounted at no height is not a row the operator can find.
+    if (extent.bottom > extent.top) {
+      rows.push(row);
+      extents.push(extent);
+    }
+  }
+  const held = rows.length === 0 ? elements.holders ??= holdersOf(region, holders) : [];
+  for (const holder of held) {
+    extents.push(extentOf(holder));
+  }
   const listTop = view.top;
-  const nearTop = extents.some((extent) => extent.top < listTop + STICKY_REACH_PX);
-  const stuckTop = nearTop
-    ? stuckBandTop(
-      listTop,
-      [...lane.querySelectorAll(STICKY_HEADER)].map(extentOf),
-      [...lane.querySelectorAll(STICKY_DIVIDER)].map(extentOf),
-    )
-    : listTop;
-  // What counts as in view. A row under the stuck header is not. A project's
-  // section is: the header stuck there is its own, or it has scrolled past.
-  const bandTop = held[0] && isProjectSection(held[0]) ? listTop : stuckTop;
+  let bandTop = listTop;
+  // A project holder uses the lane itself as its band. And when all targets
+  // are above a lane with room for its sticky band, increasing the band's
+  // top cannot make any target visible or change their order of nearness.
+  if (!(held[0] && isProjectSection(held[0]))
+    && extents.some((extent) => extent.top < listTop + STICKY_REACH_PX)
+    && !(view.height > STICKY_REACH_PX && extents.every((extent) => extent.bottom <= listTop))) {
+    // Read sticky boxes without the reserve they acquire from the dock.
+    // Otherwise a row at the very start could stay covered forever.
+    liftReserve();
+    if (elements.sticky?.lane !== lane) {
+      elements.sticky = {
+        lane,
+        headers: [...lane.querySelectorAll(STICKY_HEADER)],
+        dividers: [...lane.querySelectorAll(STICKY_DIVIDER)],
+      };
+    }
+    bandTop = stuckBandTop(listTop, elements.sticky.headers, elements.sticky.dividers, extentOf);
+  }
   const band = { top: bandTop, bottom: view.bottom };
   const placement = selectedThreadDockPlacement(extents, band);
   const holder = placement ? held[placement.index] : held[0];
@@ -199,6 +226,109 @@ function measure(
         ?.dataset.threadDirectoryKey
         ?? holder?.closest<HTMLElement>(".directory-row")?.dataset.directoryKey,
       directed: placement !== undefined,
+    },
+  };
+}
+
+/**
+ * Own the element cache and the one pending scroll/mutation/resize frame
+ * together. A React commit can consume that work before the frame fires.
+ */
+function observeDockLayout(
+  region: HTMLElement,
+  cardRef: RefObject<HTMLButtonElement | null>,
+  sync: (elements: DockElements) => void,
+) {
+  const elements: DockElements = {};
+  let observedLane: HTMLElement | undefined;
+  let observedCard: HTMLButtonElement | null;
+  let measured = false;
+  let frame = 0;
+  const containsMatch = (node: Element, selector: string): boolean =>
+    node.matches(selector) || node.querySelector(selector) !== null;
+  const forgetTargets = (): void => {
+    elements.rows = undefined;
+    elements.lane = undefined;
+    elements.holders = undefined;
+  };
+  const noteMutations = (records: MutationRecord[]): boolean => {
+    let changed = false;
+    for (const record of records) {
+      if (record.type === "childList") {
+        for (const node of [...record.addedNodes, ...record.removedNodes]) {
+          if (node instanceof Element) {
+            if (node.matches(".selected-thread-dock, .selected-thread-dock-band")) continue;
+            if (elements.sticky && containsMatch(node, STICKY_MEMBERS)) elements.sticky = undefined;
+            if (elements.rows && containsMatch(node, TARGET_MEMBERS)) forgetTargets();
+            if (elements.dragging || containsMatch(node, DRAGGING)) elements.dragging = undefined;
+          }
+          changed = true;
+        }
+      } else if (record.target !== region && record.target !== cardRef.current) {
+        if (record.attributeName === "data-thread-key" || record.attributeName === "data-directory-key") {
+          forgetTargets();
+        } else if (record.attributeName === "class" && record.target instanceof Element
+          && (elements.dragging || record.target.matches(DRAGGING))) {
+          elements.dragging = undefined;
+        }
+        changed = true;
+      }
+    }
+    return changed;
+  };
+  const refresh = (force = false): void => {
+    const queued = frame !== 0;
+    if (frame !== 0) {
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+    }
+    // Layout effects run before the mutation observer's delivery.
+    const changed = !mutation || noteMutations(mutation.takeRecords());
+    if (measured && !force && !queued && !changed && observedCard === cardRef.current) return;
+    measured = true;
+    sync(mutation ? elements : {});
+    if (resize && observedLane !== elements.lane) {
+      if (observedLane) resize.unobserve(observedLane);
+      observedLane = elements.lane;
+      if (observedLane) resize.observe(observedLane);
+    }
+    if (observedCard !== cardRef.current) {
+      if (observedCard) resize?.unobserve(observedCard);
+      observedCard = cardRef.current;
+      if (observedCard) resize?.observe(observedCard);
+    }
+  };
+  const schedule = (): void => {
+    if (frame !== 0) return;
+    frame = window.requestAnimationFrame(() => {
+      frame = 0;
+      refresh(true);
+    });
+  };
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : undefined;
+  const mutation = typeof MutationObserver === "function" ? new MutationObserver((records) => {
+    if (noteMutations(records)) schedule();
+  }) : undefined;
+  resize?.observe(region);
+  mutation?.observe(region, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["aria-expanded", "class", "data-directory-key", "data-thread-key", "style"],
+  });
+  mutation?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-density"] });
+  document.fonts?.addEventListener("loadingdone", schedule);
+  // Scroll events do not bubble; the lane inside the region scrolls.
+  region.addEventListener("scroll", schedule, { capture: true, passive: true });
+  return {
+    refresh,
+    dispose() {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      region.removeEventListener("scroll", schedule, { capture: true });
+      resize?.disconnect();
+      mutation?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", schedule);
     },
   };
 }
@@ -249,21 +379,25 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // to that row when it arrives, as it does for a row the dock scrolls to.
   const focusOnArrivalRef = useRef<string | undefined>(undefined);
 
-  const sync = useCallback((): void => {
+  const sync = useCallback((elements?: DockElements): void => {
     const region = regionRef.current;
-    // Lifted for the measure, which reads the list with its headers in
-    // their own places, and put back below before anything paints. The
-    // class goes, not the property: see `.selected-thread-dock-band`.
     const reserved = reservedRegionRef.current;
-    reserved?.classList.remove(TOP_DOCK_CLASS);
+    let hasReserve = reserved === region && region?.classList.contains(TOP_DOCK_CLASS);
     if (reserved && reserved !== region) {
+      reserved.classList.remove(TOP_DOCK_CLASS);
       reserved.style.removeProperty(RESERVE_PROPERTY);
       reservedRegionRef.current = undefined;
     }
-    const measured = region && threadKey
+    const measured = region && threadKey && elements
       ? measure(region, threadKey, {
         ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
         directoryKeys: directoriesKey ? directoriesKey.split("\n") : [],
+      }, elements, () => {
+        // Keep the custom property to avoid restyling the entire region.
+        if (hasReserve) {
+          region.classList.remove(TOP_DOCK_CLASS);
+          hasReserve = false;
+        }
       })
       : undefined;
     rowRef.current = measured?.row;
@@ -275,12 +409,14 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       if (region.style.getPropertyValue(RESERVE_PROPERTY) !== value) {
         region.style.setProperty(RESERVE_PROPERTY, value);
       }
-      region.classList.add(TOP_DOCK_CLASS);
+      if (!region.classList.contains(TOP_DOCK_CLASS)) region.classList.add(TOP_DOCK_CLASS);
       reservedRegionRef.current = region;
+    } else if (hasReserve) {
+      region?.classList.remove(TOP_DOCK_CLASS);
     }
     if (focusOnArrivalRef.current !== undefined) {
       const arrived = region && focusOnArrivalRef.current === threadKey && !measured
-        ? threadRows(region, threadKey)[0]
+        ? elements?.rows?.[0]
         : undefined;
       if (arrived || focusOnArrivalRef.current !== threadKey) {
         focusOnArrivalRef.current = undefined;
@@ -299,50 +435,39 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
     }
   }, [ancestorsKey, directoriesKey, regionRef, threadKey]);
 
-  // Every render: the selection, the lens and the rows all reach here as a
-  // render, and the first paint after one must not show a stale dock.
-  useLayoutEffect(sync);
+  const layoutRef = useRef<({
+    region: HTMLElement;
+    sync: typeof sync;
+  } & ReturnType<typeof observeDockLayout>) | undefined>(undefined);
 
-  // Only on unmount. A cleanup tied to the thread or the region would take
-  // the reserve back after the layout pass above had just set it.
+  const refreshLayout = (): void => {
+    const region = regionRef.current;
+    const layout = layoutRef.current;
+    if (layout?.region !== region || layout?.sync !== sync) {
+      layout?.dispose();
+      layoutRef.current = region && threadKey
+        ? { region, sync, ...observeDockLayout(region, cardRef, sync) }
+        : undefined;
+    }
+    if (layoutRef.current) layoutRef.current.refresh();
+    else sync();
+  };
+
+  // Consume pending DOM changes before paint. Data-only commits with no
+  // sidebar mutations, size changes or scroll do not need a layout read.
+  useLayoutEffect(refreshLayout);
+  useEffect(() => {
+    // On mount the enclosing host ref can attach after our layout effect.
+    if (!layoutRef.current && regionRef.current && threadKey) refreshLayout();
+  });
+
   useLayoutEffect(() => () => {
+    layoutRef.current?.dispose();
+    layoutRef.current = undefined;
     reservedRegionRef.current?.classList.remove(TOP_DOCK_CLASS);
     reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
     reservedRegionRef.current = undefined;
   }, []);
-
-  // And what moves rows without a render: a scroll, a resize, and rows that
-  // mount inside a list which keeps its own state.
-  useEffect(() => {
-    const region = regionRef.current;
-    if (!region || !threadKey) {
-      return undefined;
-    }
-    let frame = 0;
-    const schedule = (): void => {
-      if (frame !== 0) {
-        return;
-      }
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        sync();
-      });
-    };
-    // Scroll events do not bubble; the lane inside the region scrolls.
-    region.addEventListener("scroll", schedule, { capture: true, passive: true });
-    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : undefined;
-    resize?.observe(region);
-    const mutation = typeof MutationObserver === "function"
-      ? new MutationObserver(schedule)
-      : undefined;
-    mutation?.observe(region, { childList: true, subtree: true });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      region.removeEventListener("scroll", schedule, { capture: true });
-      resize?.disconnect();
-      mutation?.disconnect();
-    };
-  }, [regionRef, sync, threadKey]);
 
   if (!dock || !props.thread) {
     return null;

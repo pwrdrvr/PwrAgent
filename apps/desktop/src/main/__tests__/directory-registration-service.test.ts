@@ -348,14 +348,17 @@ describe("registerDirectoryFromDisk", () => {
 
   it("canonicalizes pwragent-managed worktree paths back to the parent repo", async () => {
     // When the user picks a directory inside `<repo>/.worktrees/<hash>/<project>`,
-    // `git rev-parse --show-toplevel` reports the worktree path. We
-    // canonicalize back to `<repo>` so the directoryKey dedupes against
+    // Git reports the worktree top level and lists the parent checkout first.
+    // Use `<repo>` so the directoryKey dedupes against
     // the existing canonical-repo entry rather than producing a duplicate
     // "PwrAgent" pinned at the worktree path.
     const ensure = buildEnsureSpy();
-    const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+    const runGit = vi.fn(async (cwd: string, args: string[]) => {
       if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
-        return "/Users/me/code/PwrAgent/.worktrees/abc123/PwrAgent";
+        return cwd;
+      }
+      if (args[0] === "worktree" && args[1] === "list") {
+        return "worktree /Users/me/code/PwrAgent\0\0worktree /Users/me/code/PwrAgent/.worktrees/abc123/PwrAgent\0\0";
       }
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
         return "feat/x";

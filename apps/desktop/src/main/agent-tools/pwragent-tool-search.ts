@@ -11,8 +11,9 @@ Search when the user wants to:
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, list/export received original files for saving, or inspect/render PDF attachments. Search does not authorize sending messages.
+- Read or change the messaging profile's Working Updates default.
 - Open, edit, read back, comment on, review, approve or merge GitHub pull requests and GitLab merge requests, with screenshot or video attachments; read PR/MR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub and GitLab issues.
-- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs and download CI artifacts, GitLab CI pipelines and failure logs; request rerunning failed CI jobs; attach or watch pull requests; hold merging until another thread finishes; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred. Prefer these tools to GitHub connectors and gh/glab.
+- Read forge cache, PR/MR status, GitHub Actions runs and GitLab pipelines, logs and artifacts; rerun failed jobs; attach or watch PRs; hold merges; wait durably for standalone CI, local watcher markers, thread turns, or PR prerequisites; request or record code reviews, list unresolved findings, and settle them as addressed, declined, or deferred. Prefer these tools to GitHub connectors and gh/glab.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
@@ -73,6 +74,8 @@ const SEARCH_ALIASES: Record<string, string> = {
   create_instance_thread: "federation run work another remote machine computer",
   list_attention_threads: "attention needs waiting unread running review queue summarize overview",
   get_current_messaging_surface: "telegram discord slack line lark feishu mattermost messaging conversation",
+  get_messaging_working_updates_default: "read show current profile settings working updates default bound threads",
+  set_messaging_working_updates_default: "change set save profile settings working updates default none mute bound threads",
   attach_thread_here: "telegram discord slack line lark feishu mattermost messaging attach topic",
   rename_current_messaging_conversation: "telegram discord slack line lark feishu mattermost rename topic",
   send_private_response: "telegram discord slack line lark feishu mattermost message private reply dm",
@@ -104,6 +107,32 @@ function exactToolNames(query: string): string[] {
 
 function hasAnyWord(terms: ReadonlySet<string>, text: string): boolean {
   return words(text).some((word) => terms.has(word));
+}
+
+function preferredWaitTool(query: string): string | undefined {
+  const normalized = query.trim().toLowerCase().replace(/^please\s+/, "");
+  if (/^job[ -]+monitor(?:\s+for\b|\s*[.!?]?$)/.test(normalized)
+    || /^(?:create|start|launch|use)\s+(?:(?:a|the)\s+)?job[ -]+monitor\b/.test(normalized)) {
+    return "create_monitor_delegation";
+  }
+  if (normalized === "ci_run") return "manage_thread_dependencies";
+  // Match the requested action, since a status read can mention waiting jobs.
+  const waitTarget = normalized.match(/^(?:wait(?:ing)?|watch(?:ing)?|monitor(?:ing)?|notify|notification|wake|poll(?:ing)?)\s+(.+)/)?.[1];
+  if (!waitTarget) return undefined;
+  if (/\b(?:with|using)\s+(?:(?:a|the)\s+)?job[ -]+monitor\b/.test(waitTarget)) {
+    return "create_monitor_delegation";
+  }
+  if (/(?:^|\b(?:for|of|on)\s+)(?:(?:my|the|this|an?)\s+)?attached\s+(?:pr|mr|pull request|merge request)\b/.test(waitTarget)) {
+    return "watch_thread_pull_request";
+  }
+  const terms = new Set(words(waitTarget));
+  if (/\/(?:actions\/runs|-\/pipelines)\/\d+\b/.test(normalized)
+    || (/\bgithub actions\b/.test(normalized) && hasAnyWord(terms, "run runs workflow workflows"))
+    || (/\bgitlab\b/.test(normalized) && hasAnyWord(terms, "pipeline pipelines"))
+    || (terms.has("ci") && hasAnyWord(terms, "standalone release") && hasAnyWord(terms, "run runs"))) {
+    return "manage_thread_dependencies";
+  }
+  return undefined;
 }
 
 function isRuntimeModelDiscoveryQuery(query: string): boolean {
@@ -150,6 +179,7 @@ export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, l
   // more searches recovering the rest. The limit caps only ranked matches.
   const named = [...new Set(exactToolNames(query))]
     .flatMap((name) => tools.filter((tool) => tool.name === name));
+  const preferred = preferredWaitTool(query);
   const ranked = tools.filter((tool) => !named.includes(tool)
     && (!runtimeModelDiscovery || describesRuntimeModelDiscovery(tool))).map((tool) => {
     const name = new Set(words(tool.name));
@@ -157,9 +187,9 @@ export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, l
     const description = new Set(words(tool.description));
     const score = terms.reduce((total, term) =>
       total + (name.has(term) ? 8 : aliases.has(term) ? 6 : description.has(term) ? 1 : 0), 0);
-    return { tool, score };
-  }).filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
+    return { tool, score, preferred: tool.name === preferred };
+  }).filter((match) => match.preferred || match.score > 0)
+    .sort((a, b) => Number(b.preferred) - Number(a.preferred) || b.score - a.score || a.tool.name.localeCompare(b.tool.name))
     .map(({ tool }) => tool);
   const bounded = Math.min(5, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 3));
   const definitionFor = (tool: typeof tools[number]) => ({

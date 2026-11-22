@@ -1,7 +1,12 @@
+import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
@@ -9,6 +14,7 @@ import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import budgets from "./fixtures/navigation-listing-budgets.json";
 
 const mocks = vi.hoisted(() => {
@@ -17,7 +23,7 @@ const mocks = vi.hoisted(() => {
     store: {
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
-      readDirectoryGitStatusCache: async () => ({}),
+      readDirectoryGitStatusCache: vi.fn(async (): Promise<Record<string, { gitStatus: NavigationDirectoryGitStatus }>> => ({})),
       listAllActivePrStatusWatches: vi.fn(async (): Promise<ThreadPullRequestWatchSummary[]> => []),
     },
     messaging: {
@@ -35,9 +41,13 @@ vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStor
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { runGitCommand } from "../app-server/git-executable";
+import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
+import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
+import { navigationDirectoryGitRevisions, projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 
 function createSource(coverage: "complete" | "checking" | "degraded" = "complete") {
   let finish!: () => void;
@@ -53,7 +63,7 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+    withNavigationPrimaryGitRepositories: (threads: []) => threads,
     hydrateThreadGitWorkingStates: async (threads: []) => threads,
     withNavigationSubAgentActivity: (threads: []) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -72,6 +82,126 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     },
   };
 }
+
+it("publishes the repository once when a same-named worktree has a saved project registration", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-project-index-")));
+  const previous = mocks.store.readNavigationQueryIndex.getMockImplementation();
+  try {
+    const repo = canonicalizeNavigationPath(path.join(root, "Project"));
+    const worktree = canonicalizeNavigationPath(path.join(root, ".codex", "worktrees", "task", "Project"));
+    await mkdir(repo);
+    await runGitCommand(repo, ["init"]);
+    await runGitCommand(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture"]);
+    await runGitCommand(repo, ["worktree", "add", "--detach", worktree]);
+    const repositoryKey = "github.com/example/project";
+    const repoKey = `directory:${repo}`;
+    const worktreeKey = `directory:${worktree}`;
+    const launchpad = (checkout: string, backend: NavigationLaunchpadDraft["backend"]): NavigationLaunchpadDraft => ({
+      directoryKey: `directory:${checkout}`, directoryKind: "directory", directoryPath: checkout, directoryLabel: "Project",
+      backend, executionMode: "default", workMode: "local", prompt: "", registeredAt: 1, createdAt: 1, updatedAt: 1,
+    });
+    const thread: NavigationThreadSummary = {
+      id: "worktree-thread", source: "codex", title: "Worktree thread", titleSource: "derived", projectKey: worktree,
+      linkedDirectories: [{ id: worktree, path: worktree, label: "Project", kind: "worktree" }], inbox: { inInbox: false },
+    };
+    for (const parentRegistered of [false, true]) {
+      const source = createSource();
+      source.listThreads.mockResolvedValue([thread]);
+      const directoryOverlays = { [repoKey]: { directoryKey: repoKey, pinnedRank: "1024", directoryThreadsCollapsed: true } };
+      mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({
+        threads,
+        directoryOverlays,
+        directories: buildDirectorySummaries({ threads, directoryOverlayByKey: directoryOverlays, launchpadsByKey: {
+          [worktreeKey]: launchpad(worktree, "codex"),
+          ...(parentRegistered ? { [repoKey]: launchpad(repo, "claude") } : {}),
+        } }).map((directory) => ({ ...directory, repositoryKey })),
+      }));
+      mocks.store.readDirectoryGitStatusCache.mockResolvedValue({
+        [repoKey]: { gitStatus: { currentBranch: "main" } },
+        [worktreeKey]: { gitStatus: { currentBranch: "topic", originRepository: repositoryKey } },
+      });
+
+      const index = await source.read();
+      expect(index.worktreeProjectAliases).toEqual({ [`directory:${repo}`]: [`directory:${worktree}`] });
+      const projects = projectNavigationQuery({ index, request: {
+        protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index" },
+      } }).directories!.filter((row) => row.kind === "directory");
+      expect(projects.map((row) => row.path)).toEqual([repo]);
+      expect(findPeerCounterpartDirectory({ kind: "directory", label: "Project", repositoryKey }, projects))
+        .toMatchObject({ key: repoKey, counts: { total: 1 }, gitStatus: { currentBranch: "main" }, pinnedRank: "1024", directoryThreadsCollapsed: true });
+      const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "owner", query: { kind: "directory-index" } };
+      const pins: NavigationQueryRequest = { ...request, query: { kind: "group-members", roots: [{ backend: "codex", threadId: thread.id }] } };
+      const store = new NavigationQueryStore();
+      const read = vi.fn((sent: NavigationQueryRequest) => store.readPage({ request: sent, scopeKey: "worktree", loadIndex: () => source.read() }));
+      const window = new NavigationWindowQueries({ getNavigationQueryPage: read });
+      try {
+        window.setDemand(new Map([["projects", request], ["pins", pins]]));
+        await window.refresh();
+        const moved = "github.com/example/moved";
+        for (const [originRepository, changesOrigin] of [[repositoryKey, false], [moved, true], [moved, false]] as const) {
+          const gitStatus = { currentBranch: "feature", originRepository };
+          mocks.store.readDirectoryGitStatusCache.mockResolvedValue({
+            [repoKey]: { gitStatus: { currentBranch: "main" } }, [worktreeKey]: { gitStatus },
+          });
+          const event: AgentEvent = { backend: "codex", notification: { method: "navigation/directoryGitStatus/updated",
+            params: { directoryKey: worktreeKey, fetchedAt: 1, gitStatus, directoryGitRevisions: navigationDirectoryGitRevisions(gitStatus) } } };
+          for (const listener of source.listeners) listener(event);
+          read.mockClear();
+          window.invalidate(undefined, undefined, event);
+          await window.refresh(undefined, undefined, true);
+          const fresh = projectNavigationQuery({ index: await source.read(), request }).directories[0]!;
+          expect(fresh.repositoryKey).toBe(parentRegistered ? repositoryKey : originRepository);
+          expect(window.getSnapshot().resources.get("projects")!.state.page?.directories?.[0]?.repositoryKey).toBe(fresh.repositoryKey);
+          expect(window.getSnapshot().resources.get("pins")!.state.page?.entries[0]?.row.checkoutProject?.repositoryKey).toBe(fresh.repositoryKey);
+          expect(read.mock.calls.map(([sent]) => sent.query.kind).sort()).toEqual(
+            changesOrigin && !parentRegistered ? ["directory-index", "group-members"] : [],
+          );
+        }
+      } finally { window.dispose(); }
+      if (parentRegistered) expect(projects[0]?.launchpadBackend).toBe("claude");
+      const projectPage = (query: NavigationQueryRequest["query"]) => projectNavigationQuery({ index, request: {
+        protocol: 2, inventory: "owner", consumer: "star-map", query,
+      } });
+      expect(projectPage({ kind: "star-map-geometry" }).directories).toMatchObject([{ key: repoKey, counts: { total: 1 } }]);
+      expect(projectPage({ kind: "star-map", projectKey: repoKey, filters: {} }).entries.map(({ row }) => row)).toMatchObject([
+        { id: thread.id, checkoutProject: { key: repoKey }, linkedDirectories: [{ path: worktree }] },
+      ]);
+      expect(projectPage({ kind: "star-map", projectKey: worktreeKey, filters: {} }).entries).toEqual([]);
+    }
+    const draftOnly = createSource();
+    draftOnly.listThreads.mockResolvedValue([]);
+    mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads,
+      directories: buildDirectorySummaries({ threads, launchpadsByKey: {
+        [worktreeKey]: { ...launchpad(worktree, "codex"), registeredAt: undefined, prompt: "Unsent draft" },
+      } }),
+    }));
+    expect((await draftOnly.read()).directories).toEqual([]);
+  } finally {
+    mocks.store.readNavigationQueryIndex.mockImplementation(previous!);
+    mocks.store.readDirectoryGitStatusCache.mockResolvedValue({});
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it("keeps the worktree path available when Git loses its primary checkout", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stale-worktree-")));
+  try {
+    const repo = path.join(root, "primary");
+    const checkout = path.join(root, "linked");
+    await runGitCommand(root, ["init", repo]);
+    await runGitCommand(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture"]);
+    await runGitCommand(repo, ["worktree", "add", "--detach", checkout]);
+    const probe = () => resolveWorktreeRepositoryDirectory(checkout, { rootOnly: true });
+    expect(await probe()).toMatchObject({ path: canonicalizeNavigationPath(repo) });
+    await rename(repo, path.join(root, "moved"));
+    await expect(runGitCommand(checkout, ["rev-parse", "--show-toplevel"])).rejects.toThrow();
+    expect(await probe()).toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 describe("owner index source event admission", () => {
   it.each([96, 192].flatMap((size) => [false, true].map((mounted) => ({ size, mounted }))))(
@@ -501,7 +631,7 @@ describe("owner index reads under live turns", () => {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -536,7 +666,7 @@ describe("owner index reads under live turns", () => {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -570,7 +700,7 @@ it.each([
   const registry = {
     listThreads: async () => [thread],
     onEvent: () => () => undefined,
-    canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+    withNavigationPrimaryGitRepositories: (threads: NavigationThreadSummary[]) => threads,
     hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
     withNavigationSubAgentActivity: (threads: NavigationThreadSummary[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -631,7 +761,7 @@ it.each([
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+    withNavigationPrimaryGitRepositories: (threads: NavigationThreadSummary[]) => threads,
     hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
     withNavigationSubAgentActivity: (threads: NavigationThreadSummary[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -705,7 +835,7 @@ describe("owner index coverage", () => {
       isIncompleteThreadList: (threads: unknown) => params.incomplete && threads === listed,
       getStartupProviderRefreshStatus: () => params.startup,
       onEvent: () => () => {},
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -743,7 +873,7 @@ describe("owner index coverage", () => {
       isIncompleteThreadList: () => false,
       getStartupProviderRefreshStatus: () => startup,
       onEvent: () => () => {},
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -757,4 +887,43 @@ describe("owner index coverage", () => {
     expect((await read()).coverage).toEqual({ state: "complete" });
     expect(listThreads).toHaveBeenCalledTimes(2);
   });
+});
+
+it("reuses membership across a PR status burst while pages observe the current registry", async () => {
+  const source = createSource();
+  const project = mocks.store.readNavigationQueryIndex;
+  const original = project.getMockImplementation()!;
+  const pr = { provider: "github.com", org: "fixture", repo: "work", number: 23,
+    url: "https://github.com/fixture/work/pull/23", state: "pending" } as const;
+  const threads = Array.from({ length: 800 }, (_, index): NavigationThreadSummary => ({
+    source: "codex", id: `fixture-${index}`, title: `Thread ${index}`, titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: true }, ...(index === 0 ? { prs: [pr] } : {}),
+  }));
+  source.listThreads.mockResolvedValue(threads);
+  vi.spyOn(source.registry, "withNavigationPrimaryGitRepositories").mockImplementation((rows) => rows.map((row) => ({
+    ...row, primaryGitRepository: "github.com/fixture/work",
+  })));
+  project.mockClear().mockImplementation(({ threads }) => ({ threads, directories: [] }));
+  source.finish();
+  const store = new NavigationQueryStore();
+  const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar",
+    query: { kind: "exact", identities: [{ backend: "codex", threadId: "fixture-0" }, { backend: "codex", threadId: "fixture-1" }] } };
+  let status: NonNullable<NavigationThreadSummary["prs"]>[number] = pr;
+  const read = () => store.readPage({ request, scopeKey: "fixture", loadIndex: () => source.read(),
+    pullRequests: { read: async () => [[status]], verify: async () => [[status]] } });
+  try {
+    const initial = await read();
+    expect(initial.entries[0]?.row.prs?.[0]?.state).toBe("pending");
+    expect(initial.entries[1]?.row).toMatchObject({ id: "fixture-1", primaryGitRepository: "github.com/fixture/work" });
+    for (const state of ["failing", "passing", "merged"] as const) {
+      status = { ...pr, state };
+      source.emit("pullRequest/status/updated");
+      expect((await read()).entries[0]?.row.prs?.[0]?.state).toBe(state);
+    }
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+    expect(project).toHaveBeenCalledTimes(1);
+  } finally {
+    project.mockImplementation(original);
+    source.emit("thread/name/updated");
+  }
 });

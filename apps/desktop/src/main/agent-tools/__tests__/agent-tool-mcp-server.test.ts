@@ -33,6 +33,7 @@ describe("AgentToolMcpServer", () => {
 
   it.each(["codex", "claude", "acp:grok"] as const)("rechecks asynchronous lifecycle discovery and direct calls for %s", async (backend) => {
     let allowed = false;
+    const denial = "App management requires messaging RBAC enforcement.";
     const dispatch = vi.fn(async () => agentToolSuccess({ status: "ok" }));
     const router = new AgentToolRouter([{ namespace: "pwragent", name: "manage_pwragent",
       description: "Manage the local instance.", inputSchema: { type: "object" }, dispatch }]);
@@ -40,7 +41,7 @@ describe("AgentToolMcpServer", () => {
       resolveCatalogs: () => [{ id: "app_management", router }],
       resolveCallContext: () => ({ backend, threadId: "agent", turnId: "turn" }),
       isToolAdvertised: async () => allowed,
-      authorizeToolCall: async () => allowed ? undefined : "tools.instance_lifecycle",
+      authorizeToolCall: async () => allowed ? undefined : denial,
     });
     openServers.push(server);
     const client = await connectClient(await server.registerClient({ backend, threadId: "agent" }));
@@ -49,7 +50,11 @@ describe("AgentToolMcpServer", () => {
       for (const grant of [false, true, false]) {
         allowed = grant;
         expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(grant ? ["manage_pwragent"] : []);
-        expect((await client.callTool({ name: "manage_pwragent", arguments: {} })).isError === true).toBe(!grant);
+        const result = await client.callTool({ name: "manage_pwragent", arguments: { action: "status" } });
+        expect(result.isError === true).toBe(!grant);
+        if (!grant) {
+          expect(result.structuredContent).toEqual({ code: "forbidden", message: denial });
+        }
       }
       expect(dispatch).toHaveBeenCalledOnce();
     } finally { await client.close(); }
@@ -137,8 +142,8 @@ describe("AgentToolMcpServer", () => {
 
       expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(tools.map((tool) => tool.name)));
       expect(client.getInstructions()).toContain("skill://waiting-on-work/SKILL.md");
-      expect(client.getInstructions()).toContain("watch_thread_pull_request and end the turn");
-      expect(client.getInstructions()).toContain("manage_thread_dependencies (Continue After), mode all");
+      expect(client.getInstructions()).toContain("follow prAutomation.guidance and use watch_thread_pull_request");
+      expect(client.getInstructions()).toContain("ci_run for standalone CI, and local_file for watcher markers");
       // Include the prerequisite route without turning the bootstrap into a guide.
       expect(client.getInstructions()!.length).toBeLessThan(900);
       expect(PWRAGENT_TOOL_GUIDE).toContain("Use list_ci_artifacts and download_ci_artifact");

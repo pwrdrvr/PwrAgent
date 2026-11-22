@@ -13,6 +13,10 @@ import { directoryEnrichmentDiagnostics } from "./directory-enrichment-diagnosti
 import { gitSubprocessDiagnostics } from "./git-subprocess-diagnostics";
 import type { HotCpuTarget } from "./hot-cpu-target";
 
+// The rolling main-thread profile is serialized on the thread it observes.
+// Sample at 250 Hz to reduce that payload while retaining stacks for CPU bursts.
+const MAIN_CPU_PROFILE_SAMPLING_INTERVAL_US = 4_000;
+
 export function createMainProcessHotCpuTarget(): HotCpuTarget {
   let session: Session | null = null;
 
@@ -48,6 +52,11 @@ export function createMainProcessHotCpuTarget(): HotCpuTarget {
       // contract is a no-op here.
       on: () => {},
       off: () => {},
+    },
+    cpuProfileSamplingIntervalUs: MAIN_CPU_PROFILE_SAMPLING_INTERVAL_US,
+    readProfilerThreadCpuMicros: () => {
+      const { user, system } = process.threadCpuUsage();
+      return user + system;
     },
     getOSProcessId: () => process.pid,
     setListingDiagnosticsEnabled: (enabled) => listingDiagnostics.setEnabled(enabled),

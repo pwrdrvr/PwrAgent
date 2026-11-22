@@ -182,6 +182,7 @@ const getExistingRuntimeFederationLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
+const setMessagingWorkingUpdatesSettingsMock = vi.fn();
 const setPwrAgentAppManagementHandlerMock = vi.fn();
 const setPwrAgentStarMapHandlerMock = vi.fn();
 const setPwrAgentOpenAIDecisionsHandlerMock = vi.fn();
@@ -447,6 +448,19 @@ vi.mock("../shell/ipc/codex-environment-editor-ipc", () => ({
 vi.mock("../shell/ipc/operator-requests-ipc", () => ({
   registerOperatorRequestIpcHandlers: vi.fn(),
 }));
+
+vi.mock("../shell/ipc/resource-checkout-ipc", () => ({
+  registerResourceCheckoutIpcHandlers: vi.fn(),
+}));
+
+vi.mock("../resource-checkouts/checkout-runtime", () => {
+  const service = { read: vi.fn(), subscribe: vi.fn() };
+  return {
+    initializeResourceCheckouts: vi.fn(async () => service),
+    getResourceCheckoutService: vi.fn(() => service),
+    disposeResourceCheckouts: vi.fn(async () => {}),
+  };
+});
 
 vi.mock("../shell/ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
@@ -755,6 +769,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setLocalPullRequestAuthorityResolver: vi.fn(),
     setThreadMaintenanceToolHandler: vi.fn(),
     setResearchHandler: vi.fn(),
+    setResourceCheckoutHandler: vi.fn(),
     setThreadDependencyToolHandler: vi.fn(),
     setThreadDependenciesPeerHandler: vi.fn(),
     setThreadPrWatchesPeerHandler: vi.fn(),
@@ -773,6 +788,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     listThreads: listThreadsMock,
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
+    setMessagingWorkingUpdatesSettings: setMessagingWorkingUpdatesSettingsMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
     getAppManagementRuntimeId: vi.fn(() => "fixture-runtime"),
     canManagePwrAgent: vi.fn(async () => false),
@@ -943,9 +959,13 @@ describe("bootstrapApp", () => {
       || ["setBundledGitLfsAdvisory", "setNavigationDetailPendingWakesProjector", "setManagedGrokSignatureRejectionReporter",
         "setFederationMessagingPlatformStatusReader", "setInboundPreviewSink"].includes(name);
     const legacyHandlers = legacy.filter(isHandler);
-    // The owner now also binds research and the To-do runtime.
-    const coreHandlers = legacyHandlers.flatMap((name) => name === "registry.setPwrAgentOpenAIDecisionsHandler"
-      ? [name, "registry.setResearchHandler"] : [name]);
+    // Include the owner handlers added after the boot recording.
+    const coreHandlers = legacyHandlers.flatMap((name) => {
+      if (name === "registry.setPwrAgentAppManagementHandler") return ["registry.setResourceCheckoutHandler", name];
+      if (name === "registry.setPwrAgentOpenAIDecisionsHandler") return [name, "registry.setResearchHandler"];
+      if (name === "registry.setMessagingAgentToolService") return [name, "registry.setMessagingWorkingUpdatesSettings"];
+      return [name];
+    });
     const handlers = [...coreHandlers, "registry.setPwrAgentThreadTodoHandler"];
     expect(events.filter(isHandler)).toEqual(handlers);
     // Core subscribers retain their recorded order.
@@ -1186,6 +1206,7 @@ describe("bootstrapApp", () => {
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
     setMessagingAgentToolServiceMock.mockReset();
+    setMessagingWorkingUpdatesSettingsMock.mockReset();
     setPwrAgentAppManagementHandlerMock.mockReset();
     setPwrAgentStarMapHandlerMock.mockReset();
     setPwrAgentOpenAIDecisionsHandlerMock.mockReset();

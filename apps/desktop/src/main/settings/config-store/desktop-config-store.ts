@@ -193,6 +193,15 @@ export class DesktopConfigStore {
     return this.snapshot.domains[domain];
   }
 
+  /** Read the saved value before deciding whether a targeted write is a no-op. */
+  readSavedDevelopmentWorkingUpdatesMode(): ConfigDomainMap["messaging"]["toolUpdateMode"] {
+    const observation = readRawConfigFile(this.options.configPath, { now: this.now });
+    if (observation.kind === "invalid") {
+      throw new Error(`Cannot read settings from ${this.options.configPath}: ${observation.error}`);
+    }
+    return observation.kind === "valid" ? observation.config.messaging?.toolUpdateMode : undefined;
+  }
+
   version(): number {
     return this.snapshot.version;
   }

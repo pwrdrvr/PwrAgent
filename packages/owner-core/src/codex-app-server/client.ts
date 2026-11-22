@@ -7869,6 +7869,8 @@ async function requestWithFallbacks(params: {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+type ThreadPageWalk<T> = { threads: T[]; cursorExhausted: boolean };
+
 async function requestThreadListPages(params: {
   listingDiagnostics: CodexListingDiagnostics;
   logger: CodexClientLogger;
@@ -7884,7 +7886,7 @@ async function requestThreadListPages(params: {
   deadlineAt?: number;
   sourceKinds?: CodexThreadListParams["sourceKinds"];
   ancestorThreadId?: string;
-}): Promise<RawCodexThreadSummary[]> {
+}): Promise<ThreadPageWalk<RawCodexThreadSummary>> {
   const pages: RawCodexThreadSummary[] = [];
   const seenCursors = new Set<string>();
   const startedAt = Date.now();
@@ -7930,14 +7932,13 @@ async function requestThreadListPages(params: {
       maxPreviewBytes = Math.max(maxPreviewBytes, threadPreviewBytes);
     }
 
-    if (maxPagesLimit !== undefined && pageCount >= maxPagesLimit) {
-      terminalReason = "max-pages";
-      break;
-    }
-
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
       terminalReason = "no-next-cursor";
+      break;
+    }
+    if (maxPagesLimit !== undefined && pageCount >= maxPagesLimit) {
+      terminalReason = "max-pages";
       break;
     }
     if (seenCursors.has(nextCursor)) {
@@ -7966,7 +7967,7 @@ async function requestThreadListPages(params: {
     terminalReason,
   });
 
-  return mergedThreads;
+  return { threads: mergedThreads, cursorExhausted: terminalReason === "no-next-cursor" };
 }
 
 /**
@@ -8108,8 +8109,8 @@ export class CodexAppServerClient {
     >
   >();
   private readonly threadListTextCache = new ThreadListTextCache();
-  private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
-  private readonly pendingThreadInventories = new Map<string, Promise<RawCodexThreadSummary[]>>();
+  private readonly pendingThreadListings = new Map<string, Promise<ThreadPageWalk<AppServerThreadSummary>>>();
+  private readonly pendingThreadInventories = new Map<string, Promise<ThreadPageWalk<RawCodexThreadSummary>>>();
   private activeThreadListingGeneration = 0;
   private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
@@ -8210,10 +8211,11 @@ export class CodexAppServerClient {
       },
       onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
     });
+    const observer = createCodexObserverWithConfigReadRedaction(options.connectionObserver);
     this.rawConnection = new JsonRpcConnection(
       this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      createCodexObserverWithConfigReadRedaction(options.connectionObserver),
+      observer && (this.transport.wrapConnectionObserver?.(observer) ?? observer),
       { logContext: { backend: "codex" }, logger: host.rpcLogger },
     );
     // Every request, admitted or lifecycle, reaches Codex through this one
@@ -9384,7 +9386,7 @@ export class CodexAppServerClient {
           requestTimeoutMs:
             this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         })
-      ).filter((thread) => thread.id === params.threadId);
+      ).threads.filter((thread) => thread.id === params.threadId);
       if (matchingThreads.length !== 1) {
         throw new Error(
           `Codex recovery expected one protocol path for thread ${params.threadId}; found ${matchingThreads.length}`,
@@ -10012,10 +10014,11 @@ export class CodexAppServerClient {
     if (notification && ["navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
       "thread/pin/reordered", "thread/subAgents/updated"].includes(notification.method)) return;
     this.activeThreadListingGeneration += 1;
-    // Turn/status and viewer overlay events do not change archived inventory.
+    // Starting a new thread, turns, status and viewer overlays leave archived
+    // inventory alone. Archive/restore/delete still fence both inventories.
     // Keep its in-flight owner joinable while active navigation advances.
     if (!notification || !["turn/started", "turn/completed", "turn/failed", "turn/cancelled",
-      "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/started", "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
       "thread/pin/reordered"].includes(notification.method)) {
       this.archivedThreadListingGeneration += 1;
     }
@@ -10030,7 +10033,7 @@ export class CodexAppServerClient {
     requireComplete?: boolean;
     skipArchivedMetadataRefresh?: boolean;
     deadlineAt?: number;
-  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+  }, diagnostics?: JsonRpcObserverDiagnostics, onIncompletePageWalk?: () => void): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     // Registry scopes and federation consumers can reach the same provider
@@ -10044,15 +10047,18 @@ export class CodexAppServerClient {
       params?.requireComplete === true,
     ]);
     const existing = this.pendingThreadListings.get(key);
+    const pending = existing ?? this.host.listingDiagnostics.trace("provider", {
+      provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true,
+    }, () => this.loadThreadListing(params, diagnostics));
     if (existing) {
       this.host.listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
-      return structuredClone(await existing);
+    } else {
+      this.pendingThreadListings.set(key, pending);
     }
-    const pending = this.host.listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
-      () => this.loadThreadListing(params, diagnostics));
-    this.pendingThreadListings.set(key, pending);
     try {
-      return await pending;
+      const { threads, cursorExhausted } = await pending;
+      if (!cursorExhausted) onIncompletePageWalk?.();
+      return existing ? structuredClone(threads) : threads;
     } finally {
       if (this.pendingThreadListings.get(key) === pending) this.pendingThreadListings.delete(key);
     }
@@ -10061,7 +10067,7 @@ export class CodexAppServerClient {
   private async readThreadInventory(
     params: Parameters<CodexAppServerClient["listThreads"]>[0],
     diagnostics?: JsonRpcObserverDiagnostics,
-  ): Promise<RawCodexThreadSummary[]> {
+  ): Promise<ThreadPageWalk<RawCodexThreadSummary>> {
     // Directory enrichment and archived metadata merging happen after the
     // physical page walk. Different consumers can share that walk without
     // sharing mutable results or weakening limits, deadlines or mutation fences.
@@ -10100,30 +10106,18 @@ export class CodexAppServerClient {
   private async loadThreadListing(
     params: Parameters<CodexAppServerClient["listThreads"]>[0],
     diagnostics?: JsonRpcObserverDiagnostics,
-  ): Promise<AppServerThreadSummary[]> {
-    if (params?.archived === true) {
-      const archivedThreads = await this.readThreadInventory(params, diagnostics);
-      return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
-        enrichDirectories: params?.enrichDirectories ?? true,
-      });
-    }
-
-    const activeThreads = filterVisibleCodexThreads(
-      await this.readThreadInventory(params, diagnostics),
-    );
-    const threads = params?.skipArchivedMetadataRefresh
-      ? activeThreads
-      : mergeArchivedThreadMetadata({
-          activeThreads,
-          archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
-        });
-    if (!params?.skipArchivedMetadataRefresh) {
-      this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
-    }
-
-    return await this.enrichThreads(threads, {
-      enrichDirectories: params?.enrichDirectories ?? true,
-    });
+  ): Promise<ThreadPageWalk<AppServerThreadSummary>> {
+    const { threads: raw, cursorExhausted } = await this.readThreadInventory(params, diagnostics);
+    const visible = filterVisibleCodexThreads(raw);
+    const refreshMetadata = !params?.archived && !params?.skipArchivedMetadataRefresh;
+    const threads = refreshMetadata
+      ? mergeArchivedThreadMetadata({ activeThreads: visible, archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter) })
+      : visible;
+    if (refreshMetadata) this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
+    return {
+      threads: await this.enrichThreads(threads, { enrichDirectories: params?.enrichDirectories ?? true }),
+      cursorExhausted,
+    };
   }
 
   /**
@@ -10144,7 +10138,7 @@ export class CodexAppServerClient {
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
-    const nativeThreads = await requestThreadListPages({
+    const { threads: nativeThreads } = await requestThreadListPages({
       listingDiagnostics: this.host.listingDiagnostics,
       logger: this.host.logger,
       textCache: this.threadListTextCache,
@@ -10179,7 +10173,7 @@ export class CodexAppServerClient {
     await this.ensureInitialized();
 
     const rawThreads = filterVisibleCodexThreads(
-      await requestThreadListPages({
+      (await requestThreadListPages({
         listingDiagnostics: this.host.listingDiagnostics,
         logger: this.host.logger,
         textCache: this.threadListTextCache,
@@ -10187,7 +10181,7 @@ export class CodexAppServerClient {
         client: this.connection,
         filter: params?.filter,
         requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      }),
+      })).threads,
     );
     const enrichedThreads = await this.enrichThreads(rawThreads, {
       enrichDirectories: true,
@@ -10258,7 +10252,7 @@ export class CodexAppServerClient {
             callerReason: `${diagnostics.callerReason ?? "thread-list"}:archived-metadata`,
           }
         : undefined)
-      .then(filterVisibleCodexThreads)
+      .then(({ threads }) => filterVisibleCodexThreads(threads))
       .then((threads) => {
         if (generation === this.archivedThreadListingGeneration) {
           this.archivedThreadMetadataByFilter.set(cacheKey, threads);

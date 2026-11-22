@@ -10,12 +10,16 @@ import { headlessEntries } from "../../../scripts/build-headless.mjs";
 const desktop = path.resolve(import.meta.dirname, "../../..");
 const main = path.join(desktop, "src/main");
 const accessMarker = "__PWRAGENT_OWNER_GETTER_ORACLE__";
-const entries = [
-  "src/main/index.ts",
+const sharedMainWorkerEntries = [
   "src/main/state/storage-maintenance-worker.ts",
   "src/main/claude/claude-session-reader-worker.ts",
   "src/main/mcp-connections/mcp-connection-bridge-entry.ts",
   "src/main/token-miser/token-miser-hook-entry.ts",
+];
+const entries = [
+  "src/main/index.ts",
+  ...sharedMainWorkerEntries,
+  "src/main/diagnostics/chromium-trace-worker.ts",
   "src/preload/entry.ts",
   "src/preload/storage-maintenance.ts",
   "src/renderer/index.html",
@@ -205,10 +209,17 @@ it("covers every configured production entry, inline worker, and audio worklet",
   expect(found.sort()).toEqual([...entries].sort());
   const workers: string[] = [];
   const worklets: string[] = [];
+  const nodeWorkerLaunchers: string[] = [];
   const otherWorkerDeclarations: string[] = [];
   for (const file of walkFiles(path.join(desktop, "src"))) {
     const text = fs.readFileSync(file, "utf8");
-    if (/new\s+(?:Shared)?Worker\s*\(/.test(text)) otherWorkerDeclarations.push(file);
+    if (/new\s+(?:Shared)?Worker\s*\(/.test(text)) {
+      if (/import\s*\{\s*Worker\s*\}\s*from\s*["']node:worker_threads["']/.test(text)) {
+        nodeWorkerLaunchers.push(file);
+      } else {
+        otherWorkerDeclarations.push(file);
+      }
+    }
     if (/\.addModule\s*\(/.test(text)) {
       const visitModuleLoads = (node: ts.Node): void => {
         if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
@@ -228,6 +239,7 @@ it("covers every configured production entry, inline worker, and audio worklet",
   }
   expect(workers).toEqual([worker]);
   expect(worklets).toEqual([audioWorklet]);
+  expect(nodeWorkerLaunchers).toEqual([path.join(main, "diagnostics/chromium-trace-publisher.ts")]);
   expect(otherWorkerDeclarations).toEqual([]);
   expect(walkFiles(desktop).filter((file) => file.endsWith("electron.vite.config.ts")))
     .toEqual([path.join(desktop, "electron.vite.config.ts")]);
@@ -236,7 +248,7 @@ it("covers every configured production entry, inline worker, and audio worklet",
   expect(Object.values(headlessEntries).sort()).toEqual([
     "src/main/headless/index.ts",
     outpostSandboxEntry,
-    ...entries.slice(1, 5),
+    ...sharedMainWorkerEntries,
   ].sort());
   // A newly introduced bundler must enter this inventory rather than escaping it.
   const otherBuilders = walkFiles(desktop).filter((file) => /(?:from\s*["']esbuild["']|import\(["']esbuild["']\))/.test(fs.readFileSync(file, "utf8")));

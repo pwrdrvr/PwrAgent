@@ -5688,8 +5688,8 @@ textarea,
    the scrollbar's column alone.
 
    The shift hangs on the class, not on the property's value. The dock
-   takes the class off to measure the list with its headers in their own
-   places, on every scroll frame. Changing an inherited custom property
+   takes the class off when placement needs the unshifted sticky boxes.
+   Changing an inherited custom property
    there restyles every row under the region (38ms a frame at 360 rows);
    a class with these four descendant selectors restyles the headers. */
 .selected-thread-dock-band {
@@ -5829,7 +5829,16 @@ textarea,
   margin-inline: 0;
 }
 
-.sidebar__project-index-toggle {
+/* SidebarViewMenu.tsx: row style and project index, beside the lens switch.
+   The wrapper anchors the menu and stretches the trigger to the lens row's
+   height. */
+.sidebar__view-menu {
+  display: flex;
+  position: relative;
+  flex: none;
+}
+
+.sidebar__view-menu-trigger {
   display: grid;
   flex: none;
   place-items: center;
@@ -5842,17 +5851,90 @@ textarea,
   cursor: pointer;
 }
 
-.sidebar__project-index-toggle.is-on {
+.sidebar__view-menu-trigger.is-open {
   color: var(--accent-bright);
 }
 
-.sidebar__project-index-toggle:hover {
+.sidebar__view-menu-trigger:hover {
   background: var(--bg-panel-hover);
 }
 
-.sidebar__project-index-toggle:focus-visible {
+.sidebar__view-menu-trigger:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
+}
+
+.sidebar__menu--view {
+  top: calc(100% + 6px);
+  min-width: 248px;
+  gap: 2px;
+  padding: 6px;
+}
+
+.sidebar-view-menu__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-view-menu__heading {
+  padding: 6px 10px 4px 34px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-view-menu__item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-view-menu__item:hover,
+.sidebar-view-menu__item:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.sidebar-view-menu__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.sidebar-view-menu__check {
+  display: grid;
+  place-items: center;
+  height: 18px;
+  color: var(--accent-bright);
+}
+
+.sidebar-view-menu__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-view-menu__title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.sidebar-view-menu__detail {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 /* Project index (ProjectIndex.tsx): a column of project names beside the
@@ -19583,6 +19665,11 @@ a.button {
   gap: 8px;
 }
 
+/* A secret's stored state, under its value and not under its name. */
+.settings-mcp-local__env > .settings-secret__status {
+  grid-column: 2 / -1;
+}
+
 .settings-mcp-local .settings-mcp-local__secret {
   display: inline-flex;
   align-items: center;
@@ -26207,6 +26294,12 @@ a.button {
   font-weight: 650;
   letter-spacing: 0.14em;
   user-select: all;
+}
+
+.settings-boat-actions {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .settings-boat-key {
@@ -34095,6 +34188,57 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+.mcp-access-panel__sandboxes {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 7px;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-access-panel__sandboxes > li {
+  display: grid;
+  gap: 5px;
+}
+
+/* A sandbox's name and actions, with its open tunnels listed beneath. */
+.mcp-access-panel__sandbox,
+.mcp-access-panel__forwards li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mcp-access-panel__forwards {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--border-subtle);
+  list-style: none;
+}
+
+.mcp-access-panel__forward-url {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.mcp-access-panel__sandboxes .mcp-access-panel__row-body {
+  min-width: 0;
+}
+
+.mcp-access-panel__sandboxes .mcp-access-panel__verify-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mcp-access-panel__footer {
   display: flex;
   flex-wrap: wrap;
@@ -37875,7 +38019,6 @@ div.composer-error-row__toggle {
 
 .transcript-diff__path,
 .transcript-diff__hunk,
-.transcript-diff__separator,
 .transcript-diff__text,
 .transcript-diff__line-number,
 .transcript-diff__stat {
@@ -37904,19 +38047,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-diff__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   padding: 0 12px 12px;
-}
-
-.transcript-diff__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  min-width: 0;
 }
 
 .transcript-diff__stats {
@@ -37944,18 +38075,6 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
 }
 
-.transcript-diff__toggle {
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.transcript-diff__summary {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
 .transcript-diff__rows {
   display: flex;
   flex-direction: column;
@@ -37964,8 +38083,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-diff__row,
-.transcript-diff__hunk,
-.transcript-diff__separator {
+.transcript-diff__hunk {
   min-width: 100%;
 }
 
@@ -38030,19 +38148,11 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
 }
 
-.transcript-diff__hunk,
-.transcript-diff__separator {
+.transcript-diff__hunk {
   padding: 6px 12px;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.transcript-diff__hunk {
   background: var(--bg-panel-hover);
-}
-
-.transcript-diff__separator {
-  background: var(--bg-panel);
 }
 
 .skill-chip {
@@ -42366,11 +42476,8 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* Thread-level gate result, above the turn rows. It borrows the pricing
-   summary card wholesale — same shell, same eyebrow, same key/value rows, and
-   the section action the Tool calls tab already uses — so the two read as one
-   stack rather than as a summary and a widget. The figure and its percentage
-   wear the verdict; before pricing lands there is no verdict, and the figure
-   keeps the card's own text color. */
+   summary card shell, eyebrow and key/value rows. The figure and its
+   percentage use the verdict color when pricing is available. */
 .token-miser-summary-card__figure {
   color: var(--savings-verdict, var(--text-primary));
 }
@@ -42475,45 +42582,18 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.35;
 }
 
-.tool-call-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.tool-call-groups h4 {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.tool-call-alert,
-.tool-call-instance--noisy {
-  border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
-  box-shadow: inset 2px 0 0 0 var(--status-warning);
-}
-
-.tool-calls-panel__heading {
+.context-panel__section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.tool-calls-panel__heading h3 {
+.context-panel__section-heading h3 {
   margin: 0;
 }
 
-/* A rail heading's action, at rail scale. The shared `.button` is 34px at
-   13px, which outweighed the 14px heading it sat beside; these are the same
-   measurements as `.tool-call-row__details`, the other in-rail control. Both
-   entry points to the tool-output explorer wear this class, so the Pricing
-   card's action and the Tool calls heading's action are one control with two
-   destinations. */
+/* Compact actions for rail headings and summary cards. */
 .context-panel__section-action {
   display: inline-flex;
   flex: 0 0 auto;
@@ -42855,88 +42935,6 @@ button.pricing-token-miser__folded:focus-visible {
 
 .context-panel__section-action svg {
   flex: 0 0 auto;
-}
-
-.tool-call-alert .rail-card__title {
-  color: var(--text-primary);
-}
-
-.tool-call-row__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.tool-call-row__header > :first-child {
-  min-width: 0;
-}
-
-.tool-call-row__details {
-  flex: 0 0 auto;
-  min-height: 24px;
-  padding: 2px 7px;
-  font-size: 11px;
-}
-
-.tool-call-instance-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 10px 0 0;
-  padding: 0;
-  border-top: 1px solid var(--border-subtle);
-  list-style: none;
-}
-
-.tool-call-instances__status {
-  margin: 10px 0 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.tool-call-instance {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.tool-call-instance:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
-}
-
-.tool-call-instance__command {
-  margin: 0;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.tool-call-instance__detail {
-  margin-top: 4px;
-}
-
-.tool-call-instance__detail .transcript-command {
-  margin: 0;
-}
-
-.tool-call-instance__detail-status {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.tool-call-instances__empty {
-  margin-top: 10px;
 }
 
 /* The in-progress turn: a calm accent left-stripe + slightly firmer border,
@@ -51469,6 +51467,413 @@ button.composer__subthread-source-parent:hover {
   padding: 12px;
 }
 
+/* ============================================================
+   GET STARTED (features/onboarding/GetStarted.tsx)
+   First run on one page: agents, then Start. Keeps the wizard's frame
+   (titlebar eyebrow and breadcrumb over a dimmed app) at a single width.
+   ============================================================ */
+.get-started-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+/* Focused as a whole on open, ahead of its first control. Its ring would
+   outline the entire window. */
+.get-started-overlay:focus {
+  outline: none;
+}
+.get-started-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-strong);
+  pointer-events: none;
+}
+.get-started {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+.get-started__titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  -webkit-app-region: drag;
+}
+.get-started__titlebar button {
+  -webkit-app-region: no-drag;
+}
+.get-started__eyebrow {
+  color: var(--accent);
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.get-started__sep {
+  color: var(--text-subtle);
+}
+.get-started__crumb {
+  color: var(--text-primary);
+  font: 600 13px/1 var(--font-sans, sans-serif);
+}
+.get-started__spacer {
+  flex: 1;
+}
+.get-started__close {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.get-started__close:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+.get-started__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.get-started__body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 26px 18px;
+  overflow-y: auto;
+}
+.get-started__body--center {
+  align-items: center;
+  text-align: center;
+}
+.get-started__head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.get-started__title {
+  margin: 0;
+  color: var(--text-primary);
+  font: 650 22px/1.25 var(--font-sans, sans-serif);
+  letter-spacing: -0.005em;
+  text-wrap: balance;
+}
+.get-started__sub {
+  max-width: 64ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font: 400 14px/1.55 var(--font-sans, sans-serif);
+}
+.get-started__fine {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--text-muted);
+  font: 400 11.5px/1.45 var(--font-sans, sans-serif);
+}
+.get-started code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.get-started__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.get-started__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.get-started__label {
+  margin: 0;
+  color: var(--text-muted);
+  font: 600 11px/1.2 var(--font-sans, sans-serif);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.get-started__agents {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  list-style: none;
+}
+.get-started__agent + .get-started__agent {
+  border-top: 1px solid var(--border-subtle);
+}
+.get-started__agent-main {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+.get-started__agent-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.get-started__agent-name {
+  color: var(--text-primary);
+  font: 600 13px/1.3 var(--font-sans, sans-serif);
+}
+.get-started__agent-detail {
+  color: var(--text-secondary);
+  font: 400 12px/1.35 var(--font-sans, sans-serif);
+  overflow-wrap: anywhere;
+}
+.get-started__row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.get-started__mark {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+}
+.get-started__mark > img,
+.get-started__mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.get-started__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font: 600 11px/1.2 var(--font-sans, sans-serif);
+  white-space: nowrap;
+}
+.get-started__status--ok {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+/* Tone on the label only: a warm tint reads beige in the blue themes. */
+.get-started__status--warn {
+  color: var(--status-warning-text);
+}
+.get-started__status--info {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+.get-started__agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px 52px;
+}
+.get-started__agent-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font: 400 12px/1.45 var(--font-sans, sans-serif);
+}
+.get-started__agent-link {
+  align-self: flex-start;
+  color: var(--accent);
+  font: 600 12px/1.3 var(--font-sans, sans-serif);
+  text-decoration: none;
+}
+.get-started__agent-link:hover {
+  text-decoration: underline;
+}
+.get-started__command {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+.get-started__command-label {
+  color: var(--text-muted);
+  font: 600 11px/1.2 var(--font-sans, sans-serif);
+  white-space: nowrap;
+}
+.get-started__command-text {
+  overflow-x: auto;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.get-started__more {
+  align-self: flex-start;
+}
+.get-started__error {
+  margin: 0;
+  color: var(--danger-text);
+  font: 500 12px/1.4 var(--font-sans, sans-serif);
+}
+.get-started__choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.get-started__choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.get-started__choice.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.get-started__choice:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.get-started__choice-title {
+  color: var(--text-primary);
+  font: 600 13px/1.3 var(--font-sans, sans-serif);
+}
+.get-started__choice-detail {
+  font: 400 12px/1.4 var(--font-sans, sans-serif);
+}
+.get-started__footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+.get-started__hint {
+  color: var(--text-muted);
+  font: 500 12px/1.2 var(--font-sans, sans-serif);
+}
+.get-started__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: 600 12.5px/1 var(--font-sans, sans-serif);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.get-started__btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.get-started__btn:disabled {
+  cursor: not-allowed;
+}
+.get-started__btn--primary {
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+.get-started__btn--primary:hover:not(:disabled) {
+  background: var(--accent-fill-strong);
+}
+.get-started__btn--primary:disabled {
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+}
+.get-started__btn--ghost {
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+.get-started__btn--ghost:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+.get-started__btn--link {
+  padding-inline: 6px;
+  color: var(--text-muted);
+}
+.get-started__btn--link:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+.get-started__dismiss {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.get-started__dismiss-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-strong);
+}
+.get-started__dismiss-body {
+  position: relative;
+  display: flex;
+  width: min(540px, calc(100% - 48px));
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 24px 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+.get-started__dismiss-title {
+  margin: 0;
+  color: var(--text-primary);
+  font: 650 18px/1.3 var(--font-sans, sans-serif);
+}
+.get-started__dismiss-prose {
+  margin: 0;
+  color: var(--text-secondary);
+  font: 400 13px/1.55 var(--font-sans, sans-serif);
+}
+.get-started__dismiss-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 /* ==============================================}
 
    FIRST-RUN ONBOARDING WIZARD
@@ -56188,6 +56593,24 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 /* Machine, Speed, Where and Env hold short single-choice lists. */
 .todo-fact-menu {
   width: 260px;
+}
+
+/* The composer's PR menu: each item's name reads in full and its note
+   gives way instead. */
+.todo-fact-menu.composer-pr-menu {
+  width: 340px;
+}
+
+.composer-pr-menu .todo-split__item-label {
+  flex: none;
+}
+
+.composer-pr-menu .todo-model-picker__detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .todo-dispatch__pending {

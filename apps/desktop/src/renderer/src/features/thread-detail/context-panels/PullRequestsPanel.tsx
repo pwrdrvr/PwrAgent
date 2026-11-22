@@ -233,10 +233,14 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                   {prTitle(pr)}
                 </p>
                 <p className="rail-card__meta">{repositoryLabel(pr)}</p>
-                {isOpen && watches !== undefined ? (
+                {(isOpen || chipWatch?.mergeBuild) && watches !== undefined ? (
                   <PullRequestWatchList
                     pr={pr}
                     watches={prWatches}
+                    mergeBuild={chipWatch?.mergeBuild}
+                    onStopMergeBuild={manageable && watchContext?.stopMergeBuild
+                      ? async (wait) => await watchContext.stopMergeBuild!(props.thread, wait)
+                      : undefined}
                     autoFix={chipWatch
                       ? chipWatch.autoFix === true
                       : pullRequestMatchesRepositoryKey(pr, autoFixRepository)}

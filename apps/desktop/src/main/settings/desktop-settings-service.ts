@@ -95,6 +95,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  DEFAULT_WATCH_MERGE_BUILDS,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_DARK_THEME_DEFAULT,
   DESKTOP_LIGHT_THEME_DEFAULT,
@@ -1124,6 +1125,10 @@ export class DesktopSettingsService {
         hotCpuProfilingSlowburnThresholdPercent: this.resolveHotCpuSlowburnThresholdPercent(
           config.general?.hotCpuProfilingSlowburnThresholdPercent,
         ),
+        hotCpuProfilingCaptureChromiumTrace: this.resolveConfigBoolean(
+          config.general?.hotCpuProfilingCaptureChromiumTrace,
+          false,
+        ),
         hotCpuProfilingCaptureHeapSnapshot: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingCaptureHeapSnapshot,
           false,
@@ -1242,10 +1247,6 @@ export class DesktopSettingsService {
           config.experimental?.fullAccessRiskWarningDismissed,
           false,
         ),
-        liveTranscriptEventFiltering: this.resolveConfigBoolean(
-          config.experimental?.liveTranscriptEventFiltering,
-          false,
-        ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
           true,
@@ -1278,10 +1279,6 @@ export class DesktopSettingsService {
           config.experimental?.tokenMiserDefaultEnabled,
           true,
         ),
-        threadToolAccounting: this.resolveConfigBoolean(
-          config.experimental?.threadToolAccounting,
-          false,
-        ),
         codexToolDiscovery: this.resolveConfigBoolean(
           config.experimental?.codexToolDiscovery,
           true,
@@ -1308,11 +1305,6 @@ export class DesktopSettingsService {
           config.experimental?.managedReview,
           false,
         ),
-        diffCondensation: {
-          enabled: this.resolveDiffCondensationEnabled(
-            config.experimental?.diffCondensation?.enabled,
-          ),
-        },
       },
       imageUploads: {
         pastedImageMaxPatches: this.resolvePastedImageMaxPatches(
@@ -1843,6 +1835,10 @@ export class DesktopSettingsService {
           config.git?.defaultPrAutoDispatchEnabled,
           DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
         ),
+        watchMergeBuilds: this.resolveConfigBoolean(
+          config.git?.watchMergeBuilds,
+          DEFAULT_WATCH_MERGE_BUILDS,
+        ),
         prAutoDispatchBudgetCapacity: this.resolvePrAutoDispatchBudgetNumber(
           config.git?.prAutoDispatchBudgetCapacity,
           DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
@@ -1896,6 +1892,17 @@ export class DesktopSettingsService {
 
   readMessagingSettings(): DesktopSettingsSnapshot["messaging"] {
     return resolveMessagingSettingsDomain(this.readMessagingConfig(), this.env);
+  }
+
+  async setDevelopmentWorkingUpdatesDefault(mode: MessagingToolUpdateMode) {
+    // Another instance can save this profile before the local watcher runs.
+    const current = this.resolveToolUpdateMode(this.configStore.readSavedDevelopmentWorkingUpdatesMode());
+    if (current.value === mode) return { ...current, changed: false };
+    const update = await this.writeConfigPatchTargeted({ messaging: { toolUpdateMode: mode } });
+    return {
+      ...resolveMessagingSettingsDomain(update.values.messaging, this.env).toolUpdateMode,
+      changed: true,
+    };
   }
 
   async readMessagingProjection(): Promise<DesktopMessagingSettingsProjection> {
@@ -2491,6 +2498,14 @@ export class DesktopSettingsService {
    */
   resolveGithubEnterpriseHosts(): string[] {
     return this.configStore.read("git")?.githubEnterpriseHosts ?? [];
+  }
+
+  /** `[git] watch_merge_builds`: arm a merge build watch when a thread's PR merges. */
+  resolveWatchMergeBuilds(): boolean {
+    return this.resolveConfigBoolean(
+      this.configStore.read("git")?.watchMergeBuilds,
+      DEFAULT_WATCH_MERGE_BUILDS,
+    ).value;
   }
 
   resolveDefaultPrAutoDispatchEnabled(): boolean {
@@ -4264,15 +4279,6 @@ export class DesktopSettingsService {
     };
   }
 
-  private resolveDiffCondensationEnabled(
-    configValue: boolean | undefined,
-  ): DesktopSettingsValue<boolean> {
-    return {
-      value: configValue ?? false,
-      source: configValue === undefined ? "default" : "config",
-    };
-  }
-
   private resolveBoolean(
     configValue: boolean | undefined,
     defaultValue: boolean,
@@ -4997,7 +5003,7 @@ export class DesktopSettingsService {
       storage: resolved,
       effectivePath:
         resolved.value === "user-home"
-          ? toForwardSlashes(userHomeWorktreesRoot(baseDirectory))
+          ? toForwardSlashes(baseDirectory ?? userHomeWorktreesRoot())
           : ".worktrees",
       // Availability is checked on demand (settings:worktree-folder), never
       // here: a stat on a stale network mount would block the main process.

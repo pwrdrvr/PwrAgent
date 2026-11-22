@@ -121,6 +121,7 @@ const TOOL_DESCRIPTION = [
   "PwrAgent holds their OAuth credentials centrally and proxies them to threads.",
   "One connection therefore works for Codex and for ACP agents alike.",
   "Use list to see what this profile has configured.",
+  "For Boat, list reports sandboxStart, which says whether a sandbox can start now and what frees one.",
   "Use create to register a new remote MCP server.",
   "Use describe_thread to check what a thread actually received.",
   "Prefer this to editing an agent's own MCP config file.",

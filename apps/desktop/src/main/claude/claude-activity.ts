@@ -93,6 +93,7 @@ export function groupClaudeActivities(entries: AppServerThreadEntry[]): AppServe
     const previous = grouped.at(-1);
     // A notice, such as a compaction, is its own row, never a folded tool.
     if (entry.type !== "activity" || previous?.type !== "activity" || isClaudeNotice(entry) || isClaudeNotice(previous)
+      || entry.details[0]?.command?.rawCommand === "Code" || previous.details[0]?.command?.rawCommand === "Code"
       || !entry.turn?.id || previous.turn?.id !== entry.turn.id) {
       grouped.push(entry);
       callCount = entry.type === "activity" ? 1 : 0;

@@ -34,6 +34,16 @@ function event(method: string, params: Record<string, unknown>): AgentEvent {
 }
 
 describe("ThreadTodoFeed", () => {
+  it("re-projects a thread's cards when its parent changes, so a sibling's parent stays current", async () => {
+    const { feed, source } = harness([card("a", "t", 1)], [owner("t")]);
+    await feed.snapshot();
+    for (const method of ["thread/parent/set", "thread/parent/cleared"]) {
+      source.readOpenCards.mockClear();
+      feed.handleBackendEvent(event(method, { threadId: "t" }));
+      await vi.waitFor(() => expect(source.readOpenCards).toHaveBeenCalledWith({ backend: "codex", threadId: "t" }));
+    }
+  });
+
   it("does no work before the first snapshot", () => {
     const { feed, source } = harness([], [owner("t")]);
     feed.cardsChanged({ backend: "codex", threadId: "t" });
@@ -155,6 +165,33 @@ describe("ThreadTodoFeed", () => {
     const { feed, source } = harness([card("a", "t", 1)], [owner("t")]);
     source.managedThreadKeys.mockReturnValue(new Set(["codex:t"]));
     expect((await feed.snapshot()).todos).toEqual([]);
+  });
+
+  it("removes and restores cards when a full refresh reevaluates managed membership", async () => {
+    const { feed, source, deltas } = harness([card("a", "t", 1), card("b", "other", 2)],
+      [owner("t"), owner("other")]);
+    await feed.snapshot();
+    expect(source.managedThreadKeys).toHaveBeenLastCalledWith(["codex:t", "codex:other"]);
+    source.managedThreadKeys.mockReturnValue(new Set(["codex:t"]));
+    feed.cardsChanged();
+    await feed.idle();
+    expect((await feed.snapshot()).todos.map((todo) => todo.id)).toEqual(["b"]);
+    expect(deltas.map((delta) => delta.removedIds)).toEqual([["a"]]);
+    source.managedThreadKeys.mockReturnValue(new Set());
+    feed.cardsChanged();
+    await feed.idle();
+    expect((await feed.snapshot()).todos.map((todo) => todo.id)).toEqual(["b", "a"]);
+    expect(deltas.map((delta) => delta.upserts?.[0]?.id)).toEqual([undefined, "a"]);
+  });
+
+  it("uses one fleet lookup for a large full refresh", async () => {
+    const owners = Array.from({ length: 64 }, (_, i) => owner(`owner-${i}`));
+    const { feed, source } = harness(owners.map(({ id }, i) => card(`card-${i}`, id, i)), owners);
+    expect((await feed.snapshot()).todos).toHaveLength(64);
+    expect(source.managedThreadKeys).toHaveBeenCalledExactlyOnceWith(undefined);
+    feed.cardsChanged({ backend: "codex", threadId: "owner-0" });
+    await feed.idle();
+    expect(source.managedThreadKeys).toHaveBeenLastCalledWith(["codex:owner-0"]);
   });
 
   it("ignores federated events and emits nothing when a refresh finds no change", async () => {

@@ -2365,24 +2365,31 @@ describe("MessagingController", () => {
       });
   });
 
-  it("publishes a usable browse surface before the last peer answers and updates that surface", async () => {
+  it("paints the browse once, after the last peer answers", async () => {
     const peer = createDeferred<void>();
     const navigation = buildNavigationSnapshot();
-    const harness = await createHarness(boundedPeerBrowseFixture(navigation, navigation, peer.promise, "Peer disconnected"));
+    const fixture = boundedPeerBrowseFixture(navigation, navigation, peer.promise, "Peer disconnected");
+    const peerRead = createDeferred<void>();
+    const readPage = fixture.getNavigationQueryPage;
+    const harness = await createHarness({ ...fixture, getNavigationQueryPage: async (request) => {
+      if (request.federationTarget?.scope === "remote") peerRead.resolve();
+      return readPage(request);
+    } });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
-    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
-    expect(harness.delivered[0]).toMatchObject({
-      kind: "thread_picker", prompt: expect.stringContaining("Still checking 1"),
-    });
-    peer.resolve();
-    await pending;
-    expect(harness.delivered).toHaveLength(2);
-    expect(harness.delivered[1]).toMatchObject({
-      kind: "thread_picker", delivery: { mode: "update" },
-      prompt: expect.stringContaining("Results are incomplete"),
-      browseSessionId: (harness.delivered[0] as { browseSessionId: string }).browseSessionId,
-    });
-    harness.controller.dispose();
+    try {
+      await peerRead.promise;
+      expect(harness.delivered).toHaveLength(0);
+      peer.resolve();
+      await pending;
+      expect(harness.delivered).toHaveLength(1);
+      expect(harness.delivered[0]).toMatchObject({
+        kind: "thread_picker", prompt: expect.stringContaining("Results are incomplete"),
+      });
+      expect(JSON.stringify(harness.delivered[0])).not.toContain("Still checking");
+    } finally {
+      peer.resolve();
+      await pending.finally(() => harness.controller.dispose());
+    }
   });
 
   it.each([
@@ -2398,13 +2405,11 @@ describe("MessagingController", () => {
       key: "remote:project", path: "/remote/project", label: "Remote project", threadKeys: [],
     };
     const complete = { ...local, directories: [...local.directories, remoteDirectory] };
-    const firstDelivery = createDeferred<void>();
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
       ...boundedPeerBrowseFixture(local, complete, peer.promise),
       deliver: async (intent) => {
         delivered.push(intent);
-        firstDelivery.resolve();
         return {
           channel: "telegram",
           deliveredAt: 1000,
@@ -2415,25 +2420,18 @@ describe("MessagingController", () => {
     });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
     try {
-      // Wait for the owned delivery event, not a polling deadline racing disk IO.
-      await Promise.race([
-        firstDelivery.promise,
-        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
-      ]);
-      expect(delivered).toHaveLength(1);
-      const browseSessionId = (delivered[0] as { browseSessionId: string }).browseSessionId;
       peer.resolve();
       await pending;
-      expect(delivered[1]).toMatchObject({
-        browseSessionId, delivery: { mode: "update" },
-      });
+      // One paint, and it already carries the peer's directory selection.
+      expect(delivered).toHaveLength(1);
+      const browseSessionId = (delivered[0] as { browseSessionId: string }).browseSessionId;
       await expect(harness.store.getBrowseSession(browseSessionId, { now: 1000 })).resolves.toMatchObject({
         mode,
         selectedProject: {
           directoryKey: remoteDirectory.key, path: remoteDirectory.path, label: remoteDirectory.label,
         },
       });
-      expect(JSON.stringify(delivered[1])).not.toContain("Thread one");
+      expect(JSON.stringify(delivered[0])).not.toContain("Thread one");
     } finally {
       // Even a failed assertion must release and drain the command before
       // afterEach removes its store directory.
@@ -2451,13 +2449,18 @@ describe("MessagingController", () => {
         ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
       }],
     };
-    const firstDelivery = createDeferred<void>();
+    const peerRead = createDeferred<void>();
     const delivered: MessagingSurfaceIntent[] = [];
+    const fixture = boundedPeerBrowseFixture(navigation, complete, peer.promise);
+    const readPage = fixture.getNavigationQueryPage;
     const harness = await createHarness({
-      ...boundedPeerBrowseFixture(navigation, complete, peer.promise),
+      ...fixture,
+      getNavigationQueryPage: async (request) => {
+        if (request.federationTarget?.scope === "remote") peerRead.resolve();
+        return readPage(request);
+      },
       deliver: async (intent) => {
         delivered.push(intent);
-        firstDelivery.resolve();
         return {
           channel: "telegram",
           deliveredAt: 1000,
@@ -2468,13 +2471,9 @@ describe("MessagingController", () => {
     });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
     try {
-      // The initial delivery owns readiness; a polling deadline races the
-      // browse store's disk IO on Windows before this test can act.
-      await Promise.race([
-        firstDelivery.promise,
-        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
-      ]);
-      expect(delivered).toHaveLength(1);
+      // The browse paints nothing until every owner answers.
+      await peerRead.promise;
+      expect(delivered).toHaveLength(0);
       await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
       const afterAction = delivered.length;
       peer.resolve();
@@ -2488,7 +2487,7 @@ describe("MessagingController", () => {
     }
   });
 
-  it("budgets SQLite writes for initial and completed progressive browse publications", async () => {
+  it("budgets SQLite writes for a federated resume browse publication", async () => {
     const previous = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const { tempDir } = createTempStateDb("pwragent-browse-writes-");
@@ -2507,8 +2506,8 @@ describe("MessagingController", () => {
       });
       harness.controller.dispose();
       expectSqliteWriteBudget({
-        scenario: "messaging-progressive-browse",
-        note: "one explicit resume command: local publication plus one coalesced remote publication",
+        scenario: "messaging-federated-resume-browse",
+        note: "one explicit resume command: one publication after the local owner and one peer answer",
         writes,
       });
     } finally {
@@ -6781,6 +6780,104 @@ describe("MessagingController", () => {
         context: { ...context, causalMessagingAmbiguous: true } })).toMatchObject({ ok: false, error: { code: "ambiguous_location" } });
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context, args })).toMatchObject({ ok: true });
     } finally { db.close(); }
+  });
+
+  it.each(["binding", "default", "legacy"] as const)(
+    "requires a live provider actor and an explicit profile-settings grant on the %s route",
+    async (route) => {
+      const db = StateDb.open(":memory:");
+      let disposeController: (() => void) | undefined;
+      try {
+        let member = true;
+        const permissions: MessagingPermissionId[] = ["message.reply", "thread.settings.tool_updates"];
+        const navigation = buildNavigationSnapshot();
+        if (route === "default") {
+          navigation.threads[0]!.agent = { name: "Fixture Agent", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
+        }
+        const requests = new SqliteMessagingRequestStore(db.raw);
+        const harness = await createHarness({
+          requestStore: requests,
+          authorizeRetainedSource: (_event, verify = true) => !verify || member,
+          navigation,
+          rbacPolicy: route === "legacy" ? undefined : rbacProviderGranting(permissions),
+        });
+        disposeController = () => harness.controller.dispose();
+        const event = buildTextEvent("Read the Working Updates default", { botMention: true, channel: buildTopicChannel("400") });
+        if (route === "default") await seedConversationDefaultAgent(harness.store, event.channel);
+        else await harness.store.upsertBinding({ id: "bound", backend: "codex", threadId: "thread-1", targetKind: "thread",
+          channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+        await harness.controller.handleInboundEvent(event);
+        const source = harness.startTurn.mock.calls[0]?.[0].messageOrigin?.causalMessagingSource;
+        expect(source).toBeDefined();
+        const context = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1", causalMessagingSource: source };
+        const check = { ...context, category: "messaging_context" as const, tool: "set_messaging_working_updates_default" };
+        const authorize = () => harness.controller.authorizeRetainedTool(context, check);
+        const denied = { owns: true, allowed: false, permission: "tools.messaging_profile_settings" };
+        expect(await authorize()).toEqual(denied);
+        permissions.push("tools.messaging_profile_settings");
+        expect(await authorize()).toEqual(route === "legacy" ? denied : { owns: true, allowed: true });
+        if (route !== "legacy") {
+          const retained = requests.get(source!)!;
+          const rememberSteer = (steer: typeof event) => requests.remember({
+            agent: retained.agent, bindingId: retained.bindingId, connectionId: retained.connectionId, event: steer,
+          })!.ref;
+          const sameActor = rememberSteer({ ...event, id: "same-actor-steer" });
+          const otherActor = rememberSteer({ ...event, id: "other-actor-steer", actor: { ...event.actor, platformUserId: "other" } });
+          const otherConversation = rememberSteer({ ...event, id: "other-conversation-steer", channel: buildTopicChannel("401") });
+          const authorizeSteer = (causalMessagingSource: typeof sameActor, causalMessagingAmbiguous = false) =>
+            harness.controller.authorizeRetainedTool({ ...context, causalMessagingSource, causalMessagingAmbiguous }, check);
+          expect(sameActor.requestId).not.toBe(source!.requestId);
+          expect(await authorizeSteer(sameActor)).toEqual({ owns: true, allowed: true });
+          expect(await authorizeSteer(otherActor)).toEqual(denied);
+          expect(await authorizeSteer(otherConversation)).toEqual(denied);
+          expect(await authorizeSteer(sameActor, true)).toMatchObject({ allowed: false });
+        }
+        expect(await harness.controller.authorizeRetainedTool({ ...context, turnId: "completion" }, check)).toEqual(denied);
+        member = false;
+        expect(await authorize()).toEqual(denied);
+        member = true;
+        permissions.pop();
+        expect(await authorize()).toEqual(denied);
+      } finally {
+        disposeController?.();
+        db.close();
+      }
+    },
+  );
+
+  it("passes the bound requester to the launchpad before it starts the first prompt", async () => {
+    const db = StateDb.open(":memory:");
+    const requests = new SqliteMessagingRequestStore(db.raw);
+    const materialize = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest, options?: MaterializeDirectoryLaunchpadOptions) => {
+      const thread = { backend: "codex", threadId: "new-thread-1", executionMode: "default", workMode: "local" } as const;
+      const origin = await options?.onThreadMaterialized?.(thread);
+      return { ...thread, turnId: "turn-1", origin };
+    });
+    const harness = await createHarness({
+      requestStore: requests,
+      authorizeRetainedSource: () => true,
+      materializeDirectoryLaunchpad: materialize,
+      rbacPolicy: rbacProviderGranting(["thread.new", "message.reply", "tools.messaging_profile_settings"]),
+    });
+    try {
+      await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+        directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+      } }));
+      await harness.controller.handleInboundEvent(buildTextEvent("Start with chat settings"));
+      expect(materialize).toHaveBeenCalledOnce();
+      expect(materialize.mock.calls[0]?.[0].input).toEqual([{ type: "text", text: "Start with chat settings" }]);
+      const origin = (await materialize.mock.results[0]?.value)?.origin;
+      expect(origin).toMatchObject({ kind: "messaging", causalMessagingSource: { ownerId: expect.any(String), requestId: expect.any(String) } });
+      const causalMessagingSource = origin?.causalMessagingSource;
+      const context = { backend: "codex", threadId: "new-thread-1", turnId: "turn-1", causalMessagingSource } as const;
+      expect(await harness.controller.authorizeRetainedTool(context, {
+        ...context, category: "messaging_context", tool: "set_messaging_working_updates_default",
+      })).toEqual({ owns: true, allowed: true });
+    } finally {
+      harness.controller.dispose();
+      db.close();
+    }
   });
 
   it("rechecks revocation after provider preflight and before creating a retained destination", async () => {
@@ -22497,6 +22594,35 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it.each([undefined, "show_some"] as const)("applies the changed profile default with binding mode %s", async (override) => {
+    let mode: MessagingToolUpdateMode = "show_some";
+    const harness = await createHarness({ toolUpdateDefaultMode: () => mode });
+    const channel = buildTopicChannel("400");
+    await harness.store.upsertBinding({ id: "binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+      channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000,
+      ...(override ? { preferences: { toolUpdateMode: override, updatedAt: 1000 } } : {}) });
+    const delivered = (text: string) => harness.delivered
+      .some((intent) => intent.kind === "message" && JSON.stringify(intent.parts).includes(text));
+    await harness.controller.handleInboundEvent(buildTextEvent("start work", { channel }));
+    try {
+      await harness.controller.handleBackendEvent(buildToolCompletedEvent("before", "echo before"));
+      expect(delivered("Tool update: echo before")).toBe(true);
+      mode = "show_none";
+      await harness.controller.handleBackendEvent(buildToolCompletedEvent("after", "echo after"));
+      expect(delivered("Tool update: echo after")).toBe(override !== undefined);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          item: { id: "final", type: "agentMessage", text: "The work is complete." },
+        },
+      } });
+      expect(delivered("The work is complete.")).toBe(true);
+      expect((await harness.store.getBinding("binding"))?.preferences?.toolUpdateMode).toBe(override);
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
   it("delivers completed ACP tool updates as generated system messages", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.source = "acp:gemini";
@@ -22780,25 +22906,25 @@ describe("MessagingController", () => {
     });
   });
 
-  it("revokes stale Telegram topic bindings when the message thread no longer exists", async () => {
-    const harness = await createHarness({
-      deliver: async () => ({
-        channel: "telegram",
-        deliveredAt: 1000,
-        outcome: "failed",
-        errorMessage: "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
-      }),
+  it.each([
+    ["Bad Request: message thread not found", 1000],
+    ["Bad Request: TOPIC_DELETED", 1000],
+    ["Bad Request: TOPIC_CLOSED", undefined],
+  ])("revokes Telegram topic bindings and monitors only for a missing destination (%s)", async (description, revokedAt) => {
+    const sendMessage = vi.fn().mockRejectedValue(new Error(description));
+    const adapter = new TelegramAdapter({
+      api: { sendMessage } as unknown as TelegramBotApi,
+      config: { channel: "telegram", botToken: "token", authorizedActorIds: [] },
     });
+    const harness = await createHarness({
+      channel: "telegram",
+      deliver: (intent) => adapter.deliver(intent),
+    });
+    const channel = buildTopicChannel("405");
+    const bindingId = "binding:telegram:topic:-1001:405:acp:kimi:thread-1";
     await harness.store.upsertBinding({
-      id: "binding:telegram:topic:-1003659063549:405:acp:kimi:thread-1",
-      channel: {
-        channel: "telegram",
-        conversation: {
-          id: "405",
-          kind: "topic",
-          parentId: "-1003659063549",
-        },
-      },
+      id: bindingId,
+      channel,
       backend: "acp:kimi",
       threadId: "thread-1",
       authorizedActorIds: ["user-1"],
@@ -22806,25 +22932,27 @@ describe("MessagingController", () => {
       updatedAt: 1000,
     });
 
-    await harness.controller.handleBackendEvent({
-      backend: "acp:kimi",
-      notification: {
-        method: "turn/started",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: {
-            id: "turn-1",
-          },
-        },
-      },
-    });
+    await harness.controller.handleInboundEvent(buildTopicCommandEvent("/status", "405"));
 
-    await expect(
-      harness.store.getBinding("binding:telegram:topic:-1003659063549:405:acp:kimi:thread-1"),
-    ).resolves.toMatchObject({
-      revokedAt: 1000,
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: -1001,
+      message_thread_id: 405,
+    }));
+    const binding = await harness.store.getBinding(bindingId);
+    expect(binding).toBeDefined();
+    expect(binding?.revokedAt ?? undefined).toBe(revokedAt);
+
+    sendMessage.mockClear();
+    await harness.controller.handleInboundEvent({
+      ...buildTopicCommandEvent("/monitor", "405"),
+      id: "topic-monitor-command",
     });
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: -1001,
+      message_thread_id: 405,
+    }));
+    const monitor = await harness.store.findActiveMonitorSubscriptionForChannel(channel);
+    expect(Boolean(monitor)).toBe(revokedAt === undefined);
   });
 
   it("does not resurrect a revoked binding after a failed status refresh returns a surface", async () => {

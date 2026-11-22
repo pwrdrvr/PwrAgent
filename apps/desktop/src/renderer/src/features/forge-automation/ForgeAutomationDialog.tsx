@@ -4,6 +4,7 @@ import {
   resolveProjectForgeAutomation,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
+  type ProjectMergeBuildWatches,
 } from "@pwragent/shared/project-forge-automation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { SegmentedControl } from "../settings/SettingsLayout";
@@ -210,6 +211,25 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
             </p>
           </fieldset>
         )}
+        {draft.paused ? null : (
+          <div className="forge-automation-dialog__group">
+            <p aria-hidden="true" className="forge-automation-dialog__label">Merge build watches</p>
+            <SegmentedControl<ProjectMergeBuildWatches>
+              disabled={busy || !draft.prWatches}
+              label="Merge build watches"
+              options={[
+                { label: "Default", value: "default" },
+                { label: "On", value: "on" },
+                { label: "Off", value: "off" },
+              ]}
+              value={draft.mergeBuildWatches ?? "default"}
+              onChange={(value) => update({ mergeBuildWatches: value === "default" ? undefined : value })}
+            />
+            <p className="forge-automation-dialog__hint">
+              {describeMergeBuildWatchChoice(draft)}
+            </p>
+          </div>
+        )}
         {pausedSince && draft.paused ? (
           <p className="forge-automation-dialog__status" role="status">
             {heldCount === undefined ? pausedSince : `${pausedSince} · ${formatHeldWakeupCount(heldCount)}`}
@@ -240,6 +260,19 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
     </div>,
     document.body,
   );
+}
+
+/** What the merge build choice does, under its control. */
+function describeMergeBuildWatchChoice(draft: ProjectForgeAutomation): string {
+  if (!draft.prWatches) return "PR watches are off, so no merge build is watched.";
+  switch (draft.mergeBuildWatches ?? "default") {
+    case "on":
+      return "After a PR merges, PwrAgent watches its build on the target branch and wakes the thread if it fails.";
+    case "off":
+      return "No merge build is watched unless a thread asks for it.";
+    default:
+      return "Follows Watch merge builds in Git settings.";
+  }
 }
 
 /**

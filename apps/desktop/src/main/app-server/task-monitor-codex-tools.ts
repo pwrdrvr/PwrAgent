@@ -320,7 +320,7 @@ export function buildMonitorParentAgentGuidance(params: {
     "Before creating the delegation, write down the exact monitoring procedure you were about to perform yourself: cwd, command/status command or wait API, poll cadence, terminal success/failure criteria, and log lines needed for final diagnosis.",
     "Do not delegate an already-running parent tool session by Codex/agent session id. Monitor threads cannot read the parent turn's exec_command/write_stdin stdin, stdout, stderr, or exit status.",
     "For local build/test/script commands, prefer delegating before starting the command: include cwd plus the exact command so the monitor starts it, captures stdout/stderr, observes exit status, and reports the relevant output tail. Include desired stdout/stderr capture-file paths when useful. If the command is already running, only delegate when there is a durable pid/log/status file or external wait API the monitor can access.",
-    "If you have checked something for progress for about 30 seconds and the check is repeatable, stop polling in the parent and delegate that repeatable check to the monitor.",
+    "Prefer built-in waits for attached PRs, standalone CI runs, local result markers, and times. Delegate a repeatable check when no built-in wait covers it or when the operator explicitly requests a Job Monitor.",
     "Use this for local verification commands too when the alternative is repeatedly checking whether a long-running command has finished.",
     "A successful create_monitor_delegation response confirms that PwrAgent started the monitor thread and its turn.",
     "Treat startedByPwrAgent=true and startupConfirmed=true as final startup confirmation. Do not wait for or inspect a progress injection.",

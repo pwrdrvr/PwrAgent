@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
-import type { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -16,7 +15,13 @@ import {
 } from "@pwragent/shared/contracts/mcp-connections";
 import { pathIsExecutable, resolveCommandOnPath } from "../settings/command-discovery";
 import { terminateOwnedProcessTree, type OwnedChildProcess } from "../process-tree";
-import { mcpSharedStdio } from "./mcp-sdk";
+import { loadedMcpTypes, mcpSharedStdio } from "./mcp-sdk";
+import {
+  describeOversizedMcpMessage,
+  McpStdioFrameReader,
+  scanOversizedMessageEnvelope,
+  type McpStdioFrame,
+} from "./mcp-stdio-frames";
 
 /** How long a server gets to exit after its stdin closes, then per signal. */
 const STDIN_CLOSE_GRACE_MS = 1_000;
@@ -42,6 +47,23 @@ const INHERITED_WINDOWS = [
   "PROCESSOR_ARCHITECTURE", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
   "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERNAME", "USERPROFILE", "WINDIR",
 ];
+
+/**
+ * A message from a local server over PwrAgent's per-message limit. It was
+ * skipped; the stream stays framed and the connection stays up unless the
+ * request it answered could not be named.
+ */
+export class McpStdioMessageTooLargeError extends Error {
+  readonly reason = "message_too_large";
+
+  constructor(
+    readonly messageBytes: number,
+    readonly limitBytes: number,
+  ) {
+    super(describeOversizedMcpMessage(messageBytes, limitBytes));
+    this.name = "McpStdioMessageTooLargeError";
+  }
+}
 
 /** A launch failure the operator can act on. `output` is masked server stderr. */
 export class McpStdioLaunchError extends Error {
@@ -264,9 +286,11 @@ export class OwnedStdioClientTransport implements Transport {
   onmessage?: (message: JSONRPCMessage) => void;
 
   private child?: StdioChildProcess;
-  // Set by start(), which loads the SDK's stdio framing.
-  private readBuffer?: ReadBuffer;
+  private readonly frames: McpStdioFrameReader;
+  // Set by start(), which loads the SDK's stdio message codec.
   private serializeMessage?: (message: JSONRPCMessage) => string;
+  /** Ids of requests sent to the server and not answered yet. */
+  private readonly outstanding = new Map<string, string | number>();
   private outputTail = "";
   private exit?: { code: number | null; signal: NodeJS.Signals | null };
   private closing?: Promise<void>;
@@ -280,7 +304,10 @@ export class OwnedStdioClientTransport implements Transport {
     private readonly launch: ResolvedStdioLaunch,
     private readonly spawnProcess: StdioSpawn = spawn as unknown as StdioSpawn,
     private readonly hooks: { onSpawn?: () => void; onExit?: () => void } = {},
-  ) {}
+    options: { maxMessageBytes?: number } = {},
+  ) {
+    this.frames = new McpStdioFrameReader(options.maxMessageBytes);
+  }
 
   get pid(): number | undefined {
     return this.child?.pid;
@@ -306,8 +333,7 @@ export class OwnedStdioClientTransport implements Transport {
       this.starting = false;
     }
     if (this.child || this.closed) throw new Error("This MCP server transport was already started.");
-    const { ReadBuffer, serializeMessage } = stdio;
-    const readBuffer = this.readBuffer = new ReadBuffer();
+    const { deserializeMessage, serializeMessage } = stdio;
     this.serializeMessage = serializeMessage;
     const invocation = createCommandInvocation({
       command: this.launch.command,
@@ -359,18 +385,28 @@ export class OwnedStdioClientTransport implements Transport {
         }).catch(() => undefined);
         this.onclose?.();
       });
+      // Nothing thrown here may escape: a throw from a stream listener is an
+      // uncaught exception in the main process.
       child.stdout?.on("data", (chunk: Buffer) => {
-        readBuffer.append(chunk);
-        for (;;) {
-          let message: JSONRPCMessage | null;
+        let frames: McpStdioFrame[];
+        try {
+          frames = this.frames.push(chunk);
+        } catch (error) {
+          this.reportError(error);
+          return;
+        }
+        for (const frame of frames) {
           try {
-            message = readBuffer.readMessage();
+            if (frame.kind === "oversized") {
+              this.settleOversized(frame);
+              continue;
+            }
+            const message = deserializeMessage(frame.text);
+            this.noteAnswered(message);
+            this.onmessage?.(message);
           } catch (error) {
-            this.onerror?.(error as Error);
-            continue;
+            this.reportError(error);
           }
-          if (!message) break;
-          this.onmessage?.(message);
         }
       });
       child.stderr?.setEncoding?.("utf8");
@@ -389,6 +425,21 @@ export class OwnedStdioClientTransport implements Transport {
     const stdin = this.child?.stdin;
     const serializeMessage = this.serializeMessage;
     if (!stdin || !serializeMessage || this.closed) throw new Error("The MCP server is not running.");
+    this.noteSent(message);
+    try {
+      await this.write(stdin, serializeMessage, message);
+    } catch (error) {
+      // The server never received this request, so it cannot answer it.
+      if ("method" in message && "id" in message) this.outstanding.delete(requestKey(message.id));
+      throw error;
+    }
+  }
+
+  private async write(
+    stdin: Writable,
+    serializeMessage: (message: JSONRPCMessage) => string,
+    message: JSONRPCMessage,
+  ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const ok = stdin.write(serializeMessage(message), (error) => {
         if (error) reject(error);
@@ -452,9 +503,76 @@ export class OwnedStdioClientTransport implements Transport {
     try {
       await this.closing;
     } finally {
-      this.readBuffer?.clear();
+      this.frames.clear();
+      this.outstanding.clear();
     }
   }
+
+  private noteSent(message: JSONRPCMessage): void {
+    if (!("method" in message)) return;
+    if ("id" in message) {
+      this.outstanding.set(requestKey(message.id), message.id);
+      return;
+    }
+    // A request the client gave up on is no longer waiting for an answer.
+    const requestId = message.method === "notifications/cancelled" ? message.params?.requestId : undefined;
+    if (typeof requestId === "string" || typeof requestId === "number") {
+      this.outstanding.delete(requestKey(requestId));
+    }
+  }
+
+  private noteAnswered(message: JSONRPCMessage): void {
+    if (!("method" in message) && "id" in message && message.id !== undefined) {
+      this.outstanding.delete(requestKey(message.id));
+    }
+  }
+
+  /**
+   * Fail what an oversized message answered, and only that. A response whose
+   * id shows gets an error in its place, or is dropped when nothing waits for
+   * it any more, such as a request that timed out. One whose id cannot be read
+   * leaves every waiting request unanswerable, so each fails with the same
+   * reason and the connection closes; the next use starts it again. A request
+   * or notification from the server is dropped and reported.
+   */
+  private settleOversized(frame: Extract<McpStdioFrame, { kind: "oversized" }>): void {
+    const error = new McpStdioMessageTooLargeError(frame.bytes, this.frames.maxMessageBytes);
+    const { id, hasMethod } = scanOversizedMessageEnvelope(frame.head, frame.tail);
+    if (!hasMethod && id !== undefined && this.outstanding.has(requestKey(id))) {
+      this.failRequest(id, error);
+      return;
+    }
+    this.reportError(error);
+    // Dropped: the server's own message, a late answer, or nothing waiting.
+    if (hasMethod || id !== undefined || this.outstanding.size === 0) return;
+    for (const id of [...this.outstanding.values()]) this.failRequest(id, error);
+    void this.close().catch(() => undefined);
+  }
+
+  private failRequest(id: string | number, error: McpStdioMessageTooLargeError): void {
+    this.outstanding.delete(requestKey(id));
+    this.onmessage?.({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: loadedMcpTypes().ErrorCode.InternalError,
+        message: error.message,
+        data: { reason: error.reason, messageBytes: error.messageBytes, limitBytes: error.limitBytes },
+      },
+    });
+  }
+
+  private reportError(error: unknown): void {
+    try {
+      this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+    } catch {
+      // A failing error handler must not take the main process with it.
+    }
+  }
+}
+
+function requestKey(id: string | number): string {
+  return `${typeof id}:${id}`;
 }
 
 /** Describe why a server stopped before or during the MCP handshake. */

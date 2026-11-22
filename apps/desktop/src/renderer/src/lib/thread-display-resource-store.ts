@@ -13,12 +13,11 @@ function appendPage(previous: ThreadDisplayData, page: ThreadDisplayData): Threa
   return { ...page,
     ...(page.subAgents && previous.subAgents ? { subAgents: [...previous.subAgents, ...page.subAgents] } : {}),
     ...(page.pricingPage && previous.pricingPage ? { pricingPage: { ...page.pricingPage, rows: [...previous.pricingPage.rows, ...page.pricingPage.rows] } } : {}),
-    ...(page.toolsPage && previous.toolsPage ? { toolsPage: { ...page.toolsPage, invocations: [...previous.toolsPage.invocations, ...page.toolsPage.invocations] } } : {}),
   };
 }
 
 function loadedRows(data: ThreadDisplayData): number {
-  return data.pricingPage?.rows.length ?? data.toolsPage?.invocations.length ?? data.subAgents?.length ?? 0;
+  return data.pricingPage?.rows.length ?? data.subAgents?.length ?? 0;
 }
 
 export type ThreadDisplayResourceOptions = {

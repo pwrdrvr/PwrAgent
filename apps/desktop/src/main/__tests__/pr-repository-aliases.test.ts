@@ -113,12 +113,19 @@ describe("PullRequestRepositoryAliases", () => {
     aliases.learn("https://github.com/acme/two/pull/1", pr("https://github.com/acme/three/pull/1"));
 
     expect(aliases.canonicalizeUrl("https://github.com/acme/one/pull/4")).toBe("https://github.com/acme/three/pull/4");
+    expect(aliases.equivalentStatusKeys("github.com/acme/three#4").sort()).toEqual([
+      "github.com/acme/one#4", "github.com/acme/two#4",
+    ]);
+    expect(aliases.equivalentStatusKeys("github.com/acme/unrelated#4")).toEqual([]);
 
     aliases.learn("https://github.com/acme/three/pull/1", pr("https://github.com/acme/one/pull/1"));
 
     expect(aliases.canonicalizeUrl("https://github.com/acme/one/pull/4")).toBe("https://github.com/acme/one/pull/4");
     expect(aliases.canonicalizeUrl("https://github.com/acme/two/pull/4")).toBe("https://github.com/acme/one/pull/4");
     expect(aliases.canonicalizeUrl("https://github.com/acme/three/pull/4")).toBe("https://github.com/acme/one/pull/4");
+    expect(aliases.equivalentStatusKeys("github.com/acme/one#4").sort()).toEqual([
+      "github.com/acme/three#4", "github.com/acme/two#4",
+    ]);
   });
 
   it("canonicalizes a source repository that names the renamed repository", () => {

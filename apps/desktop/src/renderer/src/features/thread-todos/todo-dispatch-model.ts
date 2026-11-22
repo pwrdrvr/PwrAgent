@@ -1,6 +1,7 @@
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { CodexSpeed } from "@pwragent/shared/codex-speed";
-import type { ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadTodo, ThreadTodoModelSettings, ThreadTodoPlacement } from "@pwragent/shared/contracts/thread-todos";
+import { effectiveThreadTodoPlacement, resolveThreadTodoPlacement } from "@pwragent/shared/contracts/thread-todos";
 import { codexSpeedOptions } from "@pwragent/shared/codex-speed";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { FEDERATION_TARGET_AVAILABILITY_LABEL } from "../chrome/federation-thread-targets";
@@ -105,6 +106,10 @@ export type TodoDispatchMachine = {
   unavailableReason?: string;
   /** It runs this build's to-do dispatch: Where, environment and speed. */
   dispatchTarget: boolean;
+  /** As a card's owner, it honors a sub-thread or top-level pick. */
+  placement: boolean;
+  /** As a card's owner, it makes siblings, and does by default. */
+  placementSibling: boolean;
 };
 
 export const LOCAL_DISPATCH_MACHINE = "local";
@@ -117,7 +122,7 @@ export const LOCAL_DISPATCH_MACHINE = "local";
 export function todoDispatchMachines(params: {
   ownerInstanceId?: string;
   ownerLabel?: string;
-  peers: readonly { instanceId: string; label: string; availability?: string; dispatchTarget?: boolean }[];
+  peers: readonly { instanceId: string; label: string; availability?: string; dispatchTarget?: boolean; placement?: boolean; placementSibling?: boolean }[];
   local?: { instanceId?: string; label?: string };
 }): { owner: TodoDispatchMachine; machines: TodoDispatchMachine[] } {
   const ownerKey = params.ownerInstanceId ?? LOCAL_DISPATCH_MACHINE;
@@ -129,6 +134,8 @@ export function todoDispatchMachines(params: {
     label: (params.ownerInstanceId ? ownerPeer?.label ?? params.ownerLabel : params.local?.label) ?? "This machine",
     available: true,
     dispatchTarget: params.ownerInstanceId ? ownerPeer?.dispatchTarget === true : true,
+    placement: params.ownerInstanceId ? ownerPeer?.placement === true : true,
+    placementSibling: params.ownerInstanceId ? ownerPeer?.placementSibling === true : true,
   };
   const others: TodoDispatchMachine[] = [];
   if (params.ownerInstanceId && params.local?.instanceId) {
@@ -138,6 +145,8 @@ export function todoDispatchMachines(params: {
       instanceId: params.local.instanceId,
       available: true,
       dispatchTarget: true,
+      placement: true,
+      placementSibling: true,
     });
   }
   for (const peer of params.peers) {
@@ -153,9 +162,80 @@ export function todoDispatchMachines(params: {
       available,
       ...(available ? {} : { unavailableReason: FEDERATION_TARGET_AVAILABILITY_LABEL.unsupported }),
       dispatchTarget: peer.dispatchTarget === true,
+      placement: peer.placement === true,
+      placementSibling: peer.placementSibling === true,
     });
   }
   // An older owner ignores everything but the model, so its card offers
   // no other machine.
   return { owner, machines: owner.dispatchTarget ? [owner, ...others] : [owner] };
+}
+
+/**
+ * Where the started thread is filed. `lock` says why the operator cannot
+ * choose: another project or machine is always top-level, and an owner that
+ * predates placement always makes a sub-thread here. `value` and
+ * `defaultValue` are what the start amounts to: a sibling of a thread with no
+ * parent shows as top-level, which is what it is.
+ */
+export type TodoDispatchPlacement = {
+  value: ThreadTodoPlacement;
+  /** Before the operator's pick: the agent's proposal, else the owner's default. */
+  defaultValue: ThreadTodoPlacement;
+  proposed: boolean;
+  /** The rows the menu offers, in order. */
+  options: ThreadTodoPlacement[];
+  lock?: "project" | "machine" | "owner";
+  changed: boolean;
+};
+
+/**
+ * Where a card's thread will be filed, and what the run request carries.
+ * Only an owner that honors placement hears a pick, only one that differs
+ * from the card's own default, and a sibling only when the owner makes them.
+ */
+export function todoDispatchPlacement(params: {
+  todo: ThreadTodo;
+  picked?: ThreadTodoPlacement;
+  onOwner: boolean;
+  ownerHonorsPlacement: boolean;
+  ownerMakesSiblings: boolean;
+}): TodoDispatchPlacement & { send?: ThreadTodoPlacement } {
+  const action = params.todo.action?.type === "start_thread" ? params.todo.action : undefined;
+  const situation = {
+    crossProject: params.todo.targetProject !== undefined,
+    otherMachine: !params.onOwner,
+    legacyDefault: !params.ownerMakesSiblings,
+  };
+  const hasParent = params.todo.dispatchDefaults?.threadParent !== undefined;
+  const proposed = action?.placement;
+  const settledDefault = resolveThreadTodoPlacement({ ...(proposed ? { proposed } : {}), ...situation });
+  if (settledDefault.lock) {
+    return {
+      value: settledDefault.placement, defaultValue: settledDefault.placement, proposed: false,
+      options: [settledDefault.placement], lock: settledDefault.lock, changed: false,
+    };
+  }
+  // An older owner ignores placement: it files the thread as a sub-thread.
+  if (!params.ownerHonorsPlacement) {
+    return { value: "sub_thread", defaultValue: "sub_thread", proposed: false, options: ["sub_thread"], lock: "owner", changed: false };
+  }
+  const picked = params.picked === "sibling" && !params.ownerMakesSiblings ? undefined : params.picked;
+  const chosen = resolveThreadTodoPlacement({
+    ...(picked ? { requested: picked } : {}),
+    ...(proposed ? { proposed } : {}),
+    ...situation,
+  }).placement;
+  const value = effectiveThreadTodoPlacement(chosen, hasParent);
+  const defaultValue = effectiveThreadTodoPlacement(settledDefault.placement, hasParent);
+  const changed = value !== defaultValue;
+  return {
+    value,
+    defaultValue,
+    proposed: proposed !== undefined,
+    // A sibling of a thread with no parent is a top-level thread: one row.
+    options: params.ownerMakesSiblings && hasParent ? ["sibling", "sub_thread", "top_level"] : ["sub_thread", "top_level"],
+    changed,
+    ...(changed ? { send: value } : {}),
+  };
 }

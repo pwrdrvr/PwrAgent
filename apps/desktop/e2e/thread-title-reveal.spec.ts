@@ -434,7 +434,8 @@ test("the selected thread docks at the list's edge when its row scrolls away", a
     );
     await scrollRegion.screenshot({ path: test.info().outputPath("selected-thread-dock-top.png") });
 
-    await dock.click();
+    await dock.focus();
+    await dock.press("Enter");
     await expect(dock).toHaveCount(0);
     await expect(selectedRow).toBeInViewport({ ratio: 1 });
     await expect(selectedRow.locator(".thread-row__open")).toBeFocused();

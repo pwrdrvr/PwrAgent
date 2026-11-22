@@ -20,14 +20,15 @@ export class SqliteThreadReviewStorage implements ThreadReviewStorage {
   }
 
   iterate(request: ListThreadReviewsRequest): Iterable<ThreadReview> {
-    const rows = this.db.raw.prepare(`SELECT payload FROM thread_reviews
-      WHERE (? = 'all' OR status = ?)
-        AND (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
-      ORDER BY updated_at DESC, review_id`).iterate(
-      request.status ?? "open", request.status ?? "open",
-      request.backend ?? null, request.backend ?? null,
-      request.threadId ?? null, request.threadId ?? null,
-    ) as Iterable<{ payload: string }>;
+    const status = request.status ?? "open";
+    const where: string[] = [];
+    if (status !== "all") where.push("status = @status");
+    if (request.backend != null) where.push("backend = @backend");
+    if (request.threadId != null) where.push("thread_id = @threadId");
+    const clause = where.length > 0 ? " WHERE " + where.join(" AND ") : "";
+    const rows = this.db.raw.prepare(
+      "SELECT payload FROM thread_reviews" + clause + " ORDER BY updated_at DESC, review_id",
+    ).iterate({ ...request, status }) as Iterable<{ payload: string }>;
     return parseReviews(rows);
   }
 

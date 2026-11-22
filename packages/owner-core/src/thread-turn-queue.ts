@@ -212,13 +212,15 @@ export type ThreadTurnQueueLifecycleEvent =
 export type ThreadTurnQueueOptions = {
   /** Refuse new work synchronously before queue mutation during shutdown. */
   isAdmissionHeld?: () => boolean;
+  /** Revalidate owner-generated inputs after claiming the delivery and before the provider call. */
+  prepareInput?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueEntry["input"]> | undefined;
   startTurn: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult>;
   canSteerThread?: (entry: ThreadTurnQueueEntry) => boolean;
   steerTurn?: ThreadTurnQueueSteer;
   /** Discover a steer target before claiming delivery. Undefined leaves the FIFO waiting. */
   prepareSteer?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueSteer | undefined>;
-  /** A prepared steer definitively did not send any members. */
-  onSteerNotSent?: (members: readonly ThreadTurnQueueEntry[]) => void;
+  /** A prepared delivery definitively did not send any members. */
+  onDispatchNotSent?: (members: readonly ThreadTurnQueueEntry[]) => void;
   isThreadActive?: (params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
@@ -1485,11 +1487,13 @@ export class ThreadTurnQueue {
         for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
         let delivered = false;
         try {
-          const result = await send(next);
+          const refreshed = this.prepareDeliveryMembers(members);
+          const deliveryMembers = refreshed ? await refreshed : members;
+          const result = await send(refreshed ? combineQueuedDelivery(deliveryMembers) : next);
           const admission = this.admissions.get(key);
           if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
-            this.options.onSteerNotSent?.(members);
+            this.options.onDispatchNotSent?.(members);
             for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
             this.restoreMembers(key, members, previousId);
             // A hold that arrived while it was out covers it too.
@@ -1504,7 +1508,7 @@ export class ThreadTurnQueue {
           for (const member of members) this.rememberAdmittedEntry({ entryId: member.id, turnId: result.turnId });
           delivered = true;
           accepted = true;
-          await this.emitForMembers(members, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
+          await this.emitForMembers(deliveryMembers, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
           return "started";
         } finally {
           this.applyAdmission(key, { type: "settle", attempt });
@@ -1579,6 +1583,26 @@ export class ThreadTurnQueue {
     }
   }
 
+  private prepareDeliveryMembers(members: readonly ThreadTurnQueueEntry[]): Promise<ThreadTurnQueueEntry[]> | undefined {
+    const prepare = this.options.prepareInput;
+    if (!prepare) return undefined;
+    const rejectUnsent = (error: unknown): never => {
+      this.options.onDispatchNotSent?.(members);
+      throw error;
+    };
+    let inputs;
+    try {
+      inputs = members.map(prepare);
+    } catch (error) {
+      return rejectUnsent(error);
+    }
+    if (!inputs.some(Boolean)) return undefined;
+    return Promise.all(members.map(async (member, index) => {
+      const input = inputs[index];
+      return input ? { ...member, input: await input } : member;
+    })).catch(rejectUnsent);
+  }
+
   private async startEntry(
     entry: ThreadTurnQueueEntry,
     options?: {
@@ -1599,14 +1623,18 @@ export class ThreadTurnQueue {
     for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
     let accepted: ThreadTurnQueueStartResult | undefined;
     try {
-      const result = await this.options.startTurn(entry);
+      const refreshed = this.prepareDeliveryMembers(members);
+      const deliveryMembers = refreshed ? await refreshed : members;
+      const delivery = refreshed ? combineQueuedDelivery(deliveryMembers) : entry;
+      const result = await this.options.startTurn(delivery);
       accepted = result;
       const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
       if (admission.phase !== "acknowledged" || admission.attempt !== attempt) return result;
       // Completion may precede the acknowledgement. Publish start then terminal,
       // without resurrecting a running entry for the already completed turn.
       if (!admission.terminal) {
-        this.runningEntries.set(key, { entry, turnId: result.turnId, ...(members.length > 1 ? { members } : {}) });
+        this.runningEntries.set(key, { entry: delivery, turnId: result.turnId,
+          ...(members.length > 1 ? { members: deliveryMembers } : {}) });
       }
       for (const member of members) {
         this.rememberAdmittedEntry({
@@ -1615,7 +1643,7 @@ export class ThreadTurnQueue {
         });
       }
       try {
-        await this.emitForMembers(members, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
+        await this.emitForMembers(deliveryMembers, (member) => ({ type: "started", entry: member, turnId: result.turnId }));
       } finally {
         // A terminal buffered during native submission/publication still owns
         // completion even when the started observer rejects.

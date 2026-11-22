@@ -22,6 +22,7 @@ import {
 import { CodexAuthProfileSelect } from "./CodexAuthProfileSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSplitPath } from "./SettingsSplitPath";
+import { GuidedSetupButton } from "./guided-setup/GuidedSetupLauncher";
 
 type ProfileDropTarget = {
   name: string;
@@ -170,13 +171,18 @@ export function ProfilesSettings(props: {
         title="PwrAgent profiles"
         help="Profiles isolate PwrAgent settings, state, worktrees, and encrypted secrets. Launches with --profile or PWRAGENT_PROFILE still override the startup default."
         action={
-          <button
-            className="button button--secondary"
-            type="button"
-            onClick={() => setCreateOpen(true)}
-          >
-            Add profile
-          </button>
+          <>
+            <GuidedSetupButton request={{ flow: "codex-profiles" }} variant="primary">
+              Add a Codex profile
+            </GuidedSetupButton>
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => setCreateOpen(true)}
+            >
+              Add profile
+            </button>
+          </>
         }
       />
 

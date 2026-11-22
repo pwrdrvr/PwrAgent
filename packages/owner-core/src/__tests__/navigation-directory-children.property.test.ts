@@ -111,7 +111,9 @@ it("gives exact owner rows their position in the native parent's complete child 
       for (const entry of owner.entries) {
         expect(entry.siblingOrder).toBe(oracle.entries.findIndex(({ row }) => row.id === entry.row.id));
       }
-      expect(project(index, query).entries.every((entry) => entry.siblingOrder === undefined)).toBe(true);
+      expect(project(index, query).entries).toEqual(owner.entries);
+      const viewer = projectNavigationQuery({ index, request: { protocol: 2, inventory: "viewer", consumer: "main-sidebar", query } });
+      expect(viewer.entries.every((entry) => entry.siblingOrder === undefined)).toBe(true);
     }
   }));
 });

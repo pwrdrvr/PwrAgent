@@ -8,6 +8,7 @@ import {
 } from "@pwragent/shared/project-forge-automation";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
+  buildPullRequestStatusKey,
   type NavigationDirectoryRow,
   type NavigationQueryPage,
   type NavigationRow,
@@ -79,6 +80,59 @@ it("does not list the local viewer for repeated births or reconnects from an unm
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(f.read).not.toHaveBeenCalled();
+  } finally { unmount(); vi.useRealTimers(); }
+});
+
+it("keeps settled local directories mounted through local Git probes and notices from an absent peer", async () => {
+  const f = fixture();
+  const read = f.read.getMockImplementation()!;
+  const directories: NavigationDirectoryRow[] = Array.from({ length: 3 }, (_, i) => ({
+    key: `directory:/fixture/${i}`, kind: "directory", label: String(i), counts, launchpadPresent: false,
+    pinnedRootCount: 1, unpinnedRootCount: 1,
+  }));
+  const key = directories[0]!.key;
+  let branch = "main";
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await read(request, consumer);
+    return { ...page, viewerRowOwners: [], directories: request.query.kind === "directory-index"
+      ? directories.map((dir) => dir.key === key ? { ...dir, gitStatus: { currentBranch: branch } } : dir) : [] };
+  });
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const api: DesktopApi = { ...f.api, onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } };
+  const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  try {
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+    act(() => {
+      result.current.setBrowseMode("directories");
+      result.current.directoryDisclosure.setExpandedByKey(Object.fromEntries(directories.map(({ key }) => [key, true])));
+    });
+    await waitFor(() => {
+      const resources = [...result.current.pagedNavigation.resources.values()];
+      expect(resources.filter(({ state }) => state.request.query.kind === "directory")).toHaveLength(6);
+      expect(resources.every(({ loading, state }) => !loading && state.page)).toBe(true);
+    });
+    vi.useFakeTimers();
+    // Identical path strings on another machine name that owner's checkout.
+    for (const remote of [true, false]) {
+      f.read.mockClear();
+      f.release.mockClear();
+      for (const currentBranch of ["feature", "feature", "main"]) {
+        await act(async () => {
+          if (remote) emit({ backend: "codex", federationTarget: { scope: "remote", instanceId: "absent" },
+            notification: { method: "navigation/invalidated", params: { sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: key } } });
+          else {
+            branch = currentBranch;
+            emit({ backend: "codex", notification: { method: "navigation/directoryGitStatus/updated",
+              params: { directoryKey: key, gitStatus: { currentBranch }, fetchedAt: Date.now() } } });
+          }
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+        expect(result.current.directories.find((dir) => dir.key === key)?.gitStatus?.currentBranch).toBe(branch);
+      }
+      expect.soft(f.read.mock.calls.length, remote ? "absent peer" : "local patch").toBe(0);
+      expect(f.release).not.toHaveBeenCalled();
+    }
   } finally { unmount(); vi.useRealTimers(); }
 });
 
@@ -1220,4 +1274,101 @@ it("applies the owner's directory/forgeAutomation/updated event, and null clears
     .every((resource) => !resource.loading && !resource.state.stale)).toBe(true));
   expect(project()?.forgeAutomation).toBeUndefined();
   unmount();
+});
+
+it("keeps one PR burst bounded across 36 open project collections and preserves the selection", async () => {
+  const f = fixture();
+  const defaultRead = f.read.getMockImplementation()!;
+  const directories: NavigationDirectoryRow[] = Array.from({ length: 12 }, (_, index) => ({
+    key: `directory:/project-${index}`, kind: "directory", label: `Project ${index}`, path: `/project-${index}`,
+    counts: { ...counts, total: 25 }, pinnedRootCount: 1, unpinnedRootCount: 23, launchpadPresent: false,
+  }));
+  const target = { scope: "remote", instanceId: "fixture-peer" } as const;
+  const pr: PrSummary = { provider: "github.com", org: "fixture", repo: "unified", number: 71,
+    url: "https://github.com/fixture/unified/pull/71", state: "pending" };
+  const selected = row("selection");
+  let prState: PrSummary["state"] = "pending";
+  const responses: Array<() => void> = [];
+  let staggerResponses = false;
+  const projectRows = (directoryKey: string, pinned: boolean) => {
+    if (pinned) return [{ ...row(`${directoryKey}/root`), pinnedRank: "1024", ordinaryChildCount: 1 }];
+    return Array.from({ length: 23 }, (_, index) => ({ ...row(`${directoryKey}/thread-${index}`),
+      ...(index === 0 ? { prs: [{ ...pr, number: 72, url: "https://github.com/fixture/unified/pull/72" }] } : {}),
+    }));
+  };
+  const peerChild = (threadId: string, parentThreadId?: string): NavigationRow => ({
+    ...row(threadId), parentThreadId, rowRevision: prState,
+    ref: { backend: "codex", threadId, ownerInstanceId: target.instanceId },
+    federation: { ref: { backend: "codex", threadId, target }, instanceLabel: "Fixture peer" },
+    prs: [{ ...pr, state: prState }],
+  });
+  f.read.mockImplementation(async (request, consumer) => {
+    const baseline = await defaultRead(request, consumer);
+    if (staggerResponses) await new Promise<void>((resolve) => { responses.push(resolve); });
+    const query = request.query;
+    if (query.kind === "directory-index") return { ...baseline, directories, viewerRowOwners: [target.instanceId] };
+    const directoryKey = query.kind === "directory" || query.kind === "children" ? query.directoryKey : undefined;
+    let members: NavigationRow[];
+    if (query.kind === "directory" && directoryKey) members = projectRows(directoryKey, query.roots === "pinned");
+    else if (query.kind === "children") {
+      const child = { ...row(`${query.parent.threadId}/child`), parentThreadId: query.parent.threadId };
+      members = [directoryKey === directories[0]!.key ? peerChild(child.id, child.parentThreadId) : child];
+    } else if (query.kind === "exact" && request.federationTarget?.scope === "remote") {
+      members = query.identities.map(({ threadId }) => peerChild(threadId));
+    } else if (query.kind === "exact" && query.identities.some(({ threadId }) => threadId === selected.id)) {
+      members = [selected];
+    } else return baseline;
+    const nativeViewerRows = request.federationTarget?.scope !== "remote" && members.every((member) => !member.federation);
+    const proof = nativeViewerRows ? { prKeysComplete: true as const, prKeys: members.flatMap((member) =>
+      member.prs?.map(buildPullRequestStatusKey) ?? []) } : { prKeys: [] };
+    const entries = members.map((row) => ({ row, placement: { kind: "root" as const }, orderKey: row.id }));
+    return { ...baseline, entries, complete: true, nextCursor: undefined, viewerRowOwners: [target.instanceId],
+      metadataDependencies: { version: 1, threadKeys: members.map(({ ref }) => navigationIdentityKey(ref)),
+        ...proof },
+    };
+  });
+  let listener: ((event: AgentEvent) => void) | undefined;
+  let task: (() => void) | undefined;
+  const scheduleNavigationRefresh = (callback: () => void) => { task = callback; return () => { task = undefined; }; };
+  const api: DesktopApi = { ...f.api, onAgentEvent: (callback) => { listener = callback; return () => { listener = undefined; }; } };
+  let commits = 0;
+  const { result, unmount } = renderHook(() => {
+    const navigation = useThreadNavigation(api, { scheduleNavigationRefresh });
+    useLayoutEffect(() => { commits++; });
+    return navigation;
+  });
+  const projectQueries = () => [...result.current.pagedNavigation.resources.values()].filter(({ state }) =>
+    state.request.query.kind === "directory" || state.request.query.kind === "children");
+  try {
+    await waitFor(() => expect(result.current.directories).toHaveLength(12));
+    act(() => {
+      result.current.setBrowseMode("directories");
+      result.current.directoryDisclosure.setExpandedByKey(Object.fromEntries(directories.map(({ key }) => [key, true])));
+      result.current.selectThread(selected);
+    });
+    await waitFor(() => {
+      expect(projectQueries()).toHaveLength(36);
+      expect(projectQueries().every(({ state, loading }) => state.page && !loading)).toBe(true);
+      expect(result.current.selectedThreadConfigurationReady).toBe(true);
+    });
+    f.read.mockClear();
+    commits = 0;
+    staggerResponses = true;
+    await act(async () => {
+      prState = "passing";
+      for (let index = 0; index < 4; index++) listener?.({ backend: "codex", federationTarget: target,
+        notification: { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated" } } });
+      const dispatch = task;
+      task = undefined;
+      dispatch?.();
+    });
+    // Cross-process responses can land in separate turns and each cause a
+    // commit. Advance one response at a time without using wall-clock delay.
+    while (responses.length) await act(async () => { responses.shift()!(); });
+    expect({ reads: f.read.mock.calls.length, commits,
+      row: result.current.threads.find((thread) => thread.federation)?.prs?.[0]?.state,
+      page: projectQueries().flatMap(({ state }) => state.page?.entries ?? []).find(({ row }) => row.federation)?.row.prs?.[0]?.state })
+      .toEqual({ reads: 2, commits: 6, row: "passing", page: "passing" });
+    expect(result.current.selectedThreadKey).toBe("codex:selection");
+  } finally { unmount(); }
 });

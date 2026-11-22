@@ -15,6 +15,7 @@ import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bi
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
+import { resolveNavigationWorktreeProjects } from "./navigation-worktree-projects";
 import {
   directorySetMayHaveChanged,
   NavigationDirectorySetAnnouncer,
@@ -137,7 +138,10 @@ export async function loadLocalNavigationQueryIndex(params: {
     const unsubscribe = registry.onEvent?.((event) => {
       // Connectivity changes the liveness of retained peer pins without
       // changing SQLite membership or the local provider inventory.
-      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)
+      // A PR status observation changes page chips, not the compact index's
+      // attachments. The page reads those statuses from the live registry.
+      if ((event.notification.method !== "pullRequest/status/updated"
+        && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
         || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
         indexReads.invalidate(key);
@@ -260,22 +264,21 @@ async function buildLocalNavigationQueryIndex(params: {
     async () => await overlayStore.listAllActivePrStatusWatches(),
   );
   params.signal?.throwIfAborted();
-  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
-    watchedThreads, undefined, false,
-  );
-  params.signal?.throwIfAborted();
-  const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {
+  const threads = await registry.hydrateThreadGitWorkingStates(registry.withNavigationPrimaryGitRepositories(watchedThreads), {
     probeMissing: false,
   });
   params.signal?.throwIfAborted();
   const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
   params.signal?.throwIfAborted();
-  const directories: NavigationDirectorySummary[] = index.directories.map(
+  const withGitStatus: NavigationDirectorySummary[] = index.directories.map(
     (directory) => ({
       ...directory,
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,
     }),
   );
+  const projects = await resolveNavigationWorktreeProjects(withGitStatus, {
+    signal: params.signal, directoryOverlays: index.directoryOverlays, gitStatusByKey: directoryStatusCache,
+  });
   // Startup refresh status says only whether live listings have begun: it
   // records one attempt, and a Claude or ACP discovery failure in it says
   // nothing about rows PwrAgent stores itself. Completeness belongs to the
@@ -287,7 +290,7 @@ async function buildLocalNavigationQueryIndex(params: {
       : registry.isIncompleteThreadList?.(listedThreads)
         ? { state: "degraded", failedProviders: 1 }
         : { state: "complete" };
-  return { directories, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
+  return { ...projects, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
     coverage,
   };
 }

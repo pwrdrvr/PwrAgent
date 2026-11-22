@@ -15,6 +15,7 @@ import {
   THREAD_DEPENDENCY_STEP_MAX_LENGTH,
   THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH,
   summarizeThreadDependencyCiRun,
+  summarizeThreadDependencyMergeBuild,
   threadDependencyConditionName,
   threadDependencyConditionPhrase,
   threadDependencyDeliveryTarget,
@@ -54,6 +55,7 @@ const CONDITIONS: readonly { value: When; label: string }[] = [
   { value: "pr_attached", label: "Has a reviewable PR" },
   { value: "ci_passed", label: "Passes CI" },
   { value: "pr_merged", label: "Is merged" },
+  { value: "merge_build", label: "Merges and its merge build finishes" },
   { value: "marked_done", label: "Is marked done" },
 ];
 const DEPENDENT_PHRASES: Record<When, string> = {
@@ -66,6 +68,8 @@ const DEPENDENT_PHRASES: Record<When, string> = {
   // A CI run and a file marker name no prerequisite thread.
   ci_run: "until its run reaches its milestone",
   local_file: "until its watcher writes a result",
+  resource_checkout: "until its resource checkout is promoted",
+  merge_build: "until its merge build finishes",
 };
 const MAX_CONDITIONS = 16;
 const MAX_TITLE_LENGTH = 200;
@@ -891,9 +895,10 @@ function DependencyCard(props: {
           const state = evidence?.state ?? "waiting";
           // A marked-done prerequisite shows what finished, and a CI run what
           // it reached; others, why they wait.
-          const reason = evidence && (state !== "satisfied" || condition.when === "marked_done" || condition.ciRun) ? evidence.reason : undefined;
+          const reason = evidence && (state !== "satisfied" || condition.when === "marked_done" || condition.ciRun || condition.when === "merge_build") ? evidence.reason : undefined;
           // A waiting CI run carries its owner's latest check, in memory.
           const run = state === "waiting" ? evidence?.ciRun : undefined;
+          const build = state === "waiting" ? evidence?.mergeBuild : undefined;
           const markable = props.onMarkDone && threadDependencyMarkDoneIndex(dependency, index) !== undefined;
           return (
             <li className="thread-dependencies__condition" key={index}>
@@ -934,6 +939,7 @@ function DependencyCard(props: {
                 </span>
               ) : null}
               {run ? <span className="thread-dependencies__reason">{summarizeThreadDependencyCiRun(run)}</span> : null}
+              {build ? <span className="thread-dependencies__reason">{summarizeThreadDependencyMergeBuild(build)}</span> : null}
               {markable ? (
                 <span className="context-list__actions">
                   <button

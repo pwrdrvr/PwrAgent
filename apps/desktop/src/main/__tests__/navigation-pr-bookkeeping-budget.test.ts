@@ -54,7 +54,7 @@ it("bounds sidebar refresh work after archive completion and owner PR bookkeepin
   const registry = {
     listThreads,
     onEvent: (listener: (event: AgentEvent) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    canonicalizeNavigationThreadPullRequests: async (rows: unknown) => rows,
+    withNavigationPrimaryGitRepositories: (rows: unknown) => rows,
     hydrateThreadGitWorkingStates: async (rows: unknown) => rows,
     withNavigationSubAgentActivity: (rows: unknown) => rows,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),

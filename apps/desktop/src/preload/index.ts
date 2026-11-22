@@ -1,3 +1,6 @@
+import type {
+  ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceThreadRef,
+} from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
 import type {
@@ -319,6 +322,8 @@ import type {
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
+  ReadMcpIpcBearerTokenStateRequest,
+  ReadMcpIpcBearerTokenStateResponse,
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   ListMcpConnectionsRequest,
@@ -334,6 +339,9 @@ import type {
   SetSandboxerCleanupOnPrCloseRequest,
   BoatLinkTarget,
   BoatSignInMethod,
+  ChangeThreadBoatSandboxRequest,
+  ListThreadBoatSandboxesRequest,
+  ListThreadBoatSandboxesResponse,
   ConnectBoatRequest,
   OpenBoatLinkResponse,
   SetBoatCleanupOnPrCloseRequest,
@@ -662,10 +670,6 @@ import type {
   UpdateSubthreadOrderRequest,
   UpdateSubthreadOrderResponse,
 } from "@pwragent/shared/contracts/navigation";
-import type {
-  FocusedDiffAnalysisRequest,
-  FocusedDiffAnalysisResponse,
-} from "@pwragent/shared/contracts/diff-focus";
 import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import type {
   InspectTokenMiserOutputRequest,
@@ -889,6 +893,11 @@ import {
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
+  RESOURCE_CHECKOUTS_CHANGED_CHANNEL,
+  RESOURCE_CHECKOUTS_READ_CHANNEL,
+  RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL,
+  RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL,
+  RESOURCE_CHECKOUTS_PERFORM_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
   OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL,
@@ -1121,7 +1130,6 @@ import {
   COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL,
   COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
-  FOCUSED_DIFF_ANALYZE_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
@@ -1146,6 +1154,8 @@ import {
   MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL,
+  MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
@@ -1164,6 +1174,7 @@ import {
   MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
+  MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
@@ -1605,6 +1616,14 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL),
   openBoatSignInPage: async (): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL),
+  listThreadBoatSandboxes: async (
+    request: ListThreadBoatSandboxesRequest,
+  ): Promise<ListThreadBoatSandboxesResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL, request),
+  changeThreadBoatSandbox: async (
+    request: ChangeThreadBoatSandboxRequest,
+  ): Promise<ListThreadBoatSandboxesResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL, request),
   setBoatSandboxPolicy: async (
     request: SetBoatSandboxPolicyRequest,
   ): Promise<MutateMcpConnectionResponse> =>
@@ -1625,6 +1644,10 @@ const desktopApi = Object.freeze({
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_LIST_TOOLS_CHANNEL, request),
+  readMcpIpcBearerTokenState: async (
+    request: ReadMcpIpcBearerTokenStateRequest,
+  ): Promise<ReadMcpIpcBearerTokenStateResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL, request),
   setThreadMcpConnections: async (
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> =>
@@ -2727,10 +2750,6 @@ const desktopApi = Object.freeze({
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
-  analyzeFocusedDiff: async (
-    request: FocusedDiffAnalysisRequest
-  ): Promise<FocusedDiffAnalysisResponse> =>
-    await ipcRenderer.invoke(FOCUSED_DIFF_ANALYZE_CHANNEL, request),
   startThread: async (
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>
@@ -2861,6 +2880,19 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(THREAD_TODOS_DELTA_EVENT_CHANNEL, listener);
     };
   },
+  ...(process.argv.includes("--pwragent-resource-checkouts") ? {
+    openResourceCheckoutsWindow: (): Promise<void> => ipcRenderer.invoke(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL),
+    openResourceCheckoutThread: (thread: ResourceThreadRef): Promise<void> => ipcRenderer.invoke(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, thread),
+    readResourceCheckouts: (): Promise<ResourceCheckoutsSnapshot> =>
+      ipcRenderer.invoke(RESOURCE_CHECKOUTS_READ_CHANNEL),
+    performResourceCheckoutAction: (request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> =>
+      ipcRenderer.invoke(RESOURCE_CHECKOUTS_PERFORM_CHANNEL, request),
+    onResourceCheckoutsChanged: (callback: (event: ResourceCheckoutsChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ResourceCheckoutsChangedEvent) => callback(payload);
+      ipcRenderer.on(RESOURCE_CHECKOUTS_CHANGED_CHANNEL, listener);
+      return () => { ipcRenderer.off(RESOURCE_CHECKOUTS_CHANGED_CHANNEL, listener); };
+    },
+  } : {}),
   listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>
     await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL, request),
   listDismissedOperatorQuestions: async (request: OperatorQuestionThreadRequest): Promise<string[]> =>

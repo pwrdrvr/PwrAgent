@@ -11,6 +11,8 @@ import { stripVTControlCharacters } from "node:util";
 import {
   createCommandInvocation,
   readJsonRpcLines,
+  type JsonRpcObserver,
+  type JsonRpcObserverEvent,
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
@@ -104,27 +106,23 @@ export type StdioJsonRpcTransportOptions = {
 
 export { compareCodexCliVersions };
 
-function isJsonRpcResponseEnvelope(message: string): boolean {
-  try {
-    const envelope = JSON.parse(message) as unknown;
-    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
-      return false;
-    }
-    const record = envelope as Record<string, unknown>;
-    return (
-      record.id !== undefined &&
-      typeof record.method !== "string" &&
-      ("result" in record || "error" in record)
-    );
-  } catch {
+function isJsonRpcResponseEnvelope(envelope: unknown): boolean {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
     return false;
   }
+  const record = envelope as Record<string, unknown>;
+  return (
+    record.id !== undefined &&
+    typeof record.method !== "string" &&
+    ("result" in record || "error" in record)
+  );
 }
 
 export class StdioJsonRpcTransport implements JsonRpcTransport {
   private readonly responseFlushes = new Map<string | number, ReturnType<typeof createResponseFlush>>();
   private codexHome?: string;
-  private requestMethods = new Map<string | number, string>();
+  private requestMethods = new Map<string | number | null, string>();
+  private observesParsedEnvelopes = false;
   private unsubscribeAuth?: () => void;
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private childStartedAt = 0;
@@ -139,6 +137,17 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private droppedSendAfterCloseLogged = false;
 
   constructor(private readonly options: StdioJsonRpcTransportOptions) {}
+
+  wrapConnectionObserver(observer: JsonRpcObserver): JsonRpcObserver {
+    this.observesParsedEnvelopes = true;
+    return {
+      onMessage: (event) => {
+        if (event.direction === "inbound") this.observeInboundAuthentication(event.envelope);
+        // Return the original observer's result without adding an await.
+        return observer.onMessage(event);
+      },
+    };
+  }
 
   setMessageHandler(handler: (message: string) => void): void {
     this.messageHandler = handler;
@@ -280,23 +289,12 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     }
 
     readJsonRpcLines(child.stdout, (line) => {
-      // Only error envelopes and error notifications are auth evidence;
-      // transcript text and tool output must never invalidate a login.
-      try {
-        const message = JSON.parse(line);
-        const requestMethod = message.method === undefined ? this.requestMethods.get(message.id) : undefined;
-        if (message.method === undefined && message.id !== undefined) this.requestMethods.delete(message.id);
-        const error = message.error
-          ?? (message.method === "error" ? message.params : undefined)
-          ?? (["turn/completed", "turn/failed"].includes(message.method) ? message.params?.turn?.error : undefined);
-        const source = message.error ? requestMethod : message.method;
-        // MCP OAuth errors describe that server's credentials, never Codex's.
-        if (error && source && /^(?:account|model|thread|turn)\//.test(source)) {
-          this.observeAuthenticationError(JSON.stringify(error), source.startsWith("account/"));
-        } else if (error && source === "error" && message.params?.threadId) {
-          this.observeAuthenticationError(JSON.stringify(error));
-        }
-      } catch { /* JSON-RPC owns malformed-message reporting. */ }
+      if (!this.observesParsedEnvelopes) {
+        // Standalone callers keep raw-line authentication without changing RPC dispatch timing.
+        try {
+          this.observeInboundAuthentication(JSON.parse(line));
+        } catch { /* JSON-RPC owns malformed-message reporting. */ }
+      }
       this.messageHandler(line);
     });
 
@@ -493,6 +491,26 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     }, PROCESS_CLOSE_TIMEOUT_MS).unref?.();
   }
 
+  private observeInboundAuthentication(message: JsonRpcObserverEvent["envelope"]): void {
+    // Only errors are auth evidence. Transcript text and tool output cannot invalidate a login.
+    try {
+      const { id, method, error: responseError } = message;
+      const requestMethod = method === undefined && id !== undefined ? this.requestMethods.get(id) : undefined;
+      if (method === undefined && id !== undefined) this.requestMethods.delete(id);
+      const params = message.params as { threadId?: unknown; turn?: { error?: unknown } } | undefined;
+      const error = responseError
+        ?? (method === "error" ? params : undefined)
+        ?? (method === "turn/completed" || method === "turn/failed" ? params?.turn?.error : undefined);
+      const source = responseError ? requestMethod : method;
+      // MCP OAuth errors describe that server's credentials.
+      if (error && source && /^(?:account|model|thread|turn)\//.test(source)) {
+        this.observeAuthenticationError(JSON.stringify(error), source.startsWith("account/"));
+      } else if (error && source === "error" && params?.threadId) {
+        this.observeAuthenticationError(JSON.stringify(error));
+      }
+    } catch { /* Auth inspection must not interrupt delivery. */ }
+  }
+
   private observeAuthenticationError(message: string, credentialSource = false): void {
     // Generic OAuth codes alone are meaningful only at the Codex account/auth
     // boundary. A turn or model request can also report an MCP failure.
@@ -511,11 +529,23 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   }
 
   send(message: string): void {
-    if (this.codexHome && !isJsonRpcResponseEnvelope(message)) {
+    let envelope;
+    let parseFailure: { error: unknown } | undefined;
+    if (this.codexHome || this.closeRequested || this.childProcess?.stdin) {
+      try {
+        envelope = JSON.parse(message);
+      } catch (error) {
+        // Preserve precedence: auth and pipe checks can take priority over malformed JSON.
+        parseFailure = { error };
+      }
+    }
+    const isResponse = isJsonRpcResponseEnvelope(envelope);
+    if (this.codexHome && !isResponse) {
       if (!this.options.authenticationRecovery) {
         codexAuthState.assertAvailable(this.codexHome);
       } else {
-        const method = JSON.parse(message).method;
+        if (parseFailure) throw parseFailure.error;
+        const method = envelope.method;
         if (!["initialize", "initialized", "account/read", "account/rateLimits/read"].includes(method)) {
           throw new Error("Only authentication verification is allowed during Codex recovery.");
         }
@@ -523,7 +553,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     }
     const child = this.childProcess;
     if (this.closeRequested) {
-      if (isJsonRpcResponseEnvelope(message)) {
+      if (isResponse) {
         if (!this.droppedSendAfterCloseLogged) {
           this.droppedSendAfterCloseLogged = true;
           codexTransportLog.info("dropped app-server send after close");
@@ -535,7 +565,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child?.stdin) {
       throw new Error("codex app server stdio not connected");
     }
-    const envelope = JSON.parse(message);
+    if (parseFailure) throw parseFailure.error;
     if (envelope.id !== undefined && typeof envelope.method === "string") {
       // Timed-out requests may never receive a response. Eviction fails closed:
       // an uncorrelated response cannot invalidate profile authentication.

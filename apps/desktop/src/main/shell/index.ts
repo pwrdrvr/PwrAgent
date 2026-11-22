@@ -34,6 +34,7 @@ import {
 } from "./ipc/scheduled-actions-ipc";
 import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
 import { registerCodexEnvironmentEditorIpcHandlers } from "./ipc/codex-environment-editor-ipc";
+import { registerResourceCheckoutIpcHandlers } from "./ipc/resource-checkout-ipc";
 import { registerOperatorRequestIpcHandlers } from "./ipc/operator-requests-ipc";
 
 import {
@@ -1392,6 +1393,7 @@ export function bootstrapApp(): void {
     registerThreadTodoIpcHandlers(ownerServices.queues.events);
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers(ownerServices.queues);
+    registerResourceCheckoutIpcHandlers(ownerServices.resourceCheckouts);
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();

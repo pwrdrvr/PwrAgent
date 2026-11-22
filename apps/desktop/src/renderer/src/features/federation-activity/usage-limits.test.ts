@@ -3,6 +3,7 @@ import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-act
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries } from "./usage-limits";
 
 const HOUR = 3_600_000;
+const studio = { owner: "Studio", target: { scope: "local" as const } };
 const t0 = new Date(2026, 8, 28, 9).getTime();
 const weekly = (at: number, usedPercent: number, resetAt = t0 + 7 * 24 * HOUR): UsageLimitObservation => ({
   observedAt: at, accountKey: "a", planType: "plus",
@@ -11,7 +12,7 @@ const weekly = (at: number, usedPercent: number, resetAt = t0 + 7 * 24 * HOUR): 
 
 describe("usage limit history", () => {
   it("measures pace from the scheduled window start when readings are sparse", () => {
-    const [account] = buildLimitAccounts([{ owner: "Studio", current: weekly(t0 + 3 * HOUR, 9) }]);
+    const [account] = buildLimitAccounts([{ ...studio, current: weekly(t0 + 3 * HOUR, 9) }]);
     const series = sinceResetSeries(account)!;
     expect(series.windowStart).toBe(t0);
     expect(series.pacePerHour).toBeCloseTo(3);
@@ -22,7 +23,7 @@ describe("usage limit history", () => {
     // The schedule says the window began days ago; the operator reset it at 9:30.
     const resetAt = t0 + 4 * 24 * HOUR;
     const history = [weekly(t0 - HOUR, 62, resetAt), weekly(t0 + 30 * 60_000, 1, resetAt), weekly(t0 + 2.5 * HOUR, 7, resetAt)];
-    const [account] = buildLimitAccounts([{ owner: "Studio", history }]);
+    const [account] = buildLimitAccounts([{ ...studio, history }]);
     const series = sinceResetSeries(account)!;
     expect(series.resets).toEqual([{ at: t0 + 30 * 60_000, kind: "unscheduled", after: t0 - HOUR, before: t0 + 30 * 60_000 }]);
     expect(series.windowStart).toBe(t0 + 30 * 60_000);
@@ -35,7 +36,7 @@ describe("usage limit history", () => {
     // later; this instance's next reading came six hours after.
     const before = weekly(t0 - 20 * HOUR, 64, t0 + 3 * 24 * HOUR);
     const after = weekly(t0 + 6 * HOUR, 22, t0 + 7 * 24 * HOUR);
-    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const [account] = buildLimitAccounts([{ ...studio, history: [before], current: after }]);
     const series = sinceResetSeries(account)!;
     expect(series.resets).toEqual([{ at: t0, kind: "unscheduled", after: t0 - 20 * HOUR, before: t0 + 6 * HOUR }]);
     expect(seriesStart(series)).toBe(t0);
@@ -45,7 +46,7 @@ describe("usage limit history", () => {
   it("does not charge a whole week's usage to the half hour since an obsolete deadline", () => {
     const before = weekly(t0 - 28 * HOUR, 47, t0 + 41 * HOUR);
     const after = weekly(t0 + 41.5 * HOUR, 53);
-    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const [account] = buildLimitAccounts([{ ...studio, history: [before], current: after }]);
     const series = sinceResetSeries(account)!;
     expect(series.windowStart).toBe(t0);
     expect(series.resets).toEqual([{ at: t0, kind: "unscheduled", after: before.observedAt, before: after.observedAt }]);
@@ -58,7 +59,7 @@ describe("usage limit history", () => {
     // ago was still in the old window, so the reset came after that reading.
     const before = weekly(t0 - HOUR, 62, t0 + 3 * 24 * HOUR);
     const after = weekly(t0 + HOUR, 5, t0 + 7 * 24 * HOUR - 3 * HOUR);
-    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const [account] = buildLimitAccounts([{ ...studio, history: [before], current: after }]);
     const series = sinceResetSeries(account)!;
     expect(series.resets).toEqual([{ at: t0 + HOUR, kind: "unscheduled", after: t0 - HOUR, before: t0 + HOUR }]);
     expect(seriesStart(series)).toBe(t0 + HOUR);
@@ -67,7 +68,7 @@ describe("usage limit history", () => {
   it("marks a reset scheduled when the previous window had elapsed", () => {
     const first = weekly(t0 - 2 * HOUR, 88, t0);
     const second = weekly(t0 + HOUR, 2, t0 + 7 * 24 * HOUR);
-    const [account] = buildLimitAccounts([{ owner: "Studio", history: [first, second] }]);
+    const [account] = buildLimitAccounts([{ ...studio, history: [first, second] }]);
     expect(sinceResetSeries(account)!.resets).toEqual([{ at: t0, kind: "scheduled", after: t0 - 2 * HOUR, before: t0 + HOUR }]);
   });
 
@@ -77,7 +78,7 @@ describe("usage limit history", () => {
         { name: "5-hour limit", windowKey: "primary", usedPercent, resetAt, windowMinutes: 300 },
       ],
     });
-    const [account] = buildLimitAccounts([{ owner: "Studio", history: [
+    const [account] = buildLimitAccounts([{ ...studio, history: [
       reading(t0, 88, t0 + HOUR),
     ], current: reading(t0 + 7 * HOUR, 12, t0 + 11 * HOUR) }]);
     const series = fiveHourSeries(account)!;
@@ -92,9 +93,9 @@ describe("usage limit history", () => {
       { name: "Credits", windowKey: "credits", hasCredits: true },
     ] };
     const accounts = buildLimitAccounts([
-      { owner: "Studio", current: weekly(t0 + 2 * HOUR, 9) },
-      { owner: "Build", current: weekly(t0 + HOUR, 8) },
-      { owner: "Work", current: credit },
+      { ...studio, current: weekly(t0 + 2 * HOUR, 9) },
+      { owner: "Build", target: { scope: "remote", instanceId: "build" }, current: weekly(t0 + HOUR, 8) },
+      { owner: "Work", target: { scope: "remote", instanceId: "work" }, current: credit },
     ]);
     expect(accounts.map((account) => [account.key, account.owners])).toEqual([
       ["account:a", ["Studio", "Build"]],
@@ -110,27 +111,27 @@ describe("usage limit history", () => {
 
   it("finds the 5-hour limit by its length, not its position", () => {
     // Codex reports an account whose only limit is weekly as its primary window.
-    const [weeklyOnly] = buildLimitAccounts([{ owner: "Studio", current: { observedAt: t0, accountKey: "pro", limits: [
+    const [weeklyOnly] = buildLimitAccounts([{ ...studio, current: { observedAt: t0, accountKey: "pro", limits: [
       { name: "Weekly limit", windowKey: "primary", usedPercent: 3, resetAt: t0 + 7 * 24 * HOUR, windowMinutes: 10_080 },
     ] } }]);
     expect(fiveHourSeries(weeklyOnly)).toBeUndefined();
     expect(sinceResetSeries(weeklyOnly)!.windowKey).toBe("primary");
     expect(limitLabel(sinceResetSeries(weeklyOnly)!)).toBe("Weekly limit");
-    const [both] = buildLimitAccounts([{ owner: "Studio", current: { observedAt: t0, accountKey: "plus", limits: [
+    const [both] = buildLimitAccounts([{ ...studio, current: { observedAt: t0, accountKey: "plus", limits: [
       { name: "5h limit", windowKey: "primary", usedPercent: 20, resetAt: t0 + 2 * HOUR, windowMinutes: 300 },
       { name: "Weekly limit", windowKey: "secondary", usedPercent: 9, resetAt: t0 + 4 * 24 * HOUR, windowMinutes: 10_080 },
     ] } }]);
     expect(fiveHourSeries(both)!.windowMinutes).toBe(300);
     expect(limitLabel(fiveHourSeries(both)!)).toBe("5-hour window");
     // An owner that never stated the length keeps the old reading of primary.
-    const [unstated] = buildLimitAccounts([{ owner: "Studio", current: { observedAt: t0, accountKey: "old", limits: [
+    const [unstated] = buildLimitAccounts([{ ...studio, current: { observedAt: t0, accountKey: "old", limits: [
       { name: "Primary limit", windowKey: "primary", usedPercent: 20 },
     ] } }]);
     expect(fiveHourSeries(unstated)!.name).toBe("Primary limit");
   });
 
   it("projects the level at the reset when the pace cannot fill the window first", () => {
-    const [account] = buildLimitAccounts([{ owner: "Studio", current: {
+    const [account] = buildLimitAccounts([{ ...studio, current: {
       observedAt: t0 + 3 * HOUR, accountKey: "a",
       limits: [{ name: "5h", windowKey: "primary", usedPercent: 30, resetAt: t0 + 5 * HOUR, windowMinutes: 300 }],
     } }]);
@@ -145,7 +146,7 @@ describe("usage limit history", () => {
       { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30, resetAt: t0 + 9 * 24 * HOUR, expires: true },
     ] };
     // The same opaque key from two providers is two accounts.
-    const accounts = buildLimitAccounts([{ owner: "Studio", current: [weekly(t0 + HOUR, 9), claude] }]);
+    const accounts = buildLimitAccounts([{ ...studio, current: [weekly(t0 + HOUR, 9), claude] }]);
     expect(accounts.map((account) => [account.key, account.provider])).toEqual([
       ["account:a", "openai"], ["account:anthropic:a", "anthropic"]]);
     const series = accounts[1].series;

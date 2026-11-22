@@ -61,8 +61,7 @@ import type {
   HandoffThreadWorkspaceRequest,
   ThreadExecutionMode,
   ThreadCompactionRecord,
-  ThreadToolAccounting,
-  ThreadToolInvocationRecord,
+  ThreadTokenMiserAccounting,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   SetThreadCheckoutHibernationResponse,
@@ -80,12 +79,9 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import type { FederationRemoteTarget, FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
-import type { PendingRequestAction } from "@pwragent/shared/pending-request-response";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
-import type { ThreadTodo, ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { ToolOutputIncidentExplorerLens } from "@pwragent/shared/contracts/tool-output-incidents";
-import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
-import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
@@ -218,17 +214,10 @@ import {
   SandboxerConnectionPrompt,
   sandboxerConnectionIds,
 } from "./SandboxerConnectionPrompt";
-import {
-  buildQuestionnaireResponse,
-  type PendingQuestionnaireState,
-} from "./questionnaire";
-import {
-  buildMcpElicitationResponse,
-  type PendingMcpInteractionState,
-  type McpApprovalPersistence,
-} from "./mcp-elicitation";
+import type { PendingQuestionnaireState } from "./questionnaire";
+import type { PendingMcpInteractionState } from "./mcp-elicitation";
+import { usePendingRequestControls } from "./usePendingRequestControls";
 import { readRendererSequence } from "./live-transcript-activity";
-import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
 import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
 import {
   MissingWorktreeCard,
@@ -745,8 +734,7 @@ export type ThreadViewProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
-  toolAccounting?: ThreadToolAccounting;
-  threadToolAccountingEnabled?: boolean;
+  tokenMiserAccounting?: ThreadTokenMiserAccounting;
   researchEnabled?: boolean;
   pricingDisplayOptions?: {
     codexCredits: boolean;
@@ -788,6 +776,7 @@ export type ThreadViewProps = {
   fullAccessRiskWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
   prAutoDispatchAllowed?: boolean;
+  watchMergeBuildsDefault?: boolean;
   /**
    * Project-directory picker (issue #223) — surfaced in the launchpad
    * composer when no thread is selected yet. Rendering happens inside
@@ -1077,20 +1066,11 @@ type WorkflowBudgetDialogState = {
   maxAgentBudget: string;
 };
 
-type PendingTranscriptTurnTarget =
-  | {
-      intent: "reveal";
-      threadKey: string;
-      turnId: string;
-      turnTimeMs?: number;
-    }
-  | {
-      intent: "tool-detail";
-      itemId: string;
-      threadKey: string;
-      turnId: string;
-      turnTimeMs?: number;
-    };
+type PendingTranscriptTurnTarget = {
+  threadKey: string;
+  turnId: string;
+  turnTimeMs?: number;
+};
 
 const MAX_TRANSCRIPT_TARGET_PAGE_LOADS = 60;
 
@@ -1224,8 +1204,21 @@ export function ThreadView(props: ThreadViewProps) {
     undefined,
   );
   const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
-  const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
-  const [pendingRequestError, setPendingRequestError] = useState<string>();
+  const {
+    pendingRequestError,
+    setPendingRequestBusy,
+    setPendingRequestError,
+    transcriptControls,
+  } = usePendingRequestControls({
+    desktopApi: props.desktopApi,
+    thread: props.selectedThread,
+    pendingRequest: props.pendingRequest,
+    pendingUserInput: props.pendingUserInput,
+    pendingMcpInteraction: props.pendingMcpInteraction,
+    clearPendingRequest: props.clearPendingRequest,
+    updatePendingUserInput: props.onUpdatePendingUserInput,
+    updatePendingMcpInteraction: props.onUpdatePendingMcpInteraction,
+  });
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
@@ -1272,11 +1265,9 @@ export function ThreadView(props: ThreadViewProps) {
   // threaded a value through yet, so the rail is discoverable.
   const contextRailPinned = props.contextRailPinned ?? true;
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
-  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   const researchEnabled = props.researchEnabled ?? false;
   const activeContextTab =
     (!threadPricingSummaryEnabled && props.activeContextTab === "pricing")
-    || (!threadToolAccountingEnabled && props.activeContextTab === "tool-calls")
     || (!researchEnabled && props.activeContextTab === "research")
       ? DEFAULT_CONTEXT_TAB
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
@@ -1825,49 +1816,38 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    const targetIndex = target.intent === "tool-detail"
-      ? findTranscriptCommandDetailEntryIndex(
-          props.transcriptEntries,
-          target.itemId,
-        )
-      : findTranscriptTurnEntryIndex(
-          props.transcriptEntries,
-          target.turnId,
-          target.turnTimeMs,
-        );
+    const targetIndex = findTranscriptTurnEntryIndex(
+      props.transcriptEntries,
+      target.turnId,
+      target.turnTimeMs,
+    );
     if (targetIndex >= 0) {
-      if (target.intent === "reveal") {
-        expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
-      }
+      expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
       setPendingTranscriptTurnTarget(undefined);
       transcriptTurnPageLoadsRef.current = 0;
-      if (target.intent === "reveal") {
+      requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const container = transcriptPanelRef.current;
-            if (container) {
-              scrollRenderedTranscriptToTurn(
-                container,
-                target.turnId,
-                target.turnTimeMs,
-              );
-            }
-          });
+          const container = transcriptPanelRef.current;
+          if (container) {
+            scrollRenderedTranscriptToTurn(
+              container,
+              target.turnId,
+              target.turnTimeMs,
+            );
+          }
         });
-      }
+      });
       return;
     }
 
     const finishAtNearestRenderedTurn = (): void => {
-      if (target.intent === "reveal") {
-        const container = transcriptPanelRef.current;
-        if (container) {
-          scrollRenderedTranscriptToTurn(
-            container,
-            target.turnId,
-            target.turnTimeMs,
-          );
-        }
+      const container = transcriptPanelRef.current;
+      if (container) {
+        scrollRenderedTranscriptToTurn(
+          container,
+          target.turnId,
+          target.turnTimeMs,
+        );
       }
       setPendingTranscriptTurnTarget(undefined);
       transcriptTurnPageLoadsRef.current = 0;
@@ -2448,18 +2428,6 @@ export function ThreadView(props: ThreadViewProps) {
     pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
       ? pendingActivityEntry
       : undefined;
-  const toolCallEntries = useMemo(
-    () => [
-      ...props.transcriptEntries,
-      ...(pendingActivityEntry ? [pendingActivityEntry] : []),
-      ...pendingProtocolActivityEntries,
-    ],
-    [
-      pendingActivityEntry,
-      pendingProtocolActivityEntries,
-      props.transcriptEntries,
-    ],
-  );
   const { openImageGallery, imageLightbox, setExpandedGallery } = useThreadImageGallery({
     props, pendingTranscriptActivityEntry, pendingProtocolActivityEntries, pendingUsageActivityEntry,
   });
@@ -2582,7 +2550,6 @@ export function ThreadView(props: ThreadViewProps) {
       if (canLoadServerTranscriptHistory && selectedThreadKey) {
         transcriptTurnPageLoadsRef.current = 0;
         setPendingTranscriptTurnTarget({
-          intent: "reveal",
           threadKey: selectedThreadKey,
           turnId,
           turnTimeMs,
@@ -2600,35 +2567,6 @@ export function ThreadView(props: ThreadViewProps) {
     ],
   );
 
-  const handleRequestToolCallDetails = useCallback(
-    (invocation: ThreadToolInvocationRecord) => {
-      // Tool Calls owns isolated Codex item bodies. Only other backends use
-      // transcript discovery; partial Codex reads must never enter history.
-      if (invocation.backend === "codex") return;
-      if (!invocation.turnId || !selectedThreadKey) {
-        return;
-      }
-      const targetIndex = findTranscriptCommandDetailEntryIndex(
-        props.transcriptEntries,
-        invocation.itemId,
-      );
-      if (targetIndex >= 0 || !canLoadServerTranscriptHistory) {
-        return;
-      }
-      transcriptTurnPageLoadsRef.current = 0;
-      setPendingTranscriptTurnTarget({
-        intent: "tool-detail",
-        itemId: invocation.itemId,
-        threadKey: selectedThreadKey,
-        turnId: invocation.turnId,
-        turnTimeMs: invocation.observedAt,
-      });
-    }, [
-      canLoadServerTranscriptHistory,
-      props.transcriptEntries,
-      selectedThreadKey,
-    ],
-  );
   const handleOpenToolOutputIncidentExplorer = useCallback(
     (lens?: ToolOutputIncidentExplorerLens) => {
       if (!selectedThread) return;
@@ -2649,16 +2587,6 @@ export function ThreadView(props: ThreadViewProps) {
     },
     [desktopApi, props.selectedDirectory?.label, selectedThread],
   );
-  const handleAnalyzeToolHistory = useCallback(() => {
-    if (!selectedThread) return;
-    void desktopApi?.analyzeThreadToolHistory?.({
-      backend: selectedThread.source,
-      ...(selectedThread.federation?.ref.target
-        ? { federationTarget: selectedThread.federation.ref.target }
-        : {}),
-      threadId: selectedThread.id,
-    });
-  }, [desktopApi, selectedThread]);
 
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
@@ -3109,115 +3037,6 @@ export function ThreadView(props: ThreadViewProps) {
     updatePendingProtocolActivityEntries,
   ]);
 
-  async function respondToPendingRequest(action: PendingRequestAction): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread || !props.pendingRequest) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
-      return;
-    }
-
-    setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
-
-    try {
-      await props.desktopApi.submitServerRequest({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
-        turnId:
-          typeof props.pendingRequest.params.turnId === "string"
-            ? props.pendingRequest.params.turnId
-            : undefined,
-        requestId: props.pendingRequest.params.requestId,
-        response: buildPendingRequestResponse(props.pendingRequest, action),
-      });
-      props.clearPendingRequest(
-        props.pendingRequest.params.requestId,
-        (
-          action.decision === "accept" ||
-          action.decision === "accept_for_session" ||
-          action.decision === "accept_with_execpolicy_amendment" ||
-          action.decision === "apply_network_policy_amendment"
-        )
-          ? "Thinking"
-          : undefined,
-      );
-    } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingRequestBusy(false);
-    }
-  }
-
-  async function submitPendingUserInput(
-    pendingUserInput: PendingQuestionnaireState
-  ): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
-      return;
-    }
-
-    setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
-
-    try {
-      await props.desktopApi.submitServerRequest({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
-        turnId: pendingUserInput.turnId,
-        requestId: pendingUserInput.requestId,
-        response: buildQuestionnaireResponse(pendingUserInput),
-      });
-      props.clearPendingRequest(pendingUserInput.requestId, "Thinking");
-    } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingRequestBusy(false);
-    }
-  }
-
-  async function submitPendingMcpInteraction(
-    pendingMcpInteraction: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel",
-    persist?: McpApprovalPersistence,
-    remember?: ForgeApprovalRememberOptionId,
-    mergeMethod?: ThreadTodoMergeMethod,
-    projectGrant?: boolean,
-  ): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
-      return;
-    }
-
-    setPendingRequestBusy(true);
-    setPendingRequestError(undefined);
-
-    try {
-      await props.desktopApi.submitServerRequest({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
-        turnId:
-          typeof pendingMcpInteraction.turnId === "string"
-            ? pendingMcpInteraction.turnId
-            : undefined,
-        requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember, mergeMethod, projectGrant),
-      });
-      props.clearPendingRequest(
-        pendingMcpInteraction.requestId,
-        action === "accept" ? "Thinking" : undefined
-      );
-    } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingRequestBusy(false);
-    }
-  }
-
   const handleMaterializeLaunchpad = useEventCallback<
     Parameters<NonNullable<ThreadViewProps["onMaterializeLaunchpad"]>>,
     Promise<void>
@@ -3374,6 +3193,7 @@ export function ThreadView(props: ThreadViewProps) {
           onSendThreadPrAutoDispatchNow: props.onSendThreadPrAutoDispatchNow,
           backgroundPrPollingEnabled: props.backgroundPrPollingEnabled,
           prAutoDispatchAllowed: props.prAutoDispatchAllowed,
+          watchMergeBuildsDefault: props.watchMergeBuildsDefault,
           onAttachDirectoryReferences: props.onAttachDirectoryReferences,
           pendingRequestActive: Boolean(props.pendingRequest),
           pendingUserInputActive: Boolean(
@@ -3722,7 +3542,6 @@ export function ThreadView(props: ThreadViewProps) {
               pendingPlanEntry={undefined}
               pendingMcpInteraction={props.pendingMcpInteraction}
               pendingRequest={props.pendingRequest}
-              pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
               agentCommandsStatus={props.agentCommandsStatus}
@@ -3756,15 +3575,7 @@ export function ThreadView(props: ThreadViewProps) {
               onExpandedWorkPhaseGroupIdsChange={
                 props.onExpandedTranscriptWorkPhaseGroupIdsChange
               }
-              onRespondToPendingRequest={respondToPendingRequest}
-              onPendingMcpInteractionChange={(state) => {
-                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
-              }}
-              onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
-              onPendingUserInputChange={(state) => {
-                props.onUpdatePendingUserInput?.(state.requestId, () => state);
-              }}
-              onSubmitPendingUserInput={submitPendingUserInput}
+              {...transcriptControls}
               onViewportChange={props.onTranscriptViewportChange}
             />
             {pendingRequestError ? (
@@ -3852,18 +3663,10 @@ export function ThreadView(props: ThreadViewProps) {
           platform: props.platform,
           thread: selectedThread,
           pricing: props.pricing,
-          toolAccounting: props.toolAccounting,
-          toolCallEntries,
-          loadingToolCallDetailItemId:
-            pendingTranscriptTurnTarget?.intent === "tool-detail"
-              ? pendingTranscriptTurnTarget.itemId
-              : undefined,
-          onRequestToolCallDetails: handleRequestToolCallDetails,
-          onAnalyzeToolHistory: handleAnalyzeToolHistory,
+          tokenMiserAccounting: props.tokenMiserAccounting,
           onOpenToolOutputIncidentExplorer: handleOpenToolOutputIncidentExplorer,
           pricingDisplayOptions: props.pricingDisplayOptions,
           threadPricingSummaryEnabled,
-          threadToolAccountingEnabled,
           researchEnabled,
           worktreeArchiveError: props.worktreeArchiveError,
           onRestoreWorktree: props.onRestoreWorktree,

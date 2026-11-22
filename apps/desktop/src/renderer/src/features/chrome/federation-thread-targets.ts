@@ -1,10 +1,9 @@
 import {
-  formatFederationPeerDisplayLabel,
+  formatFederationPeerTargetLabels,
   type FederationCapability,
   type FederationHealthStatus,
 } from "@pwragent/shared/contracts/federation";
 import { type CelestialIconId } from "@pwragent/shared/contracts/celestial";
-import { federationDisplayLabel } from "../../lib/federation-display-label";
 
 /**
  * Capabilities a peer must advertise before this window can start a thread on
@@ -74,10 +73,7 @@ export type FederationPeerTarget<Availability extends string> = {
  * and a list that reorders under the pointer turns a misclick into a thread
  * sent to the wrong machine.
  *
- * Revoked peers are dropped — they are dead entries, not offline ones. They
- * are still passed to `formatFederationPeerDisplayLabel`, but only because it
- * filters them out itself; what the local instance's presence in that list
- * buys us is a peer sharing THIS machine's label keeping its profile suffix.
+ * Revoked peers are dropped from the target list.
  */
 export function buildFederationPeerTargets<Availability extends string>(
   health: FederationHealthStatus | undefined,
@@ -87,22 +83,15 @@ export function buildFederationPeerTargets<Availability extends string>(
   if (!health) {
     return [];
   }
-  const visibleInstances = [
-    ...health.peers,
-    ...(health.localLabel
-      ? [{ label: health.localLabel, profileName: health.localProfileName }]
-      : []),
-  ];
-  return health.peers
-    .filter(
-      (peer) =>
-        !peer.revokedAt
-        && peer.id !== excludedInstanceId,
-    )
+  const peers = health.peers.filter((peer) => !peer.revokedAt && peer.status !== "revoked");
+  const visible = health.localLabel
+    ? [...peers, { label: health.localLabel, profileName: health.localProfileName }]
+    : peers;
+  return peers
+    .filter((peer) => peer.id !== excludedInstanceId)
     .map((peer) => ({
       instanceId: peer.id,
-      label: formatFederationPeerDisplayLabel(peer, visibleInstances),
-      ...(peer.shortLabel ? { shortLabel: federationDisplayLabel(peer, visibleInstances) } : {}),
+      ...formatFederationPeerTargetLabels(peer, visible),
       availability: resolve(peer),
       ...(peer.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
     }))

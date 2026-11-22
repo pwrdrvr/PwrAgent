@@ -164,8 +164,6 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   review findings in one review card without duplicate assistant text
 - `review-multiple-findings/`: captured Codex inline review output renders
   multiple plain-text findings as separate cards without duplicate assistant text
-- `focused-diff-zoom/`: eligible transcript diffs that condense locally and can
-  hide low-signal hunks via the focused diff path
 - `thread-image-fit/`: pasted transcript image preview preserves its natural
   aspect ratio and fits within the preview container without cropping
 - `markdown-findings-table/`: wide markdown tables keep their headings and

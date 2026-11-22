@@ -137,6 +137,120 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.createConnection({ displayName: "Network", serverUrl: "https://example.org/mcp", ipcBearerToken: "secret" })).rejects.toThrow("local IPC");
   });
 
+  // The rule: the edit dialog's "is a session bearer token stored?" is the
+  // credential vault's answer, through every write that stores or drops one,
+  // and per connection. Checked against a model with one bit per connection.
+  // Listing never decrypts the vault to answer it.
+  it("answers whether an IPC session token is stored through every token write", async () => {
+    const ipcUrl = (name: string) => process.platform === "win32"
+      ? `pipe:///pipe/${name}#/mcp`
+      : `unix:///tmp/private/${name}.sock#/mcp`;
+    type Step =
+      | { kind: "replace"; target: number; token: string }
+      | { kind: "remove"; target: number; spaces: boolean }
+      | { kind: "rename"; target: number }
+      | { kind: "repoint"; target: number; token?: string }
+      | { kind: "toRemote"; target: number }
+      | { kind: "disconnect"; target: number };
+    const arbTarget = fc.constantFrom(0, 1);
+    const arbToken = fc.constantFrom("ticket-a", "ticket-b.c~d");
+    const arbStep: fc.Arbitrary<Step> = fc.oneof(
+      fc.record({ kind: fc.constant("replace" as const), target: arbTarget, token: arbToken }),
+      fc.record({ kind: fc.constant("remove" as const), target: arbTarget, spaces: fc.boolean() }),
+      fc.record({ kind: fc.constant("rename" as const), target: arbTarget }),
+      fc.record({ kind: fc.constant("repoint" as const), target: arbTarget, token: fc.option(arbToken, { nil: undefined }) }),
+      fc.record({ kind: fc.constant("toRemote" as const), target: arbTarget }),
+      fc.record({ kind: fc.constant("disconnect" as const), target: arbTarget }),
+    );
+    await fc.assert(
+      fc.asyncProperty(
+        fc.tuple(fc.option(arbToken, { nil: undefined }), fc.option(arbToken, { nil: undefined })),
+        fc.array(arbStep, { maxLength: 10 }),
+        async (initial, steps) => {
+          const settings = createSettings();
+          const service = new McpConnectionGatewayService({ registry: temporaryRegistry(), settings, sandboxer: sandboxerStub(), leaseManager: null });
+          services.push(service);
+          const ids: string[] = [];
+          const urls: string[] = [];
+          const model: boolean[] = [];
+          for (const [index, token] of initial.entries()) {
+            urls[index] = ipcUrl(`model-${index}-0`);
+            const created = await service.createConnection({
+              displayName: `Native ${index}`,
+              serverUrl: urls[index]!,
+              ...(token ? { ipcBearerToken: token } : {}),
+            });
+            ids[index] = created.id;
+            model[index] = Boolean(token);
+          }
+          const expectAnswers = async () => {
+            for (const [index, id] of ids.entries()) {
+              await expect(service.readIpcBearerTokenState({ connectionId: id }))
+                .resolves.toEqual({ connectionId: id, stored: model[index] });
+            }
+            // The owner answers a window that does not own the gateway the same way.
+            await expect((service as unknown as {
+              dispatchBrokerOperation(operation: string, params: unknown): Promise<unknown>;
+            }).dispatchBrokerOperation("broker/ipc-bearer-token-state", { connectionId: ids[0] }))
+              .resolves.toEqual({ connectionId: ids[0], stored: model[0] });
+            const reads = settings.resolveMcpConnectionCredentials.mock.calls.length;
+            await service.listConnections();
+            expect(settings.resolveMcpConnectionCredentials).toHaveBeenCalledTimes(reads);
+          };
+          await expectAnswers();
+          let revision = 0;
+          for (const step of steps) {
+            const connectionId = ids[step.target]!;
+            revision += 1;
+            switch (step.kind) {
+              case "replace":
+                // A token is only accepted for a local IPC URL.
+                if (urls[step.target]!.startsWith("https:")) {
+                  await expect(service.updateConnection({ connectionId, ipcBearerToken: step.token })).rejects.toThrow("local IPC");
+                  break;
+                }
+                await service.updateConnection({ connectionId, ipcBearerToken: step.token });
+                model[step.target] = true;
+                break;
+              case "remove":
+                if (urls[step.target]!.startsWith("https:")) break;
+                // Spaces alone trim to nothing, which removes the token.
+                await service.updateConnection({ connectionId, ipcBearerToken: step.spaces ? "   " : "" });
+                model[step.target] = false;
+                break;
+              case "rename":
+                await service.updateConnection({ connectionId, displayName: `Renamed ${revision}` });
+                break;
+              case "repoint":
+                urls[step.target] = ipcUrl(`model-${step.target}-${revision}`);
+                await service.updateConnection({
+                  connectionId,
+                  serverUrl: urls[step.target],
+                  ...(step.token ? { ipcBearerToken: step.token } : {}),
+                });
+                // A changed URL drops the old server's token.
+                model[step.target] = Boolean(step.token);
+                break;
+              case "toRemote":
+                urls[step.target] = `https://example.com/mcp-${revision}`;
+                await service.updateConnection({ connectionId, serverUrl: urls[step.target] });
+                model[step.target] = false;
+                break;
+              case "disconnect":
+                await service.disconnectConnection(connectionId);
+                if (!urls[step.target]!.startsWith("https:")) model[step.target] = false;
+                break;
+            }
+            await expectAnswers();
+          }
+          await service.removeConnection(ids[0]!);
+          await expect(service.readIpcBearerTokenState({ connectionId: ids[0]! })).rejects.toThrow();
+        },
+      ),
+      { numRuns: 40 },
+    );
+  });
+
   it("serves a changing full catalog and validates calls over the revocable socket", async () => {
     const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(), resolveInstallPaths: () => [pwrSnapInstall()], leaseManager: null });
     services.push(service);

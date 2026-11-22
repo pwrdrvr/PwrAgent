@@ -23,6 +23,8 @@ import type {
 import type {
   PrSummary,
   NavigationIdentity,
+  NavigationDirectoryGitRevisions,
+  NavigationDirectoryGitStatusUpdatedNotification,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
   ThreadLock,
@@ -2253,6 +2255,7 @@ export type AppServerNotification =
       method: "thread/prWatches/updated";
       params: { backend: AppServerBackendKind; threadId: string; prKey?: string };
     }
+  | NavigationDirectoryGitStatusUpdatedNotification
   | NavigationThreadGitWorkingStateUpdatedNotification
   | {
       /**
@@ -2694,6 +2697,8 @@ export type AppServerNotification =
       method: "navigation/invalidated";
       params: {
         sourceMethod: string;
+        directoryKey?: string;
+        directoryGitRevisions?: NavigationDirectoryGitRevisions;
         threadId?: string;
         automationId?: string;
         runId?: string;

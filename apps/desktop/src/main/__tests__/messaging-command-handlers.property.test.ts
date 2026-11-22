@@ -194,3 +194,106 @@ describe("messaging command owner protocol", () => {
     }), { numRuns: 10 });
   });
 });
+
+describe("messaging /code-review", () => {
+  /**
+   * Rule: a bare /code-review on a thread that reviews as Claude Code is a
+   * PwrAgent review like /review: reply permission, then peer scope for a
+   * peer's thread, then one Claude Code review of the current changes.
+   * Anywhere else, or with arguments, it goes to the thread as typed.
+   */
+  it("starts a tracked Claude Code review only for a bare command on a supporting thread", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom<string[]>([], ["high"], ["12"], ["--fix"]),
+      fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+      async (args, supported, remote, canReply, canControlPeer, addressed) => {
+        const binding = {
+          ...commandBinding,
+          targetKind: "agent_thread" as const,
+          ...(remote ? { federatedThread: {
+            backend: commandBinding.backend, threadId: commandBinding.threadId,
+            target: { scope: "remote" as const, instanceId: "peer" },
+          } } : {}),
+        };
+        const submissions: unknown[] = [];
+        const f = commandHarness({
+          claudeCodeReviewSupportedForBinding: async () => { f.trace.push("supported"); return supported; },
+          requirePermission: async (_event, permission) => { f.trace.push(permission); return canReply; },
+          requireRemoteScopeForBinding: async () => { f.trace.push("peer scope"); return canControlPeer; },
+          submitMessagingReview: async (params) => { f.trace.push("review"); submissions.push(params); },
+          shouldHandleAmbientSharedMessage: async () => { f.trace.push("ambient"); return addressed; },
+        });
+        const owner = new MessagingCommandHandlers({ ...f.context, store: {
+          findActiveBindingForChannel: async () => { f.trace.push("binding"); return binding; },
+        } });
+        await owner.handleCommand(commandEvent("code-review", args));
+        const typed = `input:/code-review${args.length ? ` ${args.join(" ")}` : ""}`;
+        const expected: string[] = [];
+        // A shared conversation ignores a command not addressed to PwrAgent,
+        // whether it would start a review or go to the thread as typed.
+        if (args.length > 0 || !supported) {
+          expected.push("binding", ...(args.length > 0 ? [] : ["supported"]), "ambient");
+          if (addressed) expected.push(typed);
+        } else if (!addressed) {
+          expected.push("binding", "supported", "ambient");
+        } else {
+          expected.push("binding", "supported", "ambient", "message.reply");
+          if (canReply) {
+            if (remote) expected.push("peer scope");
+            if (!remote || canControlPeer) expected.push("review");
+          }
+        }
+        expect(f.trace).toEqual(expected);
+        expect(submissions).toEqual(f.trace.includes("review")
+          ? [expect.objectContaining({ runMode: "claude-code-review", target: { type: "uncommittedChanges" } })]
+          : []);
+      },
+    ));
+  });
+});
+
+describe("messaging /review on an owner without review/start", () => {
+  /**
+   * Rule: a bare /review opens the picker where the owner runs review/start
+   * or Claude Code's /code-review; typed targets still need review/start.
+   */
+  it("opens the picker for Claude Code and refuses typed targets it cannot run", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(), fc.boolean(), fc.constantFrom<string[]>([], ["--custom", "Fixture"], ["main"]),
+      async (startReview, claudeCode, args) => {
+        const f = commandHarness({
+          reviewSupportedForBinding: async () => startReview,
+          claudeCodeReviewSupportedForBinding: async () => claudeCode,
+        });
+        await f.owner.handleCommand(commandEvent("review", args));
+        const runs = startReview || (args.length === 0 && claudeCode);
+        expect(f.trace.at(-1)).toBe(!runs ? "unsupported" : args.length === 0 ? "review-picker" : "review");
+      },
+    ));
+  });
+});
+
+describe("messaging /review on a peer's thread", () => {
+  /** Rule: every /review form on a peer-bound conversation checks peer scope first. */
+  it("checks peer scope before the picker, a typed target, or a PR review", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(), fc.constantFrom<string[]>([], ["--custom", "Fixture"], ["--pr", "1"]),
+      async (canControlPeer, args) => {
+        const binding = { ...commandBinding, federatedThread: {
+          backend: commandBinding.backend, threadId: commandBinding.threadId,
+          target: { scope: "remote" as const, instanceId: "peer" },
+        } };
+        const f = commandHarness({
+          requirePermission: async () => true,
+          requireRemoteScopeForBinding: async () => { f.trace.push("peer scope"); return canControlPeer; },
+        });
+        const owner = new MessagingCommandHandlers({ ...f.context, store: {
+          findActiveBindingForChannel: async () => { f.trace.push("binding"); return binding; },
+        } });
+        await owner.handleCommand(commandEvent("review", args));
+        const effect = args.length === 0 ? "review-picker" : "review";
+        expect(f.trace).toEqual(canControlPeer ? ["binding", "peer scope", effect] : ["binding", "peer scope"]);
+      },
+    ));
+  });
+});

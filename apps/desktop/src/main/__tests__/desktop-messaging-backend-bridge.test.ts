@@ -464,6 +464,7 @@ describe("DesktopMessagingBackendBridge", () => {
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       listThreads: vi.fn(async () => listedThreads),
+      withNavigationPrimaryGitRepositories: (threads: NavigationSnapshot["threads"]) => threads,
       hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
       withNavigationSubAgentActivity: vi.fn((threads: NavigationSnapshot["threads"]) => threads),
       getNavigationInputRequestThreadKeys: vi.fn(() => new Set()),

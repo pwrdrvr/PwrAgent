@@ -5,6 +5,7 @@ import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
   ThreadTodo,
   ThreadTodoModelSettings,
+  ThreadTodoPlacement,
   ThreadTodoWorkMode,
   ThreadTodoMessageTarget,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -25,6 +26,8 @@ export type TodoDispatchChoices = {
   /** An environment id, or `none`. */
   environments?: Readonly<Record<string, string>>;
   workMode?: ThreadTodoWorkMode;
+  /** Sub-thread or top-level; applies only where the card can choose. */
+  placement?: ThreadTodoPlacement;
   /** The start settings show as the labelled grid instead of the chip row. */
   settingsExpanded?: boolean;
   dispatchMode?: "message" | "new_thread";

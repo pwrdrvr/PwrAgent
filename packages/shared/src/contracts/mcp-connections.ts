@@ -234,8 +234,213 @@ export type BoatAccountSummary = {
   maxActiveSandboxes?: number;
   /** False when Boat will not start a machine for this account right now. */
   canStart?: boolean;
+  /** Boat's own word for why, as it gave it: a reason or an error code. */
   blockedReason?: string;
+  /** Why, by what the operator does about it. Set whenever `canStart` is false. */
+  startBlock?: BoatStartBlock;
+  /**
+   * When PwrAgent last learned this, in epoch milliseconds: a `GET /limits`
+   * answer, or a start Boat refused.
+   */
+  checkedAt?: number;
 };
+
+/**
+ * Why Boat will not start a sandbox, grouped by what frees the next start.
+ *
+ * - `concurrent_limit`: as many run at once as the account (or the
+ *   organization's cap on this member) allows. Stopping or deleting one frees
+ *   a slot. Every running sandbox counts, from any thread, machine or Boat's
+ *   own site.
+ * - `trial_compute_used`: the trial's compute allowance is spent. Only a
+ *   plan payment ends it; stopping sandboxes does not help.
+ * - `billing_required`: Boat needs a plan or money in the wallet.
+ * - `start_rate_limit`: the account's starts per minute, hour or day are used.
+ *   Waiting frees one.
+ * - `other`: Boat refused for a reason PwrAgent does not recognize.
+ */
+export const BOAT_START_BLOCKS = [
+  "concurrent_limit",
+  "trial_compute_used",
+  "billing_required",
+  "start_rate_limit",
+  "other",
+] as const;
+export type BoatStartBlock = (typeof BOAT_START_BLOCKS)[number];
+
+/** A refusal code Boat answers a create, resume or fork with. */
+export function boatStartBlockForCode(code: unknown): BoatStartBlock | undefined {
+  switch (code) {
+    case "limit_reached":
+    case "member_limit_reached":
+      return "concurrent_limit";
+    case "trial_compute_limit_reached":
+      return "trial_compute_used";
+    case "billing_required":
+      return "billing_required";
+    case "rate_limited":
+      return "start_rate_limit";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Why a `GET /limits` answer with `canStart: false` is blocked. Boat documents
+ * `startBlockedReason` only as a string, so a refusal code there is read as
+ * one. Otherwise the fields decide, the block stopping a sandbox cannot lift
+ * first: a spent trial allowance, then a checkout Boat asks for, then a full
+ * account.
+ */
+export function boatStartBlockFromLimits(limits: Record<string, unknown>): BoatStartBlock | undefined {
+  if (limits.canStart !== false) return undefined;
+  const coded = boatStartBlockForCode(limits.startBlockedReason) ?? boatStartBlockForCode(limits.blockedReason);
+  if (coded) return coded;
+  const cap = limits.trialComputeCapSeconds;
+  const used = limits.trialComputeUsedSeconds;
+  if (typeof cap === "number" && typeof used === "number" && used >= cap) return "trial_compute_used";
+  if (limits.checkoutRequired === true) return "billing_required";
+  const active = limits.activeSandboxes;
+  const max = limits.maxActiveSandboxes;
+  if (typeof active === "number" && typeof max === "number" && active >= max) return "concurrent_limit";
+  return "other";
+}
+
+/**
+ * The account a `GET /limits` answer describes. `checkedAt` is when PwrAgent
+ * read it, when known.
+ */
+export function boatAccountFromLimits(limits: Record<string, unknown>, checkedAt?: number): BoatAccountSummary {
+  const account: BoatAccountSummary = checkedAt === undefined ? {} : { checkedAt };
+  if (typeof limits.accessTier === "string" && limits.accessTier) account.plan = limits.accessTier.slice(0, 40);
+  if (typeof limits.activeSandboxes === "number") account.activeSandboxes = limits.activeSandboxes;
+  if (typeof limits.maxActiveSandboxes === "number") account.maxActiveSandboxes = limits.maxActiveSandboxes;
+  if (typeof limits.canStart === "boolean") account.canStart = limits.canStart;
+  if (typeof limits.startBlockedReason === "string" && limits.startBlockedReason) {
+    account.blockedReason = limits.startBlockedReason.slice(0, 200);
+  }
+  const block = boatStartBlockFromLimits(limits);
+  if (block) account.startBlock = block;
+  return account;
+}
+
+const BOAT_START_BLOCK_HEADLINES: Readonly<Record<BoatStartBlock, string>> = {
+  concurrent_limit: "At limit",
+  trial_compute_used: "Trial used",
+  billing_required: "Billing needed",
+  start_rate_limit: "Start limit",
+  other: "Can't start",
+};
+
+/** Two words for the chip when Boat will not start a sandbox. */
+export function boatStartBlockHeadline(block: BoatStartBlock): string {
+  return BOAT_START_BLOCK_HEADLINES[block];
+}
+
+/**
+ * One sentence on why Boat will not start a sandbox and what frees the next
+ * start. Settings, the thread tile, `account_status` and
+ * `manage_mcp_connections` all say this.
+ */
+export function describeBoatStartBlock(account: BoatAccountSummary): string {
+  const block = account.startBlock ?? "other";
+  const { activeSandboxes: active, maxActiveSandboxes: max } = account;
+  switch (block) {
+    case "concurrent_limit":
+      return `${
+        active !== undefined && max !== undefined && active >= max
+          ? `${active} of ${max} Boat sandboxes are running, the most this account runs at once.`
+          : "This Boat account is running as many sandboxes as it may at once."
+      } Stop or delete one to start another. Sandboxes from other threads, computers and Boat's site count too.`;
+    case "trial_compute_used":
+      return "The Boat trial's compute time is used up. Choose a plan in the Boat dashboard to start more sandboxes.";
+    case "billing_required":
+      return "Boat needs a plan or a payment before it starts another sandbox. Settle it in the Boat dashboard.";
+    case "start_rate_limit":
+      return "This Boat account has used its starts for now. Wait a minute, then try again.";
+    default:
+      return `Boat will not start a new sandbox for this account${
+        account.blockedReason ? ` (${account.blockedReason})` : ""
+      }. Check the Boat dashboard.`;
+  }
+}
+
+/**
+ * Whether Boat can start a sandbox for this profile now: what an agent reads
+ * before it plans to use Boat. `canStart` is null when PwrAgent cannot tell:
+ * Boat was unreachable, or the key may not read the account's limits.
+ */
+export type BoatSandboxStartAvailability = {
+  canStart: boolean | null;
+  reason?: BoatStartBlock | "not_connected" | "key_needs_sign_in" | "unknown";
+  activeSandboxes?: number;
+  maxActiveSandboxes?: number;
+  /** What would let the next start through, in a sentence. */
+  detail: string;
+  checkedAt?: number;
+};
+
+export function boatSandboxStartAvailability(
+  connection: Pick<McpConnectionStatus, "configured" | "state" | "detail" | "boatAccount">,
+): BoatSandboxStartAvailability {
+  const account = connection.boatAccount;
+  const counts = {
+    ...(account?.activeSandboxes === undefined ? {} : { activeSandboxes: account.activeSandboxes }),
+    ...(account?.maxActiveSandboxes === undefined ? {} : { maxActiveSandboxes: account.maxActiveSandboxes }),
+    ...(account?.checkedAt === undefined ? {} : { checkedAt: account.checkedAt }),
+  };
+  if (connection.state === "reauthorization_required") {
+    return {
+      canStart: false, reason: "key_needs_sign_in",
+      detail: connection.detail ?? "The operator signs in to Boat again in Settings → Plugins.",
+    };
+  }
+  if (!connection.configured || connection.state === "disconnected") {
+    return { canStart: false, reason: "not_connected", detail: "Boat is not connected. The operator connects it in Settings → Plugins." };
+  }
+  if (account?.canStart === false) {
+    return { canStart: false, reason: account.startBlock ?? "other", ...counts, detail: describeBoatStartBlock(account) };
+  }
+  if (connection.state !== "ready" || account?.canStart !== true) {
+    return {
+      canStart: null, reason: "unknown", ...counts,
+      detail: connection.detail ?? "PwrAgent could not check whether Boat can start a sandbox.",
+    };
+  }
+  return { canStart: true, ...counts, detail: "Boat can start a sandbox for this account now." };
+}
+
+/**
+ * What a Boat API key needs for PwrAgent, and all the key sign-in mints may do: one action per kind of request the Boat tools
+ * make, and nothing else. Boat's `full-sandbox` preset is not enough: it
+ * leaves out create, resume, fork and delete. No desktop stream, agent
+ * prompt, environment or account write is granted.
+ *
+ * `ssh` is there for `forward_port` alone: PwrAgent registers a key pair it
+ * made for one tunnel, and no agent is given a shell over it.
+ *
+ * `sandbox.delete` rather than `sandbox.delete-own`: a key from a later
+ * sign-in must still delete what an earlier key created, or cleanup after a
+ * pull request closes would leave those sandboxes billing. PwrAgent, the
+ * key's only holder, limits each thread to the sandboxes it created.
+ */
+export const BOAT_KEY_ACTIONS = [
+  "sandbox.create",
+  "sandbox.read",
+  "sandbox.update",
+  "sandbox.stop",
+  "sandbox.resume",
+  "sandbox.fork",
+  "sandbox.delete",
+  "exec",
+  "file.read",
+  "file.write",
+  "host",
+  "ssh",
+  "snapshot.read",
+  "snapshot.write",
+  "account.read",
+] as const;
 
 /** How the operator proves who they are on Boat's sign-in page. */
 export const BOAT_SIGN_IN_METHODS = ["github", "google"] as const;
@@ -252,6 +457,54 @@ export function isBoatSignInMethod(value: unknown): value is BoatSignInMethod {
 export type BoatSignInProgress =
   | { state: "waiting"; method: BoatSignInMethod; userCode: string; expiresAt: number }
   | { state: "failed"; error: string };
+
+/** A tunnel open on this computer into a port of a thread's sandbox. */
+export type BoatThreadPortForward = {
+  /** The port inside the sandbox. */
+  port: number;
+  /** Where it answers here: `http://127.0.0.1:<local port>`. */
+  url: string;
+};
+
+/** One of a thread's Boat sandboxes, as its panel shows it. */
+export type BoatThreadSandbox = {
+  id: string;
+  name?: string;
+  state?: string;
+  type?: string;
+  /** What Boat has billed for it so far. */
+  dollars?: number;
+  /** The auto-stop length as last set, not the time left. */
+  ttlSeconds?: number;
+  /**
+   * When Boat will stop it by itself (its `archiveAfter`), in epoch
+   * milliseconds. Absent when auto-stop is off or Boat did not say.
+   */
+  stopsAt?: number;
+  /** The tunnels open into it from this computer. */
+  forwards?: BoatThreadPortForward[];
+};
+
+export const BOAT_THREAD_SANDBOX_ACTIONS = ["stop", "delete", "close_forward"] as const;
+export type BoatThreadSandboxAction = (typeof BOAT_THREAD_SANDBOX_ACTIONS)[number];
+
+export function isBoatThreadSandboxAction(value: unknown): value is BoatThreadSandboxAction {
+  return BOAT_THREAD_SANDBOX_ACTIONS.some((action) => action === value);
+}
+
+export type ListThreadBoatSandboxesRequest = { backend: string; threadId: string };
+export type ListThreadBoatSandboxesResponse = { sandboxes: BoatThreadSandbox[] };
+export type ChangeThreadBoatSandboxRequest = ListThreadBoatSandboxesRequest & {
+  sandboxId: string;
+  action: BoatThreadSandboxAction;
+  /** The sandbox port whose tunnel `close_forward` closes. */
+  port?: number;
+};
+
+/** A sandbox port, as `close_forward` names it. */
+export function isBoatSandboxPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65_535;
+}
 
 export type ConnectBoatRequest = { apiKey: string };
 export type StartBoatSignInRequest = { method: BoatSignInMethod };
@@ -803,6 +1056,22 @@ export function mcpConnectionIdsForNewThread(
     .map((connection) => connection.id);
 }
 
+/**
+ * Whether a local IPC connection has a session bearer token stored, for the
+ * line under the edit dialog's token box. A read of its own, made when the
+ * dialog opens, because the token lives in the encrypted credential vault and
+ * `McpConnectionStatus` is read far too often to decrypt it for every row.
+ */
+export type ReadMcpIpcBearerTokenStateRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type ReadMcpIpcBearerTokenStateResponse = {
+  connectionId: McpConnectionId;
+  /** False for a connection that is not a local IPC URL: it holds none. */
+  stored: boolean;
+};
+
 export type RemoveMcpConnectionRequest = {
   connectionId: McpConnectionId;
 };
@@ -1144,11 +1413,13 @@ export function resolveMcpConnectionSetup(
         "warn",
       );
     }
+    // Connected, but no new sandbox now. Threads keep reaching it so an agent
+    // can still list and stop what is running; the chip names the block.
     if (connection.boatAccount?.canStart === false) {
       return build(
         connection.enabled ? "ready" : "parked",
-        "Can't start",
-        connection.detail ?? "Boat will not start a new sandbox for this account right now. Running ones can still be listed and stopped.",
+        boatStartBlockHeadline(connection.boatAccount.startBlock ?? "other"),
+        `${describeBoatStartBlock(connection.boatAccount)} Running sandboxes can still be listed and stopped.`,
         "warn",
       );
     }

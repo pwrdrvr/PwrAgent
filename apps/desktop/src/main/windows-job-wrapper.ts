@@ -19,6 +19,7 @@ const READY_FILE_ENV = "PWRAGENT_JOB_WRAPPER_READY_FILE";
 const EXIT_FILE_ENV = "PWRAGENT_JOB_WRAPPER_EXIT_FILE";
 const STARTED_AT_ENV = "PWRAGENT_JOB_WRAPPER_STARTED_AT";
 const STARTUP_STATUS_FILE_ENV = "PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE";
+const STOP_FILE_ENV = "PWRAGENT_JOB_WRAPPER_STOP_FILE";
 const TERMINATE_DESCENDANTS_ENV = "PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS";
 const BASH_EXIT_TRAP =
   "trap 'pwragent_exit=$?; trap - EXIT; set +e; pwragent_exit_file=$(/usr/bin/cygpath.exe -u \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"); if [ -n \"$pwragent_exit_file\" ]; then printf \"%s\" \"$pwragent_exit\" > \"$pwragent_exit_file\"; fi; exit \"$pwragent_exit\"' EXIT";
@@ -39,6 +40,7 @@ $readyFile = [string]$env:PWRAGENT_JOB_WRAPPER_READY_FILE
 $exitFile = [string]$env:PWRAGENT_JOB_WRAPPER_EXIT_FILE
 $startupStartedAt = [long]$env:PWRAGENT_JOB_WRAPPER_STARTED_AT
 $startupStatusFile = [string]$env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE
+$stopFile = [string]$env:PWRAGENT_JOB_WRAPPER_STOP_FILE
 $terminateDescendants = $env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -eq '1'
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_EXECUTABLE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENTS -ErrorAction SilentlyContinue
@@ -46,6 +48,7 @@ Remove-Item Env:PWRAGENT_JOB_WRAPPER_CWD -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_READY_FILE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTED_AT -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_STOP_FILE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -ErrorAction SilentlyContinue
 
 function Write-StartupPhase {
@@ -85,6 +88,7 @@ public static class PwrAgentWindowsJobRunner
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint INFINITE = 0xFFFFFFFF;
+    private const uint WAIT_TIMEOUT = 258;
     private const uint WAIT_FAILED = 0xFFFFFFFF;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -330,6 +334,13 @@ public static class PwrAgentWindowsJobRunner
         return accounting.ActiveProcesses;
     }
 
+    private static bool StopJobIfRequested(IntPtr job, string stopFile)
+    {
+        if (String.IsNullOrEmpty(stopFile) || !File.Exists(stopFile)) return false;
+        if (!TerminateJobObject(job, 1)) ThrowLastWin32Error("TerminateJobObject");
+        return true;
+    }
+
     public static int Run(
         string application,
         string[] arguments,
@@ -337,14 +348,11 @@ public static class PwrAgentWindowsJobRunner
         string readyFile,
         string startupStatusFile,
         long startupStartedAt,
-        bool terminateDescendants)
+        bool terminateDescendants,
+        string stopFile)
     {
         WriteStartupPhase(startupStatusFile, startupStartedAt, "native-job-started");
-        IntPtr job = CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero)
-        {
-            ThrowLastWin32Error("CreateJobObject");
-        }
+        IntPtr job = IntPtr.Zero;
 
         PROCESS_INFORMATION processInformation = new PROCESS_INFORMATION();
         bool processCreated = false;
@@ -353,6 +361,8 @@ public static class PwrAgentWindowsJobRunner
         bool attributesInitialized = false;
         try
         {
+            job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) ThrowLastWin32Error("CreateJobObject");
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits =
                 new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -437,18 +447,31 @@ public static class PwrAgentWindowsJobRunner
             // The kernel assigned the Job before CreateProcess returned. A
             // separate AssignProcessToJobObject leaves a fatal-kill race here.
             WriteStartupPhase(startupStatusFile, startupStartedAt, "target-assigned");
-            if (ResumeThread(processInformation.hThread) == UInt32.MaxValue)
+            // A stop received during PowerShell startup fences the suspended
+            // target before it can run. The launcher keeps its Job handle.
+            bool stopped = StopJobIfRequested(job, stopFile);
+            if (!stopped)
             {
-                TerminateProcess(processInformation.hProcess, 127);
-                ThrowLastWin32Error("ResumeThread");
+                if (ResumeThread(processInformation.hThread) == UInt32.MaxValue)
+                {
+                    TerminateProcess(processInformation.hProcess, 127);
+                    ThrowLastWin32Error("ResumeThread");
+                }
+                WriteStartupPhase(startupStatusFile, startupStartedAt, "target-resumed");
+                File.WriteAllText(readyFile, "ready");
+                WriteStartupPhase(startupStatusFile, startupStartedAt, "ready");
             }
-            WriteStartupPhase(startupStatusFile, startupStartedAt, "target-resumed");
-            File.WriteAllText(readyFile, "ready");
-            WriteStartupPhase(startupStatusFile, startupStartedAt, "ready");
-            if (WaitForSingleObject(processInformation.hProcess, INFINITE) == WAIT_FAILED)
+            uint waitMs = String.IsNullOrEmpty(stopFile) || stopped ? INFINITE : 50;
+            uint waitResult;
+            while ((waitResult = WaitForSingleObject(processInformation.hProcess, waitMs)) == WAIT_TIMEOUT)
             {
-                ThrowLastWin32Error("WaitForSingleObject");
+                if (StopJobIfRequested(job, stopFile))
+                {
+                    stopped = true;
+                    waitMs = INFINITE;
+                }
             }
+            if (waitResult == WAIT_FAILED) ThrowLastWin32Error("WaitForSingleObject");
             WriteStartupPhase(startupStatusFile, startupStartedAt, "target-exited");
             // Finite native builds can leave toolchain servers running. Their
             // driver has finished; retire only this Job's descendants, then
@@ -462,14 +485,26 @@ public static class PwrAgentWindowsJobRunner
             }
             while (ReadActiveProcessCount(job) > 0)
             {
+                // The original target can exit while a child still owns the
+                // workload, including a Git-for-Windows launcher handoff.
+                if (!stopped) stopped = StopJobIfRequested(job, stopFile);
                 Thread.Sleep(10);
             }
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "job-drained");
             uint exitCode;
             if (!GetExitCodeProcess(processInformation.hProcess, out exitCode))
             {
                 ThrowLastWin32Error("GetExitCodeProcess");
             }
             return unchecked((int)exitCode);
+        }
+        catch
+        {
+            if (!processCreated)
+            {
+                WriteStartupPhase(startupStatusFile, startupStartedAt, "target-not-created");
+            }
+            throw;
         }
         finally
         {
@@ -484,16 +519,18 @@ public static class PwrAgentWindowsJobRunner
                 CloseHandle(processInformation.hThread);
                 CloseHandle(processInformation.hProcess);
             }
-            CloseHandle(job);
+            if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
 }
 '@
 
+$invokingNativeJob = $false
 try {
   Write-StartupPhase -Phase 'helper-compile-started'
   Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
   Write-StartupPhase -Phase 'helper-ready'
+  $invokingNativeJob = $true
   $exitCode = [PwrAgentWindowsJobRunner]::Run(
     $application,
     [string[]]$arguments,
@@ -501,7 +538,8 @@ try {
     $readyFile,
     $startupStatusFile,
     $startupStartedAt,
-    $terminateDescendants)
+    $terminateDescendants,
+    $stopFile)
   if (Test-Path -LiteralPath $exitFile) {
     $reportedExitCode = 0
     if ([int]::TryParse(
@@ -512,6 +550,7 @@ try {
   }
   exit $exitCode
 } catch {
+  if (-not $invokingNativeJob) { Write-StartupPhase -Phase 'target-not-created' }
   Write-StartupPhase -Phase 'failed' -Detail $_.Exception.Message
   [Console]::Error.WriteLine('PwrAgent Windows job wrapper failed: ' + $_.Exception.Message)
   exit 127
@@ -521,6 +560,7 @@ try {
 export type WindowsJobWrappedCommand = {
   args: string[];
   cleanup: () => void;
+  requestStop?: () => void;
   command: string;
   env: NodeJS.ProcessEnv;
   readyFilePath: string;
@@ -588,6 +628,13 @@ export function readWindowsJobStartupTelemetry(
     phases.push({ detail, elapsedMs, phase });
   }
   return { phases };
+}
+
+export function windowsJobCleanupVerified(launch: Pick<WindowsJobWrappedCommand, "startupStatusFilePath">): boolean {
+  const { phases } = readWindowsJobStartupTelemetry(launch);
+  if (phases.some(({ phase }) => phase === "job-drained")) return true;
+  return phases.some(({ phase }) => phase === "target-not-created")
+    && !phases.some(({ phase }) => phase === "target-created-suspended");
 }
 
 export function formatWindowsJobStartupTelemetry(
@@ -738,12 +785,14 @@ export function wrapCommandInWindowsJob(params: {
   // Only finite drivers whose own exit means completion. A launcher handoff
   // (for example Git-for-Windows Bash) must keep the default natural drain.
   terminateDescendantsOnExit?: boolean;
+  keepDrainEvidenceOnStop?: boolean;
 }): WindowsJobWrappedCommand {
   const stateDirectory = mkdtempSync(
     path.join(os.tmpdir(), "pwragent-windows-job-"),
   );
   const readyFilePath = path.join(stateDirectory, "ready");
   const exitFilePath = path.join(stateDirectory, "exit");
+  const stopFilePath = path.join(stateDirectory, "stop");
   const startupStatusFilePath = path.join(stateDirectory, "startup-status.tsv");
   const scriptPath = path.join(stateDirectory, "wrapper.ps1");
   const startupStartedAt = Date.now();
@@ -773,6 +822,7 @@ export function wrapCommandInWindowsJob(params: {
   if (wrappedArgs[0] === "-lc" && wrappedArgs[1] !== undefined) {
     wrappedArgs[1] = `${BASH_EXIT_TRAP}\n${wrappedArgs[1]}`;
   }
+  let stopRequested = false;
   return {
     command: powershell,
     args: [
@@ -792,8 +842,16 @@ export function wrapCommandInWindowsJob(params: {
         retryDelay: 100,
       });
     },
+    ...(params.keepDrainEvidenceOnStop ? {
+      requestStop: () => {
+        if (stopRequested) return;
+        writeFileSync(stopFilePath, "", { flag: "wx", mode: 0o600 });
+        stopRequested = true;
+      },
+    } : {}),
     env: {
       ...params.env,
+      [STOP_FILE_ENV]: params.keepDrainEvidenceOnStop ? stopFilePath : "",
       [EXECUTABLE_ENV]: params.command,
       [ARGUMENTS_ENV]: encodeArgument(JSON.stringify(wrappedArgs)),
       [WORKING_DIRECTORY_ENV]: params.cwd ?? process.cwd(),

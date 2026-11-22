@@ -1408,6 +1408,10 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(initial.general.hotCpuProfilingCaptureChromiumTrace).toEqual({
+      value: false,
+      source: "default",
+    });
     expect(initial.general.hotCpuProfilingHeapSnapshotLimit).toEqual({
       value: 2,
       source: "default",
@@ -1425,6 +1429,7 @@ describe("DesktopSettingsService", () => {
         hotCpuProfilingStartDelayMs: 5000,
         hotCpuProfilingTriggerMode: "slowburn",
         hotCpuProfilingSlowburnThresholdPercent: 20,
+        hotCpuProfilingCaptureChromiumTrace: true,
         hotCpuProfilingCaptureHeapSnapshot: true,
         hotCpuProfilingHeapSnapshotLimit: 3,
       },
@@ -1437,6 +1442,7 @@ describe("DesktopSettingsService", () => {
     expect(saved).toContain('hot_cpu_profiling_trigger_mode = "slowburn"');
     expect(saved).toContain("hot_cpu_profiling_slowburn_threshold_percent = 20");
     expect(saved).toContain("hot_cpu_profiling_capture_heap_snapshot = true");
+    expect(saved).toContain("hot_cpu_profiling_capture_chromium_trace = true");
     expect(saved).toContain("hot_cpu_profiling_heap_snapshot_limit = 3");
     expect((await service.readSettingsProjection()).general.hotCpuProfilingEnabled).toEqual({
       value: true,
@@ -1463,6 +1469,10 @@ describe("DesktopSettingsService", () => {
     expect(
       (await service.readSettingsProjection()).general.hotCpuProfilingCaptureHeapSnapshot,
     ).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect((await service.readSettingsProjection()).general.hotCpuProfilingCaptureChromiumTrace).toEqual({
       value: true,
       source: "config",
     });
@@ -5040,9 +5050,7 @@ describe("DesktopSettingsService", () => {
     await expect(
       service.writeConfigPatchTargeted({
         experimental: {
-          diffCondensation: {
-            enabled: true,
-          },
+          fullAccessRiskWarningDismissed: true,
         },
       }),
     ).rejects.toThrow("could not be parsed");
@@ -5276,9 +5284,15 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults diff condensation to disabled and persists the toggle", async () => {
-    const root = createTempRoot();
-    const configPath = path.join(root, "config.toml");
+  it.each([true, false])("ignores the retired diff condensation toggle and preserves enabled=%s for downgrade", async (enabled) => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const legacy = [
+      "[experimental.diff_condensation]",
+      "# Operator comment",
+      `enabled = ${enabled}`,
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, legacy);
     const service = new DesktopSettingsService({
       configPath,
       env: {},
@@ -5286,29 +5300,18 @@ describe("DesktopSettingsService", () => {
     });
 
     const initial = await service.readSettingsProjection();
-    expect(initial.experimental.diffCondensation).toEqual({
-      enabled: { value: false, source: "default" },
-    });
+    expect(initial.experimental).not.toHaveProperty("diffCondensation");
 
     await service.writeConfigPatchTargeted({
-      experimental: {
-        diffCondensation: { enabled: true },
-      },
+      experimental: { fullAccessRiskWarningDismissed: true },
     });
 
     const updated = await service.readSettingsProjection();
-    expect(updated.experimental.diffCondensation).toEqual({
-      enabled: { value: true, source: "config" },
+    expect(updated.experimental.fullAccessRiskWarningDismissed).toEqual({
+      value: true,
+      source: "config",
     });
-
-    await service.writeConfigPatchTargeted({
-      experimental: {
-        diffCondensation: { enabled: false },
-      },
-    });
-
-    const reverted = await service.readSettingsProjection();
-    expect(reverted.experimental.diffCondensation.enabled.value).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toContain(legacy);
   });
 
   it("defaults Full Access risk warning dismissal to false and persists it", async () => {
@@ -5342,9 +5345,11 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults live transcript event filtering to false and persists it", async () => {
+  it.each([true, false])("ignores the retired transcript setting (stored value: %s)", async (enabled) => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
+    const retiredLine = `live_transcript_event_filtering = ${enabled}`;
+    fs.writeFileSync(configPath, `[experimental]\n${retiredLine}\n`);
     const service = new DesktopSettingsService({
       configPath,
       env: {},
@@ -5352,25 +5357,16 @@ describe("DesktopSettingsService", () => {
     });
 
     const initial = await service.readSettingsProjection();
-    expect(initial.experimental.liveTranscriptEventFiltering).toEqual({
-      value: false,
-      source: "default",
-    });
-
-    await service.writeConfigPatchTargeted({
-      experimental: {
-        liveTranscriptEventFiltering: true,
-      },
-    });
-
+    expect(initial.experimental).not.toHaveProperty("liveTranscriptEventFiltering");
+    await service.writeConfigPatchTargeted({ experimental: { fullAccessRiskWarningDismissed: true } });
     const updated = await service.readSettingsProjection();
-    expect(updated.experimental.liveTranscriptEventFiltering).toEqual({
+    expect(updated.experimental).not.toHaveProperty("liveTranscriptEventFiltering");
+    expect(updated.experimental.fullAccessRiskWarningDismissed).toEqual({
       value: true,
       source: "config",
     });
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "live_transcript_event_filtering = true",
-    );
+    // An unrelated save preserves the old value for older builds.
+    expect(fs.readFileSync(configPath, "utf8")).toContain(retiredLine);
   });
 
   it("defaults Markdown rendering on and writes only [general.markdown] to a new config", async () => {
@@ -5708,17 +5704,12 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
-    expect(initial.experimental.threadToolAccounting).toEqual({
-      value: false,
-      source: "default",
-    });
 
     await service.writeConfigPatchTargeted({
       experimental: {
         threadPricingSummary: false,
         threadPricingDisplayUsd: false,
         threadPricingDisplayCodexCredits: true,
-        threadToolAccounting: true,
       },
     });
 
@@ -5735,10 +5726,6 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
-    expect(updated.experimental.threadToolAccounting).toEqual({
-      value: true,
-      source: "config",
-    });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_summary = false",
     );
@@ -5747,9 +5734,6 @@ describe("DesktopSettingsService", () => {
     );
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_display_codex_credits = true",
-    );
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "thread_tool_accounting = true",
     );
   });
 
@@ -5889,7 +5873,9 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettingsProjection()).experimental.managedReview).toEqual({
+    const initial = await service.readSettingsProjection();
+    expect(initial.experimental).not.toHaveProperty("threadToolAccounting");
+    expect(initial.experimental.managedReview).toEqual({
       value: false,
       source: "default",
     });

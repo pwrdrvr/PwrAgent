@@ -103,6 +103,8 @@ export class TaskMonitorWakeStore {
   }
 
   claimReview(parent: Parent): ReviewClaim | "pending" | "settled" {
+    // Contenders waiting for an existing lease need no SQLite write lock.
+    if ((this.review(parent)?.claim_until ?? 0) > this.now()) return "pending";
     return this.db.transaction(() => {
       const guard = this.guard(parent);
       const now = this.now();

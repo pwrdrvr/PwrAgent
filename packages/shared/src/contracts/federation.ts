@@ -85,6 +85,19 @@ export const FEDERATION_CAPABILITIES = [
    * thread there sends the prompt alone without it.
    */
   "thread_todo_plan",
+  /**
+   * The owner honors a handoff card's `placement` and the operator's pick
+   * from `threadTodos.runAction`. A viewer shows an older owner's card as a
+   * sub-thread, which is what that owner makes, and sends no placement.
+   */
+  "thread_todo_placement",
+  /**
+   * The owner files a handoff's thread as a sibling of the raising thread,
+   * and does so when the card names no placement. A viewer offers Sibling
+   * only to such an owner, and treats an older owner's default as a
+   * sub-thread.
+   */
+  "thread_todo_placement_sibling",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",
@@ -1128,58 +1141,27 @@ export function isRemoteFederationTarget(
 }
 
 /**
- * Display label for a federation peer: the machine label, with the
- * remote profile appended as "<label> / <profile>" when it matters.
- * The profile shows when it isn't "default", or when more than one
- * visible peer shares the machine label (several profiles of one
- * machine enrolled at once) — in that case even "default" shows so the
- * entries stay tellable apart. A lone default-profile peer keeps the
- * bare machine name. Peers that never advertised a profile (older
- * builds) always keep the bare label, and revoked peers are dead
- * entries that must not force the suffix onto their live sibling.
- */
-/**
- * The machine label plus the profile name, but only when the profile is
- * actually needed to tell two instances apart. Surfaces that can lay the
- * two out separately (the star map's instance card stacks them so the card
- * stays narrow) should use this; `formatFederationPeerDisplayLabel` joins
- * the same parts for single-line contexts.
+ * The machine label and any non-default profile name. The bare machine
+ * label represents its default profile, even when other profiles are visible.
+ * Star Map cards can show the parts separately; the single-line formatters
+ * join them.
  *
- * `shortLabel` passes through when the peer has one, for faces that draw
- * the short name in place of `label`. Whether the profile shows is still
- * decided on full labels: two machines that happen to share a short name
- * are different machines.
+ * `shortLabel` passes through for surfaces that draw the short machine name.
  */
 export function formatFederationPeerDisplayLabelParts(
   peer: { label: string; profileName?: string; shortLabel?: string },
-  visiblePeers: readonly {
-    label: string;
-    profileName?: string;
-    revokedAt?: number;
-  }[],
 ): { label: string; profileName?: string; shortLabel?: string } {
-  const short = peer.shortLabel ? { shortLabel: peer.shortLabel } : {};
-  if (!peer.profileName) {
-    return { label: peer.label, ...short };
-  }
-  const sameMachinePeers = visiblePeers.filter(
-    (candidate) => !candidate.revokedAt && candidate.label === peer.label,
-  );
-  if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
-    return { label: peer.label, ...short };
-  }
-  return { label: peer.label, profileName: peer.profileName, ...short };
+  return {
+    label: peer.label,
+    ...(peer.profileName && peer.profileName !== "default" ? { profileName: peer.profileName } : {}),
+    ...(peer.shortLabel ? { shortLabel: peer.shortLabel } : {}),
+  };
 }
 
 export function formatFederationPeerDisplayLabel(
   peer: { label: string; profileName?: string },
-  visiblePeers: readonly {
-    label: string;
-    profileName?: string;
-    revokedAt?: number;
-  }[],
 ): string {
-  const parts = formatFederationPeerDisplayLabelParts(peer, visiblePeers);
+  const parts = formatFederationPeerDisplayLabelParts(peer);
   return parts.profileName
     ? `${parts.label} / ${parts.profileName}`
     : parts.label;
@@ -1193,15 +1175,25 @@ export function formatFederationPeerDisplayLabel(
  */
 export function formatFederationPeerShortDisplayLabel(
   peer: { label: string; profileName?: string; shortLabel?: string },
-  visiblePeers: readonly {
-    label: string;
-    profileName?: string;
-    revokedAt?: number;
-  }[],
 ): string {
-  const parts = formatFederationPeerDisplayLabelParts(peer, visiblePeers);
+  const parts = formatFederationPeerDisplayLabelParts(peer);
   const machine = parts.shortLabel ?? parts.label;
   return parts.profileName ? `${machine} / ${parts.profileName}` : machine;
+}
+
+/** A legacy destination can share a host label with the known default profile. */
+export function formatFederationPeerTargetLabels(
+  peer: { label: string; profileName?: string; shortLabel?: string },
+  visiblePeers: readonly { label: string; profileName?: string }[],
+): { label: string; shortLabel?: string } {
+  const unknownProfile = !peer.profileName && visiblePeers.some(
+    (candidate) => candidate.label === peer.label && candidate.profileName === "default",
+  );
+  const qualifier = unknownProfile ? " (profile unknown)" : "";
+  return {
+    label: `${formatFederationPeerDisplayLabel(peer)}${qualifier}`,
+    ...(peer.shortLabel ? { shortLabel: `${formatFederationPeerShortDisplayLabel(peer)}${qualifier}` } : {}),
+  };
 }
 
 export function federationTargetKey(target: FederationTarget): string {

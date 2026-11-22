@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.16 - 2026-11-21
+
+- Boat Sandboxes - Manage a thread's sandboxes from its MCP access panel. See cost, auto-stop time, and open port forwards, and close a forward, stop a sandbox, or confirm deletion. Settings and the thread tile show why another sandbox cannot start, including account limits and billing.
+- Boat Workspace Tools - Save named snapshots with approval and start new sandboxes from them. Approve one-off requests above configured size or auto-stop limits. Forward sandbox ports to localhost, push tracked and non-ignored workspace files while excluding `.env` files, and pull changes back with a patch check that protects against overwriting conflicting local edits.
+- Worktrees and To-dos - Create new worktrees directly in the chosen worktree folder, with opt-in Codex worktrees under its `codex` subfolder. Existing checkouts stay in place. Choose whether a same-project to-do starts a sub-thread or a top-level thread. In Worktree Settings, **Sweep now** and **Thread Maintenance…** have distinct labels, and active hibernation shows progress.
+- Claude Code Reviews - Bare `/code-review` opens the review panel on supported Claude threads in desktop and starts a review of current changes from messaging. The messaging `/review` picker also offers Claude Code review on those threads.
+- Composer and Transcript - Restore drafts containing empty code blocks, open the image selected in the transcript, and keep the selected thread's top controls above sticky headers. Retire experimental diff condensation, live transcript filtering, and the Tool calls tab. Tool Output Incidents are available from Thread info even when Pricing is off.
+- Responsiveness and Troubleshooting - Refresh only sidebar pages affected by a Git status change and reduce repeated reads for pricing, automation, reviews, and startup repair. Add an opt-in Chromium trace alongside renderer CPU profiles to help diagnose layout and paint spikes.
+- Messaging and Navigation - Shorten instance labels in resume pickers and render the messaging `/resume` picker once per action. Clarify context-rail icons and tooltips, show one plain tooltip at a time, and focus the Research activity list when the final page opens.
+
 ## v1.4.15 - 2026-11-21
 
 - Boat Sandboxes - Add Boat as a built-in compute connection alongside Sandboxer, with a Launchpad tile and Settings > Plugins setup using an API key or the Boat CLI's browser sign-in. Keep the key in PwrAgent's encrypted secret store and apply normal MCP selection and approval checks. Scope sandbox tools to the calling thread's sandboxes, request private hosted ports and credential-free environments by default, and refuse requests above configured size or auto-stop limits.

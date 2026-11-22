@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A protocol fixture, not a model/provider. All state is test-owned.
 import assert from "node:assert/strict";
-import { appendFileSync, readFileSync, renameSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
@@ -53,6 +53,7 @@ let acknowledged = false;
 let active;
 let sequence = 0;
 const helpers = new Set();
+const pendingSteerAcks = new Set();
 const helperControl = () => {
   try { return JSON.parse(readFileSync(path.join(directory, "helper-title.json"), "utf8")); }
   catch (error) { if (error.code !== "ENOENT") throw error; return undefined; }
@@ -208,11 +209,15 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       assert.equal(params.expectedTurnId, active.id);
       if (params.input?.[0]?.text === "hold-steer-ack") {
         const turnId = active.id;
-        const watcher = watch(directory, (_event, file) => {
-          if (file !== "steer.release") return;
-          watcher.close();
+        const release = path.join(directory, "steer.release");
+        // The marker is durable even when its file notification is missing.
+        const timer = setInterval(() => {
+          if (!existsSync(release)) return;
+          clearInterval(timer);
+          pendingSteerAcks.delete(timer);
           reply({ turnId });
-        });
+        }, 25);
+        pendingSteerAcks.add(timer);
         writeFileSync(path.join(directory, "steer.ready"), turnId);
         continue;
       }
@@ -264,3 +269,6 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     }
   }
 }
+
+for (const timer of pendingSteerAcks) clearInterval(timer);
+clearTimeout(active?.timer);

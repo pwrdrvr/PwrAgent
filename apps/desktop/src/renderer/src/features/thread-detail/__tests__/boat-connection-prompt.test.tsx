@@ -85,6 +85,23 @@ describe("BoatConnectionPrompt", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
+  it("names what blocks a start and keeps the switch, so running sandboxes can be stopped", async () => {
+    // Contrived counts.
+    renderTile(listing(boat({
+      boatAccount: { canStart: false, startBlock: "concurrent_limit", activeSandboxes: 2, maxActiveSandboxes: 2 },
+    })));
+    expect(await screen.findByText("2 of 2 sandboxes running · stop one to start another")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Use Boat in this thread" })).toBeInTheDocument();
+  });
+
+  it("tells a spent trial and missing billing apart from a full account", async () => {
+    const trial = renderTile(listing(boat({ boatAccount: { canStart: false, startBlock: "trial_compute_used" } })));
+    expect(await screen.findByText("Trial compute used · choose a plan in Boat")).toBeInTheDocument();
+    trial.unmount();
+    renderTile(listing(boat({ boatAccount: { canStart: false, startBlock: "billing_required" } })));
+    expect(await screen.findByText("Boat needs billing set up to start sandboxes")).toBeInTheDocument();
+  });
+
   it("shows nothing for a remote thread or a main without Boat", async () => {
     const remote = renderTile(listing(boat()), { remote: true });
     expect(remote.container).toBeEmptyDOMElement();
@@ -167,6 +184,17 @@ describe("BoatSetupDetail", () => {
     expect(screen.getByText("pro plan · 1 of 5 sandboxes running")).toBeInTheDocument();
     expect(screen.queryByLabelText("Boat API key")).not.toBeInTheDocument();
   });
+
+  it("names the block by what frees a start, not by Boat's code", () => {
+    renderDetail(vi.fn(), boat({
+      boatAccount: {
+        plan: "trial", activeSandboxes: 0, maxActiveSandboxes: 2, canStart: false,
+        blockedReason: "trial_compute_limit_reached", startBlock: "trial_compute_used",
+      },
+    }));
+    expect(screen.getByText("Trial used")).toBeInTheDocument();
+    expect(screen.queryByText("trial_compute_limit_reached")).not.toBeInTheDocument();
+  });
 });
 
 describe("BoatSetupDetail sign-in", () => {
@@ -246,6 +274,8 @@ describe("BoatSetupDetail sign-in", () => {
     expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Boat API key")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Get the Boat CLI" })).toBeInTheDocument();
+    // A pasted key is told what it must be allowed to do.
+    expect(screen.getByText(/sandbox\.create, .*snapshot\.write, account\.read/)).toBeInTheDocument();
   });
 });
 

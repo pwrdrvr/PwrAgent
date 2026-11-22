@@ -31,7 +31,7 @@ const STORAGE_OPTIONS: Array<{
   },
   {
     description:
-      "Outside the repository, in .pwragent/worktrees/<hash>/<project-folder> under the worktree folder.",
+      "Outside the repository, in <hash>/<project-folder> inside the worktree folder.",
     label: "User home",
     value: "user-home",
   },
@@ -94,7 +94,7 @@ export function WorktreesSettings(props: {
           {storage.value === "user-home" && props.snapshot.worktrees.baseDirectory ? (
             <ToggleField
               label="Use for Codex threads too"
-              sub="Codex threads' worktrees go to .codex/worktrees in this folder. Codex Desktop lists only worktrees in its own folder, so it won't show these."
+              sub="Codex threads' worktrees go to the codex folder inside this folder. Codex Desktop lists only worktrees in its own folder, so it won't show these."
               checked={props.snapshot.worktrees.baseDirectoryIncludesCodex === true}
               disabled={props.saving || !props.onWriteConfig}
               onChange={async (baseDirectoryIncludesCodex) => {
@@ -167,6 +167,7 @@ const FOLDER_STATUS_CHIPS: Record<DesktopWorktreeFolderStatus | "checking", { la
   available: { label: "Available", modifier: "ok" },
   missing: { label: "Not available", modifier: "err" },
   "not-responding": { label: "Not responding", modifier: "err" },
+  "in-use": { label: "Not empty", modifier: "err" },
 };
 
 function folderStatusError(baseDirectory: string, status: DesktopWorktreeFolderStatus | "checking" | undefined) {
@@ -175,6 +176,9 @@ function folderStatusError(baseDirectory: string, status: DesktopWorktreeFolderS
   }
   if (status === "not-responding") {
     return `${baseDirectory} is not responding. Check the drive or network share, or choose another folder.`;
+  }
+  if (status === "in-use") {
+    return `${baseDirectory} already holds other files. Worktrees go straight into this folder, so choose an empty one.`;
   }
   return undefined;
 }

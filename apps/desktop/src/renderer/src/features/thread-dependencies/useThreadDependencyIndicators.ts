@@ -9,6 +9,7 @@ import {
   threadDependencyDeliveryTarget,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ownMergeBuildWaits } from "../pr-watches/merge-build-watches";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   ACTIVE_DEPENDENCY_STATUSES,
@@ -32,6 +33,13 @@ export type ThreadDependencyIndicator = {
   tooltip: string;
   /** A waiting registration holds this thread's merges. */
   mergeHeld: boolean;
+  /**
+   * The thread's own active merge build waits, with each latest build check,
+   * for its PR chips and Pull requests card. Shared while unchanged.
+   */
+  mergeBuildWaits?: readonly ThreadDependency[];
+  /** Compares `mergeBuildWaits` without walking them. */
+  mergeBuildSignature?: string;
 };
 
 export type ThreadDependencyIndicatorsValue = {
@@ -169,10 +177,14 @@ export function summarizeThreadDependencies(
     const reviewCount = items.filter(needsDeliveryReview).length;
     const alert = reviewCount > 0;
     const mergeHeld = items.some(holdsMerge);
+    const mergeBuildWaits = ownMergeBuildWaits(items, { backend: items[0]!.backend, threadId: items[0]!.threadId });
     indicators.set(key, {
       count: items.length,
       alert,
       mergeHeld,
+      ...(mergeBuildWaits.length
+        ? { mergeBuildWaits, mergeBuildSignature: signMergeBuildWaits(mergeBuildWaits) }
+        : {}),
       label: alert ? `Check delivery${reviewCount > 1 ? ` · ${reviewCount}` : ""}` : mergeHeld ? "Merge held" : items.length > 1 ? `${items.length} waiting` : progressLabel(items[0]!),
       tooltip: describeRegistrations(items, reviewCount),
     });
@@ -194,7 +206,17 @@ function sameIndicators(
 
 function sameIndicator(left: ThreadDependencyIndicator, right: ThreadDependencyIndicator): boolean {
   return left.count === right.count && left.alert === right.alert && left.mergeHeld === right.mergeHeld
-    && left.label === right.label && left.tooltip === right.tooltip;
+    && left.label === right.label && left.tooltip === right.tooltip
+    && left.mergeBuildSignature === right.mergeBuildSignature;
+}
+
+/** What a merge build row shows: which watch, what wakes it, and its latest check. */
+function signMergeBuildWaits(waits: readonly ThreadDependency[]): string {
+  return JSON.stringify(waits.map((dependency) => [
+    dependency.id, dependency.status, dependency.wakeOn ?? "", dependency.automatic ?? false,
+    dependency.conditions.map((condition) => condition.prUrl ?? ""),
+    dependency.evidence.map((entry) => [entry.state, entry.reason, entry.prUrl ?? "", entry.mergeBuild ?? null]),
+  ]));
 }
 
 const holdsMerge = (dependency: ThreadDependency): boolean =>

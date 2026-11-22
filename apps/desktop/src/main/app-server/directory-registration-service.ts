@@ -1,12 +1,15 @@
 import { stat as fsStat } from "node:fs/promises";
 import path from "node:path";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   EnsureDirectoryLaunchpadResponse,
   RegisterDirectoryFromDiskFailureReason,
   RegisterDirectoryFromDiskResponse,
 } from "@pwragent/shared/contracts/agent";
+import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { parseWorktreeListPaths } from "@pwragent/shared/nested-worktree-pathspec";
 import { runGitCommand } from "./git-executable";
+import { buildWorktreeLinkedDirectory, toDirectoryId } from "./linked-directory-identity";
 
 /**
  * Validate `path` and seed a launchpad for the project-directory
@@ -26,8 +29,8 @@ import { runGitCommand } from "./git-executable";
  *
  * On success we call `ensureDirectoryLaunchpad` so the directory is
  * known to the launchpad layer immediately. Git detection is best effort:
- * repositories persist their canonical root so symlinked roots normalize
- * to one launchpad; other folders persist the selected path (issue #1750).
+ * repositories persist their primary checkout, and other folders persist
+ * the selected path (issue #1750).
  */
 export type DirectoryRegistrationDeps = {
   ensureDirectoryLaunchpad: (request: {
@@ -62,30 +65,6 @@ function failed(
   return { ok: false, reason, message };
 }
 
-/**
- * If `target` lives inside `<repo>/.worktrees/<hash>/<project>` —
- * pwragent's own auxiliary-worktree convention — return `<repo>` so
- * the picker's directoryKey matches the canonical-repo entry that
- * already exists in the navigation snapshot.
- *
- * Without this, picking a path under `.worktrees/<hash>/<project>`
- * generates `directory:/repo/.worktrees/<hash>/<project>` while the
- * rest of the system uses `directory:/repo`, producing a duplicate
- * entry in the picker's "Recent directories" list. This mirrors the
- * `repoWorktreeMatch` branch in
- * `packages/shared/src/directory-navigation.ts`, which
- * is the read-side of the same normalization. We deliberately do NOT
- * canonicalize `.codex/worktrees/...` paths — those are intentionally
- * tracked as their own directory entries by the directory-navigation
- * builder.
- */
-function canonicalizeRepoWorktreePath(target: string): string {
-  const match = target.match(
-    /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/][^\\/]+)?(?:[\\/].*)?$/,
-  );
-  return match ? match[1] : target;
-}
-
 export async function registerDirectoryFromDisk(
   request: { path: string; preferredBackend?: AppServerBackendKind },
   deps: DirectoryRegistrationDeps,
@@ -118,15 +97,28 @@ export async function registerDirectoryFromDisk(
   // Match navigation keys on Windows, where the native picker uses backslashes.
   let directoryPath = candidate.replace(/\\/g, "/");
   let repoRoot: string | undefined;
+  let checkoutPath: string | undefined;
   try {
     const toplevel = (await runGit(candidate, [
       "rev-parse",
       "--show-toplevel",
     ])).trim();
     if (toplevel) {
-      // Only Git roots use repository/worktree normalization. Plain folders
-      // keep their selected path, even when it contains `.worktrees`.
-      repoRoot = canonicalizeRepoWorktreePath(toplevel);
+      // Git lists the primary checkout first even when queried from a linked
+      // checkout. A separately cloned repository has its own primary entry.
+      const worktrees = await runGit(toplevel, ["worktree", "list", "--porcelain", "-z"]).catch(() => "");
+      const [primary] = parseWorktreeListPaths(worktrees);
+      const selectedRoot = canonicalizeNavigationPath(toplevel);
+      repoRoot = selectedRoot;
+      if (primary && canonicalizeNavigationPath(primary) !== selectedRoot) {
+        // For a bare or separate Git directory, list can report the admin
+        // folder as the first entry. Register only a verified working root.
+        const root = await runGit(primary, ["rev-parse", "--show-toplevel"]).catch(() => "");
+        if (root && canonicalizeNavigationPath(root.trim()) === canonicalizeNavigationPath(primary)) {
+          repoRoot = canonicalizeNavigationPath(primary);
+          checkoutPath = selectedRoot;
+        }
+      }
       directoryPath = repoRoot;
     }
   } catch {
@@ -166,10 +158,24 @@ export async function registerDirectoryFromDisk(
   return {
     ok: true,
     directoryPath,
+    ...(checkoutPath ? { checkoutPath } : {}),
     directoryKey,
     directoryLabel,
     currentBranch,
     launchpad: ensured.launchpad,
     defaults: ensured.defaults,
   };
+}
+
+/** Thread attachments retain the selected checkout as their working copy. */
+export function linkedDirectoryForRegistration(
+  registration: Extract<RegisterDirectoryFromDiskResponse, { ok: true }>,
+): LinkedDirectorySummary {
+  if (registration.checkoutPath) {
+    const [directory] = buildWorktreeLinkedDirectory({ repositoryPath: registration.directoryPath,
+      worktreePath: registration.checkoutPath, label: registration.directoryLabel });
+    if (directory) return { ...directory, id: directory.worktreePath ?? directory.id };
+  }
+  const directoryPath = toDirectoryId(path.resolve(registration.directoryPath));
+  return { id: directoryPath, kind: "local", label: registration.directoryLabel, path: directoryPath };
 }

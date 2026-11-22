@@ -1,15 +1,24 @@
+import fs from "node:fs/promises";
 import type { Transport, FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { BoatPortForwards, type BoatPortForward, type BoatTunnelRuntime } from "./boat-port-forward";
+import { BoatWorkspaceError, type BoatWorkspace, type BoatWorkspaceGit } from "./boat-workspace";
+import { runGitCommand } from "../app-server/git-executable";
 import {
   BOAT_LINKS,
   BOAT_MCP_CONNECTION_ID,
+  boatAccountFromLimits,
+  boatStartBlockForCode,
+  describeBoatStartBlock,
   normalizeBoatApiKey,
   type BoatAccountSummary,
+  type BoatStartBlock,
   type BoatLinkTarget,
   type BoatSandboxPolicy,
   type McpConnectionStatus,
   type OpenBoatLinkResponse,
 } from "@pwragent/shared/contracts/mcp-connections";
-import { BoatApi, BoatApiError } from "./boat-api";
+import { BoatApi, BoatApiError, type BoatAccountEvent } from "./boat-api";
 import {
   BOAT_SERVER_INSTRUCTIONS,
   BoatTools,
@@ -33,6 +42,13 @@ const STATUS_CACHE_MS = 60_000;
 
 type BoatStatus = Pick<McpConnectionStatus, "configured" | "state" | "detail" | "boatAccount">;
 
+/**
+ * `key`: the stored key changed or Boat stopped accepting it, which ends what
+ * every open session could do. `account`: only what the account can start
+ * changed.
+ */
+export type BoatStatusChange = "key" | "account";
+
 export type BoatSecretStore = {
   read(connectionId: string): Promise<Record<string, string>>;
   write(connectionId: string, values: Record<string, string>): Promise<void>;
@@ -43,6 +59,8 @@ export type BoatSessionScope = {
   ownedSandboxIds: () => ReadonlySet<string>;
   recordOwned: (sandbox: BoatOwnedSandbox) => void;
   forgetOwned: (sandboxId: string) => void;
+  /** The thread's directories on this machine, its working directory first. */
+  workspaceRoots?: () => Promise<readonly string[]>;
 };
 
 export type BoatConnectionOptions = {
@@ -51,12 +69,26 @@ export type BoatConnectionOptions = {
   policy: () => BoatSandboxPolicy;
   openExternal: (url: string) => Promise<void>;
   now?: () => number;
+  /** Stands in for `ssh` and the file system under a port forward, in tests. */
+  tunnelRuntime?: BoatTunnelRuntime;
+  /** Runs Git in a thread directory for a push or pull. */
+  git?: BoatWorkspaceGit;
 };
 
 export class BoatConnection {
   private readonly api: BoatApi;
-  private cached?: { at: number; value: BoatStatus };
-  private pending?: Promise<BoatStatus>;
+  /**
+   * The last status and the account generation it was read in. Every event
+   * that can change how many sandboxes run (a create, resume, fork, stop or
+   * delete settling, from any session or window) moves the generation on, so
+   * a status read before it is not served as current, and a read that was
+   * in flight when it happened is not stored as current either.
+   */
+  private cached?: { at: number; generation: number; value: BoatStatus };
+  private pending?: { generation: number; promise: Promise<BoatStatus> };
+  private generation = 0;
+  /** The last refused start, and the generation it was refused in. */
+  private refusal?: { generation: number; block: BoatStartBlock; code?: string; hiddenFromLimits: boolean };
   /** Set when Boat refuses the stored key, until a new key is saved. */
   private rejected = false;
   /**
@@ -64,9 +96,12 @@ export class BoatConnection {
    * key is saved. Only a create can show it, so a refresh does not clear it.
    */
   private cannotCreate = false;
-  private readonly statusListeners = new Set<() => void>();
+  private readonly statusListeners = new Set<(change: BoatStatusChange) => void>();
+  private readonly forwards: BoatPortForwards;
+  private nextSession = 0;
 
   constructor(private readonly options: BoatConnectionOptions) {
+    this.forwards = new BoatPortForwards(options.tunnelRuntime);
     this.api = new BoatApi({
       readKey: async () => await this.readKey(),
       fetchFn: options.fetchFn,
@@ -74,18 +109,20 @@ export class BoatConnection {
         if (this.rejected) return;
         this.rejected = true;
         this.cached = undefined;
-        for (const listener of this.statusListeners) listener();
+        this.announce("key");
       },
       onCannotCreate: () => {
         if (this.cannotCreate) return;
         this.cannotCreate = true;
         this.cached = undefined;
-        for (const listener of this.statusListeners) listener();
+        this.announce("key");
       },
+      onAccountEvent: (event) => this.learn(event),
+      accountGeneration: () => this.generation,
     });
   }
 
-  onStatusChanged(listener: () => void): () => void {
+  onStatusChanged(listener: (change: BoatStatusChange) => void): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
   }
@@ -99,28 +136,105 @@ export class BoatConnection {
     };
   }
 
-  /** Concurrent reads share one check. `refresh` skips the cache. */
+  /**
+   * Concurrent reads share one check. `refresh` skips the cache. A read that
+   * starts after a sandbox change never gets an answer from before it.
+   */
   async readStatus(refresh = false): Promise<BoatStatus> {
-    const now = this.options.now?.() ?? Date.now();
     // An asked-for refresh checks the key again: one refused request must
     // not hold Boat off until a new key is pasted.
     if (refresh) this.rejected = false;
-    if (!refresh && this.cached && now - this.cached.at < STATUS_CACHE_MS) return this.cached.value;
-    if (this.pending) return await this.pending;
-    const pending = this.probe().then((value) => {
-      // The first answer is news only when a key is stored: until then every
-      // reader already shows Boat as not connected.
-      const changed = this.cached
-        ? JSON.stringify(this.cached.value) !== JSON.stringify(value)
-        : value.configured;
-      this.cached = { at: this.options.now?.() ?? Date.now(), value };
-      if (changed) for (const listener of this.statusListeners) listener();
+    const cached = this.cached;
+    if (
+      !refresh
+      && cached
+      && cached.generation === this.generation
+      && this.now() - cached.at < STATUS_CACHE_MS
+    ) {
+      return cached.value;
+    }
+    if (this.pending?.generation === this.generation) return await this.pending.promise;
+    const generation = this.generation;
+    const promise = this.probe().then((value) => {
+      // Overtaken by a sandbox change: the caller that asked first gets it,
+      // and the next read asks Boat again.
+      if (generation === this.generation) this.store(value);
       return value;
     }).finally(() => {
-      if (this.pending === pending) this.pending = undefined;
+      if (this.pending?.promise === promise) this.pending = undefined;
     });
-    this.pending = pending;
-    return await pending;
+    this.pending = { generation, promise };
+    return await promise;
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private announce(change: BoatStatusChange): void {
+    for (const listener of this.statusListeners) listener(change);
+  }
+
+  /** Keeps a status as current for this generation, and says if it is news. */
+  private store(value: BoatStatus): void {
+    // The first answer is news only when a key is stored: until then every
+    // reader already shows Boat as not connected.
+    const previous = this.cached?.value;
+    const changed = previous ? statusKey(previous) !== statusKey(value) : value.configured;
+    this.cached = { at: this.now(), generation: this.generation, value };
+    if (!changed) return;
+    // Reachable or not is the connection's state, and what a tool listing
+    // depends on; the account's capacity alone is not.
+    const sameConnection = previous?.configured === value.configured && previous.state === value.state;
+    this.announce(sameConnection ? "account" : "key");
+  }
+
+  /**
+   * What a request with the stored key showed. Boat's account-wide count is
+   * the truth: PwrAgent never works out capacity from its own records, which
+   * miss sandboxes other threads, computers or Boat's site started.
+   */
+  private learn(event: BoatAccountEvent): void {
+    switch (event.kind) {
+      case "limits": {
+        // Read before a sandbox change settled: the next read asks again.
+        if (event.since !== this.generation || this.rejected || this.cannotCreate) return;
+        let account = boatAccountFromLimits(event.limits, this.now());
+        // A refusal `/limits` may not show (a start-rate window, an
+        // organization's cap on one member) stands until a sandbox changes:
+        // Boat's counts are taken, its "can start" is not.
+        const refusal = this.refusal;
+        if (refusal?.generation === this.generation && refusal.hiddenFromLimits && account.canStart !== false) {
+          account = refusedAccount(account, refusal.block, refusal.code, account.checkedAt ?? this.now());
+        }
+        this.store(readyStatus(account));
+        return;
+      }
+      case "sandboxes_changed": {
+        this.generation += 1;
+        // Readers that show the last answer re-read; the next read asks Boat.
+        if (this.cached) this.announce("account");
+        return;
+      }
+      case "start_refused": {
+        // Known at once, without asking Boat again. Not when a sandbox
+        // change settled while the start was in flight: Boat may have
+        // refused it before a slot came free.
+        if (event.since !== this.generation || this.rejected || this.cannotCreate) return;
+        // A read already in flight may have been answered before the slot
+        // filled, so it is overtaken.
+        this.generation += 1;
+        this.refusal = {
+          generation: this.generation,
+          block: event.block,
+          ...(event.code ? { code: event.code } : {}),
+          hiddenFromLimits: event.code === "rate_limited" || event.code === "member_limit_reached",
+        };
+        const previous = this.cached?.value.boatAccount;
+        this.store(readyStatus(refusedAccount(previous, event.block, event.code, this.now())));
+        return;
+      }
+    }
   }
 
   /**
@@ -152,6 +266,7 @@ export class BoatConnection {
     this.rejected = false;
     this.cannotCreate = false;
     this.cached = undefined;
+    this.generation += 1;
     return await this.readStatus(true);
   }
 
@@ -161,7 +276,8 @@ export class BoatConnection {
     this.rejected = false;
     this.cannotCreate = false;
     this.cached = undefined;
-    for (const listener of this.statusListeners) listener();
+    this.generation += 1;
+    this.announce("key");
   }
 
   async openLink(target: BoatLinkTarget): Promise<OpenBoatLinkResponse> {
@@ -183,17 +299,111 @@ export class BoatConnection {
       mcpInMemory.load(),
       mcpTypes.load(),
     ]);
-    const tools = new BoatTools({ api: this.api, policy: this.options.policy, ...scope });
+    const session = `session-${this.nextSession++}`;
+    const { workspaceRoots, ...owned } = scope;
+    const tools = new BoatTools({
+      api: this.api,
+      policy: this.options.policy,
+      ...owned,
+      forwards: { manager: this.forwards, session },
+      ...(workspaceRoots ? { workspace: this.workspace(workspaceRoots) } : {}),
+    });
     const server = new Server({ name: "pwragent-boat", version: "1" }, {
       capabilities: { tools: {} },
       instructions: BOAT_SERVER_INSTRUCTIONS,
     });
     server.setRequestHandler(types.ListToolsRequestSchema, async () => ({ tools: [...tools.list()] }));
     server.setRequestHandler(types.CallToolRequestSchema, async (request, extra) =>
-      await tools.call(request.params.name, request.params.arguments, extra.signal));
+      await tools.call(request.params.name, request.params.arguments, extra.signal, async (message) => {
+        // A form with no fields: the person approves or declines. It reaches
+        // them through the tool call that asked, or not at all.
+        try {
+          const answer = await server.elicitInput(
+            { message, requestedSchema: { type: "object", properties: {} } },
+            { signal: extra.signal },
+          );
+          return answer.action === "accept" ? "approved" : "declined";
+        } catch (error) {
+          if (extra.signal.aborted) throw error;
+          return "unavailable";
+        }
+      }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    // The session's tunnels do not outlive it.
+    server.onclose = () => void this.forwards.closeForSession(session);
     await server.connect(serverTransport);
     return clientTransport;
+  }
+
+  /**
+   * One tool call outside any MCP session, for a window acting on a thread's
+   * sandboxes. The scope's rules apply exactly as they do to an agent.
+   */
+  async callTool(scope: BoatSessionScope, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+    // Holds the tunnels so a stop or delete from a window closes them too.
+    // The session is never recorded: a window opens no tunnel of its own.
+    const { workspaceRoots: _noDirectories, ...owned } = scope;
+    return await new BoatTools({
+      api: this.api,
+      policy: this.options.policy,
+      ...owned,
+      forwards: { manager: this.forwards, session: "window" },
+    }).call(name, args);
+  }
+
+  private workspace(roots: () => Promise<readonly string[]>): BoatWorkspace {
+    const fetchFn = this.options.fetchFn;
+    return {
+      roots,
+      git: this.options.git ?? (async (cwd, args) => await runGitCommand(cwd, args, { maxBuffer: 64 * 1024 * 1024 })),
+      transfer: {
+        // A signed URL is its own authority: the Boat key is not sent to it.
+        upload: async (url, file, signal) => {
+          const response = await fetchFn(url, {
+            method: "PUT",
+            body: await fs.readFile(file),
+            redirect: "error",
+            ...(signal ? { signal } : {}),
+          });
+          if (!response.ok) throw new BoatWorkspaceError(`Boat did not accept the upload (HTTP ${response.status}).`);
+        },
+        download: async (url, file, limitBytes, signal) => {
+          const response = await fetchFn(url, { method: "GET", redirect: "error", ...(signal ? { signal } : {}) });
+          if (!response.ok) throw new BoatWorkspaceError(`Boat did not return the changes (HTTP ${response.status}).`);
+          const tooLarge = (): BoatWorkspaceError => new BoatWorkspaceError(
+            `The sandbox's changes are more than the ${limitBytes / (1024 * 1024)} MiB a pull brings back. Nothing was changed.`,
+          );
+          // The declared length first, then the bytes as they arrive: never
+          // more than the limit in memory, whatever the server says.
+          if (Number(response.headers.get("content-length")) > limitBytes) {
+            await response.body?.cancel().catch(() => undefined);
+            throw tooLarge();
+          }
+          const chunks: Uint8Array[] = [];
+          let received = 0;
+          const reader = response.body?.getReader();
+          for (let part = await reader?.read(); part && !part.done; part = await reader?.read()) {
+            received += part.value.byteLength;
+            if (received > limitBytes) {
+              await reader?.cancel().catch(() => undefined);
+              throw tooLarge();
+            }
+            chunks.push(part.value);
+          }
+          await fs.writeFile(file, Buffer.concat(chunks), { mode: 0o600 });
+        },
+      },
+    };
+  }
+
+  /** The tunnels open into these sandboxes. */
+  portForwards(sandboxIds: ReadonlySet<string>): BoatPortForward[] {
+    return this.forwards.list(sandboxIds);
+  }
+
+  /** Ends every tunnel: the app is quitting, or the key is gone. */
+  async closePortForwards(): Promise<void> {
+    await this.forwards.closeAll();
   }
 
   private async readKey(): Promise<string | undefined> {
@@ -221,18 +431,7 @@ export class BoatConnection {
     if (this.cannotCreate) return CANNOT_CREATE;
     try {
       const limits = await this.api.requestWithKey(key, { method: "GET", path: ["limits"] });
-      const boatAccount = accountSummary(limits);
-      return boatAccount.canStart === false
-        ? {
-            configured: true, state: "ready", boatAccount,
-            detail: `Boat will not start a new sandbox for this account${
-              boatAccount.blockedReason ? ` (${boatAccount.blockedReason})` : ""
-            }. Running sandboxes can still be listed and stopped. Check the Boat dashboard.`,
-          }
-        : {
-            configured: true, state: "ready", boatAccount,
-            detail: "Connected with an API key stored in this profile. Sandboxes bill per second while they run.",
-          };
+      return readyStatus(boatAccountFromLimits(limits, this.now()));
     } catch (error) {
       if (error instanceof BoatApiError && error.kind === "rejected") {
         this.rejected = true;
@@ -246,7 +445,14 @@ export class BoatConnection {
       }
       if (error instanceof BoatApiError && error.kind === "limited") {
         // The key works; the account is at a limit. Threads keep list and stop.
-        return { configured: true, state: "ready", detail: error.message, boatAccount: { canStart: false } };
+        // A code PwrAgent does not sort is shown in Boat's own words.
+        const block = boatStartBlockForCode(error.code);
+        return readyStatus(refusedAccount(
+          this.cached?.value.boatAccount,
+          block ?? "other",
+          block ? error.code : error.message,
+          this.now(),
+        ));
       }
       return {
         configured: true, state: "temporarily_unavailable",
@@ -267,14 +473,47 @@ const CANNOT_CREATE: BoatStatus = {
   detail: "The stored Boat API key is not allowed to create sandboxes. Sign in again to replace it.",
 };
 
-function accountSummary(limits: Record<string, unknown>): BoatAccountSummary {
-  const account: BoatAccountSummary = {};
-  if (typeof limits.accessTier === "string" && limits.accessTier) account.plan = limits.accessTier.slice(0, 40);
-  if (typeof limits.activeSandboxes === "number") account.activeSandboxes = limits.activeSandboxes;
-  if (typeof limits.maxActiveSandboxes === "number") account.maxActiveSandboxes = limits.maxActiveSandboxes;
-  if (typeof limits.canStart === "boolean") account.canStart = limits.canStart;
-  if (typeof limits.startBlockedReason === "string" && limits.startBlockedReason) {
-    account.blockedReason = limits.startBlockedReason.slice(0, 200);
+/** A status without when it was read, to tell whether anything changed. */
+function statusKey(status: BoatStatus): string {
+  const { checkedAt: _checkedAt, ...account } = status.boatAccount ?? {};
+  return JSON.stringify({ ...status, boatAccount: account });
+}
+
+function readyStatus(boatAccount: BoatAccountSummary): BoatStatus {
+  return boatAccount.canStart === false
+    ? {
+        configured: true, state: "ready", boatAccount,
+        detail: `${describeBoatStartBlock(boatAccount)} Running sandboxes can still be listed and stopped.`,
+      }
+    : {
+        configured: true, state: "ready", boatAccount,
+        detail: "Connected with an API key stored in this profile. Sandboxes bill per second while they run.",
+      };
+}
+
+/**
+ * The account as a refused start left it: what was last read, with the
+ * refusal. `limit_reached` means every slot on the account is taken, so its
+ * running count is at least the cap. (`member_limit_reached` is a smaller cap
+ * an organization sets on one member, and says nothing about the account's.)
+ */
+function refusedAccount(
+  previous: BoatAccountSummary | undefined,
+  block: BoatStartBlock,
+  code: string | undefined,
+  checkedAt: number,
+): BoatAccountSummary {
+  const account: BoatAccountSummary = {
+    ...previous,
+    canStart: false,
+    startBlock: block,
+    checkedAt,
+  };
+  if (code) account.blockedReason = code.slice(0, 200);
+  else delete account.blockedReason;
+  if (code === "limit_reached" && account.maxActiveSandboxes !== undefined) {
+    account.activeSandboxes = Math.max(account.activeSandboxes ?? 0, account.maxActiveSandboxes);
   }
   return account;
 }
+

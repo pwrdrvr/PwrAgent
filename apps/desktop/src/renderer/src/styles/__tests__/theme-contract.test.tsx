@@ -798,18 +798,18 @@ describe("Tangerine Terminal theme contract", () => {
     expect(projectHeaderRule).toContain("background: var(--bg-panel-elevated);");
   });
 
-  it("keeps onboarding and warning overlays clickable without losing window drag affordances", () => {
-    const overlayRule = extractRuleBody(css, ".onboarding-wizard-overlay");
-    const titlebarRule = extractRuleBody(css, ".onboarding-wizard__titlebar");
+  it("keeps first-run and warning overlays clickable without losing window drag affordances", () => {
+    const overlayRule = extractRuleBody(css, ".get-started-overlay");
+    const titlebarRule = extractRuleBody(css, ".get-started__titlebar");
     const warningBannerRule = extractRuleBody(css, ".codex-config-warning-banner");
 
     expect(overlayRule).toContain("-webkit-app-region: no-drag;");
     expect(css).toMatch(
-      /\.onboarding-wizard-overlay__scrim\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?\}/
+      /\.get-started-overlay__scrim\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?\}/
     );
     expect(titlebarRule).toContain("-webkit-app-region: drag;");
     expect(css).toMatch(
-      /\.onboarding-wizard__titlebar button,\s*\.onboarding-wizard__titlebar input,\s*\.onboarding-wizard__titlebar a,\s*\.onboarding-wizard__titlebar select,\s*\.onboarding-wizard__titlebar \[role="button"\]\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/
+      /\.get-started__titlebar button\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/
     );
     expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
   });

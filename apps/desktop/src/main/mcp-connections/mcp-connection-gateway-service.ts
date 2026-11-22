@@ -33,6 +33,8 @@ import { listedMcpSkills, offersMcpSkills, skillsAwareInstructions } from "./mcp
 import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import { BoatConnection, type BoatSessionScope } from "./boat-connection";
+import type { BoatTunnelRuntime } from "./boat-port-forward";
+import type { BoatWorkspaceGit } from "./boat-workspace";
 import { BoatSignIn } from "./boat-sign-in";
 import {
   McpStdioLaunchError,
@@ -74,7 +76,13 @@ import {
   SANDBOXER_MCP_CONNECTION_ID,
   BOAT_MCP_CONNECTION_ID,
   isBoatSignInMethod,
+  isBoatSandboxPort,
+  isBoatThreadSandboxAction,
   type BoatLinkTarget,
+  type BoatThreadSandbox,
+  type ChangeThreadBoatSandboxRequest,
+  type ListThreadBoatSandboxesRequest,
+  type ListThreadBoatSandboxesResponse,
   type BoatSandboxPolicy,
   type BoatSignInMethod,
   type OpenBoatLinkResponse,
@@ -84,6 +92,8 @@ import {
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
   type ProbeMcpConnectionRequest,
+  type ReadMcpIpcBearerTokenStateRequest,
+  type ReadMcpIpcBearerTokenStateResponse,
   type ProbeMcpConnectionResponse,
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
@@ -360,6 +370,8 @@ export type McpConnectionGatewayServiceOptions = {
   sandboxer?: SandboxerConnection;
   /** Test seam: Boat's browser sign-in, which runs Boat's CLI. */
   boatSignIn?: BoatSignIn;
+  boatTunnelRuntime?: BoatTunnelRuntime;
+  boatGit?: BoatWorkspaceGit;
   /** Test seam: the sandbox rows PwrAgent's Boat server reads and writes. */
   threadSandboxes?: Pick<ThreadSandboxStorage, "recordCreated" | "pendingForThread" | "markOutcome">;
   /**
@@ -706,6 +718,7 @@ export class McpConnectionGatewayService {
   private bridgeSocketPath?: string;
   private bridgeSocketDirectory?: string;
   private bridgeStart?: Promise<void>;
+  private closePromise?: Promise<void>;
   private readonly grants = new Map<string, BridgeGrant>();
   private readonly threadRegistrations = new Map<
     string,
@@ -899,10 +912,13 @@ export class McpConnectionGatewayService {
       fetchFn: createMcpSafeFetch({ fetchFn: this.fetchFn, connectionId: BOAT_MCP_CONNECTION_ID }),
       policy: () => this.requireConnection(BOAT_MCP_CONNECTION_ID).boatPolicy!,
       openExternal: this.openExternal,
+      ...(options.boatTunnelRuntime ? { tunnelRuntime: options.boatTunnelRuntime } : {}),
+      ...(options.boatGit ? { git: options.boatGit } : {}),
     });
-    this.boat.onStatusChanged(() => {
-      // A rejected or removed key ends what every open session could do.
-      this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
+    this.boat.onStatusChanged((change) => {
+      // A rejected or removed key ends what every open session could do. A
+      // change in what the account can start leaves every tool as it was.
+      if (change === "key") this.invalidateConnectionTools(BOAT_MCP_CONNECTION_ID);
       this.announceChanged([BOAT_MCP_CONNECTION_ID]);
     });
     this.boatSignIn = options.boatSignIn ?? new BoatSignIn({
@@ -1563,6 +1579,66 @@ export class McpConnectionGatewayService {
     return this.announced(await this.connectionStatus(this.requireConnection(BOAT_MCP_CONNECTION_ID)));
   }
 
+  /** A thread's Boat sandboxes with what each has cost, for its panel. */
+  async listThreadBoatSandboxes(request: ListThreadBoatSandboxesRequest): Promise<ListThreadBoatSandboxesResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ListThreadBoatSandboxesResponse>(
+        ownership.holder, "broker/boat-thread-sandboxes", request,
+      );
+    }
+    const scope = this.boatThreadScope({ threadId: request.threadId, backend: request.backend }, "thread");
+    // Nothing recorded: Boat is not asked, and a missing key is not an error.
+    if (scope.ownedSandboxIds().size === 0) return { sandboxes: [] };
+    const result = await this.boat.callTool(scope, "list_sandboxes", {});
+    if (result.isError) throw new Error(boatToolText(result));
+    const listed = (result.structuredContent as { sandboxes?: unknown } | undefined)?.sandboxes;
+    // Read after the list: it may have dropped a sandbox Boat no longer has.
+    const forwards = this.boat.portForwards(scope.ownedSandboxIds());
+    return {
+      sandboxes: (Array.isArray(listed) ? listed : []).flatMap(boatThreadSandbox).map((sandbox) => {
+        const open = forwards
+          .filter((forward) => forward.sandboxId === sandbox.id)
+          .sort((a, b) => a.port - b.port)
+          .map((forward) => ({ port: forward.port, url: forward.url }));
+        return open.length ? { ...sandbox, forwards: open } : sandbox;
+      }),
+    };
+  }
+
+  /**
+   * Stops or deletes one of a thread's sandboxes, or closes a tunnel into
+   * one, for the operator. Only a sandbox that thread created is reachable,
+   * as for the thread's agent.
+   */
+  async changeThreadBoatSandbox(request: ChangeThreadBoatSandboxRequest): Promise<ListThreadBoatSandboxesResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ListThreadBoatSandboxesResponse>(
+        ownership.holder, "broker/boat-thread-sandbox-change", request,
+      );
+    }
+    const scope = this.boatThreadScope({ threadId: request.threadId, backend: request.backend }, "thread");
+    const wasOwned = scope.ownedSandboxIds().has(request.sandboxId);
+    if (request.action === "close_forward" && !isBoatSandboxPort(request.port)) {
+      throw new Error("Name the sandbox port whose tunnel to close.");
+    }
+    const result = await this.boat.callTool(
+      scope,
+      request.action === "delete"
+        ? "delete_sandbox"
+        : request.action === "close_forward" ? "close_port_forward" : "stop_sandbox",
+      request.action === "close_forward"
+        ? { sandboxId: request.sandboxId, port: request.port }
+        : { sandboxId: request.sandboxId },
+    );
+    // Already gone from Boat is what a delete wanted: the tool has dropped
+    // it from the thread, and the list that comes back no longer shows it.
+    const gone = request.action === "delete" && wasOwned && !scope.ownedSandboxIds().has(request.sandboxId);
+    if (result.isError && !gone) throw new Error(boatToolText(result));
+    return await this.listThreadBoatSandboxes(request);
+  }
+
   /** Opens Boat's page for the sign-in in flight, in this machine's browser. */
   async openBoatSignInPage(): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
@@ -1625,8 +1701,15 @@ export class McpConnectionGatewayService {
         forgetOwned: () => undefined,
       };
     }
+    return this.boatThreadScope(owner, thread ? "thread" : "cleanup");
+  }
+
+  private boatThreadScope(
+    owner: { threadId: string; backend?: string },
+    role: "thread" | "cleanup",
+  ): BoatSessionScope {
     return {
-      role: thread ? "thread" : "cleanup",
+      role,
       ownedSandboxIds: () => new Set(
         this.threadSandboxes.pendingForThread({ backend: owner.backend ?? "", threadId: owner.threadId })
           .filter((record) => record.connectionId === BOAT_MCP_CONNECTION_ID)
@@ -1646,6 +1729,20 @@ export class McpConnectionGatewayService {
           connectionId: BOAT_MCP_CONNECTION_ID, sandboxId, status: "deleted", now: Date.now(),
         });
       },
+      // Read on each push or pull: a thread's directories change.
+      ...(role === "thread"
+        ? {
+            workspaceRoots: async () => {
+              const roots = owner.backend
+                ? await this.threadRootsResolver?.({
+                  backend: owner.backend as AppServerBackendKind,
+                  threadId: owner.threadId,
+                })
+                : undefined;
+              return (roots ?? []).map((root) => root.path);
+            },
+          }
+        : {}),
     };
   }
 
@@ -1798,6 +1895,33 @@ export class McpConnectionGatewayService {
     if (!pending) return;
     this.pendingAuthorizations.delete(connectionId);
     pending.abandon(reason);
+  }
+
+  /**
+   * Whether a local IPC connection has a session bearer token stored.
+   *
+   * The edit dialog asks once, when it opens, so its token box can say
+   * `Saved in keychain` or `Not set`. `connectionStatus` cannot carry it:
+   * status is read on every listing, window focus and federation peer read,
+   * and a tokenless IPC connection must never decrypt the credential vault
+   * for that. Nothing is persisted, so the answer cannot drift from the vault.
+   */
+  async readIpcBearerTokenState(
+    request: ReadMcpIpcBearerTokenStateRequest,
+  ): Promise<ReadMcpIpcBearerTokenStateResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ReadMcpIpcBearerTokenStateResponse>(
+        ownership.holder,
+        "broker/ipc-bearer-token-state",
+        request,
+      );
+    }
+    const connection = this.requireConnection(request.connectionId);
+    if (!isMcpIpcUrl(connection.serverUrl)) return { connectionId: connection.id, stored: false };
+    // Keyed by URL: a token issued for an old URL is not this server's.
+    const credential = await this.credentialVault.read(connection.id, connection.serverUrl);
+    return { connectionId: connection.id, stored: Boolean(credential?.ipcBearerToken) };
   }
 
   /**
@@ -2032,6 +2156,7 @@ export class McpConnectionGatewayService {
       // Removes PwrAgent's copy of the key. It stays valid at Boat until the
       // operator revokes it there, and running sandboxes keep running.
       await this.boatSignIn.cancel();
+      await this.boat.closePortForwards();
       await this.boat.disconnect();
       this.invalidateConnectionTools(connectionId);
       return this.announced(await this.connectionStatus(connection));
@@ -2559,8 +2684,17 @@ export class McpConnectionGatewayService {
     };
   }
 
-  async close(): Promise<void> {
-    await this.boatSignIn.cancel();
+  close(): Promise<void> {
+    this.closePromise ??= this.closeOnce();
+    return this.closePromise;
+  }
+
+  private async closeOnce(): Promise<void> {
+    // The kernel listener may already exist while startup is awaiting chmod
+    // or publish. Join startup before taking the listener for cleanup.
+    await this.bridgeStart?.catch(() => undefined);
+    await this.boatSignIn.cancel({ wait: true });
+    await this.boat.closePortForwards();
     this.grants.clear();
     this.relayGrantEpochs.clear();
     this.threadRegistrations.clear();
@@ -2620,6 +2754,7 @@ export class McpConnectionGatewayService {
   }
 
   private claimProfileOwnership(): ProfileOwnership {
+    if (this.closePromise) throw new Error("The MCP connection gateway is shutting down.");
     // Status reads also start the broker on demand. During onboarding there
     // is no active profile: publishing discovery would create profiles/default
     // even when the operator is provisioning only named profiles.
@@ -4341,6 +4476,7 @@ export class McpConnectionGatewayService {
   }
 
   private async startBridgeServer(): Promise<void> {
+    if (this.closePromise) throw new Error("The MCP connection gateway is shutting down.");
     if (this.bridgeServer) return;
     if (this.bridgeStart) return await this.bridgeStart;
     this.bridgeStart = this.startBridgeServerNow().finally(() => {
@@ -4416,9 +4552,18 @@ export class McpConnectionGatewayService {
     // server's forms, and only a request that opted in listens for them.
     let followUp: ((line: string) => void) | undefined;
     const ignoreLine: (line: string) => void = () => undefined;
+    let refused = false;
+    // Nothing thrown here may escape: a throw from a socket listener is an
+    // uncaught exception in the main process.
     socket.on("data", (chunk: string) => {
+      if (refused) return;
       buffer += chunk;
       if (buffer.length > MAX_RPC_LINE_BYTES) {
+        // Answer once and stop reading, so a peer that keeps writing cannot
+        // grow the buffer while the answer drains.
+        refused = true;
+        buffer = "";
+        socket.pause();
         this.respond(socket, { ok: false, error: "request too large" });
         return;
       }
@@ -4427,11 +4572,22 @@ export class McpConnectionGatewayService {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         if (followUp) {
-          followUp(line);
+          try {
+            followUp(line);
+          } catch (error) {
+            connectionLog.warn("MCP bridge follow-up line failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           continue;
         }
         followUp = ignoreLine;
-        void this.handleBridgeLine(socket, line, (handler) => { followUp = handler; });
+        this.handleBridgeLine(socket, line, (handler) => { followUp = handler; }).catch((error: unknown) => {
+          connectionLog.warn("MCP bridge request failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.respond(socket, { ok: false, error: "request failed" });
+        });
       }
     });
     socket.on("error", () => socket.destroy());
@@ -4446,6 +4602,10 @@ export class McpConnectionGatewayService {
     try {
       request = JSON.parse(line) as BridgeRequest;
     } catch {
+      this.respond(socket, { ok: false, error: "malformed request" });
+      return;
+    }
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
       this.respond(socket, { ok: false, error: "malformed request" });
       return;
     }
@@ -4616,6 +4776,12 @@ export class McpConnectionGatewayService {
         ...(values.github !== undefined ? { github: values.github as GithubMcpSettingsInput } : {}),
       });
     }
+    if (operation === "broker/ipc-bearer-token-state") {
+      if (typeof values.connectionId !== "string") {
+        throw new Error("Invalid MCP connection bearer token state request.");
+      }
+      return await this.readIpcBearerTokenState({ connectionId: values.connectionId });
+    }
     if (operation === "broker/github-inspect") {
       return await this.inspectGithubSetup(typeof values.command === "string" ? { command: values.command } : {});
     }
@@ -4734,6 +4900,26 @@ export class McpConnectionGatewayService {
     }
     if (operation === "broker/boat-sign-in-cancel") return await this.cancelBoatSignIn();
     if (operation === "broker/boat-sign-in-open") return await this.openBoatSignInPage();
+    if (operation === "broker/boat-thread-sandboxes" || operation === "broker/boat-thread-sandbox-change") {
+      if (typeof values.threadId !== "string" || typeof values.backend !== "string") {
+        throw new Error("Invalid Boat thread sandbox request.");
+      }
+      const thread = { backend: values.backend, threadId: values.threadId };
+      if (operation === "broker/boat-thread-sandboxes") return await this.listThreadBoatSandboxes(thread);
+      if (
+        typeof values.sandboxId !== "string"
+        || !isBoatThreadSandboxAction(values.action)
+        || (values.action === "close_forward" && !isBoatSandboxPort(values.port))
+      ) {
+        throw new Error("Invalid Boat thread sandbox request.");
+      }
+      return await this.changeThreadBoatSandbox({
+        ...thread,
+        sandboxId: values.sandboxId,
+        action: values.action,
+        ...(values.action === "close_forward" ? { port: values.port as number } : {}),
+      });
+    }
     if (operation === "broker/set-boat-cleanup-on-pr-close") {
       if (typeof values.enabled !== "boolean") throw new Error("Invalid Boat cleanup on PR close request.");
       return await this.setBoatCleanupOnPrClose(values.enabled);
@@ -5595,4 +5781,28 @@ export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
 
 export function getExistingMcpConnectionGatewayService(): McpConnectionGatewayService | undefined {
   return mcpConnectionGatewayService;
+}
+
+function boatToolText(result: { content?: unknown }): string {
+  const first = Array.isArray(result.content) ? result.content[0] as { text?: unknown } | undefined : undefined;
+  return typeof first?.text === "string" && first.text ? first.text : "Boat could not do that.";
+}
+
+/** The fields a thread's panel shows, from what `list_sandboxes` returns. */
+function boatThreadSandbox(value: unknown): BoatThreadSandbox[] {
+  if (!value || typeof value !== "object") return [];
+  const sandbox = value as Record<string, unknown>;
+  if (typeof sandbox.id !== "string" || !sandbox.id) return [];
+  const dollars = (sandbox.cost as { dollars?: unknown } | undefined)?.dollars;
+  // Boat's deadline; `ttlSeconds` is only the length it was set to.
+  const stopsAt = typeof sandbox.archiveAfter === "string" ? Date.parse(sandbox.archiveAfter) : Number.NaN;
+  return [{
+    id: sandbox.id,
+    ...(typeof sandbox.name === "string" && sandbox.name ? { name: sandbox.name.slice(0, 200) } : {}),
+    ...(typeof sandbox.state === "string" ? { state: sandbox.state.slice(0, 40) } : {}),
+    ...(typeof sandbox.type === "string" ? { type: sandbox.type.slice(0, 40) } : {}),
+    ...(typeof dollars === "number" && Number.isFinite(dollars) ? { dollars } : {}),
+    ...(typeof sandbox.ttlSeconds === "number" ? { ttlSeconds: sandbox.ttlSeconds } : {}),
+    ...(Number.isFinite(stopsAt) ? { stopsAt } : {}),
+  }];
 }

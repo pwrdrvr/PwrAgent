@@ -305,8 +305,8 @@ describe("Token Miser pricing projection", () => {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: count }, (_, index) => line(index, { model: "unknown-fixture" })) });
       db.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5'").run();
       const attach = vi.spyOn(store as unknown as {
-        attachTokenMiserUsageTurnMetadataSync(backend: string, threadId: string, lines: ThreadUsageLineRecord[]): void;
-      }, "attachTokenMiserUsageTurnMetadataSync");
+        attachUsageTurnMetadataSync(backend: string, threadId: string, lines: ThreadUsageLineRecord[]): void;
+      }, "attachUsageTurnMetadataSync");
       await store.readTokenMiserGatePricingLines({ backend: "codex", threadId: THREAD, sourceItemIds: [], turnIds: ["turn-1"] });
       const sizes = attach.mock.calls.map((call) => call[2].length);
       expect(Math.max(...sizes)).toBeLessThanOrEqual(10);
@@ -326,7 +326,7 @@ describe("Token Miser pricing projection", () => {
       const prepare = db.raw.prepare.bind(db.raw);
       vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
-        const kind = /FROM thread_usage_lines/.test(sql) ? "lines" : /FROM thread_usage_turns/.test(sql) ? "turns" : undefined;
+        const kind = /FROM thread_usage_lines/.test(sql) ? "lines" : /(?:FROM|JOIN) thread_usage_turns/.test(sql) ? "turns" : undefined;
         if (kind) {
           const all = statement.all.bind(statement);
           vi.spyOn(statement, "all").mockImplementation((...args) => {
@@ -448,12 +448,16 @@ describe("Token Miser ledger SQLite commit budgets", () => {
     try {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: 24 }, (_, index) => line(index, { model: "unknown-fixture" })) });
       db.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5'").run();
+      const totalChanges = db.raw.prepare<[], number>("SELECT total_changes()").pluck();
       for (const scenario of ["repair", "repeat"] as const) {
+        const before = totalChanges.get()!;
         const { writes } = await measureSqliteWrites(async () => {
           await store.readTokenMiserGatePricingLines({
             backend: "codex", threadId: THREAD, sourceItemIds: [], turnIds: ["turn-23"],
           });
         });
+        // The repair changes 24 ledger lines and applies 24 summary deltas.
+        expect(totalChanges.get()! - before).toBe(scenario === "repair" ? 48 : 0);
         expectSqliteWriteBudget({
           scenario: `token-miser-pricing-${scenario}`, writes,
           note: "Targeted gate pricing with 24 legacy repairable rows, or an identical repeat; setup excluded.",

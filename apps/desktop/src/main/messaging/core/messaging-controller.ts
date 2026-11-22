@@ -1041,6 +1041,7 @@ export class MessagingController {
       shouldHandleAmbientSharedMessage: (...args) => this.inboundTurns.shouldHandleAmbientSharedMessage(...args),
       admitTurnInput: (...args) => this.inboundTurns.admitTurnInput(...args),
       reviewSupportedForBinding: (...args) => this.reviewWorkflow.reviewSupportedForBinding(...args),
+      claudeCodeReviewSupportedForBinding: (...args) => this.reviewWorkflow.claudeCodeReviewSupportedForBinding(...args),
       deliverReviewUnsupported: (...args) => this.reviewWorkflow.deliverReviewUnsupported(...args),
       submitMessagingReview: (...args) => this.reviewWorkflow.submitMessagingReview(...args),
       presentReviewPicker: (...args) => this.reviewWorkflow.presentReviewPicker(...args),
@@ -4641,7 +4642,7 @@ export class MessagingController {
   async authorizeRetainedTool(
     context: PwrAgentMessagingRequest["context"],
     check: Parameters<MessagingController["checkDynamicToolPermission"]>[0],
-  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }>{
+  ): ReturnType<MessagingAccessControl["authorizeRetainedTool"]> {
     return this.accessControl.authorizeRetainedTool(context, check);
   }
 

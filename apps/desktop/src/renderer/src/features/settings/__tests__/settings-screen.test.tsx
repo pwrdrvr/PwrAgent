@@ -91,23 +91,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/**
- * The Experimental tab tucks its deprecated features (Diff Condensation,
- * Live Transcript Event Filtering) inside a collapsed-by-
- * default "Soon to be discontinued" drawer, where they are hidden from the
- * accessibility tree until expanded. Idempotent (checks `aria-expanded`) so
- * it is safe regardless of the drawer's persisted collapse state from a
- * prior test in this file.
- */
-function openDiscontinuedDrawer() {
-  const header = screen.getByRole("button", {
-    name: /Soon to be discontinued/,
-  });
-  if (header.getAttribute("aria-expanded") !== "true") {
-    fireEvent.click(header);
-  }
-}
-
 function createSnapshot(
   overrides: Partial<DesktopSettingsSnapshot> = {},
 ): DesktopSettingsSnapshot {
@@ -170,6 +153,7 @@ function createSnapshot(
         value: 15,
         source: "default",
       },
+      hotCpuProfilingCaptureChromiumTrace: { value: false, source: "default" },
       hotCpuProfilingCaptureHeapSnapshot: {
         value: false,
         source: "default",
@@ -207,7 +191,12 @@ function createSnapshot(
         transcriptTextSize: { value: "md", source: "default" },
       },
       codexProfileModel: { value: "shared", source: "default" },
-      messagingAcknowledgment: { value: null, source: "default" },
+      // On record, so Messaging tests reach the forms. The safety gate's own
+      // tests clear it.
+      messagingAcknowledgment: {
+        value: { acknowledgedAt: "2026-01-02T03:04:05.000Z", providers: [] },
+        source: "config",
+      },
       interactiveSvgSkipNotice: { value: false, source: "default" },
       interactiveSvgAutoOpen: { value: false, source: "default" },
       htmlPreviewRunScripts: { value: false, source: "default" },
@@ -222,10 +211,6 @@ function createSnapshot(
         source: "default",
       },
       fullAccessRiskWarningDismissed: {
-        value: false,
-        source: "default",
-      },
-      liveTranscriptEventFiltering: {
         value: false,
         source: "default",
       },
@@ -249,10 +234,6 @@ function createSnapshot(
         value: true,
         source: "default",
       },
-      threadToolAccounting: {
-        value: false,
-        source: "default",
-      },
       codexDefaultModeRequestUserInput: {
         value: false,
         source: "default",
@@ -260,9 +241,6 @@ function createSnapshot(
       codexSkillQuestionsWarningDismissed: {
         value: false,
         source: "default",
-      },
-      diffCondensation: {
-        enabled: { value: false, source: "default" },
       },
     },
     imageUploads: {
@@ -2304,6 +2282,14 @@ describe("SettingsScreen", () => {
       ).getByRole("radio", { name: /5 seconds/ }),
     ).not.toBeDisabled();
     expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
+    const chromiumTrace = getLabeledSwitch("Chromium trace");
+    expect(chromiumTrace).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(chromiumTrace);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { hotCpuProfilingCaptureChromiumTrace: true },
+      });
+    });
     expect(
       getLabeledSwitch("Smart heap snapshots"),
     ).toHaveAttribute("aria-checked", "false");
@@ -2569,31 +2555,11 @@ describe("SettingsScreen", () => {
         name: "Enable background pull request status",
       }),
     ).not.toBeInTheDocument();
-    openDiscontinuedDrawer();
-    expect(
-      screen.getByText(
-        "Send focused-diff hunks to Codex to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires.",
-      ),
-    ).toBeInTheDocument();
-    fireEvent.click(getLabeledSwitch("Enable diff condensation"));
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { diffCondensation: { enabled: true } },
-      });
-    });
-
-    fireEvent.click(
-      getLabeledSwitch("Enable live transcript event filtering"),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { liveTranscriptEventFiltering: true },
-      });
-    });
+    expect(screen.queryByText("Diff Condensation")).not.toBeInTheDocument();
 
     expect(
-      getLabeledSwitch("Display tool call tracking"),
-    ).not.toBeDisabled();
+      screen.queryByRole("heading", { name: "Tool Call Tracking" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Thread pricing" }),
     ).not.toBeInTheDocument();
@@ -3191,7 +3157,6 @@ describe("SettingsScreen", () => {
           threadPricingSummary: { value: true, source: "config" },
           threadPricingDisplayUsd: { value: true, source: "default" },
           threadPricingDisplayCodexCredits: { value: false, source: "default" },
-          threadToolAccounting: { value: false, source: "default" },
         },
       }),
     );
@@ -3223,19 +3188,9 @@ describe("SettingsScreen", () => {
         experimental: { threadPricingDisplayCodexCredits: true },
       });
     });
-
-    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Display tool call tracking" }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { threadToolAccounting: true },
-      });
-    });
   });
 
-  it("disables pricing units but keeps tool accounting independent", () => {
+  it("disables pricing units when thread pricing is off", () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -3244,7 +3199,6 @@ describe("SettingsScreen", () => {
           threadPricingSummary: { value: false, source: "config" },
           threadPricingDisplayUsd: { value: true, source: "default" },
           threadPricingDisplayCodexCredits: { value: false, source: "default" },
-          threadToolAccounting: { value: false, source: "default" },
         },
       }),
     );
@@ -3257,11 +3211,6 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("button", { name: "Codex Credits" }),
     ).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
-    expect(
-      screen.getByRole("switch", { name: "Display tool call tracking" }),
-    ).toBeEnabled();
   });
 
   it("saves hot CPU profiling delay and trigger mode presets", async () => {
@@ -3306,12 +3255,11 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("defaults missing experimental flags appropriately and persists changes", async () => {
+  it("defaults the missing Codex skill questions flag to off and persists changes", async () => {
     const snapshot = createSnapshot();
     const experimental = snapshot.experimental as Partial<
       typeof snapshot.experimental
     >;
-    delete experimental.liveTranscriptEventFiltering;
     delete experimental.codexDefaultModeRequestUserInput;
     const settings = createSettingsState(snapshot);
 
@@ -3322,23 +3270,11 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    openDiscontinuedDrawer();
-    const filteringSwitch = screen.getByRole("switch", {
-      name: "Enable live transcript event filtering",
-    });
     const questionsSwitch = screen.getByRole("switch", {
       name: "Enable Codex skill questions",
     });
 
-    expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
-
-    fireEvent.click(filteringSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { liveTranscriptEventFiltering: true },
-      });
-    });
 
     fireEvent.click(questionsSwitch);
     await waitFor(() => {
@@ -11246,7 +11182,8 @@ describe("SettingsScreen", () => {
     expect(within(dialog).queryByLabelText("MCP server URL")).not.toBeInTheDocument();
     const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
     expect(secret).toHaveValue("");
-    expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
+    expect(secret).toHaveAttribute("placeholder", "Paste a new value to replace it");
+    expect(secret).toHaveAccessibleDescription("Saved in keychain");
     expect(within(dialog).getByText(/stops the 2 sessions/)).toBeInTheDocument();
     // Shown as one line, the way it was pasted, with the resolved program.
     const commandLine = within(dialog).getByLabelText(/^Command line/);
@@ -12156,3 +12093,211 @@ function createCatalogRefreshApi() {
     startProviderCatalogRefresh,
   };
 }
+
+describe("Settings → Messaging safety gate", () => {
+  type Patch = Parameters<DesktopSettingsState["writeConfig"]>[0];
+  const MESSAGING_SUBS = [
+    "telegram",
+    undefined,
+    "routes",
+    "discord",
+    "mattermost",
+    "slack",
+    "feishu",
+    "line",
+  ] as const;
+
+  function unacknowledgedSnapshot(): DesktopSettingsSnapshot {
+    const base = createSnapshot();
+    return createSnapshot({
+      general: {
+        ...base.general,
+        messagingAcknowledgment: { value: null, source: "default" },
+      },
+    });
+  }
+
+  /** Settings whose writes land in the snapshot, the way main answers them,
+   *  so an acknowledgement written by the gate lifts it. */
+  function StatefulSettings(props: {
+    initial: DesktopSettingsSnapshot;
+    writes: Patch[];
+    replaceSecret: DesktopSettingsState["replaceSecret"];
+    sub?: string;
+    desktopApi?: DesktopApi;
+  }) {
+    const [snapshot, setSnapshot] = useState(props.initial);
+    const settings: DesktopSettingsState = {
+      ...createSettingsState(snapshot),
+      replaceSecret: props.replaceSecret,
+      writeConfig: async (patch) => {
+        props.writes.push(patch);
+        setSnapshot((current) => {
+          const ack = patch.general?.messagingAcknowledgment;
+          return ack === undefined
+            ? current
+            : {
+                ...current,
+                general: {
+                  ...current.general,
+                  messagingAcknowledgment: { value: ack, source: "config" },
+                },
+              };
+        });
+        return true;
+      },
+    };
+    return (
+      <SettingsScreen
+        desktopApi={props.desktopApi}
+        initialSection="messaging"
+        initialSubsection={props.sub}
+        settings={settings}
+        onClose={() => undefined}
+      />
+    );
+  }
+
+  function secretInputs(): Element[] {
+    return [...document.querySelectorAll('input[type="password"]')];
+  }
+
+  it("lets no provider be configured from any Messaging screen until an acknowledgement is on record", async () => {
+    for (const sub of MESSAGING_SUBS) {
+      const writes: Patch[] = [];
+      const replaceSecret = vi.fn(async () => true);
+      const generateMessagingPairingToken = vi.fn();
+      const setMessagingEnabled = vi.fn();
+      render(
+        <StatefulSettings
+          initial={unacknowledgedSnapshot()}
+          writes={writes}
+          replaceSecret={replaceSecret}
+          sub={sub}
+          desktopApi={{ generateMessagingPairingToken, setMessagingEnabled }}
+        />,
+      );
+      await act(async () => undefined);
+      // The harm first: a token field or an adapter switch on screen.
+      expect(secretInputs()).toHaveLength(0);
+      expect(screen.queryByRole("switch", { name: /Enabled/ })).toBeNull();
+      const pane = await screen.findByRole("region", { name: "Messaging settings" });
+      expect(within(pane).getByText(/I understand\./)).toBeInTheDocument();
+      // Every control on the screen, clicked without ticking the box.
+      for (const button of within(pane).getAllByRole("button")) {
+        fireEvent.click(button);
+      }
+      await act(async () => undefined);
+      expect(secretInputs()).toHaveLength(0);
+      expect(screen.queryByRole("switch", { name: /Enabled/ })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Set up messaging" })).toBeNull();
+      expect(writes).toEqual([]);
+      expect(replaceSecret).not.toHaveBeenCalled();
+      expect(generateMessagingPairingToken).not.toHaveBeenCalled();
+      expect(setMessagingEnabled).not.toHaveBeenCalled();
+      // The locked click points at the box instead of doing nothing.
+      expect(
+        pane.querySelector(".guided-setup__safety-ack-flash"),
+      ).not.toBeNull();
+      cleanup();
+    }
+  });
+
+  it("records the acknowledgement in first-run setup's shape, then shows the forms", async () => {
+    const writes: Patch[] = [];
+    const base = unacknowledgedSnapshot();
+    const initial = createSnapshot({
+      ...base,
+      messaging: {
+        ...base.messaging,
+        discord: {
+          ...base.messaging.discord,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    });
+    render(
+      <StatefulSettings
+        initial={initial}
+        writes={writes}
+        replaceSecret={vi.fn(async () => true)}
+        sub="telegram"
+      />,
+    );
+    fireEvent.click(await screen.findByRole("checkbox", { name: /I understand\./ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to messaging settings" }));
+    await screen.findByRole("region", { name: "Telegram messaging settings" });
+    expect(writes).toHaveLength(1);
+    const ack = writes[0]?.general?.messagingAcknowledgment;
+    expect(Object.keys(writes[0] ?? {})).toEqual(["general"]);
+    expect(ack?.providers).toEqual(["discord", "telegram"]);
+    expect(new Date(ack?.acknowledgedAt ?? "").toISOString()).toBe(ack?.acknowledgedAt);
+    expect(secretInputs().length).toBeGreaterThan(0);
+  });
+
+  it("opens the guided Telegram setup from the gate after recording the acknowledgement", async () => {
+    const writes: Patch[] = [];
+    render(
+      <StatefulSettings
+        initial={unacknowledgedSnapshot()}
+        writes={writes}
+        replaceSecret={vi.fn(async () => true)}
+      />,
+    );
+    const guided = await screen.findByRole("button", {
+      name: "Set up Telegram step by step →",
+    });
+    fireEvent.click(guided);
+    expect(screen.queryByRole("dialog", { name: "Set up messaging" })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I understand\./ }));
+    fireEvent.click(guided);
+    const dialog = await screen.findByRole("dialog", { name: "Set up messaging" });
+    expect(
+      await within(dialog).findByRole("heading", { name: "Connect Telegram" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Bot token")).toBeInTheDocument();
+    expect(writes[0]?.general?.messagingAcknowledgment?.providers).toEqual(["telegram"]);
+    // Opening the step switches nothing on: with no token stored, skipping
+    // it or closing the flow must not leave the adapter enabled.
+    expect(writes.filter((patch) => patch.messaging?.telegram?.enabled)).toEqual([]);
+  });
+
+  it("puts the safety screen back over a guided provider step when the record is cleared", async () => {
+    const replaceSecret = vi.fn(async () => true);
+    const acknowledged = createSnapshot();
+    const settings = createSettingsState(acknowledged);
+    const view = render(
+      <SettingsScreen
+        initialSection="messaging"
+        settings={{ ...settings, replaceSecret }}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Telegram" }));
+    const dialog = await screen.findByRole("dialog", { name: "Set up messaging" });
+    expect(within(dialog).getByLabelText("Bot token")).toBeInTheDocument();
+
+    // Another window clears the acknowledgement in Settings → General.
+    view.rerender(
+      <SettingsScreen
+        initialSection="messaging"
+        settings={{ ...settings, snapshot: unacknowledgedSnapshot(), replaceSecret }}
+        onClose={() => undefined}
+      />,
+    );
+    const reopened = screen.getByRole("dialog", { name: "Set up messaging" });
+    expect(within(reopened).queryByLabelText("Bot token")).toBeNull();
+    expect(within(reopened).getByText(/I understand\./)).toBeInTheDocument();
+    expect(replaceSecret).not.toHaveBeenCalled();
+    // It comes back unticked: Continue can't rewrite the record until the
+    // operator ticks the box again.
+    expect(
+      within(reopened).getByRole("checkbox", { name: /I understand\./ }),
+    ).not.toBeChecked();
+    vi.mocked(settings.writeConfig).mockClear();
+    fireEvent.click(
+      within(reopened).getByRole("button", { name: "Continue with messaging →" }),
+    );
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+  });
+});

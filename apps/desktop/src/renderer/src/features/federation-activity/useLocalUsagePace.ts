@@ -62,6 +62,7 @@ const accountOf = (data: ReadUsageActivityResponse) => {
   if (!current) return undefined;
   const account = buildLimitAccounts([{
     owner: "local",
+    target: LOCAL,
     current,
     history: data.limitHistory?.filter((observation) =>
       observation.accountKey === current.accountKey

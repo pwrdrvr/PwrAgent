@@ -132,3 +132,61 @@ describe("messaging review owner ports", () => {
     } finally { await real.close(); }
   });
 });
+
+describe("messaging review on a peer's thread", () => {
+  /**
+   * Rule: a peer-bound picker reads the peer's providers, offers no Auto-fix
+   * toggle (a peer review submits "wait"), and every review it starts, in any
+   * mode, goes to the peer.
+   */
+  it("reads providers from the peer and submits every review there", async () => {
+    const real = await messagingReviewHarness();
+    try {
+      const peer = { scope: "remote" as const, instanceId: "peer" };
+      const stored = (await real.store.getBinding("fixture-binding"))!;
+      const binding = { ...stored, federatedThread: { backend: stored.backend, threadId: stored.threadId, target: peer } };
+      const listed: unknown[] = [];
+      const backend = real.controllerOptions.backend;
+      const listBackends = backend.listBackends!.bind(backend);
+      backend.listBackends = async (request) => { listed.push(request?.federationTarget); return await listBackends(request); };
+      const owner = new MessagingReviewWorkflow(contextFor(real));
+      await owner.presentReviewPicker(binding, real.event());
+      expect(listed).toContainEqual(peer);
+      const intent = real.review();
+      expect(intent.actions.map((action) => action.id)).not.toContain("review:summary:auto-fix");
+      for (const runMode of [undefined, "codex-sub-agent", "pwragent-sub-agent"] as const) {
+        await owner.submitMessagingReview({ binding, event: real.event(), target: { type: "uncommittedChanges" }, runMode });
+      }
+      expect(real.requests.map((request) => request.federationTarget)).toEqual([peer, peer, peer]);
+      expect(real.requests.every((request) => request.afterReview !== "auto-fix")).toBe(true);
+    } finally { await real.close(); }
+  });
+});
+
+describe("messaging review picker actions on a peer's thread", () => {
+  /** Rule: a review picker action on a peer-bound conversation checks peer scope first. */
+  it.each([true, false])("gates Start on peer scope (peer-bound: %s)", async (peerBound) => {
+    const real = await messagingReviewHarness();
+    try {
+      await real.command();
+      const getBinding = real.store.getBinding.bind(real.store);
+      real.store.getBinding = async (id) => {
+        const binding = await getBinding(id);
+        return binding && peerBound
+          ? { ...binding, federatedThread: { backend: binding.backend, threadId: binding.threadId,
+            target: { scope: "remote" as const, instanceId: "peer" } } }
+          : binding;
+      };
+      const scope = vi.spyOn(messagingModules(real.controller).access, "requireRemoteScopeForBinding")
+        .mockImplementation(async () => false);
+      await real.click("review:summary:start");
+      if (peerBound) {
+        expect(scope).toHaveBeenCalledWith(expect.anything(), expect.anything(), "review:summary:start:remote-instance");
+        expect(real.requests).toEqual([]);
+      } else {
+        expect(scope.mock.calls.map((call) => call[2])).not.toContain("review:summary:start:remote-instance");
+        expect(real.requests).toHaveLength(1);
+      }
+    } finally { await real.close(); }
+  });
+});

@@ -53,11 +53,10 @@ import {
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_WATCH_MERGE_BUILDS,
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   type DesktopBootInfo,
-  type DesktopCodexProfileModel,
-  type DesktopPwrAgentProfileSummary,
   type DesktopSettingsSnapshot,
   type PrAutoDispatchBudgetStatus,
   DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
@@ -118,6 +117,8 @@ import {
   useThreadDependencyIndicators,
   useThreadDependencyIndicatorsValue,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
+import { cancelMergeBuildWatches, createMergeBuildWatch } from "./features/pr-watches/merge-build-watches";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import {
   buildWatchCiRequestText,
   ThreadPrWatchIndicatorsContext,
@@ -407,8 +408,8 @@ const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
 
-const LazyOnboardingWizard = lazy(async () => ({
-  default: (await import("./features/onboarding/OnboardingWizard")).OnboardingWizard,
+const LazyGetStarted = lazy(async () => ({
+  default: (await import("./features/onboarding/GetStarted")).GetStarted,
 }));
 
 export function resolveNormalAppEnabled(params: {
@@ -2478,12 +2479,6 @@ function DesktopAppShell(props: {
     onThreadLifecycleChanged: navigation.refresh,
     sources: scheduledActionProjectionSources,
   });
-  const replayCodexProfileSetup = settings.snapshot
-    ? inferReplayCodexProfileSetup(
-        settings.snapshot.general.codexProfileModel?.value ?? "shared",
-        profiles.profiles,
-      )
-    : undefined;
   // Replying is what clears unread on the Attention lens, where focusing a
   // thread deliberately does not. Harmless elsewhere: every other lens has
   // already marked the thread seen on focus by the time a reply lands. Shared
@@ -2669,6 +2664,10 @@ function DesktopAppShell(props: {
         ?.capabilities.includes("thread_todo_dispatch_target") === true,
       messageTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
         ?.capabilities.includes("thread_todo_message") === true,
+      placement: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_placement") === true,
+      placementSibling: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_placement_sibling") === true,
     })),
     [federationMachines, liveFederationHealth],
   );
@@ -3158,8 +3157,6 @@ function DesktopAppShell(props: {
     desktopApi,
     retainedRemoteThreads: recentRemoteThreads,
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
-    liveTranscriptEventFiltering:
-      settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
     suspended: remoteReadsSuspended,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
@@ -3251,7 +3248,7 @@ function DesktopAppShell(props: {
     thread: NavigationThreadSummary;
     returnFocus?: RefObject<HTMLElement | null>;
   }>();
-  // Thread maintenance: File → Thread Maintenance…, Settings → Review…, or
+  // Thread maintenance: File → Thread Maintenance…, Settings → Thread Maintenance…, or
   // an agent. It works on this machine's threads, so a remote window has none.
   // One session per window: each launch reopens it, minimized or not, and only
   // the dialog's Close or the notice's Discard ends it.
@@ -3409,21 +3406,50 @@ function DesktopAppShell(props: {
     ? (settings.snapshot.git?.backgroundPrPolling?.value ?? DEFAULT_BACKGROUND_PR_POLLING)
       && (settings.snapshot.git?.prAutoDispatchAllowed?.value ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED)
     : undefined;
+  // Merge build watches are Continue After waits. The lists refresh from
+  // `thread/dependencies/updated`; only a change that did not go through is
+  // worth a notice.
+  const watchMergeBuild = useEventCallback(async (thread: NavigationThreadSummary, pr: PrSummary) => {
+    try {
+      await createMergeBuildWatch(desktopApi ?? {}, thread, pr.url);
+    } catch (error) {
+      showAppNotice({
+        id: `merge-build-watch:${threadSummaryIdentityKey(thread)}:${pr.url}`,
+        title: "Couldn't watch the merge build",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  const stopMergeBuild = useEventCallback(async (thread: NavigationThreadSummary, wait: ThreadDependency) => {
+    try {
+      await cancelMergeBuildWatches(desktopApi ?? {}, thread, [wait]);
+    } catch (error) {
+      showAppNotice({
+        id: `merge-build-watch:${wait.id}`,
+        title: "The merge build watch is still running",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   const threadPrWatchContext = useMemo(
     () => ({
       byThreadKey: threadPrWatchIndicators,
       ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
       ...(canManagePrWatches ? { stop: stopPrWatch, watchCi: watchPrCi } : {}),
       ...(canAskAgentToWatchCi ? { askAgentToWatchCi } : {}),
+      ...(canContinueAfter ? { watchMergeBuild, stopMergeBuild } : {}),
     }),
     [
       threadPrWatchIndicators,
       prAutoFixAvailable,
       canManagePrWatches,
       canAskAgentToWatchCi,
+      canContinueAfter,
       stopPrWatch,
       watchPrCi,
       askAgentToWatchCi,
+      watchMergeBuild,
+      stopMergeBuild,
     ],
   );
   const threadHandoffTargets = useMemo(
@@ -4254,12 +4280,7 @@ function DesktopAppShell(props: {
         messageCount: session.messages.length,
         contextWindow: session.contextWindow,
         pricing: session.response?.pricing,
-        toolAccounting:
-          settings.snapshot?.experimental.threadToolAccounting?.value === true
-            ? session.response?.toolAccounting
-            : undefined,
-        threadToolAccountingEnabled:
-          settings.snapshot?.experimental.threadToolAccounting?.value === true,
+        tokenMiserAccounting: session.response?.toolAccounting?.tokenMiser,
         researchEnabled:
           settings.snapshot?.experimental.researchEnabled?.value === true,
         threadPricingSummaryEnabled:
@@ -4326,6 +4347,8 @@ function DesktopAppShell(props: {
             ? settings.snapshot.git?.prAutoDispatchAllowed?.value
               ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED
             : false,
+        watchMergeBuildsDefault:
+          settings.snapshot?.git?.watchMergeBuilds?.value ?? DEFAULT_WATCH_MERGE_BUILDS,
         pickDirectoryError: navigation.pickDirectoryError,
         pickingDirectory: navigation.pickingDirectory,
         onSelectDirectoryFromPicker: handleSelectDirectoryFromPicker,
@@ -4675,6 +4698,9 @@ function DesktopAppShell(props: {
             projectRevealRequest={projectRevealRequest}
             projectIndexHidden={projectIndexHidden}
             onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
+            density={props.appearanceController.appearance.density}
+            onDensityChange={(density) => props.appearanceController.setDensity(density)}
+            onOpenAppearanceSettings={() => openSettingsSection("general")}
             projectIndexWidth={projectIndexWidth}
             onProjectIndexWidthChange={setProjectIndexWidthPersisted}
             selectedItemKey={navigation.selectedItemKey}
@@ -4742,6 +4768,9 @@ function DesktopAppShell(props: {
             onOpenProfile={profiles.openProfile}
             onOpenUsageActivity={desktopApi?.openUsageActivity
               ? () => void desktopApi.openUsageActivity?.()
+              : undefined}
+            onOpenResources={desktopApi?.openResourceCheckoutsWindow
+              ? () => void desktopApi.openResourceCheckoutsWindow?.()
               : undefined}
             onSelectThread={(thread, options) => {
               setMainView("thread");
@@ -5101,59 +5130,23 @@ function DesktopAppShell(props: {
 
           {onboardingOpen !== null && settings.snapshot ? (
             <Suspense fallback={null}>
-              <LazyOnboardingWizard
+              <LazyGetStarted
                 isReplay={onboardingOpen === "replay"}
                 bootInfo={bootInfo}
-                initialDensity={settings.snapshot.general.appearance.density.value}
-                initialTheme={settings.snapshot.general.appearance.theme.value}
-                initialCodexProfileModel={
-                  onboardingOpen === "replay" && replayCodexProfileSetup
-                    ? replayCodexProfileSetup.model
-                    : settings.snapshot.general.codexProfileModel.value
-                }
-                initialCodexProfileNames={
-                  onboardingOpen === "replay"
-                    ? replayCodexProfileSetup?.profileNames
-                    : undefined
-                }
-                appearanceController={props.appearanceController}
                 settings={settings}
                 desktopApi={desktopApi}
-                onComplete={async (patch) => {
-                  await settings.writeConfig(patch);
-                  // The wizard already flips theme + density live via
-                  // appearanceController as the operator clicks — the
-                  // explicit setters below are a belt-and-suspenders to keep
-                  // the controller's React state aligned with whatever the
-                  // final patch holds, even if persistAndComplete adjusts.
-                  if (patch.general?.appearance?.density) {
-                    props.appearanceController.setDensity(
-                      patch.general.appearance.density,
-                    );
-                  }
-                  if (patch.general?.appearance?.theme) {
-                    props.appearanceController.setTheme(
-                      patch.general.appearance.theme,
-                    );
-                  }
-                  // Mark onboarding complete AND kick off the deferred Codex
-                  // `listThreads` prefetch in one IPC call (#500). On replay,
-                  // skip the call entirely — replays don't touch onboarding.
-                  //
-                  // In bootstrap mode (#524), skip this too. The bootstrap
-                  // window is about to quit; firing
-                  // `completeOnboardingCodexBootstrap` here would (a) write
-                  // `[onboarding] completed = true` to `.bootstrap/config.toml`
-                  // (which we're about to delete) and (b) trigger a Codex
-                  // `listThreads` against the system default Codex install,
-                  // contaminating the soon-to-quit window with the operator's
-                  // real Codex Desktop threads. The new profile's window
-                  // handles its own completion + prefetch on launch.
-                  if (!onboardingOpen) return;
+                claudeSignIn={claudeSignIn.controls}
+                onComplete={async () => {
+                  // Start in an existing profile. Mark first run complete
+                  // and start the deferred Codex `listThreads` prefetch in
+                  // one call (#500). A replay never touches onboarding. A
+                  // bootstrap Start comes here only when the new profile's
+                  // window failed to take over; that profile's own window
+                  // runs its completion and prefetch, so this just closes.
                   if (
-                    onboardingOpen !== "replay" &&
-                    bootInfo?.mode !== "bootstrap" &&
-                    desktopApi?.completeOnboardingCodexBootstrap
+                    onboardingOpen !== "replay"
+                    && bootInfo?.mode !== "bootstrap"
+                    && desktopApi?.completeOnboardingCodexBootstrap
                   ) {
                     await desktopApi.completeOnboardingCodexBootstrap({
                       connect: true,
@@ -5164,19 +5157,14 @@ function DesktopAppShell(props: {
                 }}
                 onDismiss={(persistCompleted) => {
                   if (persistCompleted) {
-                    // Skip path: persist `completed = true` so the wizard
-                    // doesn't auto-fire again, but pass `connect: false` so
-                    // we don't auto-load Codex threads under an unverified
-                    // identity. The renderer's next explicit refresh (or app
-                    // restart) will surface them.
+                    // Started without an agent: persist `completed = true`
+                    // so first run doesn't open again, with `connect: false`
+                    // so no Codex threads load under an unverified identity.
                     void desktopApi?.completeOnboardingCodexBootstrap?.({
                       connect: false,
                     }).then(() => settings.refresh());
                   }
                   setOnboardingOpen(null);
-                }}
-                onOpenMessagingSettings={() => {
-                  openSettingsSection("messaging");
                 }}
               />
             </Suspense>
@@ -5319,41 +5307,6 @@ function isSettingsSection(
   return (
     section !== undefined && SETTINGS_SECTIONS.has(section as SettingsSection)
   );
-}
-
-export type ReplayCodexProfileSetup = {
-  model: DesktopCodexProfileModel;
-  profileNames?: readonly string[];
-};
-
-export function inferReplayCodexProfileSetup(
-  persisted: DesktopCodexProfileModel,
-  profiles: readonly DesktopPwrAgentProfileSummary[],
-): ReplayCodexProfileSetup {
-  const namedPairings = profiles.filter((profile) => profile.codexProfile.name);
-  if (namedPairings.length >= 2) {
-    return {
-      model: "multiple",
-      profileNames: namedPairings.map((profile) => profile.name),
-    };
-  }
-
-  const activeProfile = profiles.find((profile) => profile.active);
-  const isolatedProfile = activeProfile?.codexProfile.name
-    ? activeProfile
-    : namedPairings[0];
-  if (isolatedProfile) {
-    return { model: "isolated", profileNames: [isolatedProfile.name] };
-  }
-
-  return { model: persisted };
-}
-
-export function inferReplayCodexProfileModel(
-  persisted: DesktopCodexProfileModel,
-  profiles: readonly DesktopPwrAgentProfileSummary[],
-): DesktopCodexProfileModel {
-  return inferReplayCodexProfileSetup(persisted, profiles).model;
 }
 
 // Own window layout, including live drag width and startup preference adoption.
@@ -5664,7 +5617,8 @@ function useShellLayout(settings: DesktopSettingsState) {
 
 // Keep layer navigation, the Settings leave guard and focus restoration together.
 function useMainView() {
-  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
+  const [savedView, setMainViewState] = useRecoverableState<MainView | "resources">("app.mainView", "thread");
+  const mainView = savedView === "resources" ? "thread" : savedView;
   const mainViewRef = useRef<MainView>(mainView);
   // The control that opened Settings or Automations. The layer covers the
   // sidebar and main, which go inert under it, so focus returns here on
@@ -5688,14 +5642,14 @@ function useMainView() {
   // otherwise act on a window the operator is still deciding whether to
   // leave, and "Keep editing" would cancel only half of it.
   const setMainView = useCallback(
-    (next: SetStateAction<MainView>, onShown?: () => void) => {
+    (next: SetStateAction<MainView>, onShown?: () => void, opener?: HTMLElement | null) => {
       const current = mainViewRef.current;
       const target = typeof next === "function" ? next(current) : next;
       const show = () => {
         if (!isLayerView(current) && isLayerView(target)) {
-          const opener = document.activeElement;
+          const target = opener ?? document.activeElement;
           layerOpenerRef.current =
-            opener instanceof HTMLElement && opener !== document.body ? opener : null;
+            target instanceof HTMLElement && target !== document.body ? target : null;
         }
         mainViewRef.current = target;
         setMainViewState(target);

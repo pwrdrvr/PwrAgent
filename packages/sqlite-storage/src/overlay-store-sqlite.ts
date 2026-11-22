@@ -54,6 +54,7 @@ import {
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { managedKeysFromLegacyProjection, prepareScopedManagedMembership } from "./thread-managed-membership";
 import { ThreadDependencyStore } from "./thread-dependency-store";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
@@ -812,30 +813,10 @@ function stripFederationStamp(
 const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
 
-/** The identities navigation consumes, independent of worker status or history.
- * Preserve the legacy per-overlay malformed-entry boundary: keep the valid
- * prefix, then stop that parent's traversal if an entry cannot be read.
- */
-function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId"> & {
-  subAgents?: readonly ThreadSubAgentSummary[];
-}): Set<string> {
-  const keys = new Set<string>();
-  try {
-    for (const subAgent of overlay.subAgents ?? []) {
-      const threadId = subAgent.monitorThreadId?.trim();
-      const backend = subAgent.backend ?? overlay.backend;
-      if (!threadId || (backend === overlay.backend && threadId === overlay.threadId)) continue;
-      keys.add(buildThreadIdentityKey(backend, threadId));
-    }
-  } catch {
-    // A malformed unrelated overlay must not block navigation.
-  }
-  return keys;
-}
-
 export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadRegistry, PrAutoDispatchStorage, PrStatusWatchStorage {
   private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
+  private scopedManagedMembership?: ReturnType<typeof prepareScopedManagedMembership>;
   private navigationOverlayCache?: {
     dataVersion: number;
     threadChanges: number;
@@ -1086,7 +1067,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: AppServerBackendScope;
     threads: AppServerThreadSummary[];
     workspaceRoots?: string[];
-  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[] } {
+  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[]; directoryOverlays: Record<string, DirectoryOverlayState> } {
     const backendState = this.getBackend(params.backend);
     const baseline = this.readNavigationUnreadBaseline();
     const managed = this.listManagedSubAgentThreadKeys();
@@ -1150,11 +1131,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         'directoryPath', json_extract(payload, '$.directoryPath'),
         'backend', json_extract(payload, '$.backend'),
         'executionMode', json_extract(payload, '$.executionMode'),
+        'registeredAt', json_extract(payload, '$.registeredAt'),
         'createdAt', json_extract(payload, '$.createdAt'),
         'updatedAt', json_extract(payload, '$.updatedAt'), 'prompt', ''
       ) AS compact FROM directory_launchpads
       WHERE length(trim(COALESCE(json_extract(payload, '$.prompt'), ''))) > 0
         OR COALESCE(json_array_length(payload, '$.imageAttachments'), 0) > 0
+        OR COALESCE(json_array_length(payload, '$.fileAttachments'), 0) > 0
         OR json_extract(payload, '$.registeredAt') IS NOT NULL
         OR json_extract(payload, '$.settingsTouchedAt') IS NOT NULL
     `).iterate() as Iterable<{ directory_path: string; compact: string }>;
@@ -1186,10 +1169,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
           nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
       });
+    const directoryOverlays = this.readAllDirectoryOverlaysSync();
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
-      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots,
+      directoryOverlayByKey: directoryOverlays, workspaceRoots: params.workspaceRoots,
       checkoutGroups: this.readProjectCheckoutGroups() });
-    return { threads, directories };
+    return { threads, directories, directoryOverlays };
   }
 
   /** Cache only the durable compact projection, never provider rows or mutable
@@ -2119,7 +2103,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * Persist the latest value for every distinct usage line under one sqlite
    * transaction. Callers may pass repeated ids; later entries win before any
-   * statement runs, and affected pricing summaries are recomputed once each.
+   * statement runs, and affected pricing summaries reflect the same transaction.
    */
   async upsertThreadUsageLines(params: {
     lines: ThreadUsageLineRecord[];
@@ -2188,6 +2172,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       );
     };
     const unchangedSummaries = new Map<string, ThreadPricingSummary>();
+    let usageLineUpsert: BetterSqlite3.Statement | undefined;
     const upsertLine = (
       inputLine: ThreadUsageLineRecord,
     ): ThreadUsageLineRecord => {
@@ -2394,8 +2379,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         )
         .run(toThreadUsageLineRowParams(line));
 
-      this.stateDb.raw
-        .prepare(
+      (usageLineUpsert ??= this.stateDb.raw.prepare(
           `INSERT INTO thread_usage_lines (
             usage_line_id,
             usage_turn_id,
@@ -2565,7 +2549,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             observed_hot_replay_cached_tokens = COALESCE(excluded.observed_hot_replay_cached_tokens, thread_usage_lines.observed_hot_replay_cached_tokens),
             observed_hot_replay_count = COALESCE(excluded.observed_hot_replay_count, thread_usage_lines.observed_hot_replay_count),
             updated_at = excluded.updated_at`,
-        )
+        ))
         .run(toThreadUsageLineRowParams(line));
 
       if (existing?.totalTokens === 0 && line.totalTokens > 0) {
@@ -2656,7 +2640,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           .filter(([key]) => !summaryTargets.has(key))
           .map(([, summary]) => summary),
         ...[...summaryTargets.values()].map((target) =>
-          this.recomputeThreadPricingSummarySync(target),
+          this.readOrInitializeThreadPricingSummarySync(target),
         ),
       ];
     });
@@ -2677,24 +2661,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     /** The owner's account limits at completion; rides the same UPDATE. */
     limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
-    // Most lines share their turn's identity, so existing thread indexes can
-    // answer this without a new write-maintained index. The fallback preserves
-    // the original usage_turn_id-only relationship for every other ledger row.
+    // The ledger link is authoritative even across provider or thread identities.
     const turn = this.stateDb.raw.prepare(
       `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
         WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
-          AND CASE WHEN EXISTS (
-            SELECT 1 FROM thread_usage_lines AS line
-             WHERE line.backend = turn.backend AND line.thread_id = turn.thread_id
-               AND line.usage_turn_id = turn.usage_turn_id
-               AND line.source = 'live' AND line.scope = 'turn'
-               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
-          ) THEN 1 ELSE EXISTS (
+          AND EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
              WHERE line.usage_turn_id = turn.usage_turn_id
                AND line.source = 'live' AND line.scope = 'turn'
                AND line.parent_thread_id IS NULL AND line.status != 'superseded'
-          ) END`,
+          )`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
       completed_at_inferred: number | null;
@@ -2902,29 +2878,60 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     lastWriteBefore: number;
     limit: number;
   }): Promise<{ repaired: number; remaining: boolean; datedByFirstWrite: number }> {
+    // A few distant candidates can span a long stretch of completed history.
+    // Use at most four direct lookups per sparse thread to avoid sorting it.
+    // For larger backlogs, seek the thread once and deduplicate starts before
+    // LEAD so ties never count as the next start.
     const candidates = this.stateDb.raw.prepare(
-      `SELECT turn.usage_turn_id,
-              COALESCE(turn.started_at, turn.observed_at) AS started_at,
-              MIN(line.created_at) AS first_write_at,
-              MAX(line.updated_at) AS last_write_at,
-              (SELECT MIN(COALESCE(next.started_at, next.observed_at))
-                 FROM thread_usage_turns AS next
-                WHERE next.provider = turn.provider
-                  AND next.backend = turn.backend
-                  AND next.thread_id = turn.thread_id
-                  AND COALESCE(next.started_at, next.observed_at)
-                    > COALESCE(turn.started_at, turn.observed_at)) AS next_started_at
-         FROM thread_usage_turns AS turn
-         JOIN thread_usage_lines AS line ON line.usage_turn_id = turn.usage_turn_id
-        WHERE turn.completed_at IS NULL
-          AND line.source = 'live'
-          AND line.scope = 'turn'
-          AND line.parent_thread_id IS NULL
-          AND line.status != 'superseded'
-        GROUP BY turn.usage_turn_id
-       HAVING MAX(line.updated_at) < ?
-        ORDER BY turn.observed_at, turn.usage_turn_id
-        LIMIT ?`,
+      `WITH candidates AS MATERIALIZED (
+         SELECT turn.usage_turn_id, turn.provider, turn.backend, turn.thread_id, turn.observed_at,
+                COALESCE(turn.started_at, turn.observed_at) AS started_at,
+                MIN(line.created_at) AS first_write_at,
+                MAX(line.updated_at) AS last_write_at
+           FROM thread_usage_turns AS turn
+           JOIN thread_usage_lines AS line ON line.usage_turn_id = turn.usage_turn_id
+          WHERE turn.completed_at IS NULL
+            AND line.source = 'live'
+            AND line.scope = 'turn'
+            AND line.parent_thread_id IS NULL
+            AND line.status != 'superseded'
+          GROUP BY turn.usage_turn_id
+         HAVING MAX(line.updated_at) < ?
+          ORDER BY turn.observed_at, turn.usage_turn_id
+          LIMIT ?
+       ), candidate_threads AS MATERIALIZED (
+         SELECT provider, backend, thread_id, MIN(started_at) AS first_start,
+                MAX(MAX(started_at, first_write_at, last_write_at)) AS last_possible_end,
+                COUNT(*) <= 4 AS sparse
+           FROM candidates
+          GROUP BY provider, backend, thread_id
+       ), distinct_starts AS (
+         SELECT DISTINCT thread.provider, thread.backend, thread.thread_id,
+                COALESCE(next.started_at, next.observed_at) AS started_at
+           FROM candidate_threads AS thread
+          CROSS JOIN thread_usage_turns AS next INDEXED BY idx_thread_usage_turns_thread
+             ON next.provider = thread.provider AND next.backend = thread.backend
+            AND next.thread_id = thread.thread_id
+          WHERE thread.sparse = 0
+            AND COALESCE(next.started_at, next.observed_at) BETWEEN thread.first_start AND thread.last_possible_end
+       ), next_starts AS (
+         SELECT provider, backend, thread_id, started_at,
+                LEAD(started_at) OVER (PARTITION BY provider, backend, thread_id ORDER BY started_at) AS next_started_at
+           FROM distinct_starts
+       )
+       SELECT turn.usage_turn_id, turn.started_at, turn.first_write_at, turn.last_write_at,
+              CASE WHEN thread.sparse THEN (
+                SELECT MIN(COALESCE(next.started_at, next.observed_at))
+                  FROM thread_usage_turns AS next INDEXED BY idx_thread_usage_turns_thread
+                 WHERE next.provider = turn.provider AND next.backend = turn.backend
+                   AND next.thread_id = turn.thread_id
+                   AND COALESCE(next.started_at, next.observed_at) > turn.started_at
+                   AND COALESCE(next.started_at, next.observed_at) <= MAX(turn.first_write_at, turn.last_write_at)
+              ) ELSE next_starts.next_started_at END AS next_started_at
+         FROM candidates AS turn
+         JOIN candidate_threads AS thread USING (provider, backend, thread_id)
+         LEFT JOIN next_starts USING (provider, backend, thread_id, started_at)
+        ORDER BY turn.observed_at, turn.usage_turn_id`,
     ).all(params.lastWriteBefore, params.limit + 1) as Array<{
       usage_turn_id: string;
       started_at: number;
@@ -3342,9 +3349,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
     }
 
+    // Seek by thread and sort just its groups. The provider-first primary key
+    // can walk unrelated summaries to satisfy this ordering.
     const summaryRows = this.stateDb.raw
       .prepare(
-        `SELECT * FROM thread_pricing_summaries
+        `SELECT * FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
          WHERE backend = ? AND thread_id = ?
          ORDER BY provider ASC, currency ASC`,
       )
@@ -3362,6 +3371,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * Stored running totals and a reference-price provenance flag. No usage
    * rows are materialized and no repricing repair runs on this read.
+   * Pin the sparse index for each family membership check. ANALYZE can favor
+   * an index containing all metered lines when reference prices are clustered.
+   * Keep the catalog predicate literal to match the partial indexes.
    */
   async readThreadPricingSummaries(threads: ReadonlyArray<{
     backend: ThreadOverlayState["backend"];
@@ -3369,19 +3381,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }>): Promise<ThreadPricingSummary[]> {
     const statement = this.stateDb.raw.prepare(
       `SELECT summary.*, EXISTS (
-         SELECT 1 FROM thread_usage_lines AS line
+         SELECT 1 FROM thread_usage_lines AS line INDEXED BY idx_thread_usage_lines_assumed_thread
          WHERE line.backend = summary.backend
-           AND (line.thread_id = summary.thread_id OR line.parent_thread_id = summary.thread_id)
+           AND line.thread_id = summary.thread_id
            AND line.provider = summary.provider AND line.currency = summary.currency
            AND line.status != 'superseded' AND line.price_status = 'priced'
-           AND line.pricing_catalog_id = ?
+           AND line.pricing_catalog_id = 'openrouter-assumed'
+         UNION ALL
+         SELECT 1 FROM thread_usage_lines AS line INDEXED BY idx_thread_usage_lines_assumed_parent
+         WHERE line.backend = summary.backend
+           AND line.parent_thread_id = summary.thread_id
+           AND line.provider = summary.provider AND line.currency = summary.currency
+           AND line.status != 'superseded' AND line.price_status = 'priced'
+           AND line.pricing_catalog_id = 'openrouter-assumed'
        ) AS has_assumed_pricing
-       FROM thread_pricing_summaries AS summary
+       FROM thread_pricing_summaries AS summary INDEXED BY idx_thread_pricing_summaries_thread
        WHERE summary.backend = ? AND summary.thread_id = ?
        ORDER BY provider ASC, currency ASC`,
     );
     return threads.flatMap((thread) =>
-      (statement.all(OPENROUTER_ASSUMED_PRICING_CATALOG_ID, thread.backend, thread.threadId) as Array<ThreadPricingSummaryRow & { has_assumed_pricing: number }>)
+      (statement.all(thread.backend, thread.threadId) as Array<ThreadPricingSummaryRow & { has_assumed_pricing: number }>)
         .map((row) => ({ ...threadPricingSummaryFromRow(row), ...(row.has_assumed_pricing ? { hasAssumedPricing: true as const } : {}) })));
   }
 
@@ -3475,7 +3494,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         });
       }
       for (const target of summaryTargets.values()) {
-        this.recomputeThreadPricingSummarySync(target);
+        this.readOrInitializeThreadPricingSummarySync(target);
       }
     })();
   }
@@ -4150,14 +4169,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   // transcript-hydration line can supersede the live line without dropping
   // start timing or observed replay tallies. Attach it back onto displayed
   // lines at read time so the renderer can compute finished durations and keep
-  // reading observed fields off ThreadUsageLineRecord. Deliberately NOT summed
-  // into pricing summaries.
+  // reading observed fields off ThreadUsageLineRecord. Pricing summaries omit
+  // these fields. Seek the displayed keys in the turn primary key while keeping
+  // the backend and thread-family scope across providers.
   private attachUsageTurnMetadataSync(
     backend: string,
     threadId: string,
     lines: ThreadUsageLineRecord[],
   ): void {
-    if (lines.length === 0) {
+    const usageTurnIds = new Set<string>();
+    for (const line of lines) {
+      if (line.usageTurnId) {
+        usageTurnIds.add(line.usageTurnId);
+      }
+    }
+    if (usageTurnIds.size === 0) {
       return;
     }
     const turnRows = this.stateDb.raw
@@ -4172,26 +4198,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
                 final_context_tokens,
                 peak_context_tokens,
                 model_context_window
-           FROM thread_usage_turns
+           FROM json_each(?) AS requested
+          CROSS JOIN thread_usage_turns AS turn ON turn.usage_turn_id = requested.value
           WHERE backend = ?
-            AND thread_id = ?
-          UNION ALL
-         SELECT usage_turn_id,
-                started_at,
-                completed_at,
-                observed_cold_replay_count,
-                observed_cold_replay_uncached_tokens,
-                observed_hot_replay_cached_tokens,
-                observed_hot_replay_count,
-                final_context_tokens,
-                peak_context_tokens,
-                model_context_window
-           FROM thread_usage_turns
-          WHERE backend = ?
-            AND parent_thread_id = ?
-            AND thread_id != ?`,
+            AND (thread_id = ? OR parent_thread_id = ?)`,
       )
-      .all(backend, threadId, backend, threadId, threadId) as UsageTurnMetadataRow[];
+      .all(JSON.stringify([...usageTurnIds]), backend, threadId, threadId) as UsageTurnMetadataRow[];
     applyUsageTurnMetadata(lines, turnRows);
   }
 
@@ -4200,8 +4212,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * gate as their source item, and this thread's own rows for a gate's turn.
    * Those are the only rows `indexTokenMiserPricingLines` lookups return, so
    * this gives them the whole-ledger read's rows, order, turn metadata, and
-   * repricing without materializing every line of a long thread. SQLite still
-   * filters the thread's index range; only matches become records.
+   * repricing. Seek each key within the family, then deduplicate rowids before
+   * loading and sorting the matching lines.
    */
   async readTokenMiserGatePricingLines(params: {
     backend: ThreadOverlayState["backend"];
@@ -4212,44 +4224,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (params.sourceItemIds.length === 0 && params.turnIds.length === 0) {
       return [];
     }
-    const sourceItemIds = JSON.stringify(params.sourceItemIds);
-    const turnIds = JSON.stringify(params.turnIds);
+    const keys = {
+      backend: params.backend,
+      threadId: params.threadId,
+      sourceItemIds: JSON.stringify(params.sourceItemIds),
+      turnIds: JSON.stringify(params.turnIds),
+    };
     const readMatches = () => this.stateDb.raw
       .prepare(
-        `SELECT *
-         FROM (
-           SELECT *
-           FROM thread_usage_lines
-           WHERE backend = ?
-             AND status != 'superseded'
-             AND thread_id = ?
-             AND (
-               source_item_id IN (SELECT value FROM json_each(?))
-               OR turn_id IN (SELECT value FROM json_each(?))
-               OR usage_turn_id IN (SELECT value FROM json_each(?))
-             )
-           UNION ALL
-           SELECT *
-           FROM thread_usage_lines
-           WHERE backend = ?
-             AND status != 'superseded'
-             AND parent_thread_id = ?
-             AND thread_id != ?
-             AND source_item_id IN (SELECT value FROM json_each(?))
+        `WITH matches AS (
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_source
+           WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+             AND source_item_id IN (SELECT value FROM json_each(@sourceItemIds))
+           UNION
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_turn
+           WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+             AND turn_id IN (SELECT value FROM json_each(@turnIds))
+           UNION
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gate_usage_turn
+           WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+             AND usage_turn_id IN (SELECT value FROM json_each(@turnIds))
+           UNION
+           SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gate_child_source
+           WHERE backend = @backend AND parent_thread_id = @threadId AND status != 'superseded'
+             AND thread_id != @threadId
+             AND source_item_id IN (SELECT value FROM json_each(@sourceItemIds))
          )
-         ORDER BY created_at DESC, usage_line_id DESC`,
+         SELECT line.*
+           FROM matches CROSS JOIN thread_usage_lines AS line ON line.rowid = matches.rowid
+          ORDER BY line.created_at DESC, line.usage_line_id DESC`,
       )
-      .all(
-        params.backend,
-        params.threadId,
-        sourceItemIds,
-        turnIds,
-        turnIds,
-        params.backend,
-        params.threadId,
-        params.threadId,
-        sourceItemIds,
-      ) as ThreadUsageLineRow[];
+      .all(keys) as ThreadUsageLineRow[];
     let lines = readMatches().map(threadUsageLineFromRow);
     // Preserve the whole-ledger read's retry barriers and fixed point. Just
     // repricing the matched rows would skip a newer no-progress batch and
@@ -4260,44 +4265,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       // row even when this reader itself made no repair.
       lines = readMatches().map(threadUsageLineFromRow);
     }
-    this.attachTokenMiserUsageTurnMetadataSync(params.backend, params.threadId, lines);
+    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
     return lines;
-  }
-
-  /** Attach only the turns the projection actually uses, including children. */
-  private attachTokenMiserUsageTurnMetadataSync(
-    backend: string,
-    threadId: string,
-    lines: ThreadUsageLineRecord[],
-  ): void {
-    const usageTurnIds = [...new Set(lines.flatMap((line) =>
-      line.usageTurnId ? [line.usageTurnId] : []))];
-    if (usageTurnIds.length > 0) {
-      const turnRows = this.stateDb.raw
-        .prepare(
-          `SELECT usage_turn_id,
-                  started_at,
-                  completed_at,
-                  observed_cold_replay_count,
-                  observed_cold_replay_uncached_tokens,
-                  observed_hot_replay_cached_tokens,
-                  observed_hot_replay_count,
-                  final_context_tokens,
-                  peak_context_tokens,
-                  model_context_window
-             FROM thread_usage_turns
-            WHERE usage_turn_id IN (SELECT value FROM json_each(?))
-              AND backend = ?
-              AND (thread_id = ? OR parent_thread_id = ?)`,
-        )
-        .all(
-          JSON.stringify(usageTurnIds),
-          backend,
-          threadId,
-          threadId,
-        ) as UsageTurnMetadataRow[];
-      applyUsageTurnMetadata(lines, turnRows);
-    }
   }
 
   /**
@@ -4338,7 +4307,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE,
         ) as ThreadUsageLineRow[];
         const lines = rows.map(threadUsageLineFromRow);
-        this.attachTokenMiserUsageTurnMetadataSync(params.backend, params.threadId, lines);
+        this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
         const before = repairs.length;
         for (let index = 0; index < rows.length; index += 1) {
           const repaired = repriceTokenUsageLine(lines[index]!);
@@ -7293,7 +7262,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async getPrAutoDispatchCandidateWinner(params: {
     prKey: string;
     /** Passes over an eligible thread the caller rules out, such as one whose project narrows Auto-fix. */
-    accepts?: (candidate: { backend: ThreadOverlayState["backend"]; threadId: string }) => boolean;
+    accepts?: (candidate: { backend: ThreadOverlayState["backend"]; threadId: string }) => boolean | Promise<boolean>;
   }): Promise<PrAutoDispatchCandidate | undefined> {
     const rows = this.stateDb.raw
       .prepare(
@@ -7309,17 +7278,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         thread_id: string;
       }>;
     for (const row of rows) {
-      if (
-        isPrAutoDispatchCandidateEligible(this.getThread(buildThreadIdentityKey(row.backend, row.thread_id)))
-        && (params.accepts?.({ backend: row.backend, threadId: row.thread_id }) ?? true)
-      ) {
-        return {
-          backend: row.backend,
-          eligibleSince: row.eligible_since,
-          prKey: row.pr_key,
-          threadId: row.thread_id,
-        };
-      }
+      const identity = { backend: row.backend, threadId: row.thread_id };
+      const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+      if (!isPrAutoDispatchCandidateEligible(this.getThread(key))) continue;
+      // A checkout check may yield while another operation locks or disables
+      // the thread. Read its current eligibility before returning a winner.
+      if (params.accepts && (!await params.accepts(identity)
+        || !isPrAutoDispatchCandidateEligible(this.getThread(key)))) continue;
+      return { ...identity, eligibleSince: row.eligible_since, prKey: row.pr_key };
     }
     return undefined;
   }
@@ -9074,10 +9040,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async listPendingPrTerminalWatchObservations(params: {
     backend?: ThreadOverlayState["backend"]; threadId?: string;
   } = {}): Promise<PrTerminalWatchObservation[]> {
-    const rows = this.stateDb.raw.prepare(`SELECT payload FROM pr_status_watches
-      WHERE status IN ('pending_terminal', 'notifying_terminal')
-        AND (? IS NULL OR (backend = ? AND thread_id = ?))`)
-      .all(params.backend ?? null, params.backend ?? null, params.threadId ?? null) as Array<{ payload: string }>;
+    const backend = params.backend ?? null;
+    // The four-state predicate admits the partial retry index. Keep saved
+    // observations in row order, including across threads at startup.
+    const rows = (backend === null
+      ? this.stateDb.raw.prepare(`SELECT payload FROM pr_status_watches
+          WHERE status IN ('pending_terminal', 'notifying_terminal')
+            AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+          ORDER BY rowid`).all()
+      : this.stateDb.raw.prepare(`SELECT payload FROM pr_status_watches
+          WHERE status IN ('pending_terminal', 'notifying_terminal')
+            AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+            AND backend = ? AND thread_id = ?
+          ORDER BY rowid`).all(backend, params.threadId ?? null)) as Array<{ payload: string }>;
     const observations = new Map<string, PrTerminalWatchObservation>();
     for (const row of rows) {
       const { terminalObservation } = JSON.parse(row.payload) as { terminalObservation: PrTerminalWatchObservation };
@@ -9206,7 +9181,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
              FROM pr_status_watches
              WHERE head_sha = '' AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
                AND (? = 0 OR status IN ('watching', 'dispatching'))
-               AND backend = ? AND thread_id = ?`,
+               AND backend = ? AND thread_id = ?
+             ORDER BY pr_key`,
           )
           .all(params.unobservedOnly ? 1 : 0, params.backend, params.threadId)
       : this.stateDb.raw
@@ -9214,7 +9190,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             `SELECT DISTINCT pr_key
              FROM pr_status_watches
              WHERE head_sha = '' AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
-               AND (? = 0 OR status IN ('watching', 'dispatching'))`,
+               AND (? = 0 OR status IN ('watching', 'dispatching'))
+             ORDER BY pr_key`,
           )
           .all(params.unobservedOnly ? 1 : 0)) as Array<{ pr_key: string }>;
     return rows.map((row) => row.pr_key);
@@ -10163,13 +10140,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return next;
   }
 
-  async removeDirectoryRegistration(params: { directoryKey: string }): Promise<void> {
+  async removeDirectoryRegistration(params: { directoryKey: string; worktreeKeys?: readonly string[] }): Promise<void> {
     this.stateDb.raw.transaction(() => {
-      this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?")
-        .run(params.directoryKey);
-      const current = this.getDirectoryOverlay(params.directoryKey);
-      if (current?.pinnedRank) {
-        this.putDirectoryOverlay(params.directoryKey, { ...current, pinnedRank: undefined });
+      const remove = this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?");
+      const unpin = (key: string) => {
+        const current = this.getDirectoryOverlay(key);
+        if (current?.pinnedRank) {
+          this.putDirectoryOverlay(key, { ...current, pinnedRank: undefined });
+        }
+      };
+      remove.run(params.directoryKey);
+      unpin(params.directoryKey);
+      if (!params.worktreeKeys?.length) return;
+      const read = this.stateDb.raw.prepare("SELECT payload FROM directory_launchpads WHERE directory_path = ?");
+      const hasDraft = this.stateDb.raw.prepare("SELECT 1 FROM composer_draft_latest WHERE scope_key = ? AND status = 'unsent'");
+      const unregister = this.stateDb.raw.prepare("UPDATE directory_launchpads SET payload = json_remove(payload, '$.registeredAt') WHERE directory_path = ?");
+      for (const key of params.worktreeKeys) {
+        const row = read.get(key) as { payload: string } | undefined;
+        const launchpad = row ? JSON.parse(row.payload) as DirectoryLaunchpadOverlayState : undefined;
+        if (launchpad?.registeredAt == null) continue;
+        // Check the current payload while removing the registration. The
+        // compact index has no draft text and may predate a composer save.
+        if (launchpad.prompt?.trim() || launchpad.imageAttachments?.length || launchpad.fileAttachments?.length
+          || hasDraft.get(`launchpad:${key}`)) {
+          unregister.run(key);
+        } else {
+          remove.run(key);
+        }
+        unpin(key);
       }
     })();
     this.notifyDirectoryLaunchpadsChanged();
@@ -10583,6 +10581,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.listManagedSubAgentThreadKeys();
   }
 
+  /** Check private execution membership only for the named owner keys. */
+  readManagedSubAgentThreadKeysForOwners(keys: readonly string[]): ReadonlySet<string> {
+    this.scopedManagedMembership ??= prepareScopedManagedMembership(this.stateDb.raw);
+    return this.scopedManagedMembership(keys);
+  }
+
   private listManagedSubAgentThreadKeys(): Set<string> {
     // Transactions can reuse a generation after a savepoint rollback. Never
     // consume or publish the committed cache while reading such a snapshot.
@@ -10619,17 +10623,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         if (key) threadKeys.add(key);
         continue;
       }
-      try {
-        if (!row.projection) continue;
-        // A legacy payload array the one-time move has not reached yet.
-        const [backend, threadId, subAgents] = JSON.parse(row.projection) as [
-          ThreadOverlayState["backend"], string, ThreadSubAgentSummary[] | undefined,
-        ];
-        for (const key of managedSubAgentChildKeys({ backend, threadId, subAgents })) {
+      if (row.projection) {
+        for (const key of managedKeysFromLegacyProjection(row.projection)) {
           threadKeys.add(key);
         }
-      } catch {
-        // A malformed unrelated overlay must not block navigation.
       }
     }
     // Ordinary grouped handoffs stay visible even when an older writer
@@ -11372,6 +11369,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return row ? threadToolInvocationFromRow(row) : undefined;
   }
 
+  private readOrInitializeThreadPricingSummarySync(params: {
+    backend: string;
+    currency: string;
+    provider: string;
+    threadId: string;
+    updatedAt: number;
+  }): ThreadPricingSummary {
+    const current = this.stateDb.raw.prepare(
+      `SELECT * FROM thread_pricing_summaries
+       WHERE provider = @provider AND backend = @backend AND thread_id = @threadId
+         AND currency = @currency AND ledger_delta_ready = 1`,
+    ).get(params) as ThreadPricingSummaryRow | undefined;
+    // Older buckets can be stale and new buckets can already have child
+    // usage. Establish an exact baseline with the existing scoped query.
+    return current
+      ? threadPricingSummaryFromRow(current)
+      : this.recomputeThreadPricingSummarySync(params);
+  }
+
   private recomputeThreadPricingSummarySync(params: {
     backend: string;
     currency: string;
@@ -11469,7 +11485,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           reasoning_output_tokens,
           total_tokens,
           total_cost_micros,
-          updated_at
+          updated_at,
+          ledger_delta_ready
         ) VALUES (
           @provider,
           @backend,
@@ -11485,7 +11502,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           @reasoningOutputTokens,
           @totalTokens,
           @totalCostMicros,
-          @updatedAt
+          @updatedAt,
+          1
         )
         ON CONFLICT(provider, backend, thread_id, currency) DO UPDATE SET
           usage_line_count = excluded.usage_line_count,
@@ -11498,7 +11516,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           reasoning_output_tokens = excluded.reasoning_output_tokens,
           total_tokens = excluded.total_tokens,
           total_cost_micros = excluded.total_cost_micros,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at,
+          ledger_delta_ready = 1`,
       )
       .run(summary);
 
@@ -13008,9 +13027,10 @@ function launchpadDirectoryIdentity(
   }
   const present = Boolean(launchpad.prompt?.trim())
     || (launchpad.imageAttachments?.length ?? 0) > 0
+    || (launchpad.fileAttachments?.length ?? 0) > 0
     || launchpad.registeredAt != null
     || launchpad.settingsTouchedAt != null;
   return present
-    ? JSON.stringify([launchpad.directoryKind, launchpad.directoryLabel, launchpad.directoryPath ?? null])
+    ? JSON.stringify([launchpad.directoryKind, launchpad.directoryLabel, launchpad.directoryPath ?? null, launchpad.registeredAt != null])
     : undefined;
 }

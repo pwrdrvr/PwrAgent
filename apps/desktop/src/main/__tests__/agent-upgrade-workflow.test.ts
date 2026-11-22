@@ -4,7 +4,7 @@ import type { PwrAgentAppRequest } from "@pwragent/shared/contracts/app-tools";
 import type { AppUpdateStatus } from "../../shared/app-metadata";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
-import { authorizeAppManagement } from "../agent-tools/app-management-authorization";
+import { appManagementDenial } from "../agent-tools/app-management-authorization";
 
 let state: AppUpdateStatus;
 const nativeInstall = vi.fn();
@@ -114,9 +114,9 @@ it("keeps an accepted restart authorized when its initiating turn ends during qu
   let active = true;
   const ports = { isActive: () => active, isToolAllowed: () => true, isAgent: async () => true,
     readOrigin: async () => ({ kind: "messaging" as const, causalMessagingSource: { ownerId: "profile", requestId: "owner" } }),
-    authorizeActor: async () => true };
+    actorDenial: async () => null };
   const handler = createPwrAgentAppManagementHandler({ startedAt: 1, version: () => "1.4.7",
-    authorize: async (context, phase?: string) => await authorizeAppManagement({ ...ports, allowCompleted: phase === "accepted" }, context) });
+    authorize: async (context, phase?: string) => await appManagementDenial({ ...ports, allowCompleted: phase === "accepted" }, context) === null });
   quit.mockImplementation(async (options) => {
     expect(await options.authorizeAgent()).toBe(true);
     expect(options.beforeQuit()).toBe(true);

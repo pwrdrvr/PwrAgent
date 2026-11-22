@@ -7,6 +7,8 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   activeIds = ["active", "transition"];
   archivedIds = ["archive-one", "archive-two", "archive-three"];
   rows?: { active: Array<{ id: string; cwd: string }>; archived: Array<{ id: string; cwd: string }> };
+  repeatActiveCursor = false;
+  repeatArchivedCursor = false;
   readonly listings: Array<{ archived: boolean; cursor?: string; sortKey?: string }> = [];
   private readonly heldKinds = new Set<boolean>();
   private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
@@ -73,13 +75,15 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
       const ids = archived ? this.archivedIds.slice(page, page + 1) : this.activeIds;
       result = {
         data: ids.map((id) => ({ id, name: id, updatedAt: 1, cwd: "/fixture/project" })),
-        nextCursor: archived && page + 1 < this.archivedIds.length ? String(page + 1) : null,
+        nextCursor: archived && page + 1 < this.archivedIds.length
+          ? this.repeatArchivedCursor && cursor ? cursor : String(page + 1) : null,
       };
       if (this.rows) {
         const rows = archived ? this.rows.archived : this.rows.active;
         const end = page + Math.min(request.params?.limit ?? 25, 100);
+        const nextCursor = end < rows.length ? String(end) : null;
         result = { data: rows.slice(page, end).map((row) => ({ ...row, name: row.id, updatedAt: 1 })),
-          nextCursor: end < rows.length ? String(end) : null };
+          nextCursor: !archived && this.repeatActiveCursor && cursor ? cursor : nextCursor };
       }
     }
     const reply = () => this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));

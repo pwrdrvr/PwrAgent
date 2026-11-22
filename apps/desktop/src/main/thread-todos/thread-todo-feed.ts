@@ -16,6 +16,10 @@ import { getMainLogger } from "../log";
 
 const feedLog = getMainLogger("pwragent:thread-todos");
 
+// A small full refresh can avoid rebuilding the fleet after an association
+// change. Large full refreshes amortize the shared fleet scan and warm cache.
+const FULL_REFRESH_SCOPED_OWNER_LIMIT = 32;
+
 export type ThreadTodoFeedOwner = Pick<AppServerThreadSummary, "id" | "source" | "title" | "archivedAt">
   & { federation?: unknown };
 
@@ -26,8 +30,8 @@ export type ThreadTodoFeedSource = {
   readOpenCards: (scope?: ThreadScope) => ThreadTodo[];
   /** The owner's complete provider listing; usually the sidebar's cache. */
   loadOwners: () => Promise<readonly ThreadTodoFeedOwner[]>;
-  /** Private managed sub-agent threads, whose cards stay hidden. */
-  managedThreadKeys: () => ReadonlySet<string>;
+  /** Private managed sub-agent threads in the given scope, or all for a full refresh. */
+  managedThreadKeys: (keys?: readonly string[]) => ReadonlySet<string>;
   withDispatchDefaults: (todos: ThreadTodo[]) => Promise<ThreadTodo[]>;
   mergeMethods: () => ThreadTodoMergeMethodPreferences;
 };
@@ -125,7 +129,10 @@ export class ThreadTodoFeed {
         return;
       case "thread/pullRequests/updated":
       case "thread/modelSettings/updated":
-        // Review queues follow PR attachments; dispatch defaults follow the model.
+      case "thread/parent/set":
+      case "thread/parent/cleared":
+        // Review queues follow PR attachments; dispatch defaults follow the
+        // model and the parent a sibling is filed under.
         if (threadId) this.cardsChanged({ backend: event.backend, threadId });
         return;
     }
@@ -161,7 +168,7 @@ export class ThreadTodoFeed {
       this.cards.clear();
       for (const todo of this.source.readOpenCards()) this.addCard(todo);
       this.setOwners(await this.source.loadOwners());
-      const projected = await this.project([...this.cards.keys()]);
+      const projected = await this.project([...this.cards.keys()], true);
       for (const todo of projected) this.visible.set(todo.id, todo);
       this.state = "live";
     } catch (error) {
@@ -188,7 +195,7 @@ export class ThreadTodoFeed {
     this.cards.clear();
     for (const todo of this.source.readOpenCards()) this.addCard(todo);
     for (const key of this.cards.keys()) keys.add(key);
-    await this.publish([...keys]);
+    await this.publish([...keys], true);
   }
 
   private async reloadOwners(): Promise<void> {
@@ -229,9 +236,9 @@ export class ThreadTodoFeed {
   }
 
   /** Re-projects the named threads' cards and publishes what changed. */
-  private async publish(keys: string[]): Promise<void> {
+  private async publish(keys: string[], fullRefresh = false): Promise<void> {
     const scope = new Set(keys);
-    const next = new Map((await this.project(keys)).map((todo) => [todo.id, todo]));
+    const next = new Map((await this.project(keys, fullRefresh)).map((todo) => [todo.id, todo]));
     const removed = [...this.visible.values()]
       .filter((todo) => scope.has(buildThreadIdentityKey(todo.backend, todo.threadId)) && !next.has(todo.id))
       .sort(compareThreadTodosNewestFirst);
@@ -252,10 +259,13 @@ export class ThreadTodoFeed {
   }
 
   /** The named threads' cards that an available owner holds, as published. */
-  private async project(keys: string[]): Promise<ThreadTodo[]> {
-    const managed = this.source.managedThreadKeys();
-    const eligible = keys.flatMap((key) => {
-      if (!this.owners.has(key) || managed.has(key)) return [];
+  private async project(keys: string[], fullRefresh: boolean): Promise<ThreadTodo[]> {
+    const candidates = keys.filter((key) => this.owners.has(key) && this.cards.has(key));
+    if (candidates.length === 0) return [];
+    const useFleet = fullRefresh && candidates.length > FULL_REFRESH_SCOPED_OWNER_LIMIT;
+    const managed = this.source.managedThreadKeys(useFleet ? undefined : candidates);
+    const eligible = candidates.flatMap((key) => {
+      if (managed.has(key)) return [];
       const title = this.owners.get(key);
       return (this.cards.get(key) ?? []).map((todo) => title === undefined ? todo : { ...todo, threadTitle: title });
     });

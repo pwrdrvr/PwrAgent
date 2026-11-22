@@ -45,6 +45,30 @@ describe("claudeCodeReviewCommand", () => {
     }));
   });
 
+  /**
+   * Rule: Auto-fix is Claude Code's own `--fix`, sent as one flag after the
+   * effort; it changes nothing else in the command or what the card reads.
+   */
+  it("adds exactly one --fix after the effort when Auto-fix is on", () => {
+    const target: fc.Arbitrary<AppServerReviewTarget> = fc.oneof(
+      fc.constant({ type: "uncommittedChanges" } as const),
+      members.map((picked) => ({
+        type: "pullRequests" as const,
+        pullRequests: picked.map((member) => ({ url: url(member.number, member.other ? "other" : "project") })),
+      })),
+      branch.filter((value) => !/^#?[0-9]+$/.test(value)).map((value) => ({ type: "branch" as const, branch: value })),
+      path.map((value) => ({ type: "path" as const, path: value })),
+    );
+    fc.assert(fc.property(target, level, (chosen, chosenLevel) => {
+      const plain = claudeCodeReviewCommand({ target: chosen, level: chosenLevel, repository: REPOSITORY });
+      const fixing = claudeCodeReviewCommand({ target: chosen, level: chosenLevel, repository: REPOSITORY, fix: true });
+      const head = chosenLevel ? `/code-review ${chosenLevel}` : "/code-review";
+      expect(fixing).toBe(`${head} --fix${plain.slice(head.length)}`);
+      expect(fixing.split(" ").filter((word) => word === "--fix")).toHaveLength(1);
+      expect(parseClaudeCodeReviewPullRequests(fixing)).toEqual(parseClaudeCodeReviewPullRequests(plain));
+    }));
+  });
+
   it("names every pull request in full when the checkout's repository is unknown", () => {
     fc.assert(fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 99_999 }), { minLength: 1, maxLength: 8 }), (picked) => {
       const urls = picked.map((number) => url(number));

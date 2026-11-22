@@ -196,7 +196,6 @@ export const THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL =
   "thread-migration:list-source-threads";
 export const THREAD_MIGRATION_START_CHANNEL = "thread-migration:start";
 export const THREAD_MIGRATION_RETRY_CHANNEL = "thread-migration:retry";
-export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
 export const ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL =
@@ -273,6 +272,12 @@ export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
 export const THREAD_TODOS_SNAPSHOT_CHANNEL = "thread-todos:snapshot";
 /** One revision of change to the window's open cards. */
 export const THREAD_TODOS_DELTA_EVENT_CHANNEL = "thread-todos:delta";
+export const RESOURCE_CHECKOUTS_READ_CHANNEL = "resource-checkouts:read";
+export const RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL = "resource-checkouts:open-window";
+export const RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL = "resource-checkouts:open-thread";
+export const RESOURCE_CHECKOUTS_PERFORM_CHANNEL = "resource-checkouts:perform";
+export const RESOURCE_CHECKOUTS_CHANGED_CHANNEL = "resource-checkouts:changed";
+
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
 export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
 export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";
@@ -409,6 +414,8 @@ export const MCP_CONNECTION_BOAT_OPEN_CHANNEL = "mcp-connection:boat-open";
 export const MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL = "mcp-connection:boat-sign-in";
 export const MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL = "mcp-connection:boat-sign-in-cancel";
 export const MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL = "mcp-connection:boat-sign-in-open";
+export const MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL = "mcp-connection:boat-thread-sandboxes";
+export const MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL = "mcp-connection:boat-thread-sandbox-change";
 export const MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL =
   "mcp-connection:set-boat-sandbox-policy";
 export const MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL =
@@ -418,6 +425,8 @@ export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
 export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =
   "mcp-connection:fetch-linear-pasted-images";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
+export const MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL =
+  "mcp-connection:read-ipc-bearer-token-state";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
 export const MCP_CONNECTION_READ_THREAD_CHANNEL =

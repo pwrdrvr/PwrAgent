@@ -29,8 +29,8 @@ it never gives the SDK a `.cmd`, `.bat`, or `.ps1` launcher.
 
 The SDK's pinned platform package provides an unmodified native Claude Code
 binary as a fallback. Discovery probes both candidates with `--version` and
-compares the CLI versions, not the npm SDK version. For example, SDK `0.3.296`
-contains Claude Code `2.1.296`. A system binary at least as new as the bundle
+compares the CLI versions, not the npm SDK version. SDK `0.3.330` bundles
+Claude Code `2.1.330`. A system binary at least as new as the bundle
 wins, including on equal versions. A missing, older, or unprobeable system
 binary falls back to the bundled binary after its version probe succeeds.
 If the bundle is unavailable, the system installation remains usable.
@@ -55,11 +55,13 @@ thread instructions when present. `settingSources` includes `user`, `project`,
 and `local`, preserving the CLI's settings, CLAUDE.md, and skills. PwrAgent does
 not pass `--bare`. CLI-managed configuration remains under the CLI's control.
 
-The declared SDK version is `0.3.296`, published October 9, 2026, and satisfies
-the repository's seven-day dependency maturity rule. The license gate has an
-explicit package-name exception for the SDK and its eight platform packages
-under Anthropic Commercial Terms. It does not add their non-SPDX license
-declarations to the general license allowlist. First-party code remains MIT.
+The operator approved a version-specific exception to the seven-day dependency
+maturity rule for SDK `0.3.330` and its eight matching platform packages on
+November 22, 2026. The exact versions are recorded in `pnpm-workspace.yaml`.
+The license gate has an explicit package-name exception for these packages
+under Anthropic Commercial Terms. It does not add their
+non-SPDX license declarations to the general license allowlist. First-party
+code remains MIT.
 
 ## Sessions and permissions
 
@@ -524,3 +526,25 @@ providers; their code is not incorporated:
 
 The integration makes no subscription pricing or quota guarantees. Those remain
 provider policy and can change independently of this process boundary.
+
+## Code Mode transcript compatibility
+
+Claude Code's experimental `REPL` tool can represent JavaScript calling other
+CLI tools. PwrAgent recognizes a top-level REPL with string `input.code` as
+Code, with a collapsed summary and an expanded script preview capped at 4000
+characters with a truncation note. Direct children of that REPL use the normal
+command, read, edit diff, and MCP rows; children of other parents remain in
+sub-agent transcripts. A background task tied to the Code row is named Code
+in Actions and stops through the CLI's existing task-id control.
+
+This is transcript compatibility, not feature enablement. PwrAgent's pinned
+SDK is `0.3.322`; it has no typed Code Mode availability field, so no status
+banner is inferred. The [German Code Mode documentation](https://code.claude.com/docs/de/code-mode)
+excludes Agent SDK and `claude -p`, also tracked in
+[issue 111178](https://github.com/anthropics/claude-code/issues/111178).
+PwrAgent does not set `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE`, override an inherited
+`0`, inspect project settings to force it on, or allow REPL and its children
+through `allowedTools`. Existing `canUseTool` handling and CLI lifetime remain
+in charge. There is no new interpreter, sandbox, or lifetime timer. Codex Code
+Mode, Token Miser, and portable discovery are unchanged. See the
+[research handoff](claude-code-mode-handoff.md) for scope and acceptance.

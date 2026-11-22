@@ -20,6 +20,13 @@ import { describeGitCommandState } from "./CommandToolsSettings";
 import { claudeProviderStatus } from "./claude-provider-status";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
+import { GuidedSetupDialog } from "./guided-setup/GuidedSetupDialog";
+import {
+  GuidedSetupLaunchProvider,
+  type GuidedSetupRequest,
+} from "./guided-setup/GuidedSetupLauncher";
+import { isMessagingAcknowledged } from "./guided-setup/messaging-acknowledgment";
+import { MessagingSafetyGate } from "./guided-setup/MessagingSafetyGate";
 import { AboutSettings } from "./AboutSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
 import { AccessControlSettings } from "./AccessControlSettings";
@@ -513,6 +520,8 @@ export function SettingsScreen(props: {
   // The AI Providers screens own refreshing; this re-reads on their
   // BACKEND_SUMMARIES_REFRESH_EVENT announcements.
   const acpCatalog = useAcpAgentCatalog(props.desktopApi);
+  // One guided flow at a time, opened from a pane's entry point.
+  const [guidedSetup, setGuidedSetup] = useState<GuidedSetupRequest>();
   // Forge connection state for the nav dots. Seeded from main's cached
   // probe so the dots are right before the Git pane is ever opened, then
   // kept fresh by the sections themselves (`onStatusChange`), which is
@@ -963,24 +972,26 @@ export function SettingsScreen(props: {
             </div>
           ) : snapshot ? (
             unsaved.provide(
-              <SettingsSectionBody
-                acpAgents={acpCatalog.entries}
-                appearanceController={props.appearanceController}
-                cachedBackends={props.cachedBackends}
-                claudeSignIn={props.claudeSignIn}
-                desktopApi={props.desktopApi}
-                onForgeStatusChange={reportForgeStatus}
-                onOpenRoute={openRoute}
-                onOpenThread={props.onOpenThread}
-                onShowNotice={props.onShowNotice}
-                onProfileCreateRequestHandled={props.onProfileCreateRequestHandled}
-                profileCreateRequested={props.profileCreateRequested}
-                profiles={props.profiles}
-                section={section}
-                settings={props.settings}
-                snapshot={snapshot}
-                sub={route.sub}
-              />,
+              <GuidedSetupLaunchProvider launch={setGuidedSetup}>
+                <SettingsSectionBody
+                  acpAgents={acpCatalog.entries}
+                  appearanceController={props.appearanceController}
+                  cachedBackends={props.cachedBackends}
+                  claudeSignIn={props.claudeSignIn}
+                  desktopApi={props.desktopApi}
+                  onForgeStatusChange={reportForgeStatus}
+                  onOpenRoute={openRoute}
+                  onOpenThread={props.onOpenThread}
+                  onShowNotice={props.onShowNotice}
+                  onProfileCreateRequestHandled={props.onProfileCreateRequestHandled}
+                  profileCreateRequested={props.profileCreateRequested}
+                  profiles={props.profiles}
+                  section={section}
+                  settings={props.settings}
+                  snapshot={snapshot}
+                  sub={route.sub}
+                />
+              </GuidedSetupLaunchProvider>,
             )
           ) : (
             <p className="settings-empty">Settings are unavailable.</p>
@@ -991,6 +1002,18 @@ export function SettingsScreen(props: {
         </div>
       </div>
       {unsaved.dialog}
+      {guidedSetup ? (
+        <GuidedSetupDialog
+          request={guidedSetup}
+          settings={props.settings}
+          desktopApi={props.desktopApi}
+          profiles={props.profiles}
+          claudeSignIn={props.claudeSignIn}
+          acpAgents={acpCatalog.entries}
+          cachedBackends={props.cachedBackends}
+          onClose={() => setGuidedSetup(undefined)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1169,6 +1192,11 @@ function SettingsSectionBody(props: {
             general: { hotCpuProfilingTriggerMode },
           });
         }}
+        onHotCpuProfilingCaptureChromiumTraceChange={async (hotCpuProfilingCaptureChromiumTrace) => {
+          await props.settings.writeConfig({
+            general: { hotCpuProfilingCaptureChromiumTrace },
+          });
+        }}
         onHotCpuProfilingCaptureHeapSnapshotChange={async (
           hotCpuProfilingCaptureHeapSnapshot: boolean,
         ) => {
@@ -1229,21 +1257,6 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
-        onDiffCondensationEnabledChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { diffCondensation: { enabled } },
-          });
-        }}
-        onLiveTranscriptEventFilteringChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { liveTranscriptEventFiltering: enabled },
-          });
-        }}
-        onThreadToolAccountingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { threadToolAccounting: enabled },
-          });
-        }}
         onTokenMiserEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserEnabled: enabled },
@@ -1287,6 +1300,19 @@ function SettingsSectionBody(props: {
   }
 
   if (props.section === "messaging") {
+    // Every messaging screen can enable adapters, store tokens, or pair a
+    // conversation, so none renders before the safety acknowledgement is
+    // on record.
+    if (!isMessagingAcknowledged(props.snapshot)) {
+      return (
+        <MessagingSafetyGate
+          snapshot={props.snapshot}
+          saving={props.settings.saving}
+          focus={messagingPlatformFromSub(props.sub)}
+          writeConfig={props.settings.writeConfig}
+        />
+      );
+    }
     return (
       <MessagingSettings
         desktopApi={props.desktopApi}
@@ -1566,6 +1592,11 @@ function SettingsSectionBody(props: {
         onDefaultPrAutoDispatchEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             git: { defaultPrAutoDispatchEnabled: enabled },
+          });
+        }}
+        onWatchMergeBuildsChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            git: { watchMergeBuilds: enabled },
           });
         }}
         onPrAutoDispatchBudgetCapacityChange={async (capacity: number) => {

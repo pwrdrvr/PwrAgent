@@ -1,3 +1,7 @@
+import {
+  hasScheduledActionProjectionSchema,
+  SCHEDULED_ACTION_PROJECTION_SCHEMA,
+} from "./scheduled-thread-action-projection-schema";
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
@@ -39,8 +43,10 @@ import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
+import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
+import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
-export const CURRENT_STATE_DB_USER_VERSION = 82;
+export const CURRENT_STATE_DB_USER_VERSION = 86;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -521,6 +527,10 @@ CREATE INDEX IF NOT EXISTS idx_automation_runs_execution_thread_valid
   );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_owner_thread
   ON automation_runs(backend, thread_id);
+-- Turn lookups rank only the rows matching the key. Leave updated_at out of
+-- the index so a pricing payload update does not dirty its pages.
+CREATE INDEX IF NOT EXISTS idx_automation_runs_backend_turn
+  ON automation_runs(backend, backend_turn_id) WHERE backend_turn_id IS NOT NULL;
 -- NOTE: idx_automation_runs_source_event is created in the v23 migration
 -- (ensureAutomationRunSourceEventKey), NOT here. ensureCurrentSchema runs
 -- before migrations, and on an existing DB the source_event_key column does
@@ -718,6 +728,21 @@ CREATE TABLE IF NOT EXISTS operator_seen_items (
   item_key TEXT PRIMARY KEY,
   seen_at  INTEGER NOT NULL
 );
+`;
+
+const OPERATOR_REQUEST_SCOPE_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_operator_open_questions_backend
+  ON operator_async_questions(backend, created_at) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_operator_open_questions_thread
+  ON operator_async_questions(thread_id, backend) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_thread_todos_backend
+  ON thread_todos(backend);
+CREATE INDEX IF NOT EXISTS idx_thread_todos_thread_backend
+  ON thread_todos(thread_id, backend);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_backend
+  ON thread_reviews(backend);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_thread_backend
+  ON thread_reviews(thread_id, backend);
 `;
 
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
@@ -926,6 +951,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
   WHERE status IN ('watching', 'dispatching');
 CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
   ON pr_status_watches(pr_key, status, lease_expires_at);
+-- Share the live-watch index between startup and thread-scoped retry reads.
+CREATE INDEX IF NOT EXISTS idx_pr_status_watches_retry
+  ON pr_status_watches(status, backend, thread_id, head_sha, pr_key)
+  WHERE status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal');
+-- Include the history tie-breaker so the thread seek stops at the limit.
+CREATE INDEX IF NOT EXISTS idx_pr_status_watches_history
+  ON pr_status_watches(backend, thread_id, updated_at DESC, watch_id DESC)
+  WHERE status IN ('dispatched', 'superseded', 'cancelled', 'failed');
 `;
 
 /**
@@ -1049,6 +1082,25 @@ BEGIN
 END;
 `;
 
+const THREAD_USAGE_TURN_IDENTITY_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
+  ON thread_usage_turns(backend, thread_id, turn_id)
+  WHERE turn_id IS NOT NULL;
+`;
+
+const THREAD_USAGE_LINE_PARENT_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE parent_thread_id IS NOT NULL AND status != 'superseded';
+`;
+
+const THREAD_USAGE_LINE_COMPLETION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_completion_turn
+  ON thread_usage_lines(usage_turn_id)
+  WHERE source = 'live' AND scope = 'turn' AND parent_thread_id IS NULL
+    AND status != 'superseded' AND usage_turn_id IS NOT NULL;
+`;
+
 const THREAD_USAGE_PRICING_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
   catalog_id      TEXT NOT NULL,
@@ -1110,8 +1162,6 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
   ON thread_usage_turns(provider, backend, thread_id, observed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
-  ON thread_usage_turns(provider, backend, thread_id, turn_id);
 
 CREATE TABLE IF NOT EXISTS thread_usage_lines (
   usage_line_id              TEXT PRIMARY KEY,
@@ -1178,15 +1228,8 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
   ON thread_usage_lines(provider, backend, thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_parent
   ON thread_usage_lines(provider, backend, parent_thread_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
-  ON thread_usage_lines(provider, backend, thread_id, turn_id);
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
-  ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
   ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
-  WHERE status != 'superseded';
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
-  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
   WHERE status != 'superseded';
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
   ON thread_usage_lines(provider, backend, currency, thread_id)
@@ -1220,7 +1263,7 @@ CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
   updated_at                INTEGER NOT NULL,
   PRIMARY KEY (provider, backend, thread_id, currency)
 );
-`;
+` + THREAD_USAGE_TURN_IDENTITY_INDEX + THREAD_USAGE_LINE_PARENT_INDEX;
 
 const THREAD_TOOL_ACCOUNTING_SCHEMA = `
 CREATE TABLE IF NOT EXISTS thread_tool_invocations (
@@ -2193,10 +2236,58 @@ export class StateDb {
           db.pragma("user_version = 82");
         }).immediate();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 83) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 83) return;
+          // Replace two existing indexes to limit the ongoing ledger write cost.
+          db.exec(`DROP INDEX IF EXISTS idx_thread_usage_lines_turn;
+                   DROP INDEX IF EXISTS idx_thread_usage_lines_source;`);
+          ensureThreadUsageGatePricingIndexes(db);
+          db.pragma("user_version = 83");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 84) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 84) return;
+          // Parent reads bind a parent ID. Move the index coverage for root
+          // rows to the completion lookup so each live upsert maintains one.
+          db.exec("DROP INDEX IF EXISTS idx_thread_usage_turns_turn");
+          db.exec("DROP INDEX IF EXISTS idx_thread_usage_lines_read_parent");
+          db.exec(THREAD_USAGE_TURN_IDENTITY_INDEX);
+          db.exec(THREAD_USAGE_LINE_PARENT_INDEX);
+          db.exec(THREAD_USAGE_LINE_COMPLETION_INDEX);
+          db.pragma("user_version = 84");
+        }).immediate();
+      }
+      // Other builds may already have stamped v85. The column and its three
+      // triggers are installed atomically, so the column identifies this migration.
+      const pricingSummaryColumns = readTableInfo(db, "thread_pricing_summaries");
+      const pricingDeltasMissing = pricingSummaryColumns.length > 0
+        && !pricingSummaryColumns.some((column) => column.name === "ledger_delta_ready");
+      if ((db.pragma("user_version", { simple: true }) as number) < 85 || pricingDeltasMissing) {
+        db.transaction(() => {
+          // Install capture only. Legacy summaries become delta-ready from
+          // the existing scoped summary read, inside a normal ledger write.
+          ensureThreadPricingSummaryDeltas(db);
+          if ((db.pragma("user_version", { simple: true }) as number) < 85) {
+            db.pragma("user_version = 85");
+          }
+        }).immediate();
+      }
+      // A branch may already have claimed this version. Repair absent
+      // projection objects and rebuild their totals together under the lock.
+      if ((db.pragma("user_version", { simple: true }) as number) < 86
+        || !hasScheduledActionProjectionSchema(db)) {
+        db.transaction(() => {
+          if (!hasScheduledActionProjectionSchema(db)) db.exec(SCHEDULED_ACTION_PROJECTION_SCHEMA);
+          if ((db.pragma("user_version", { simple: true }) as number) < 86) db.pragma("user_version = 86");
+        }).immediate();
+      }
       db.exec(OWNER_JOB_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
+      ensureThreadManagedMembershipSchema(db);
       ensureThreadUsageActivitySchema(db);
       removeUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
@@ -2477,6 +2568,7 @@ export class StateDb {
       this.db
         .prepare("DELETE FROM composer_draft_latest WHERE updated_at < ?")
         .run(now - COMPOSER_DRAFT_LATEST_RETENTION_MS);
+      reclaimEmptyLegacyMembershipIndex(this.db);
     });
     cleanup();
     if (reclaimPages !== 0) this.db.pragma(reclaimPages === undefined ? "incremental_vacuum" : `incremental_vacuum(${Math.max(0, Math.floor(reclaimPages))})`);
@@ -2493,6 +2585,13 @@ export class StateDb {
     this.db
       .prepare("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)")
       .run(key, value);
+  }
+
+  getOrInsertMeta(key: string, value: string): string {
+    const existing = this.getMeta(key);
+    if (existing !== undefined) return existing;
+    this.db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").run(key, value);
+    return this.getMeta(key)!;
   }
 
   getSecret(key: string): Buffer | undefined {
@@ -2913,11 +3012,18 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingCumulativeColumns(db);
     ensureThreadUsageRequestPricingColumns(db);
     ensureThreadUsagePricingIndexes(db);
+    ensureThreadPricingSummaryReadIndexes(db);
     // Current and newer partial profiles skip the numbered migration ladder.
     // Repair the mapping after FTS convergence, in this same transaction. Older
     // profiles first finish identity migrations, then create it in v82.
     if ((db.pragma("user_version", { simple: true }) as number) >= 82) {
       ensureThreadSearchIdentityIndexes(db);
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) >= 83) {
+      ensureThreadUsageGatePricingIndexes(db);
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) >= 84) {
+      db.exec(THREAD_USAGE_LINE_COMPLETION_INDEX);
     }
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     ensureThreadToolIncidentExplorerSchema(db);
@@ -2938,6 +3044,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     // other's table. Both are idempotent.
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
     db.exec(THREAD_REVIEW_SCHEMA);
+    db.exec(OPERATOR_REQUEST_SCHEMA);
+    db.exec(OPERATOR_REQUEST_SCOPE_INDEXES);
     ensureThreadReviewFindingStatusNames(db);
     db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
     db.exec(RESEARCH_SCHEMA);
@@ -3148,9 +3256,8 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
   ON thread_usage_turns(provider, backend, thread_id, observed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
-  ON thread_usage_turns(provider, backend, thread_id, turn_id);
 `);
+  db.exec(THREAD_USAGE_TURN_IDENTITY_INDEX);
 
   const providerScopedSummaries = Boolean(db.prepare(
     "SELECT 1 FROM pragma_table_info('thread_pricing_summaries') WHERE name = 'provider' AND pk > 0",
@@ -3666,15 +3773,49 @@ function ensureThreadUsagePricingIndexes(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
   ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
   WHERE status != 'superseded';
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
-  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
-  WHERE status != 'superseded';
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
   ON thread_usage_lines(provider, backend, currency, thread_id)
   WHERE status != 'superseded';
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
   ON thread_usage_lines(provider, backend, currency, parent_thread_id)
   WHERE status != 'superseded';
+`);
+  db.exec(THREAD_USAGE_LINE_PARENT_INDEX);
+}
+
+function ensureThreadPricingSummaryReadIndexes(db: BetterSqlite3.Database): void {
+  // Use the current schema transaction so existing profiles build the indexes
+  // once. Summary readers seek by thread and sort its few provider/currency
+  // groups. The two provenance indexes contain only priced reference lines.
+  // Keep their predicates in sync with readThreadPricingSummaries.
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_pricing_summaries_thread
+  ON thread_pricing_summaries(backend, thread_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_assumed_thread
+  ON thread_usage_lines(backend, thread_id, provider, currency)
+  WHERE status != 'superseded' AND price_status = 'priced' AND pricing_catalog_id = 'openrouter-assumed';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_assumed_parent
+  ON thread_usage_lines(backend, parent_thread_id, provider, currency)
+  WHERE status != 'superseded' AND price_status = 'priced' AND pricing_catalog_id = 'openrouter-assumed'
+    AND parent_thread_id IS NOT NULL;
+`);
+}
+
+function ensureThreadUsageGatePricingIndexes(db: BetterSqlite3.Database): void {
+  db.exec(`
+-- Reorder the turn index so gate reads can seek without a provider. Writes
+-- with all four equality constraints still seek the same keys.
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
+  ON thread_usage_lines(backend, thread_id, turn_id, provider);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
+  ON thread_usage_lines(backend, thread_id, source_item_id)
+  WHERE status != 'superseded' AND source_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gate_child_source
+  ON thread_usage_lines(backend, parent_thread_id, source_item_id)
+  WHERE status != 'superseded' AND parent_thread_id IS NOT NULL AND source_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gate_usage_turn
+  ON thread_usage_lines(backend, thread_id, usage_turn_id)
+  WHERE status != 'superseded' AND usage_turn_id IS NOT NULL;
 `);
 }
 

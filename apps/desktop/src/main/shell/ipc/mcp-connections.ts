@@ -3,6 +3,11 @@ import {
   isMcpConnectionToolApproval,
   isBoatLinkTarget,
   isBoatSignInMethod,
+  isBoatSandboxPort,
+  isBoatThreadSandboxAction,
+  type ChangeThreadBoatSandboxRequest,
+  type ListThreadBoatSandboxesRequest,
+  type ListThreadBoatSandboxesResponse,
   type StartBoatSignInRequest,
   isSandboxerLinkTarget,
   isSandboxerTransport,
@@ -26,6 +31,8 @@ import {
   type DisconnectMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
+  type ReadMcpIpcBearerTokenStateRequest,
+  type ReadMcpIpcBearerTokenStateResponse,
   type ConnectPwrGitResponse,
   type ListMcpConnectionsRequest,
   type ListMcpConnectionsResponse,
@@ -82,6 +89,8 @@ import {
   MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL,
   MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL,
+  MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL,
+  MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
@@ -93,6 +102,7 @@ import {
   MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
   MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
+  MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
@@ -383,6 +393,41 @@ export function registerMcpConnectionIpcHandlers(
       return { connectionId: connection.id, connection };
     },
   );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL,
+    async (event, request: ListThreadBoatSandboxesRequest): Promise<ListThreadBoatSandboxesResponse> => {
+      // The key that reads them, and the bill, are this machine's.
+      requireLocalOwner(event);
+      if (typeof request?.threadId !== "string" || typeof request.backend !== "string") {
+        throw new Error("Name the thread whose Boat sandboxes to list.");
+      }
+      return await service.listThreadBoatSandboxes({ backend: request.backend, threadId: request.threadId });
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL,
+    async (event, request: ChangeThreadBoatSandboxRequest): Promise<ListThreadBoatSandboxesResponse> => {
+      requireLocalOwner(event);
+      if (
+        typeof request?.threadId !== "string"
+        || typeof request.backend !== "string"
+        || typeof request.sandboxId !== "string"
+        || !isBoatThreadSandboxAction(request.action)
+        || (request.action === "close_forward" && !isBoatSandboxPort(request.port))
+      ) {
+        throw new Error("Name the Boat sandbox and whether to stop or delete it, or which tunnel to close.");
+      }
+      return await service.changeThreadBoatSandbox({
+        backend: request.backend,
+        threadId: request.threadId,
+        sandboxId: request.sandboxId,
+        action: request.action,
+        ...(request.action === "close_forward" ? { port: request.port } : {}),
+      });
+    },
+  );
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_OPEN_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_BOAT_OPEN_CHANNEL,
@@ -492,6 +537,17 @@ export function registerMcpConnectionIpcHandlers(
     ): Promise<ListMcpConnectionToolsResponse> => {
       requireLocalOwner(event);
       return await service.listConnectionTools(request);
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL,
+    async (
+      event,
+      request: ReadMcpIpcBearerTokenStateRequest,
+    ): Promise<ReadMcpIpcBearerTokenStateResponse> => {
+      requireLocalOwner(event);
+      return await service.readIpcBearerTokenState(request);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_SET_THREAD_CHANNEL);
@@ -803,6 +859,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(PWRSUITE_INSTALLER_REVEAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_READ_IPC_BEARER_TOKEN_STATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL);
@@ -813,6 +870,8 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_CANCEL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_BOAT_SIGN_IN_OPEN_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOXES_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_BOAT_THREAD_SANDBOX_CHANGE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_SANDBOX_POLICY_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_BOAT_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);

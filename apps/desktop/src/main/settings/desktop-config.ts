@@ -160,6 +160,7 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
+    hotCpuProfilingCaptureChromiumTrace?: boolean;
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
@@ -193,7 +194,6 @@ export type DesktopSettingsConfig = {
   experimental?: {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
-    liveTranscriptEventFiltering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -204,14 +204,10 @@ export type DesktopSettingsConfig = {
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;
-    threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
     codexConfigWarningsDismissed?: string[];
     managedReview?: boolean;
-    diffCondensation?: {
-      enabled?: boolean;
-    };
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
@@ -413,6 +409,7 @@ export type DesktopSettingsConfig = {
     backgroundPrPolling?: boolean;
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
+    watchMergeBuilds?: boolean;
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
@@ -472,6 +469,7 @@ type TomlScalar = TomlValue;
 
 const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
 const LEGACY_SETTINGS_MARKER = "pwragent-legacy-settings";
+const RETIRED_DIFF_CONDENSATION_HELPER_ID = "diff_condensation";
 const LEGACY_PROVIDER_DEFAULTS_LAST_VERSION = "1.4.10";
 const LEGACY_PROVIDER_DEFAULTS_SHAPE = "backend-table-array";
 const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
@@ -846,6 +844,12 @@ export function desktopSettingsPatchToEdits(
       patch.general.hotCpuProfilingSlowburnThresholdPercent,
     );
   }
+  if (typeof patch.general?.hotCpuProfilingCaptureChromiumTrace === "boolean") {
+    set(
+      ["general", "hot_cpu_profiling_capture_chromium_trace"],
+      patch.general.hotCpuProfilingCaptureChromiumTrace,
+    );
+  }
   if (patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined) {
     set(
       ["general", "hot_cpu_profiling_capture_heap_snapshot"],
@@ -1000,22 +1004,10 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
-  if (patch.experimental?.diffCondensation?.enabled !== undefined) {
-    set(
-      ["experimental", "diff_condensation", "enabled"],
-      patch.experimental.diffCondensation.enabled,
-    );
-  }
   if (patch.experimental?.fullAccessRiskWarningDismissed !== undefined) {
     set(
       ["experimental", "full_access_risk_warning_dismissed"],
       patch.experimental.fullAccessRiskWarningDismissed,
-    );
-  }
-  if (patch.experimental?.liveTranscriptEventFiltering !== undefined) {
-    set(
-      ["experimental", "live_transcript_event_filtering"],
-      patch.experimental.liveTranscriptEventFiltering,
     );
   }
   if (patch.experimental?.threadPricingSummary !== undefined) {
@@ -1079,12 +1071,6 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "token_miser_default_enabled"],
       patch.experimental.tokenMiserDefaultEnabled,
-    );
-  }
-  if (patch.experimental?.threadToolAccounting !== undefined) {
-    set(
-      ["experimental", "thread_tool_accounting"],
-      patch.experimental.threadToolAccounting,
     );
   }
   if (patch.experimental?.codexToolDiscovery !== undefined) {
@@ -2104,45 +2090,10 @@ export function desktopSettingsPatchToEdits(
       : { op: "deleteTableArray", path: ["models", "usage_account_names"] });
   }
   if (patch.models?.helperModels !== undefined) {
-    const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
-    if (helperModels.defaultModel) {
-      set(["models", "helper_default_model"], helperModels.defaultModel);
-    } else {
-      edits.push({ op: "delete", path: ["models", "helper_default_model"] });
-    }
-    if (helperModels.defaultReasoningEffort) {
-      set(
-        ["models", "helper_default_reasoning_effort"],
-        helperModels.defaultReasoningEffort,
-      );
-    } else {
-      edits.push({
-        op: "delete",
-        path: ["models", "helper_default_reasoning_effort"],
-      });
-    }
-    const entries = Object.entries(helperModels.helpers)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([helper, choice]) => ({
-        helper,
-        ...(choice.backend ? { backend: choice.backend } : {}),
-        ...(choice.model ? { model: choice.model } : {}),
-        ...(choice.reasoningEffort
-          ? { reasoning_effort: choice.reasoningEffort }
-          : {}),
-      }));
-    if (entries.length > 0) {
-      edits.push({
-        op: "setTableArray",
-        path: ["models", "helper_models"],
-        value: entries,
-      });
-    } else {
-      edits.push({
-        op: "deleteTableArray",
-        path: ["models", "helper_models"],
-      });
-    }
+    edits.push(...helperModelSettingsToEdits(
+      patch.models.helperModels,
+      currentTables.models?.helper_models,
+    ));
   }
   if (patch.models?.taskMonitorModels !== undefined) {
     const entries = Object.entries(
@@ -2306,6 +2257,9 @@ export function desktopSettingsPatchToEdits(
       ["git", "default_pr_auto_dispatch_enabled"],
       patch.git.defaultPrAutoDispatchEnabled,
     );
+  }
+  if (patch.git?.watchMergeBuilds !== undefined) {
+    set(["git", "watch_merge_builds"], patch.git.watchMergeBuilds);
   }
   if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
     set(
@@ -2472,7 +2426,6 @@ function normalizeDesktopConfig(
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
-  const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
   const integratedTerminal = tables["integrated_terminal"];
@@ -2538,6 +2491,9 @@ function normalizeDesktopConfig(
       ),
       hotCpuProfilingSlowburnThresholdPercent: readNumber(
         general?.hot_cpu_profiling_slowburn_threshold_percent,
+      ),
+      hotCpuProfilingCaptureChromiumTrace: readBoolean(
+        general?.hot_cpu_profiling_capture_chromium_trace,
       ),
       hotCpuProfilingCaptureHeapSnapshot: readBoolean(
         general?.hot_cpu_profiling_capture_heap_snapshot,
@@ -2624,9 +2580,6 @@ function normalizeDesktopConfig(
       fullAccessRiskWarningDismissed: readBoolean(
         experimental?.full_access_risk_warning_dismissed,
       ),
-      liveTranscriptEventFiltering: readBoolean(
-        experimental?.live_transcript_event_filtering,
-      ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(
         experimental?.thread_pricing_display_usd,
@@ -2647,7 +2600,6 @@ function normalizeDesktopConfig(
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
       researchEnabled: readBoolean(experimental?.research_enabled),
-      threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,
       ),
@@ -2658,9 +2610,6 @@ function normalizeDesktopConfig(
         experimental?.codex_config_warnings_dismissed,
       ),
       managedReview: readBoolean(experimental?.managed_review),
-      diffCondensation: {
-        enabled: readBoolean(diffCondensation?.enabled),
-      },
     },
     imageUploads: {
       pastedImageMaxPatches: readNumber(
@@ -2963,6 +2912,7 @@ function normalizeDesktopConfig(
       defaultPrAutoDispatchEnabled: readBoolean(
         git?.default_pr_auto_dispatch_enabled,
       ),
+      watchMergeBuilds: readBoolean(git?.watch_merge_builds),
       prAutoDispatchBudgetCapacity: readNumber(
         git?.pr_auto_dispatch_budget_capacity,
       ),
@@ -3045,6 +2995,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.hotCpuProfilingTriggerMode;
   const hotCpuProfilingSlowburnThresholdPercent =
     config.general?.hotCpuProfilingSlowburnThresholdPercent;
+  const hotCpuProfilingCaptureChromiumTrace =
+    config.general?.hotCpuProfilingCaptureChromiumTrace;
   const hotCpuProfilingCaptureHeapSnapshot =
     config.general?.hotCpuProfilingCaptureHeapSnapshot;
   const hotCpuProfilingHeapSnapshotLimit =
@@ -3077,6 +3029,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingStartDelayMs !== undefined ||
     hotCpuProfilingTriggerMode !== undefined ||
     hotCpuProfilingSlowburnThresholdPercent !== undefined ||
+    hotCpuProfilingCaptureChromiumTrace !== undefined ||
     hotCpuProfilingCaptureHeapSnapshot !== undefined ||
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
@@ -3112,6 +3065,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (hotCpuProfilingSlowburnThresholdPercent !== undefined) {
       pruned.general.hotCpuProfilingSlowburnThresholdPercent =
         hotCpuProfilingSlowburnThresholdPercent;
+    }
+    if (hotCpuProfilingCaptureChromiumTrace !== undefined) {
+      pruned.general.hotCpuProfilingCaptureChromiumTrace = hotCpuProfilingCaptureChromiumTrace;
     }
     if (hotCpuProfilingCaptureHeapSnapshot !== undefined) {
       pruned.general.hotCpuProfilingCaptureHeapSnapshot =
@@ -4061,6 +4017,47 @@ function readUsageAccountNames(value: unknown): Record<string, string> | undefin
   return Object.keys(names).length ? names : undefined;
 }
 
+function helperModelSettingsToEdits(
+  patch: DesktopHelperModelSettings,
+  existingRows: TomlScalar | undefined,
+): TomlEdit[] {
+  const { defaultModel, defaultReasoningEffort, helpers } = normalizeHelperModelSettings(patch);
+  const entries = Object.entries(helpers)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([helper, choice]) => ({
+      helper,
+      ...(choice.backend ? { backend: choice.backend } : {}),
+      ...(choice.model ? { model: choice.model } : {}),
+      ...(choice.reasoningEffort ? { reasoning_effort: choice.reasoningEffort } : {}),
+    }));
+  // Keep existing overrides for this retired helper when rewriting the
+  // array, so a downgrade can still recover the operator's choice.
+  const retiredRows = Array.isArray(existingRows)
+    ? existingRows.flatMap((row) => (
+      typeof row === "object" && readString(row.helper) === RETIRED_DIFF_CONDENSATION_HELPER_ID
+        ? [row]
+        : []
+    ))
+    : [];
+  const rows = [...entries, ...retiredRows];
+  const defaultModelPath = ["models", "helper_default_model"];
+  const defaultEffortPath = ["models", "helper_default_reasoning_effort"];
+  const rowsPath = ["models", "helper_models"];
+  return [
+    defaultModel
+      ? { op: "set", path: defaultModelPath, value: defaultModel }
+      : { op: "delete", path: defaultModelPath },
+    defaultReasoningEffort
+      ? { op: "set", path: defaultEffortPath, value: defaultReasoningEffort }
+      : { op: "delete", path: defaultEffortPath },
+    // An inline array and an array of tables cannot define the same key.
+    { op: "delete", path: rowsPath },
+    rows.length > 0
+      ? { op: "setTableArray", path: rowsPath, value: rows }
+      : { op: "deleteTableArray", path: rowsPath },
+  ];
+}
+
 function normalizeHelperModelSettings(
   value: DesktopHelperModelSettings,
 ): DesktopHelperModelSettings {
@@ -4069,6 +4066,7 @@ function normalizeHelperModelSettings(
   const helpers: Record<string, DesktopHelperModelChoice> = {};
   for (const [helper, choice] of Object.entries(value.helpers)) {
     const id = helper.trim();
+    if (id === RETIRED_DIFF_CONDENSATION_HELPER_ID) continue;
     const normalized = id ? normalizeHelperModelChoice(choice) : undefined;
     if (normalized) helpers[id] = normalized;
   }
@@ -4098,7 +4096,7 @@ function readHelperModelSettings(
         continue;
       }
       const helper = typeof item.helper === "string" ? item.helper.trim() : "";
-      if (!helper || helpers[helper]) continue;
+      if (!helper || helper === RETIRED_DIFF_CONDENSATION_HELPER_ID || helpers[helper]) continue;
       const choice = normalizeHelperModelChoice({
         backend: item.backend,
         model: item.model,

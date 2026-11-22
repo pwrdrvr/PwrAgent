@@ -61,6 +61,18 @@ before launch. `handoff_task` and `create_instance_thread` already accept
 provider overrides, but create threads immediately rather than configure a
 card for later operator dispatch.
 
+`placement` says where the started thread is filed. `sibling`, the
+default, files it beside the raising thread, under that thread's parent, or
+top-level when the raising thread has no parent. `sub_thread` files it under
+the raising thread; use it only for work that belongs to that thread alone.
+`top_level` starts a thread of its own in the project. A card for another
+project, or a start on another machine, is always top-level, and an explicit
+`sub_thread` there is refused. The operator can change the placement on the
+card before starting it. A Federation viewer sends that pick only to an
+owner that advertises `thread_todo_placement`, and offers Sibling only to an
+owner that also advertises `thread_todo_placement_sibling`. An older owner
+treats an unnamed placement as a sub-thread.
+
 `update_review_item` also accepts other names. `dismissed` is the older name
 for declined. Claude Code's code review reports `fixed`, `no_change_needed`,
 and `skipped`, and treats all three as settled. `fixed` means addressed. The
@@ -95,6 +107,11 @@ The shared dynamic-tool and MCP catalog exposes four thread-scoped tools:
 | `list_reviews` | Read reviews and findings with ids and resolutions; defaults to open. Use `status: "all"` to inspect dismissals. While a finding is open, the result carries `guidance`: work on findings only when the operator asks, and settle each one as addressed, declined, or deferred with `update_review_item`. |
 | `update_review_item` | Settle a finding as `addressed`, `declined`, or `deferred` (with `todoId`), or reopen it, with a `note` and optional `url` documenting the outcome. |
 | `update_review` | Dismiss, reopen, or document a handled review with a `note` and optional `url`. |
+
+A review that names a pull request also decides when PwrAgent offers to
+merge it. Settling the last finding records the reviewed checkout's HEAD as
+the commit the findings were fixed through, so commit a fix before marking
+it addressed. See [PR review readiness](pr-review-readiness.md).
 
 The trusted calling context supplies backend and thread identity. An agent
 cannot inspect or mutate another thread's review by passing its id. Reusing a
@@ -290,9 +307,11 @@ id: a review runs as a turn of its own thread, and its artifact lands in that
 turn, inline or from a sub-agent. A review that lands before its start
 returns matches the thread's pending start. A refused start removes only
 itself, so a running review keeps its own choice. A review PwrAgent did not
-start, such as a typed `/code-review`, never fixes; one started from the
-review panel's Claude Code mode does, because the owner arms it on the turn
-that sends the command. An app restart ends the
+start, such as a typed `/code-review`, never fixes. A review in Claude Code
+mode is never armed either: its Auto-fix is Claude Code's own `--fix`, which
+the owner adds to the command and which settles the findings in the review's
+own turn. The panel's and the messaging picker's command preview show it. A
+bare `/code-review` typed in messaging stays bare. An app restart ends the
 review's turn, so nothing needs to outlive it.
 `review-auto-fix.property.test.ts` holds these rules against a model of the
 reviews.

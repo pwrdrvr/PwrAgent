@@ -1256,9 +1256,10 @@ export type MaterializeDirectoryLaunchpadOptions = {
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
+  /** Local host hook. May supply the origin for the inline first turn once its thread is known. */
   onThreadMaterialized?: (
     thread: MaterializedDirectoryLaunchpadThread,
-  ) => void | Promise<void>;
+  ) => void | AppServerThreadMessageOrigin | Promise<void | AppServerThreadMessageOrigin>;
 };
 
 export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchpadThread & {
@@ -1530,10 +1531,12 @@ export type RegisterDirectoryFromDiskResponse =
   | {
       ok: true;
       /**
-       * Canonical Git root when detected, otherwise the selected folder
+       * Primary Git checkout when detected, otherwise the selected folder
        * path. The directoryKey uses this path with the `directory:` prefix.
        */
       directoryPath: string;
+      /** Selected linked checkout root, when it differs from the project path. */
+      checkoutPath?: string;
       directoryKey: string;
       directoryLabel: string;
       currentBranch?: string;
@@ -1558,6 +1561,8 @@ export type AgentEvent = {
    * or to membership changes. Owners omit the field when it exceeds bounds.
    */
   navigationDirectoryScope?: { version: 1; directoryKeys: string[] };
+  /** Forge-confirmed status key aliases for the local renderer. Never federated. */
+  navigationPullRequestKeyAliases?: string[];
   /** Navigable owner of a stream notice, captured before a private helper is finalized. */
   errorNoticeContext?: {
     backend: AppServerBackendKind;

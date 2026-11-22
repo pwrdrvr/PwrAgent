@@ -494,9 +494,7 @@ describe("settings ipc", () => {
       {
         patch: {
           experimental: {
-            diffCondensation: {
-              enabled: true,
-            },
+            fullAccessRiskWarningDismissed: true,
           },
         },
       },
@@ -504,13 +502,13 @@ describe("settings ipc", () => {
     expect(writeResponse).toMatchObject({
       update: {
         normalizedPatch: {
-          experimental: { diffCondensation: { enabled: true } },
+          experimental: { fullAccessRiskWarningDismissed: true },
         },
         scheduledProviderRefreshes: [],
       },
       snapshot: {
         experimental: {
-          diffCondensation: { enabled: { value: true } },
+          fullAccessRiskWarningDismissed: { value: true, source: "config" },
         },
       },
     });
@@ -535,7 +533,7 @@ describe("settings ipc", () => {
 
     const readResponse = await handlers.get(SETTINGS_READ_CHANNEL)?.({});
     const encoded = JSON.stringify(readResponse);
-    expect(encoded).toContain("diffCondensation");
+    expect(encoded).toContain("fullAccessRiskWarningDismissed");
     expect(encoded).not.toContain("123456789:secret-token");
     expect(encoded).not.toContain("discord-secret");
     expect(readSettings).toHaveBeenCalledTimes(2);

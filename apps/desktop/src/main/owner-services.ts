@@ -1,3 +1,6 @@
+import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
+import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
+import { disposeResourceCheckouts, initializeResourceCheckouts } from "./resource-checkouts/checkout-runtime";
 import { createDesktopBackendRegistry } from "./app-server/backend-registry-wiring";
 import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { createResearchOwnerIdentity } from "./research/research-owner-identity";
@@ -34,6 +37,7 @@ import { initializeDesktopBackendRegistry } from "./app-server/backend-registry"
 import { initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
+import { DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE } from "@pwragent/shared/contracts/messaging";
 import { initializeRuntimeLeaseManager } from "./runtime-lease-manager";
 import { initializeRuntimeFederationLeaseCoordinator } from "./runtime-federation-lease";
 import { initializeRuntimeMessagingLeaseCoordinator } from "./runtime-messaging-lease";
@@ -108,6 +112,7 @@ export interface OwnerStartOptions {
     closeAppServerIpc?: () => Promise<void>;
     observer?: Parameters<typeof createShutdownBarrier>[0]["observer"];
   };
+  approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
   onStateInitialized?: (state: ReturnType<typeof initializeDesktopState>) => void;
 }
 
@@ -436,6 +441,19 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     });
   }
   const federationRuntime = initializeDesktopFederationRuntime();
+  const resourceCheckouts = bootMode === "active-profile"
+    ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts, host.application.isPackaged)
+    : undefined;
+  if (resourceCheckouts) registry.setResourceCheckoutHandler(
+    createResourceCheckoutToolHandler(
+      resourceCheckouts,
+      (context, resourceId, key, continuation) => service.registerResourceCheckoutContinuation(context, resourceId, key, continuation),
+      (context, { instanceId, ...target }, prompt, bind) => registry.sendResourceCheckoutHandoff(context, {
+        ...target, ...(instanceId === resourceCheckouts.handoffInstanceId() ? {} : { instanceId }),
+      }, prompt, bind),
+    ),
+    (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+  );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({
       authorize: (context, phase) => registry.canManagePwrAgent(context, false, phase === "accepted"),
@@ -614,12 +632,13 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
 
 wireAppServerOwnerServices();
 wireOwnerRendererEvents();
-  const messagingRuntime = initializeDesktopMessagingRuntime((options) =>
-    loadDesktopMessagingConfigFromSettings(
+  const messagingRuntime = initializeDesktopMessagingRuntime(
+    (options) => loadDesktopMessagingConfigFromSettings(
       getDesktopSettingsService(),
       process.env,
       options,
     ),
+    () => config.read("messaging").toolUpdateMode ?? DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE,
   );
 
   getDesktopBackendRegistry().setMessagingArchiveCleaner({
@@ -627,6 +646,7 @@ wireOwnerRendererEvents();
       messagingRuntime.requestBindingRevokeAllForThread(request),
   });
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
+  if (bootMode === "active-profile") registry.setMessagingWorkingUpdatesSettings(settings);
   wireOwnerMessagingServices(messagingRuntime);
 
 
@@ -713,21 +733,19 @@ wireOwnerRendererEvents();
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  let messagingConfigFingerprint = JSON.stringify({
-    messaging: getDesktopConfigStore().read("messaging"),
-    pdfAnalysisEnabled:
-      getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
-      ?? true,
-  });
+  const fingerprintMessagingLifecycleConfig = () => {
+    // Controllers read this default from the current config snapshot.
+    const { toolUpdateMode: _toolUpdateMode, ...messaging } = config.read("messaging");
+    return JSON.stringify({
+      messaging,
+      pdfAnalysisEnabled: config.read("general").settings.pdfAnalysisEnabled ?? true,
+    });
+  };
+  let messagingConfigFingerprint = fingerprintMessagingLifecycleConfig();
   ownerSubscriptions.add(getDesktopConfigStore().subscribe(
     ["general", "messaging"],
     () => {
-      const nextFingerprint = JSON.stringify({
-        messaging: getDesktopConfigStore().read("messaging"),
-        pdfAnalysisEnabled:
-          getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
-          ?? true,
-      });
+      const nextFingerprint = fingerprintMessagingLifecycleConfig();
       if (nextFingerprint === messagingConfigFingerprint) {
         return;
       }
@@ -792,7 +810,7 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
-    queues,
+    queues, resourceCheckouts,
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
       if (previousProviderDefaults) {
@@ -917,6 +935,8 @@ export async function disposeOwnerServices(source: string, remainingTimeoutMs?: 
   ownerShutdownStarted = true;
   mainProcessShutdownPromise ??= (async () => {
     disposeDesktopAutomationService();
+    const checkoutShutdown = disposeResourceCheckouts(remainingTimeoutMs === undefined ? undefined : Math.min(2_000, remainingTimeoutMs))
+      .catch((error: unknown) => mainLog.warn("checkout shutdown failed", { error: String(error) }));
     if (shutdownOwner) {
       await shutdownOwner(source, remainingTimeoutMs);
     } else {
@@ -929,6 +949,7 @@ export async function disposeOwnerServices(source: string, remainingTimeoutMs?: 
     }
     // Keep the scheduler subscribed until registry shutdown drains accepted work.
     disposeScheduledThreadActionService();
+    await checkoutShutdown;
     disposeDesktopSettingsService();
     getExistingRuntimeLeaseManager()?.markExited();
     stopProfileRuntimeHeartbeatRefresh();

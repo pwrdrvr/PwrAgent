@@ -8,24 +8,25 @@ export function useJobMonitorWakeNotices(
   showNotice: (notice: AppNoticeToastNotice) => void,
 ): AppNoticeToastNotice[] {
   const [alerts, setAlerts] = useState<JobMonitorWakeAlert[]>([]);
-  const revision = useRef(0);
+  const reads = useRef({ revision: 0 });
   const manage = api?.manageThreadPendingWakes;
   const subscribe = api?.onAgentEvent;
   const refresh = useCallback(async () => {
     if (!manage) return;
-    const reading = ++revision.current;
+    const reading = ++reads.current.revision;
     const result = await manage({ action: "list_monitor_wake_alerts" });
-    if (reading === revision.current && result.ok) setAlerts(result.monitorWakeAlerts ?? []);
+    if (reading === reads.current.revision && result.ok) setAlerts(result.monitorWakeAlerts ?? []);
   }, [manage]);
 
   useEffect(() => {
+    const requests = reads.current;
     const reload = () => { void refresh().catch(() => undefined); };
     const unsubscribe = subscribe?.((event) => {
       if (event.notification.method === "thread/taskMonitorWakeGuard/updated" && event.federationTarget?.scope !== "remote") reload();
     });
     reload();
     return () => {
-      revision.current++;
+      requests.revision++;
       unsubscribe?.();
     };
   }, [refresh, subscribe]);

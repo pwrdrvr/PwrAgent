@@ -1,7 +1,8 @@
+import { navigationDirectoryGitRevisions } from "@pwragent/owner-core/navigation-query-projection";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
-import { type AgentEvent, type EnsureDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
+import { type EnsureDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import {
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
@@ -396,13 +397,14 @@ export class DesktopDirectoryGitStatus {
       params: {
         directoryKey: params.directoryKey,
         gitStatus: params.gitStatus ?? null,
+        directoryGitRevisions: navigationDirectoryGitRevisions(params.gitStatus),
         fetchedAt: params.fetchedAt,
       },
     };
     await this.ports.publishLocalEvent({
       backend: "codex",
       notification,
-    } as unknown as AgentEvent);
+    });
   }
 
   applyCachedStatus(directory: NavigationSnapshot["directories"][number]): NavigationSnapshot["directories"][number] {

@@ -18,11 +18,9 @@ import {
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
-  AppServerThreadEntry,
   CodexEnvironmentActionRun,
   ThreadCompactionRecord,
-  ThreadToolAccounting,
-  ThreadToolInvocationRecord,
+  ThreadTokenMiserAccounting,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
 import type { EditGroupCommitState, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -33,23 +31,22 @@ import { isThreadPendingWakeLive } from "@pwragent/shared/contracts/thread-pendi
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
+  ActivityIcon,
   AutomationsIcon,
-  ConnectionsIcon,
   DecisionsIcon,
   EditsIcon,
+  GaugeIcon,
   InfoIcon,
-  HistoryIcon,
   HourglassIcon,
   PauseIcon,
+  PlugIcon,
   PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
-  ServerIcon,
   SubAgentsIcon,
   ResearchIcon,
   TerminalIcon,
   TodoIcon,
-  ToolCallsIcon,
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -78,7 +75,6 @@ import { WaitingForPanel } from "./context-panels/WaitingForPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
-import { ToolCallsPanel } from "./context-panels/ToolCallsPanel";
 import { DecisionsPanel } from "./context-panels/DecisionsPanel";
 import { decisionsRailHasContent } from "./context-panels/decisions-format";
 import { useDecisionsRail } from "./context-panels/useDecisionsRail";
@@ -101,28 +97,36 @@ const noop = (): void => {};
 type ContextTab = {
   id: ContextTabId;
   label: string;
+  /** What the panel holds, after the name in the tab's tooltip. The rail is
+   *  icon-only, so this line is the only place the tab explains itself. */
+  hint: string;
   Icon: ComponentType<IconProps>;
   /** Anchored to the bottom of the tab rail (below the spacer). */
   bottom?: boolean;
 };
 
 const CONTEXT_TABS: ContextTab[] = [
-  { id: "connections", label: "Connections", Icon: ConnectionsIcon },
-  { id: "info", label: "Thread info", Icon: InfoIcon },
-  { id: "todos", label: "To-dos", Icon: TodoIcon },
-  { id: "research", label: "Research", Icon: ResearchIcon },
-  { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
-  { id: "edits", label: "Edits", Icon: EditsIcon },
-  { id: "pricing", label: "Pricing", Icon: PricingIcon },
-  { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
-  { id: "decisions", label: "Decisions", Icon: DecisionsIcon },
-  { id: "actions", label: "Actions", Icon: TerminalIcon },
-  { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
-  { id: "automations", label: "Automations", Icon: AutomationsIcon },
-  { id: "pr-activity", label: "PR activity", Icon: HistoryIcon },
-  { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
-  { id: "projects", label: "Linked projects", Icon: ProjectsIcon },
-  { id: "providers", label: "AI provider info", Icon: ServerIcon, bottom: true },
+  { id: "connections", label: "Connections", hint: "PwrGit, PwrSnap, and Sandboxer", Icon: PlugIcon },
+  { id: "info", label: "Thread info", hint: "status, IDs, and where it runs", Icon: InfoIcon },
+  { id: "todos", label: "To-dos", hint: "cards raised for this thread", Icon: TodoIcon },
+  { id: "research", label: "Research", hint: "this thread's research runs", Icon: ResearchIcon },
+  { id: "waiting", label: "Waiting for", hint: "wakes, watches, and follow-ups", Icon: HourglassIcon },
+  { id: "edits", label: "Edits", hint: "files this thread changed", Icon: EditsIcon },
+  { id: "pricing", label: "Pricing", hint: "token usage and cost", Icon: PricingIcon },
+  { id: "decisions", label: "Decisions", hint: "decision batches this thread ran", Icon: DecisionsIcon },
+  { id: "actions", label: "Actions", hint: "agent commands running in the background", Icon: TerminalIcon },
+  { id: "subagents", label: "Sub-agents", hint: "agents this thread spawned", Icon: SubAgentsIcon },
+  { id: "automations", label: "Automations", hint: "scheduled runs for this thread", Icon: AutomationsIcon },
+  { id: "pr-activity", label: "PR activity", hint: "what Auto-fix did on this thread's PRs", Icon: ActivityIcon },
+  { id: "prs", label: "Pull requests", hint: "attached PRs and their watches", Icon: PullRequestIcon },
+  { id: "projects", label: "Linked projects", hint: "directories this thread works in", Icon: ProjectsIcon },
+  {
+    id: "providers",
+    label: "AI provider info",
+    hint: "accounts, rate limits, and usage pace",
+    Icon: GaugeIcon,
+    bottom: true,
+  },
 ];
 
 type ThreadContextPanelProps = {
@@ -188,11 +192,7 @@ type ThreadContextPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
-  toolAccounting?: ThreadToolAccounting;
-  toolCallEntries?: AppServerThreadEntry[];
-  loadingToolCallDetailItemId?: string;
-  onRequestToolCallDetails?: (invocation: ThreadToolInvocationRecord) => void;
-  onAnalyzeToolHistory?: () => void;
+  tokenMiserAccounting?: ThreadTokenMiserAccounting;
   onOpenToolOutputIncidentExplorer?: (
     lens?: ToolOutputIncidentExplorerLens,
   ) => void;
@@ -201,7 +201,6 @@ type ThreadContextPanelProps = {
     usd: boolean;
   };
   threadPricingSummaryEnabled?: boolean;
-  threadToolAccountingEnabled?: boolean;
   researchEnabled?: boolean;
   /** Absent on the new-thread launchpad, where only provider context applies. */
   thread?: NavigationPresentedThread;
@@ -248,7 +247,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     onActionRunsDockChange,
     onShowActionRunsAboveComposer,
   } = props;
-  const threadBackend = props.thread?.source;
   const openIncidentExplorer = useCallback(() => {
     onOpenToolOutputIncidentExplorer?.();
   }, [onOpenToolOutputIncidentExplorer]);
@@ -264,27 +262,18 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   );
   const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
   // The Pull requests tab counts what wakes this thread: this instance's own
-  // list for a local thread, the owner's projection for a peer's.
+  // list for a local thread, the owner's projection for a peer's, plus the
+  // merge build watches its card lists from Continue After.
   const localPrWatches = useThreadPrWatches(props.thread);
   const prWatchCount = props.thread
-    ? props.thread.federation || readRendererFederationTarget()
+    ? (props.thread.federation || readRendererFederationTarget()
       ? props.thread.activePrWatches?.length ?? 0
-      : localPrWatches?.watches.length ?? 0
+      : localPrWatches?.watches.length ?? 0)
+      + (localPrWatches?.mergeBuildWaits?.length ?? 0)
     : 0;
   // The Waiting for tab counts every pending wake, so a waiting thread says
   // so before the tab opens. Unknown (an older owner) draws no badge.
   const dependencyContext = useThreadDependencyIndicatorsContext();
-  const toolCallsFederationTarget = props.thread?.federation?.ref.target
-    ?? readRendererFederationTarget();
-  const toolCallsInstanceId = toolCallsFederationTarget?.scope === "remote"
-    ? toolCallsFederationTarget.instanceId
-    : undefined;
-  const threadLinkSource = useMemo(() =>
-    threadBackend && toolCallsInstanceId
-      ? { backend: threadBackend, instanceId: toolCallsInstanceId }
-      : undefined,
-    [threadBackend, toolCallsInstanceId],
-  );
   const openTokenMiserSavings = useCallback(() => {
     onOpenToolOutputIncidentExplorer?.("savings");
   }, [onOpenToolOutputIncidentExplorer]);
@@ -325,7 +314,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
-  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   // Research is for every local backend; a federated thread's runs live on its owning instance.
   const researchEnabled = props.researchEnabled === true && Boolean(props.thread) && !props.thread?.federation?.ref.target;
   // The tab shows once the thread can see a decision or has run a batch.
@@ -358,8 +346,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : "providers"
     : props.activeTab === "pricing" && !threadPricingSummaryEnabled
       ? "info"
-      : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
-        ? "info"
       : props.activeTab === "todos" && !props.todos
         ? "info"
       : props.activeTab === "research" && !researchEnabled
@@ -380,13 +366,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     subAgentLens,
     desktopApi: props.desktopApi,
     thread: props.thread,
-    resource: open && activeTab === "pricing" ? "pricing" : open && activeTab === "tool-calls" ? "tools" : open && activeTab === "subagents" ? "subagents" : undefined,
+    resource: open && (activeTab === "pricing" || activeTab === "subagents")
+      ? activeTab
+      : undefined,
   });
   const visibleTabs = CONTEXT_TABS.filter((tab) =>
     props.thread
       ? tab.id !== "connections"
         && (tab.id !== "pricing" || threadPricingSummaryEnabled)
-        && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
         && (tab.id !== "todos" || props.todos !== undefined)
         && (tab.id !== "research" || researchEnabled)
         && (tab.id !== "decisions" || decisionsVisible)
@@ -810,11 +797,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? `${baseLabel}${followUpsSuspended ? " · agent follow-ups suspended" : ""}${monitorWakesSuspended ? " · Job Monitor wakes suspended" : ""}`
       : baseLabel;
     const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
+    const tooltipText = `${label} — ${tab.hint}`;
     return (
       <button
         key={tab.id}
         id={`context-rail-tab-${tab.id}`}
         aria-label={label}
+        aria-describedby={`context-rail-tab-${tab.id}-hint`}
         aria-selected={isActive && open}
         aria-controls={open ? "context-rail-panel" : undefined}
         className={`context-rail__tab${isActive ? " is-active" : ""}${
@@ -822,12 +811,21 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }`}
         role="tab"
         tabIndex={isActive ? 0 : -1}
-        title={label}
         type="button"
+        // The rail's one tooltip, shared with its panels' controls: a tab's
+        // explanation is replaced, never joined, when a panel control raises
+        // its own. A second tooltip system here left both on screen.
+        onMouseEnter={(event) => railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
+        onMouseLeave={railTooltip.hide}
+        onFocus={(event) => railTooltip.show(event.currentTarget, tooltipText)}
+        onBlur={railTooltip.hide}
         onClick={() => selectTab(tab.id)}
         onAnimationEnd={landing ? () => setLandedRingPlayed(connectionsLanding) : undefined}
       >
         <TabIcon size={18} aria-hidden="true" />
+        {/* The tooltip is sighted-only; this carries its explanation to
+            assistive tech without changing the tab's accessible name. */}
+        <span id={`context-rail-tab-${tab.id}-hint`} hidden>{tab.hint}</span>
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
         {todoBadge ? (
           <span
@@ -913,6 +911,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             backends={props.backends}
             platform={props.platform}
             desktopApi={props.desktopApi}
+            onOpenToolOutputIncidentExplorer={
+              onOpenToolOutputIncidentExplorer ? openIncidentExplorer : undefined
+            }
             onRefreshNavigation={props.onRefreshNavigation}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
@@ -978,38 +979,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             }
             onScrollToTurn={props.onScrollToTurn}
             subAgents={props.thread.subAgents}
-            tokenMiserAccounting={props.toolAccounting?.tokenMiser}
+            tokenMiserAccounting={props.tokenMiserAccounting}
             threadReasoningEffort={props.thread.reasoningEffort}
             turnFailures={props.thread.turnFailureLog}
           />
         );
-      case "tool-calls": {
-        if (!props.thread) return null;
-        return (
-          <ToolCallsPanel
-            desktopApi={props.desktopApi}
-            totals={displayResource.data?.toolTotals}
-            entries={props.toolCallEntries}
-            loadingDetailItemId={props.loadingToolCallDetailItemId}
-            onAnalyzeHistory={props.onAnalyzeToolHistory}
-            /* No lens: this button opens the window by the window's own name,
-               so a thread that gated still gets the opening lens its
-               accounting chooses. Only the Pricing rail's button, which names
-               a lens inside the window, asks for one. */
-            onOpenIncidentExplorer={
-              props.onOpenToolOutputIncidentExplorer
-                ? openIncidentExplorer
-                : undefined
-            }
-            onRequestInvocationDetails={props.onRequestToolCallDetails}
-            onScrollToTurn={props.onScrollToTurn}
-            threadLinkSource={threadLinkSource}
-            toolAccounting={displayResource.data?.toolsPage ?? props.toolAccounting}
-            onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
-            loading={displayResource.loading}
-          />
-        );
-      }
       case "decisions":
         if (!props.thread) return null;
         return (

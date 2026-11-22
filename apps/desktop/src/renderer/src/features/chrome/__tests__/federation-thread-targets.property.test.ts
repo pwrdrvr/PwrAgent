@@ -77,6 +77,27 @@ function connectedIds(health: FederationHealthStatus): string[] {
 }
 
 describe("machine pickers", () => {
+  it("distinguishes a default profile from a same-label peer that has no profile metadata", () => {
+    fc.assert(fc.property(
+      fc.stringMatching(/^Host[A-Z]{0,8}$/),
+      fc.option(fc.stringMatching(/^Mini[A-Z]{0,5}$/), { nil: undefined }),
+      fc.boolean(),
+      (label, shortLabel, reverse) => {
+        const base = { label, shortLabel, role: "client" as const, status: "connected" as const, capabilities: CAPABILITY_SETS[2]! };
+        const peers = [{ ...base, id: "pwr_default", profileName: "default" }, { ...base, id: "pwr_legacy" }];
+        const health: FederationHealthStatus = { enabled: true, role: "gateway", status: "connected",
+          peers: reverse ? peers.toReversed() : peers };
+        const targets = listedFederationPeerTargets(buildFederationThreadTargets(health));
+        const names = new Map(targets.map(({ instanceId, label, shortLabel }) => [instanceId, { label, shortLabel }]));
+        expect(names.get("pwr_default")).toEqual({ label, shortLabel });
+        expect(names.get("pwr_legacy")).toEqual({
+          label: `${label} (profile unknown)`,
+          shortLabel: shortLabel ? `${shortLabel} (profile unknown)` : undefined,
+        });
+      },
+    ));
+  });
+
   // The rule Profiles → Remote Instances already follows: a picker lists the
   // connected machines and nothing else, in the order of the name each row
   // shows, so the list cannot look shuffled or offer a machine that is down.

@@ -3,19 +3,20 @@ import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationL
 import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
-  buildPullRequestStatusKey,
 } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
 import {
   navigationInvalidationMayChangeMembership,
+  navigationPullRequestKeysMayMatch,
   navigationQueryEventRequiresRefresh,
   navigationWorkingStatePath,
   readNavigationDirectoryScope,
 } from "@pwragent/shared/navigation-query-events";
-import { readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
+import { readDirectoryGitProof, readDirectoryGitRevisions, readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
+  NavigationDirectoryGitRevisions,
   NavigationIdentity,
   NavigationMetadataDependencies,
   NavigationQueryAnchor,
@@ -31,14 +32,14 @@ import {
   navigationFallbackAnchor, navigationIdentitiesEqual, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
-// Changes to one owner's threads. A PR status can affect a local thread
+// Changes to one owner's threads or checkouts. A PR status can affect a local thread
 // through its forge identity and therefore does not belong in this set.
 const OWNER_ROW_CHANGES = new Set([
   "thread/started", "thread/archived", "thread/unarchived", "thread/deleted", "thread/parent/set", "thread/parent/cleared",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered", "thread/subthreadsCollapsed/updated", "thread/subthreadOrder/updated",
   "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
   "thread/backgroundTasks/updated", "thread/turnQueue/updated", "navigation/thread/seen", "federation/peerStatus/changed",
-  "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+  "turn/started", "turn/completed", "turn/failed", "turn/cancelled", "navigation/directoryGitStatus/updated",
 ]);
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
@@ -102,7 +103,13 @@ type Resource = {
 /** One opening restores saved depth within one Load more click's bounds. Lists
  * opened together share it; the clock starts at the first read. */
 type ResumeBudget = { reads: number; until?: number };
-type OwnerPageProof = { dependencies?: NavigationMetadataDependencies; viewerRowOwners?: readonly string[]; bytes: number };
+type OwnerPageProof = {
+  dependencies?: NavigationMetadataDependencies;
+  viewerRowOwners?: readonly string[];
+  directoryGitProof?: NavigationQueryPage["directoryGitProof"];
+  gitBytes: number;
+  bytes: number;
+};
 type RetainableState = { state: NavigationPageState; ownerProof?: OwnerPageProof };
 
 function loadedRows(page: NavigationQueryPage | undefined): number {
@@ -296,20 +303,27 @@ export class NavigationWindowQueries {
     const remote = state.request.federationTarget?.scope === "remote";
     const metadataDependencies = remote && page.metadataDependencies?.workingStatePaths ? page.metadataDependencies : undefined;
     const viewerRowOwners = !remote && state.request.inventory === "viewer" ? page.viewerRowOwners : undefined;
-    if (!metadataDependencies && !viewerRowOwners) return { state };
+    const gitProof = page.directoryGitProof;
+    if (!metadataDependencies && !viewerRowOwners && !gitProof) return { state };
     const rows = { ...page };
+    if (gitProof) delete rows.directoryGitProof;
     if (metadataDependencies) delete rows.metadataDependencies;
     if (viewerRowOwners) delete rows.viewerRowOwners;
     // Removing a JSON field saves its name, value, and one separating comma.
-    const proofBytes = new TextEncoder().encode(JSON.stringify({ metadataDependencies, viewerRowOwners })).byteLength - 1;
+    const encoder = new TextEncoder();
+    const gitBytes = gitProof ? encoder.encode(JSON.stringify({ directoryGitProof: gitProof })).byteLength - 1 : 0;
+    const ownerBytes = metadataDependencies || viewerRowOwners
+      ? encoder.encode(JSON.stringify({ metadataDependencies, viewerRowOwners })).byteLength - 1 : 0;
+    const proofBytes = ownerBytes + gitBytes;
     const rowBytes = this.pageBytes(page) - proofBytes;
     if (rows.remoteOwner?.ownerContentBytes !== undefined) {
       rows.remoteOwner = { ...rows.remoteOwner, ownerContentBytes: rowBytes };
     }
     this.pageSizes.set(rows, rowBytes);
     const dependencies = metadataDependencies && readNavigationMetadataDependencies(metadataDependencies);
-    return { state: { ...state, page: rows }, ...(dependencies || viewerRowOwners
-      ? { ownerProof: { dependencies, viewerRowOwners, bytes: proofBytes } } : {}) };
+    const directoryGitProof = gitProof ? readDirectoryGitProof(gitProof) : undefined;
+    return { state: { ...state, page: rows }, ...(dependencies || viewerRowOwners || directoryGitProof
+      ? { ownerProof: { dependencies, viewerRowOwners, directoryGitProof, gitBytes, bytes: proofBytes } } : {}) };
   }
 
   private deleteOwnerProof(page: NavigationQueryPage | undefined): void {
@@ -325,7 +339,10 @@ export class NavigationWindowQueries {
     const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(previous);
     if (bytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
     if (state.page !== previous) this.deleteOwnerProof(previous);
-    const spare = this.trimRetained(bytes);
+    const spare = this.trimRetained(bytes, ownerProof ? ownerProof.bytes - ownerProof.gitBytes : 0);
+    if (ownerProof?.gitBytes && ownerProof.bytes > spare) {
+      ownerProof = this.withoutGitProof(ownerProof);
+    }
     if (state.page && ownerProof && ownerProof.bytes <= spare && !this.ownerPageProofs.has(state.page)) {
       this.ownerPageProofs.set(state.page, ownerProof);
       this.ownerProofBytes += ownerProof.bytes;
@@ -334,12 +351,30 @@ export class NavigationWindowQueries {
     resource.value = { ...resource.value, state, restoredFromCache: false };
   }
 
-  private trimRetained(activeBytes: number): number {
+  private withoutGitProof(proof: OwnerPageProof): OwnerPageProof | undefined {
+    return proof.dependencies || proof.viewerRowOwners
+      ? { dependencies: proof.dependencies, viewerRowOwners: proof.viewerRowOwners, gitBytes: 0, bytes: proof.bytes - proof.gitBytes }
+      : undefined;
+  }
+
+  private trimRetained(activeBytes: number, incomingOwnerBytes = 0): number {
     let bytes = activeBytes + [...this.retained.values()].reduce((total, entry) => total + entry.bytes, 0);
     for (const [key, entry] of this.retained) {
       if (bytes <= MAX_RETAINED_BYTES && this.retained.size <= 64) break;
       this.retained.delete(key);
       bytes -= entry.bytes;
+    }
+    // A Git proof spends spare capacity after the existing owner and off-page
+    // membership proofs, including one arriving with this read.
+    if (bytes + this.ownerProofBytes + incomingOwnerBytes > MAX_RETAINED_BYTES) {
+      for (const [page, proof] of this.ownerPageProofs) {
+        if (bytes + this.ownerProofBytes + incomingOwnerBytes <= MAX_RETAINED_BYTES) break;
+        if (!proof.gitBytes) continue;
+        this.ownerProofBytes -= proof.gitBytes;
+        const remaining = this.withoutGitProof(proof);
+        if (remaining) this.ownerPageProofs.set(page, remaining);
+        else this.ownerPageProofs.delete(page);
+      }
     }
     for (const page of this.ownerPageProofs.keys()) {
       if (bytes + this.ownerProofBytes <= MAX_RETAINED_BYTES) break;
@@ -441,7 +476,6 @@ export class NavigationWindowQueries {
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))));
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
-    const batchPinLoading = selected.some((resource) => resource.pinPublicationPending && !resource.pending);
     let startedReads = false;
     const refreshed = Promise.all(selected.map(async (resource) => {
       const pending = resource.pending;
@@ -456,8 +490,8 @@ export class NavigationWindowQueries {
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
         if (resource.pending) resource.refreshAfterPending = true;
-        const read = this.read(resource, false, undefined, false, "refresh", !batchPinLoading);
-        startedReads ||= batchPinLoading && !pending && Boolean(resource.pending);
+        const read = this.read(resource, false, undefined, false, "refresh", false);
+        startedReads ||= !pending && Boolean(resource.pending);
         await read;
       }
       while (this.isCurrent(resource)) {
@@ -472,8 +506,8 @@ export class NavigationWindowQueries {
         await this.read(resource, false);
       }
     }));
-    // The pin discovery wave queues its reads in one turn. Publish its
-    // loading state once, with every newly queued read marked as loading.
+    // One refresh queues its reads in one turn. Publish every newly queued
+    // read's loading state together, including a refresh of multiple owners.
     if (startedReads) this.publish();
     return refreshed.then(() => undefined);
   }
@@ -498,22 +532,24 @@ export class NavigationWindowQueries {
     let count = 0;
     const batch = ++this.nextDiagnosticBatch;
     const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
+    const notification = event?.notification;
+    const gitRevisions = notification?.method === "navigation/directoryGitStatus/updated"
+      || (notification?.method === "navigation/invalidated" && notification.params?.sourceMethod === "navigation/directoryGitStatus/updated")
+      ? readDirectoryGitRevisions(notification.params?.directoryGitRevisions) : undefined;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
-      if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
+      if (event && !this.eventAffectsResource(resource, event, directoryScope, gitRevisions)) continue;
       if (correlatedPinPublication) resource.pinPublicationPending = true;
       count++;
       resource.diagnosticBatch = batch;
       const method = event?.notification.method === "navigation/invalidated"
         ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
       const pinParams = event?.notification.params as { threadId?: unknown; rowChanges?: unknown } | undefined;
-      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges)
-        || method === "pullRequest/status/updated";
+      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges);
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
-          || (method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges))
-          || method === "pullRequest/status/updated");
+          || (method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges)));
       // An instance-only summary notice can discover new mounted children.
       // Its pending replacement cannot use the old membership to exclude a
       // subsequent metadata change to one of those newly discovered rows.
@@ -574,9 +610,9 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[]): boolean {
+  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[], gitRevisions?: NavigationDirectoryGitRevisions): boolean {
     const request = resource.value.state.request;
-    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string; prKey?: string;
+    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string;
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
@@ -591,26 +627,70 @@ export class NavigationWindowQueries {
     const sourceOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
     const viewerRowOwners = sourceOwner && page ? this.ownerPageProofs.get(page)?.viewerRowOwners : undefined;
     if (sourceOwner && request.federationTarget?.scope !== "remote" && request.inventory === "viewer"
-      && !resource.membershipUncertain && page?.coverage.state === "complete"
-      && viewerRowOwners && !viewerRowOwners.includes(sourceOwner)
-      && typeof method === "string" && OWNER_ROW_CHANGES.has(method)
-      && !(request.query.kind === "exact" && request.query.resolveFromOwners
-        && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner))) return false;
+      && !resource.membershipUncertain && page?.coverage.state === "complete" && viewerRowOwners) {
+      const resolvesPeer = request.query.kind === "exact" && request.query.resolveFromOwners
+        && request.query.identities.some((ref) => ref.ownerInstanceId === sourceOwner);
+      // A compact PR notice only invalidates the serving peer's rows. A
+      // full observation can patch the same PR across owned and mounted rows.
+      const peerOnlyPrNotice = method === "pullRequest/status/updated" && event.notification.method === "navigation/invalidated";
+      if (!resolvesPeer && !viewerRowOwners.includes(sourceOwner)
+        && (peerOnlyPrNotice || (typeof method === "string" && OWNER_ROW_CHANGES.has(method)))) return false;
+      // A pinned row's directory identity comes from the published pin
+      // summary. A peer's Git notice refreshes its direct pages; a subsequent
+      // local pin-summary publication refreshes this delegated projection.
+      if (!resolvesPeer && gitRevisions && !resource.pending && !resource.value.state.stale) return false;
+    }
+    if (method === "pullRequest/status/updated") {
+      // Directory counts and descriptors contain no PR status, even while a
+      // read is in flight. An attachment change is a separate event.
+      if (request.query.kind === "directory-index") return false;
+      if (resource.membershipUncertain || resource.prAttachmentsUncertain || page?.coverage.state !== "complete") return true;
+      const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
+      const key = event.notification.method === "pullRequest/status/updated"
+        && typeof event.notification.params.prKey === "string" ? event.notification.params.prKey : undefined;
+      if (dependencies?.prKeysComplete) {
+        // A viewer-local proof covers native rows only. Compact peer notices
+        // leave them alone; full status observations can patch shared PRs.
+        if (sourceOwner && request.inventory === "viewer" && request.federationTarget?.scope !== "remote"
+          && event.notification.method === "navigation/invalidated") return false;
+        const aliases = sourceOwner ? undefined : event.navigationPullRequestKeyAliases;
+        return dependencies.prKeys.some((candidate) => !key || navigationPullRequestKeysMayMatch(candidate, key)
+          || aliases?.some((alias) => navigationPullRequestKeysMayMatch(candidate, alias)));
+      }
+      // A verified preview can omit a stored attachment. Its absence
+      // cannot rule out a status change that makes that attachment visible.
+      return true;
+    }
+    if (gitRevisions && typeof params?.directoryKey === "string" && params.directoryKey
+      && federationTargetsEqual(request.federationTarget, event.federationTarget)
+      && !resource.membershipUncertain && !resource.pending && !resource.value.state.stale && page?.coverage.state === "complete") {
+      const proof = this.ownerPageProofs.get(page)?.directoryGitProof;
+      if (proof) {
+        const revision = proof.directories.find(([key]) => key === params.directoryKey)?.[1];
+        return revision !== undefined && revision !== gitRevisions.repository && revision !== gitRevisions.descriptor;
+      }
+    }
+    const scopedActivity = method === "turn/started" && directoryScope !== undefined && request.query.kind === "children"
+      && federationTargetsEqual(request.federationTarget, event.federationTarget);
+    if ((method === "navigation/thread/seen" || scopedActivity) && !resource.membershipUncertain && page?.coverage.state === "complete"
+      && typeof params?.threadId === "string") {
+      const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
+      // The peer builds its proof before row expansion stamps federated refs.
+      const ref = { backend: event.backend, threadId: params.threadId,
+        ownerInstanceId: request.federationTarget?.scope === "remote" ? undefined : sourceOwner };
+      if (dependencies) return dependencies.threadKeys.includes(navigationIdentityKey(ref))
+        || (request.query.kind === "children" && request.query.parent.backend === ref.backend
+          && request.query.parent.threadId === ref.threadId && request.query.parent.ownerInstanceId === sourceOwner);
+    }
     if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
       const workingState = method === "navigation/threadGitWorkingState/updated";
       // The index holds directory Git status and counts. Working-state probes
       // only change thread rows, even when the inventory is incomplete.
       if (workingState && request.query.kind === "directory-index") return false;
-      if (!resource.membershipUncertain && page?.coverage.state === "complete"
-        && (workingState || method === "navigation/thread/seen")) {
+      if (!resource.membershipUncertain && page?.coverage.state === "complete" && workingState) {
         const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
         if (workingState && typeof params?.worktreePath === "string" && dependencies?.workingStatePaths) {
           return dependencies.workingStatePaths.includes(params.worktreePath);
-        }
-        if (method === "navigation/thread/seen" && typeof params?.threadId === "string" && dependencies) {
-          // The page proof was built on the serving owner, where native refs
-          // are local. Row expansion adds a federation identity only to rows.
-          return dependencies.threadKeys.includes(navigationIdentityKey({ backend: event.backend, threadId: params.threadId }));
         }
       }
       // A descriptor's unread count includes siblings outside the exact
@@ -619,14 +699,11 @@ export class NavigationWindowQueries {
         && (request.query.kind === "exact" || request.query.kind === "children")) return true;
     }
     if (request.inventory === "viewer" && request.federationTarget?.scope !== "remote" && !resource.membershipUncertain
-      && page?.coverage.state === "complete") {
+      && page?.coverage.state === "complete" && request.query.kind !== "children") {
       const dependencies = this.metadataDependencies(page);
       if (dependencies && event.federationTarget?.scope !== "remote"
         && method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId) {
         return params.rowChanges.some((ref) => dependencies.threadKeys.includes(navigationIdentityKey(ref)));
-      }
-      if (dependencies && method === "pullRequest/status/updated" && typeof params.prKey === "string") {
-        return Boolean(resource.prAttachmentsUncertain) || dependencies.prKeys.includes(params.prKey);
       }
       if (dependencies && !navigationInvalidationMayChangeMembership(method) && typeof params.threadId === "string") {
         const ref = { backend: event.backend, threadId: params.threadId,
@@ -651,8 +728,7 @@ export class NavigationWindowQueries {
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && (!navigationInvalidationMayChangeMembership(method)
         || method === "thread/pin/added" || method === "thread/pin/removed"
-        || (method === "navigation/remoteThreadPins/changed" && Array.isArray(params.rowChanges))
-        || method === "pullRequest/status/updated")) {
+        || (method === "navigation/remoteThreadPins/changed" && Array.isArray(params.rowChanges)))) {
       // Pins move roots between directory sections, but do not reparent children.
       // Metadata refreshes preserve this membership proof. Membership changes
       // withdraw it until their replacement is accepted, even while queued.
@@ -661,12 +737,6 @@ export class NavigationWindowQueries {
       // Unknown membership events still discover newly created/reparented children.
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
         : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
-      if (method === "pullRequest/status/updated" && typeof params.prKey === "string") {
-        // Status is keyed by PR across owners and backends, and cannot attach
-        // a new PR or reparent a child. Partial membership still reads broadly.
-        return Boolean(resource.prAttachmentsUncertain)
-          || page.entries.some(({ row }) => row.prs?.some((pr) => buildPullRequestStatusKey(pr) === params.prKey));
-      }
       if (method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId
         && event.federationTarget?.scope !== "remote" && request.federationTarget?.scope !== "remote") {
         // The cache compared complete published populations, including
@@ -692,7 +762,8 @@ export class NavigationWindowQueries {
     if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
     if (resource.membershipUncertain || navigationInvalidationMayChangeMembership(method)) return true;
     if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
-      && page?.coverage.state === "complete" && page.complete) {
+      && !resource.pending && !resource.value.state.stale && page?.coverage.state === "complete" && page.complete
+      && page.entries.every(({ row }) => !row.checkoutProject && !row.linkedDirectoriesTruncated && !row.linkedDirectories.length)) {
       return page.selectionDirectory?.key === params.directoryKey || Boolean(page.directories?.some((directory) => directory.key === params.directoryKey));
     }
     const refs = [...request.query.identities, ...(page?.entries.map(({ row }) => row.ref) ?? [])];
@@ -724,6 +795,7 @@ export class NavigationWindowQueries {
     while (this.isCurrent(resource) && resource.pending) await resource.pending;
     if (!this.isCurrent(resource)) return;
     resource.anchor = anchor;
+    resource.membershipUncertain = true;
     return this.read(resource, false, anchor);
   }
 
@@ -734,6 +806,7 @@ export class NavigationWindowQueries {
     while (this.isCurrent(resource) && resource.pending) await resource.pending;
     if (!this.isCurrent(resource)) return;
     resource.anchor = undefined;
+    resource.membershipUncertain = true;
     resource.value = { ...resource.value, state: { ...resource.value.state, rebaselineRequired: false, stale: true } };
     return this.read(resource, false, undefined, true);
   }
@@ -976,6 +1049,7 @@ export class NavigationWindowQueries {
           });
         } catch (error) {
           if (!cursor || !isNavigationCursorExpired(error)) throw error;
+          resource.membershipUncertain = true;
           navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "cursor-expired" });
           // Cursor cache eviction is ordinary pressure, not a broken folder.
           // Rebuild only the already displayed range plus the block this
@@ -990,7 +1064,15 @@ export class NavigationWindowQueries {
           page = await readAround({ ...started.request, anchor: recoveryAnchor });
         }
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
-        let next = this.retainableState(applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor }));
+        const priorState = resource.value.state;
+        let next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+        // applyNavigationPage validated the retained query, epoch, revision
+        // and range. Transfer only a proof still admitted for those rows.
+        if (page.rangeUnchanged && priorState.page && !next.ownerProof?.directoryGitProof) {
+          const prior = this.ownerPageProofs.get(priorState.page);
+          if (prior?.directoryGitProof) next.ownerProof = { ...next.ownerProof, directoryGitProof: prior.directoryGitProof,
+            gitBytes: prior.gitBytes, bytes: (next.ownerProof?.bytes ?? 0) + prior.gitBytes };
+        }
         assertRetained(next.state);
         if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
           && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {

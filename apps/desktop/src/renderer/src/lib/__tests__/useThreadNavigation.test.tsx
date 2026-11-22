@@ -284,6 +284,33 @@ describe("useThreadNavigation", () => {
     }
   });
 
+  it("restores a local launchpad by its history key when its checkout has no project row", async () => {
+    const directoryKey = "directory:/worktrees/topic";
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const launchpad = { ...defaults, directoryKey, directoryKind: "directory" as const,
+      directoryLabel: "topic", directoryPath: "/worktrees/topic", workMode: "local" as const,
+      createdAt: 1, updatedAt: 1 };
+    const api: DesktopApi = {
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: [], threads: [], directories: [], launchpadDefaults: defaults }),
+      getNavigationLaunchpadConfig: async (request) => ({ protocol: 2, revision: "config",
+        directoryKey: request.directoryKey, defaults, launchpad: request.directoryKey === directoryKey ? launchpad : undefined }),
+    };
+    const { result } = renderHook(() => {
+      const draftStore = useComposerDraftStore();
+      const navigation = useThreadNavigation(api, { composerDraftStore: draftStore });
+      return { draftStore, navigation };
+    });
+    act(() => {
+      result.current.draftStore.set(buildLaunchpadComposerScopeKey(directoryKey), { draft: "Unsent worktree draft",
+        imageAttachments: [], fileAttachments: [], skillTokens: [] });
+      result.current.navigation.selectDirectoryLaunchpad(directoryKey);
+    });
+    await waitFor(() => expect(result.current.navigation.selectedLaunchpad).toMatchObject({ directoryKey,
+      directoryPath: "/worktrees/topic", prompt: "Unsent worktree draft" }));
+    expect(result.current.navigation.directories).toHaveLength(0);
+  });
+
   it("exposes a failed launchpad configuration read and reloads the selected project", async () => {
     const defaults = { backend: "codex" as const, executionMode: "default" as const };
     const projects = ["first", "second"].map((name) => ({
@@ -12826,7 +12853,7 @@ describe("useThreadNavigation", () => {
     }
     await act(async () => { await vi.advanceTimersByTimeAsync(250); });
     expect(result.current.selectedThreadConfigurationReady).toBe(true);
-    expect(readPopulation).toHaveBeenCalledTimes(2);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
   });
 
   it("patches the snapshot for thread/executionMode/queued and queueCleared", async () => {

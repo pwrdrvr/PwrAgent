@@ -47,18 +47,37 @@ for a viewer means a disconnected window).
 Compact navigation rows carry a preview of up to 16 PRs and the full count
 when attachments exceed that preview. The preview retains the lead and the
 PRs whose readiness determines the two rollup indicators. The shared
-membership index projects stored statuses in memory. The owner validates
-automatic attachments for a page before calculating its preview, attachment
+membership index carries stored attachments. A status observation can refresh a
+page without rebuilding that index. The owner validates automatic attachments
+and applies canonical statuses before calculating the page's preview, attachment
 count, and wire bytes. Cursor backing keeps compact row references and observed
 previews. The owner reads full attachments only when the page demands them.
 Directory index and archive planning reads use membership alone. Federated pins
 and watched threads receive owner-validated previews. A continuation keeps the
 same row offsets and reuses PR projections it already observed. A fresh read
 reuses a cursor generation only if its baseline proves every retained PR
-observation within the page work budget. Owner polling and
-Auto-fix validate their complete attachment inventory independently. Star Map
-facets and filtering use validated PR membership across their inventory.
-Selected detail and bounded pages take priority over those inventory checks.
+observation within the page work budget. Star Map facets and filtering use
+validated PR membership across their inventory. Selected detail and bounded
+pages take priority over those inventory checks.
+
+Owner refresh seeds status polling from stored attachments and repository
+observations. A PR that already has a repository identity can poll by number
+without re-reading its checkout or default refs. The owner resolves an
+origin when a primary workspace changes, an attachment lacks repository
+identity, or a saved origin cannot identify any live attachment. Terminal
+attachments need identity for status ownership too. Inconclusive reads can
+retry after the remote cache expires. Branch discovery runs on turn completion,
+branch adoption, selection, and in the existing slow rotation. That rotation
+considers up to 100 threads with access in the last seven days, runs at most
+three per tick, and excludes focused threads. Selection and the owner’s
+seen timestamp can put a thread in that pool. A background inventory event
+does not count as access.
+
+Watch creation and Auto-fix delivery check the attached PR against the current
+primary checkout. Auto-fix validates candidates in election order before a
+repair claim. Sandbox cleanup validates attachment membership before treating
+terminal PRs as completion evidence. Forge project rules resolve the checkout
+on demand. Stored polling identity supplies status ownership and poll targets.
 
 The sidebar's PR disclosure and row menu request the owner's complete list through the paged
 selected-detail collection, with one restart on an expired cursor. The owner
@@ -171,3 +190,7 @@ have:
   Peer observations suppress local subscription results in every window,
   including pinned peers in the main window. An ownership change must notify
   subscribers even if the visible PR metadata did not change.
+- Review and merge offers consume `PrStatusTransition`s and never poll or ask
+  the forge. They act only for the one live thread that owns the PR. Read
+  [PR review readiness](../../docs/pr-review-readiness.md) before changing
+  `PrReviewOfferCoordinator`, its triggers, or its Git work.

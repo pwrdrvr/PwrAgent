@@ -411,6 +411,17 @@ export class MessagingCallbackHandlers {
       if (action && pendingIntent.intent.kind === "review") {
         const permission = permissionForActionId(action.id);
         if (permission && !await this.context.host().requirePermission(event, permission, action.id)) return;
+        // A peer-bound picker reads and starts reviews on the peer.
+        const reviewBinding = pendingIntent.bindingId
+          ? await this.context.store.getBinding(pendingIntent.bindingId)
+          : undefined;
+        if (
+          reviewBinding
+          && federationTargetForBinding(reviewBinding)
+          && !await this.context.host().requireRemoteScopeForBinding(event, reviewBinding, `${action.id}:remote-instance`)
+        ) {
+          return;
+        }
         await this.context.host().handleReviewAction(pendingIntent, event, action);
         return;
       }

@@ -1,3 +1,5 @@
+import { CHECKOUT_FEDERATION_METHOD } from "../resource-checkouts/resource-checkout-service";
+import { readDirectoryGitRevisions } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
@@ -241,7 +243,7 @@ import {
   isFederationInstanceId,
   isFederationEventClass,
   formatFederationPeerDisplayLabel,
-  formatFederationPeerShortDisplayLabel,
+  formatFederationPeerTargetLabels,
   isRemoteFederationTarget,
   type FederationRemoteTarget,
   type FederationTarget,
@@ -396,7 +398,7 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins } from "../app-server/local-directory-pins";
-import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { linkedDirectoryForRegistration, registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
 import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
@@ -461,6 +463,7 @@ import {
   loadLocalNavigationQueryIndex,
   navigationPullRequestProjection,
 } from "../app-server/navigation-query-source";
+import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   FederationReplacementReceiver,
@@ -768,6 +771,8 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todo_dispatch_target",
   "thread_todo_message",
   "thread_todo_plan",
+  "thread_todo_placement",
+  "thread_todo_placement_sibling",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -991,6 +996,8 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
         ...(event.notification.method === "navigation/directoryGitStatus/updated"
           || event.notification.method === "directory/forgeAutomation/updated"
           ? { directoryKey: identity(params.directoryKey) } : {}),
+        ...(event.notification.method === "navigation/directoryGitStatus/updated"
+          ? { directoryGitRevisions: readDirectoryGitRevisions(params.directoryGitRevisions) } : {}),
         automationId: identity(params.automationId),
         runId: identity(params.runId),
       },
@@ -1000,6 +1007,10 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
 
 /** A local event as this owner sends it to a federated viewer. */
 export function projectLocalEventForFederation(event: AgentEvent, ownerInstanceId: FederationInstanceId): AgentEvent {
+  if (event.navigationPullRequestKeyAliases) {
+    const { navigationPullRequestKeyAliases: _localAliases, ...federatedEvent } = event;
+    event = federatedEvent;
+  }
   return rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
 }
 
@@ -1257,6 +1268,22 @@ export class DesktopFederationRuntime {
     } catch {
       return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner did not complete an authorized transfer. Check file permissions and peer availability, then request the original again." } };
     }
+  }
+
+  private resourceCheckoutHandler?: (source: string, request: unknown) => unknown;
+
+  setResourceCheckoutHandler(handler: (source: string, request: unknown) => unknown): void {
+    this.resourceCheckoutHandler = handler;
+  }
+
+  resourceCheckoutInstanceId(): FederationInstanceId {
+    return this.ensureLocalInstanceId();
+  }
+
+  requestResourceCheckout<T>(instanceId: FederationInstanceId, request: unknown): Promise<T> {
+    return this.rpcFor({ scope: "remote", instanceId }).request({
+      method: CHECKOUT_FEDERATION_METHOD, params: request, timeoutMs: 1_500,
+    });
   }
 
   messagingSourceInstanceId(): FederationInstanceId {
@@ -1852,30 +1879,16 @@ export class DesktopFederationRuntime {
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
-    // Compose display labels against the full visible set so two
-    // profiles of the same machine ("Mac-Mini-M4 / default",
-    // "Mac-Mini-M4 / dev") stay tellable apart in window titles and
-    // the Remote Instances menu.
-    const visible = this.visiblePeers();
-    return visible
-      .filter((peer) => peer.status === "connected")
-      .map((peer) => {
-        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
-        return {
-          target: { scope: "remote", instanceId: peer.id },
-          label: formatFederationPeerDisplayLabel(peer, visible),
-          ...(shortLabel
-            ? {
-                shortLabel: formatFederationPeerShortDisplayLabel(
-                  { ...peer, shortLabel },
-                  visible,
-                ),
-              }
-            : {}),
-          capabilities: [...peer.capabilities],
-          navigationQueryProtocol: peer.navigationQueryProtocol,
-        };
-      });
+    const peers = this.visiblePeers().filter((peer) => peer.status === "connected");
+    return peers.map((peer) => {
+      const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+      return {
+        target: { scope: "remote", instanceId: peer.id },
+        ...formatFederationPeerTargetLabels({ ...peer, shortLabel }, peers),
+        capabilities: [...peer.capabilities],
+        navigationQueryProtocol: peer.navigationQueryProtocol,
+      };
+    });
   }
 
   assertRemoteNavigationQueryProtocol(
@@ -2619,7 +2632,7 @@ export class DesktopFederationRuntime {
       tombstonedThreadCount += counts.revoked;
       const peer = visible.find((candidate) => candidate.id === instanceId);
       instanceLabels.push(
-        peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId,
+        peer ? formatFederationPeerDisplayLabel(peer) : instanceId,
       );
     }
     return { pinnedThreadCount, tombstonedThreadCount, instanceLabels };
@@ -2818,8 +2831,19 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
     if (operation === "runAction" && request && "messageTarget" in request && request.messageTarget !== undefined
-      && this.todoQueueUnavailableInstance(target, "thread_todo_message")) {
+      && this.todoQueueUnavailableInstance(target, "thread_todo_message")?.reason === "unsupported") {
       throw new Error("Update the card's PwrAgent owner to send requests to existing threads.");
+    }
+    // An older owner ignores placement and nests the thread anyway, so an
+    // operator's pick must not reach it.
+    if (operation === "runAction" && request && "placement" in request && request.placement !== undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_placement")?.reason === "unsupported") {
+      throw new Error("Update the card's PwrAgent owner to choose where the new thread is filed.");
+    }
+    // An owner without siblings would drop the pick and nest the thread.
+    if (operation === "runAction" && request && "placement" in request && request.placement === "sibling"
+      && this.todoQueueUnavailableInstance(target, "thread_todo_placement_sibling")?.reason === "unsupported") {
+      throw new Error("Update the card's PwrAgent owner to start a sibling thread.");
     }
     const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
       ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);
@@ -3078,7 +3102,7 @@ export class DesktopFederationRuntime {
     }
     return peer
       ? {
-          label: formatFederationPeerDisplayLabel(peer, visible),
+          label: formatFederationPeerDisplayLabel(peer),
           celestialIcon:
             this.celestialIconFor(instanceId) ?? peer.celestialIcon,
         }
@@ -3626,9 +3650,8 @@ export class DesktopFederationRuntime {
         if (isAppStateInitialized()) {
           for (const peer of this.store().listPeers({ includeRevoked: true })) peersById.set(peer.id, peer);
         }
-        const peers = [...peersById.values()];
         const peer = peersById.get(target.instanceId);
-        return peer ? `${formatFederationPeerDisplayLabel(peer, peers)} (${target.instanceId})` : target.instanceId;
+        return peer ? `${formatFederationPeerDisplayLabel(peer)} (${target.instanceId})` : target.instanceId;
       }
       const label = this.readRuntimeConfig().instanceLabel || defaultInstanceLabel();
       const instanceId = this.localInstanceId
@@ -3650,7 +3673,7 @@ export class DesktopFederationRuntime {
       const peer = visible.find((candidate) => candidate.id === instanceId)
         ?? this.remotePeerDirectory.get(instanceId as FederationInstanceId)
         ?? this.store().getPeer(instanceId as FederationInstanceId);
-      return peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId;
+      return peer ? formatFederationPeerDisplayLabel(peer) : instanceId;
     } catch {
       return instanceId;
     }
@@ -3753,7 +3776,7 @@ export class DesktopFederationRuntime {
     // Same composed label as connectedPeerTargets so search chips and
     // thread rows agree with the window title on multi-profile peers.
     const instanceLabel = peer
-      ? formatFederationPeerDisplayLabel(peer, visible)
+      ? formatFederationPeerDisplayLabel(peer)
       : target.instanceId;
     const capabilities = this.viewerCapabilitiesFor(
       target.instanceId,
@@ -3778,7 +3801,7 @@ export class DesktopFederationRuntime {
       const ownerLabel = ownerInstanceId === target.instanceId
         ? instanceLabel
         : ownerPeer
-          ? formatFederationPeerDisplayLabel(ownerPeer, visible)
+          ? formatFederationPeerDisplayLabel(ownerPeer)
           : thread.federation?.instanceLabel ?? ownerInstanceId;
       const ref = buildFederatedThreadRef({
         backend: thread.source,
@@ -3932,7 +3955,7 @@ export class DesktopFederationRuntime {
           return peer
             ? {
                 status: peer.status,
-                label: formatFederationPeerDisplayLabel(peer, visible),
+                label: formatFederationPeerDisplayLabel(peer),
                 celestialIcon: peer.celestialIcon,
                 capabilities: this.viewerCapabilitiesFor(instanceId, peer),
               }
@@ -4183,7 +4206,7 @@ export class DesktopFederationRuntime {
     const visible = this.visiblePeers();
     return await searchFederatedContent({ request, local, signal, onProgress,
       peers: visible.filter((peer) => peer.status === "connected" && peer.capabilities.includes("thread_detail"))
-        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer, visible),
+        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer),
           backend: this.remoteBackend({ scope: "remote", instanceId: peer.id }) })),
     });
   }
@@ -4204,9 +4227,7 @@ export class DesktopFederationRuntime {
           )
           .map((peer) => ({
             instanceId: peer.id,
-            // Composed against the full visible set so multi-profile
-            // machines keep distinct labels in search chips.
-            label: formatFederationPeerDisplayLabel(peer, visible),
+            label: formatFederationPeerDisplayLabel(peer),
             status: peer.status,
             backend: this.remoteBackend({
               scope: "remote",
@@ -4372,6 +4393,12 @@ export class DesktopFederationRuntime {
     });
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
+    router.registerHandler(CHECKOUT_FEDERATION_METHOD, (envelope) => {
+      if (!this.resourceCheckoutHandler || this.peerRole(envelope.sourceInstanceId) !== "full") {
+        throw new Error("This Federation owner does not provide checkout access to the peer.");
+      }
+      return this.resourceCheckoutHandler(envelope.sourceInstanceId, envelope.params);
+    });
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
@@ -5602,16 +5629,8 @@ export class DesktopFederationRuntime {
 
   private ensureLocalInstanceId(): FederationInstanceId {
     if (this.localInstanceId) return this.localInstanceId;
-    const state = desktopFederationState;
-    const existing = state.read("instanceId");
-    if (existing) {
-      this.localInstanceId = existing;
-      return existing;
-    }
-    const next = `pwr_${randomUUID()}`;
-    state.write("instanceId", next);
-    this.localInstanceId = next;
-    return next;
+    this.localInstanceId = desktopFederationState.getOrCreateInstanceId(`pwr_${randomUUID()}`);
+    return this.localInstanceId;
   }
 
   private store(): FederationStorage {
@@ -7793,8 +7812,11 @@ function localBackendOperations(): FederationBackendOperations {
       const index = store.readNavigationQueryIndex({
         backend: "all", threads, workspaceRoots: resolveScratchProjectsRoots(),
       });
+      const { directories } = await resolveNavigationWorktreeProjects(index.directories, {
+        signal: rpcOptions?.signal, directoryOverlays: index.directoryOverlays,
+      });
       return projectFederationProjectPage({ backend: "all", fetchedAt: Date.now(),
-        directories: index.directories, launchpadDefaults: await store.getLaunchpadDefaults(),
+        directories, launchpadDefaults: await store.getLaunchpadDefaults(),
       }, request);
     },
     async lookupArchivedThreads(request, rpcOptions) {
@@ -8640,16 +8662,8 @@ function localBackendOperations(): FederationBackendOperations {
             message: registered.message,
           };
         }
-        const directoryPath = path
-          .resolve(registered.directoryPath)
-          .replace(/\\/g, "/");
-        const directory = {
-          id: directoryPath,
-          kind: "local" as const,
-          label: registered.directoryLabel,
-          path: directoryPath,
-        };
-        await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await getDesktopOverlayStore().addLinkedDirectory({
+        const directory = linkedDirectoryForRegistration(registered);
+        await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.worktreePath ?? directory.path], async () => await getDesktopOverlayStore().addLinkedDirectory({
           backend,
           threadId: request.threadId,
           directory,

@@ -888,12 +888,9 @@ export class AutomationStore implements AutomationStorage {
   }
 
   /**
-   * The run each backend turn id belongs to, for many turns in one scan:
-   * the newest running run, else the newest run in any status. That is
-   * `findRunningRunByBackendTurnId ?? findRunByBackendTurnId` for every id.
-   * A thread's pricing event names every turn in the thread, and the table
-   * has no index on `backend_turn_id`, so a lookup per turn scanned it once
-   * per line.
+   * Look up a thread ledger's turn ids in one query. Choose the newest
+   * running row for each turn, falling back to the newest row in any status.
+   * Decode only the chosen row, so corrupt payloads do not expose stale runs.
    */
   findRunsByBackendTurnIds(params: {
     backend: AppServerBackendKind;

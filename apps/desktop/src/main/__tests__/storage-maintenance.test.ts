@@ -208,8 +208,17 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The Harness state and source-record indexes add two more VACUUM pages.
     // Main's thread_agent_follow_up_guards table and primary-key index add two more.
     // Each change separately budgeted 360 frames; their combined schema requires 362.
-    // The automatic wake guard and admission tables and admission-window index add three pages.
+    // The automatic wake guard, admission and review tables and admission-window index add four pages.
     // The WITHOUT ROWID sub-agent dismissal table adds one VACUUM page.
+    // The six operator-request scope indexes add six VACUUM frames.
+    // The three pricing summary read indexes add three VACUUM frames.
+    // The v83 gate pricing indexes add two VACUUM pages, with the same commit count.
+    // v84's partial completion index adds one VACUUM page without adding a commit.
+    // The v85 pricing summary triggers add two VACUUM frames on the combined fixture.
+    // The v86 scheduled projection table, indexes and trigger SQL add nine frames.
+    // The automation backend-turn index adds one VACUUM page to this fixture.
+    // The partial PR watch retry and history indexes add one root page each.
+    // The To-dos membership index and legacy search schema add eight vacuum frames.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

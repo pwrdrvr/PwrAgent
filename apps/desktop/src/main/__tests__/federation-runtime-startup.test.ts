@@ -59,6 +59,7 @@ vi.mock("../state/app-state", () => ({
   getAppStateDb: vi.fn(() => ({
     getMeta: mocks.stateDbGetMeta,
     setMeta: mocks.stateDbSetMeta,
+    getOrInsertMeta: (_key: string, value: string) => mocks.stateDbGetMeta() ?? value,
   })),
 }));
 

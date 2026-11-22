@@ -125,7 +125,7 @@ export function cleanEnvironment(input, home, captureRoot, source = process.env)
   };
 }
 export function configToml(input, command) {
-  return `[general]\nconfirm_quit_with_in_progress_threads = false\nnotifications_enabled = false\n[general.tool_output_alerts]\nmonitor_job_suggestions_enabled = false\n[onboarding]\ncompleted = true\n[federation]\nmode = "disabled"\n[messaging]\nenabled = false\n[experimental]\ntoken_miser_enabled = ${input.tokenMiser}\ntoken_miser_default_enabled = ${input.tokenMiser}\nthread_tool_accounting = true\n[models.codex]\npath = ${JSON.stringify(command)}\nmanaged_builds = true\nallow_fast = false\n[acp_agents.grok]\nenabled = false\nmanaged_builds = false\n[acp_agents.gemini]\nenabled = false\n[acp_agents.kimi]\nenabled = false\n[acp_agents.qwen]\nenabled = false\n`;
+  return `[general]\nconfirm_quit_with_in_progress_threads = false\nnotifications_enabled = false\n[general.tool_output_alerts]\nmonitor_job_suggestions_enabled = false\n[onboarding]\ncompleted = true\n[federation]\nmode = "disabled"\n[messaging]\nenabled = false\n[experimental]\ntoken_miser_enabled = ${input.tokenMiser}\ntoken_miser_default_enabled = ${input.tokenMiser}\n[models.codex]\npath = ${JSON.stringify(command)}\nmanaged_builds = true\nallow_fast = false\n[acp_agents.grok]\nenabled = false\nmanaged_builds = false\n[acp_agents.gemini]\nenabled = false\n[acp_agents.kimi]\nenabled = false\n[acp_agents.qwen]\nenabled = false\n`;
 }
 export function sanitizer(secrets = []) {
   const redact = (value) => {

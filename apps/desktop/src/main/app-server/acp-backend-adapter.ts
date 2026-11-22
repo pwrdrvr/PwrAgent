@@ -100,7 +100,7 @@ import {
   acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
 } from "../acp/acp-runtime-capabilities";
-import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import type { AcpSessionInventoryGroup, AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
@@ -278,7 +278,9 @@ type AcpAgentStoreLike = AcpAgentStorage<AcpRegistrySnapshot, AcpInstalledAgentR
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStorage, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStorage, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage" | "listBackendIds" | "listAllSessions">>;
+  Partial<Pick<AcpSessionStorage,
+    "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage" | "listBackendIds" | "listAllSessions" | "listInventorySessions"
+  >>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -1533,6 +1535,10 @@ export class AcpBackendAdapter {
   /** The profile's complete local membership, independent of installed agents. */
   listAllSessions(): AcpSessionMetadata[] | undefined {
     return this.acpSessionStore?.listAllSessions?.();
+  }
+
+  listInventorySessions(options?: { archived?: boolean }): AcpSessionInventoryGroup[] | undefined {
+    return this.acpSessionStore?.listInventorySessions?.(options);
   }
 
   /**

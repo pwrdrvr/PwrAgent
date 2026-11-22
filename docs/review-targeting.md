@@ -130,7 +130,8 @@ It schedules one review after the calling turn completes successfully. Both
 surfaces require two to eight distinct, attached PRs from one repository for
 a combined review. They default to the PwrAgent Sub Agent, or to Claude Code
 on a Claude thread when reviewing in its own workspace with an owner that
-supports `/code-review`. Claude Code uses the panel's default `high` effort.
+supports `/code-review`. Claude Code reviews at the thread's own effort, as
+described below.
 Messaging requires reply permission and also requires remote control for a
 peer's thread. Claude Code review turns retain the initiating contact's tool
 permissions, including when queued or sent to a peer. A messaging connection
@@ -144,9 +145,36 @@ own turn (`runMode: "claude-code-review"`). The panel offers the targets the
 command takes: Current changes, Attached PR, Branch and Path. An effort row
 (low to max; `ultra` is left out because it runs a billed cloud review whose
 findings do not return to the thread) carries the level as `reasoningEffort`,
-and the panel shows the exact command. Several PRs Together are one
+and the panel shows the exact command. The effort starts at the thread's own
+effort when `/code-review` takes it, so a medium thread is reviewed at medium;
+a thread on its model's default, or an effort the command has no level for,
+starts at `high`. The messaging picker, a bare `/code-review` from messaging
+and the `start_review` tool use the same default, and the owner applies it to
+any Claude Code review that arrives without an effort. Several PRs Together are one
 comma-separated argument, which Claude Code reviews as one report; Separately
 queues one command per PR.
+
+A bare `/code-review` typed in such a thread, or picked from the command menu,
+opens this panel the same way `/review` does. With arguments (`/code-review
+ultra`, `/code-review high 12`), and on a thread that does not review as Claude
+Code, it is Claude Code's own command and is sent as typed.
+
+From a bound messaging conversation, a bare `/code-review` starts a Claude
+Code review of the current changes at the default effort, with the same reply
+permission, peer scope and contact retention as `/review --pr`. A bare
+`/review` opens the messaging picker, which on such a thread defaults to the
+**Claude Code** mode like the panel: Review Scope offers Current changes,
+Attached PR, Branch and Path (a branch or path can be typed as a reply), an
+Effort button offers low to max, and the summary shows the exact command. A
+Reviewer from another provider switches the review to the PwrAgent Sub Agent;
+choosing Claude Code again drops it. A Claude owner has no `review/start`, so
+`/review` with a typed target (`/review main`, `/review --custom ...`) is still
+refused there.
+
+For a peer's thread, every `/review` form and every picker action checks peer
+scope first. The picker lists the peer's providers, and every review it starts
+goes to the peer. A peer's review does not auto-fix from messaging, so the
+picker shows no Auto-fix toggle there.
 
 `claudeCodeReviewCommand` builds the command on the owner. A PR is its bare
 number when the checkout has exactly one GitHub remote and the PR is that

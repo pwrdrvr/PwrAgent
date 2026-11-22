@@ -19,6 +19,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
   parseThreadTodoMessageTarget,
+  THREAD_TODO_PLACEMENTS,
   threadTodoPrerequisites,
   threadTodoSteps,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -51,6 +52,14 @@ const MODEL_SETTING_MAX_LENGTH = 200;
 const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
   readonly ThreadExecutionMode[];
 const WORK_MODES = ["local", "worktree"] as const;
+const PLACEMENT_DESCRIPTION = [
+  "sibling, the default, files the new thread beside this one, under this thread's parent.",
+  "A sibling of a top-level thread is another top-level thread.",
+  "Use sub_thread only for work that belongs to this thread alone, such as a fix it depends on.",
+  "Use top_level for work unrelated to this thread's parent.",
+  "Work for another project is always top_level, and sub_thread is refused there.",
+  "The operator can change it before starting.",
+].join(" ");
 const TODO_WRITING_GUIDANCE = [
   "Write titles, details, and handoff prompts in clear, natural language for the operator.",
   "Use normal spacing and complete sentences, without compressed agent shorthand.",
@@ -346,6 +355,10 @@ function normalizeAction(
       if (workMode !== undefined && !isOneOf(workMode, WORK_MODES)) {
         return { ok: false, message: "start_thread workMode must be local or worktree." };
       }
+      const placement = action.placement;
+      if (placement !== undefined && !isOneOf(placement, THREAD_TODO_PLACEMENTS)) {
+        return { ok: false, message: "start_thread placement must be sibling, sub_thread or top_level." };
+      }
       const executionMode = action.executionMode;
       if (executionMode !== undefined && !isOneOf(executionMode, EXECUTION_MODES)) {
         return {
@@ -371,6 +384,7 @@ function normalizeAction(
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(executionMode ? { executionMode } : {}),
           ...(workMode ? { workMode } : {}),
+          ...(placement ? { placement } : {}),
         },
       };
     }
@@ -487,6 +501,9 @@ export function normalizeUpdateTodoArgs(
   const workMode = readClearableChoice(args.workMode, "workMode", WORK_MODES);
   if (workMode && !workMode.ok) return workMode;
   if (workMode) action.workMode = workMode.value;
+  const placement = readClearableChoice(args.placement, "placement", THREAD_TODO_PLACEMENTS);
+  if (placement && !placement.ok) return placement;
+  if (placement) action.placement = placement.value;
   if (args.pullRequest !== undefined) {
     const pullRequest = normalizePullRequestReference(args.pullRequest);
     if (!pullRequest) {
@@ -624,8 +641,12 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Cards stay in the corner of the transcript and in the To-dos panel.",
         "Use one when the next step is the operator's.",
         "Use start_review when the work is ready for review.",
-        "Use merge_pull_request when the PR is green and ready to land.",
+        "Use merge_pull_request only after a review covers the PR head, its findings are settled, and CI is green.",
+        "PwrAgent raises review and merge offers for the thread's attached PR itself.",
+        "Check prAutomation.reviewReadiness first, and do not duplicate its offer.",
+        "A merge card for a PR head that is unreviewed, or whose review has unsettled findings, is refused.",
         "Use start_thread for follow-up work. For Git work, set action.workMode=worktree unless the instructions require sharing a checkout. Give the child its task in the assigned checkout.",
+        "Leave action.placement as sibling unless the work belongs to this thread alone, which is sub_thread.",
         "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
@@ -793,6 +814,11 @@ function inputSchemaForOperation(
                 description:
                   "start_thread only: use worktree for Git work unless the instructions require a shared checkout. PwrAgent creates it from the default branch. local shares the source directory and is used when omitted.",
               },
+              placement: {
+                type: "string",
+                enum: [...THREAD_TODO_PLACEMENTS],
+                description: `start_thread only: ${PLACEMENT_DESCRIPTION}`,
+              },
             },
           },
         },
@@ -862,6 +888,11 @@ function inputSchemaForOperation(
             type: "string",
             enum: [...WORK_MODES, ""],
             description: "Handoff cards: use worktree for Git work unless the instructions require a shared checkout. local shares the source directory. Empty clears the proposal.",
+          },
+          placement: {
+            type: "string",
+            enum: [...THREAD_TODO_PLACEMENTS, ""],
+            description: `Handoff cards: ${PLACEMENT_DESCRIPTION} Empty clears the proposal.`,
           },
           pullRequest: {
             type: "string",

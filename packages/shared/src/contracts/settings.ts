@@ -45,9 +45,9 @@ export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
 /**
- * The operator's worktree folder for `user-home` worktrees: PwrAgent's go to
- * `<directory>/.pwragent/worktrees`, and Codex threads' to
- * `<directory>/.codex/worktrees` only when `includeCodex` is on.
+ * The operator's worktree folder for `user-home` worktrees: PwrAgent's go
+ * straight into `<directory>`, and Codex threads' to `<directory>/codex` only
+ * when `includeCodex` is on.
  */
 export type DesktopWorktreeFolder = {
   directory: string;
@@ -59,7 +59,8 @@ export type DesktopWorktreeFolder = {
  * demand off the settings snapshot. `not-responding`: the check timed out,
  * as on a stale network mount.
  */
-export type DesktopWorktreeFolderStatus = "available" | "missing" | "not-responding";
+/** `in-use`: the folder holds other files and is not marked as PwrAgent's. */
+export type DesktopWorktreeFolderStatus = "available" | "missing" | "not-responding" | "in-use";
 
 export type DesktopWorktreeFolderCheck = {
   /** The configured folder that was checked; absent when none is set. */
@@ -85,6 +86,11 @@ export const DEFAULT_PR_AUTO_DISPATCH_ALLOWED = true;
  * default. Existing threads retain their saved per-thread preference.
  */
 export const DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS = true;
+/**
+ * When a thread's PR merges, watch its merge build on the target branch and
+ * wake the thread only if it fails. A pass ends the watch quietly.
+ */
+export const DEFAULT_WATCH_MERGE_BUILDS = true;
 export const DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY = 30;
 export const DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE = 1;
 export const DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY = true;
@@ -969,6 +975,7 @@ export type DesktopGeneralSettingsSnapshot = {
   hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
   hotCpuProfilingTriggerMode: DesktopSettingsValue<DesktopHotCpuProfileTriggerMode>;
   hotCpuProfilingSlowburnThresholdPercent: DesktopSettingsValue<number>;
+  hotCpuProfilingCaptureChromiumTrace: DesktopSettingsValue<boolean>;
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
@@ -1475,7 +1482,6 @@ export type DesktopSettingsSnapshot = {
      * thread-local transcript events are ignored and duplicate live activity
      * updates become no-ops.
      */
-    liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
      * Controls whether the released thread context-rail Pricing tab is visible.
      * The pricing ledger continues collecting usage while the tab is hidden.
@@ -1514,13 +1520,6 @@ export type DesktopSettingsSnapshot = {
     tokenMiserPollingReviewsEnabled?: DesktopSettingsValue<boolean>;
     tokenMiserDiagnosticsEnabled?: DesktopSettingsValue<boolean>;
     /**
-     * Shows the experimental Tool calls tab in the thread context rail.
-     * The desktop app may still collect tool metrics while this is disabled;
-     * this only gates the operator-facing panel. Replay-risk safety notices
-     * remain active because their cost grows while the turn is running.
-     */
-    threadToolAccounting?: DesktopSettingsValue<boolean>;
-    /**
      * Enables Codex's upstream default-mode request_user_input feature for
      * ordinary turns, allowing skills to pause and ask structured questions
      * outside Plan mode when the installed Codex build supports it.
@@ -1532,14 +1531,6 @@ export type DesktopSettingsSnapshot = {
     codexConfigWarningsDismissed?: DesktopSettingsValue<string[]>;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
-    /**
-     * Diff condensation (a.k.a. "diff eliding") gates whether the configured
-     * backend may classify less-relevant diff hunks. When disabled, every diff
-     * renders in full and no structured-generation request fires.
-     */
-    diffCondensation: {
-      enabled: DesktopSettingsValue<boolean>;
-    };
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
@@ -1798,6 +1789,11 @@ export type DesktopSettingsSnapshot = {
     prAutoDispatchAllowed: DesktopSettingsValue<boolean>;
     /** Default Auto-fix PR preference seeded only onto newly created threads. */
     defaultPrAutoDispatchEnabled: DesktopSettingsValue<boolean>;
+    /**
+     * `[git] watch_merge_builds`: when a thread's PR merges, watch the build of
+     * its merge commit on the target branch and wake the thread if it fails.
+     */
+    watchMergeBuilds?: DesktopSettingsValue<boolean>;
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
@@ -1834,7 +1830,7 @@ export type DesktopSettingsSnapshot = {
     effectivePath: string;
     /**
      * Folder that replaces the home folder for `user-home` worktrees, which
-     * then live in `<baseDirectory>/.pwragent/worktrees`. Absent: home folder.
+     * then live directly in `<baseDirectory>`. Absent: home folder.
      */
     baseDirectory?: string;
     /** Codex threads use the folder too; Codex Desktop then does not list them. */
@@ -1859,6 +1855,7 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
+    hotCpuProfilingCaptureChromiumTrace?: boolean;
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
@@ -1890,7 +1887,6 @@ export type DesktopSettingsConfigPatch = {
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
-    liveTranscriptEventFiltering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -1901,15 +1897,11 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;
-    threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
     codexConfigWarningsDismissed?: string[];
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
-    diffCondensation?: {
-      enabled?: boolean;
-    };
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
@@ -2110,6 +2102,7 @@ export type DesktopSettingsConfigPatch = {
     backgroundPrPolling?: boolean;
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
+    watchMergeBuilds?: boolean;
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;

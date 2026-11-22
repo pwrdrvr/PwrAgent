@@ -6,6 +6,7 @@ import { buildLimitAccounts, projectLimit, sinceResetSeries } from "../usage-lim
 const HOUR = 3_600_000;
 const START = Date.UTC(2026, 8, 27, 21);
 const WEEK = 168 * HOUR;
+const fixtureOwner = { owner: "Fixture", target: { scope: "local" as const } };
 
 function weekly(at: number, usedPercent: number, resetAt: number, provider = "openai"): UsageLimitObservation {
   return { observedAt: at, provider, accountKey: "fixture-account", limits: [
@@ -14,6 +15,25 @@ function weekly(at: number, usedPercent: number, resetAt: number, provider = "op
 }
 
 describe("usage limit schedule properties", () => {
+  it("groups keyless limits by instance identity even when display names match or change", () => {
+    fc.assert(fc.property(fc.stringMatching(/^Host[A-Z]{0,6}$/), fc.integer({ min: 1, max: 99 }), (owner, percent) => {
+      const keyless = (at: number, used: number) => ({ ...weekly(at, used, START + WEEK), accountKey: undefined });
+      const local = { scope: "local" as const };
+      const remote = { scope: "remote" as const, instanceId: "studio" };
+      const sources = [
+        { owner, target: local, current: keyless(START + HOUR, percent) },
+        { owner, target: remote, current: keyless(START + HOUR, percent + 1) },
+        { owner: `${owner} renamed`, target: remote, current: keyless(START + 2 * HOUR, percent + 1) },
+      ];
+      const accounts = buildLimitAccounts(sources);
+      expect(accounts.map(({ series }) => series[0]?.points.map((point) => point.usedPercent)))
+        .toEqual([[percent + 1, percent + 1], [percent]]);
+      expect(accounts.map(({ key }) => key)).toEqual(buildLimitAccounts(sources.map((source) => ({
+        ...source, owner: `${source.owner} renamed again`,
+      }))).map(({ key }) => key));
+    }));
+  });
+
   it("keeps regular renewals scheduled across any number of skipped windows", () => {
     fc.assert(fc.property(fc.record({
       windowMinutes: fc.constantFrom(300, 10_080),
@@ -28,7 +48,7 @@ describe("usage limit schedule properties", () => {
           { name: "Limit", windowKey: "primary", usedPercent: percent, resetAt, windowMinutes },
         ],
       });
-      const [account] = buildLimitAccounts([{ owner: "Fixture", history: [
+      const [account] = buildLimitAccounts([{ ...fixtureOwner, history: [
         reading(START - HOUR, oldPercent, START),
       ], current: reading(windowStart + HOUR, usedPercent, windowStart + duration) }]);
       const series = sinceResetSeries(account)!;
@@ -50,7 +70,7 @@ describe("usage limit schedule properties", () => {
       usedPercent: fc.integer({ min: 1, max: 99 }),
     }), ({ beforeHours, elapsedMinutes, oldPercent, usedPercent }) => {
       const elapsed = elapsedMinutes * 60_000;
-      const [account] = buildLimitAccounts([{ owner: "Fixture", history: [
+      const [account] = buildLimitAccounts([{ ...fixtureOwner, history: [
         weekly(START - beforeHours * HOUR, oldPercent, START + elapsed / 2),
       ], current: weekly(START + elapsed, usedPercent, START + WEEK) }]);
       const series = sinceResetSeries(account)!;
@@ -77,8 +97,8 @@ describe("usage limit schedule properties", () => {
       (codexPercent, claudePercent) => {
         const codex = weekly(START + 48 * HOUR, codexPercent, START + WEEK);
         const claude = weekly(START + 49 * HOUR, claudePercent, START + 2 * WEEK, "anthropic");
-        const [expected] = buildLimitAccounts([{ owner: "Fixture", current: codex }]);
-        const accounts = buildLimitAccounts([{ owner: "Fixture", history: [claude], current: codex }]);
+        const [expected] = buildLimitAccounts([{ ...fixtureOwner, current: codex }]);
+        const accounts = buildLimitAccounts([{ ...fixtureOwner, history: [claude], current: codex }]);
         expect(accounts.find((account) => account.provider === "openai")).toEqual(expected);
       },
     ));

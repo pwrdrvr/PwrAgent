@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 test("Settings offers a staged rendering capture without Developer Mode", async () => {
   const testInfo = test.info();
@@ -52,6 +53,71 @@ test("Settings offers a staged rendering capture without Developer Mode", async 
     await expect(start).toBeEnabled();
     await copy.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("rendering-diagnostics-complete.png") });
+  } finally {
+    await app.close();
+  }
+});
+
+test("Troubleshooting persists the Chromium trace opt-in independently of Start Capture", async () => {
+  const info = test.info();
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/readme-recents-hero/replay.fixture.json"),
+    env: {
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "250",
+      PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "50",
+      PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+    },
+  });
+  try {
+    const page = app.window;
+    const nav = page.getByRole("navigation", { name: "Settings sections" });
+    await page.getByRole("button", { name: "Open settings", exact: true }).click();
+    await nav.getByRole("button", { name: "Troubleshooting", exact: true }).click();
+    const pane = page.getByRole("region", { name: "Troubleshooting settings", exact: true });
+    const toggle = pane.getByRole("switch", { name: "Chromium trace", exact: true });
+    await expect(toggle).not.toBeChecked();
+    await toggle.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("hot-cpu-chromium-trace-off.png") });
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await expect(pane.getByText("Not armed", { exact: true })).toBeVisible();
+    await nav.getByRole("button", { name: /Exit Settings/i }).click();
+    await page.getByRole("button", { name: "Open settings", exact: true }).click();
+    await nav.getByRole("button", { name: "Troubleshooting", exact: true }).click();
+    await expect(toggle).toBeChecked();
+    await toggle.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("hot-cpu-chromium-trace.png") });
+
+    // Make the threshold deterministic while exercising the actual debugger,
+    // native trace export, settings sync, artifact manifest and notice.
+    await app.electronApp.evaluate(({ app: electronApp, BrowserWindow }) => {
+      const rendererPid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId();
+      const readMetrics = electronApp.getAppMetrics.bind(electronApp);
+      electronApp.getAppMetrics = () => readMetrics().map((metric) => metric.pid === rendererPid
+        ? { ...metric, cpu: { percentCPUUsage: 95, idleWakeupsPerSecond: 0 } }
+        : metric);
+    });
+    await pane.getByRole("button", { name: "Start Capture (Immediate)", exact: true }).click();
+    await expect(page.getByText("Renderer CPU profile captured", { exact: true })).toBeVisible();
+    const diagnostics = path.join(path.dirname(stateDbPathForHomeRoot(app.homeRoot)), "diagnostics");
+    const sessions = await Promise.all((await readdir(diagnostics)).filter((name) => name.startsWith("hot-cpu-"))
+      .map(async (name) => ({
+        name,
+        manifest: JSON.parse(await readFile(path.join(diagnostics, name, "session.json"), "utf8")),
+      })));
+    const renderer = sessions.find(({ manifest }) => manifest.target === "renderer")!;
+    const traceName = "renderer-hot-0001.trace.json";
+    const events = (await readFile(path.join(diagnostics, renderer.name, "events.ndjson"), "utf8"))
+      .split("\n").filter((line) => line.includes('"chromium-trace-'));
+    expect(renderer.manifest.artifacts, events.join("\n"))
+      .toEqual(expect.arrayContaining(["renderer-hot-0001.cpuprofile", traceName]));
+    const trace = JSON.parse(await readFile(path.join(diagnostics, renderer.name, traceName), "utf8"));
+    expect(trace.traceEvents).toEqual(expect.any(Array));
+
+    await pane.getByRole("button", { name: "Stop Capture", exact: true }).click();
+    await toggle.click();
+    await expect(toggle).not.toBeChecked();
   } finally {
     await app.close();
   }

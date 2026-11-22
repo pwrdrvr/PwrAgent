@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { openStarMapWindow } from "./fixtures/star-map-window";
 
 const approvalPendingSpecDir = path.dirname(fileURLToPath(import.meta.url));
 const approvalCommand =
@@ -139,6 +140,34 @@ test("dismisses the pending approval UI after approval", async () => {
       app.window.getByTestId("composer-stop-turn")
     ).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
+  } finally {
+    await app.close();
+  }
+});
+
+test("answers the thread's pending approval from its Star Map chat card", async () => {
+  const app = await openApprovalPendingReplay();
+
+  try {
+    const mapWindow = await openStarMapWindow(app);
+    const starMap = mapWindow.getByRole("region", { name: "Star Map", exact: true });
+    await starMap.getByRole("button", {
+      name: "Open thread: Approval pending replay",
+      exact: true,
+    }).click();
+
+    const chatCard = mapWindow.getByRole("region", {
+      name: "Chat: Approval pending replay",
+      exact: true,
+    });
+    const approval = chatCard.getByRole("group", { name: "Pending approval" });
+    await approval.getByRole("button", { name: "Approve once", exact: true }).click();
+
+    // The main window has a separate renderer and only clears its approval
+    // when the owner resolves the request. Hiding the card's UI alone cannot pass.
+    await expect(app.window.getByRole("group", { name: "Pending approval" })).toHaveCount(0);
+    await expect(approval).toHaveCount(0);
+    await expect(chatCard).toBeVisible();
   } finally {
     await app.close();
   }

@@ -29,6 +29,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
+  isThreadTodoPlacement,
   isThreadTodoSeenExecutionMode,
   isThreadTodoStatus,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -62,8 +63,11 @@ export async function listLocalTodoOwnerThreads() {
 }
 
 /** Private managed sub-agent threads; their cards never reach the queue. */
-export function readManagedTodoThreadKeys(): ReadonlySet<string> {
-  return getDesktopOverlayStore().readManagedSubAgentThreadKeys();
+export function readManagedTodoThreadKeys(keys?: readonly string[]): ReadonlySet<string> {
+  const store = getDesktopOverlayStore();
+  return keys === undefined
+    ? store.readManagedSubAgentThreadKeys()
+    : store.readManagedSubAgentThreadKeysForOwners(keys);
 }
 
 async function listLocalTodoOwners() {
@@ -188,6 +192,7 @@ export const localThreadTodoOperations = {
         ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
         ...(request.modelSettings ? { modelSettings: parseDispatchSettings(request.modelSettings) } : {}),
         ...(request.workMode === "local" || request.workMode === "worktree" ? { workMode: request.workMode } : {}),
+        ...(isThreadTodoPlacement(request.placement) ? { placement: request.placement } : {}),
         ...(typeof request.environment === "string" && request.environment.trim()
           ? { environment: request.environment.trim() }
           : {}),

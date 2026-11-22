@@ -1650,7 +1650,7 @@ describe("StarMapScreen", () => {
     await waitFor(() => {
       expect(
         screen.getByRole("button", {
-          name: /Open this instance \(Harold-MBP-M5-Max \/ default\)/,
+          name: /Open this instance \(Harold-MBP-M5-Max\)/,
         }),
       ).toBeTruthy();
     });

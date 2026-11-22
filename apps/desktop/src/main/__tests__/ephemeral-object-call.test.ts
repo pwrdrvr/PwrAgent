@@ -16,7 +16,7 @@ describe("EphemeralObjectCaller", () => {
     const caller = new EphemeralObjectCaller({ client });
 
     const result = await caller.generateObject({
-      helper: "diff_condensation",
+      helper: "thread_titles",
       schema: { type: "object" },
       schemaName: "thread_title",
       system: "Return a title.",
@@ -32,7 +32,7 @@ describe("EphemeralObjectCaller", () => {
       },
     });
     expect(client.generateObject).toHaveBeenCalledWith({
-      helper: "diff_condensation",
+      helper: "thread_titles",
       schema: { type: "object" },
       schemaName: "thread_title",
       system: "Return a title.",
@@ -46,7 +46,7 @@ describe("EphemeralObjectCaller", () => {
 
     await expect(
       caller.generateObject({
-        helper: "diff_condensation",
+        helper: "thread_titles",
         schema: { type: "object" },
         system: "Return a title.",
         prompt: "Name this thread.",
@@ -67,7 +67,7 @@ describe("EphemeralObjectCaller", () => {
 
     await expect(
       caller.generateObject({
-        helper: "diff_condensation",
+        helper: "thread_titles",
         schema: { type: "object" },
         system: "Return a title.",
         prompt: "Name this thread.",

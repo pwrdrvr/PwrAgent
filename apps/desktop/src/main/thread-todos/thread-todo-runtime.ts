@@ -24,6 +24,7 @@ import type { ThreadReview, ThreadReviewIdentity } from "@pwragent/shared/contra
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   resolveThreadTodoModelSettings,
+  threadTodoPlacementParent,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
@@ -55,7 +56,7 @@ import {
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
 import { withThreadTodoPlanNote, type ThreadTodoPlan } from "./thread-todo-plan.js";
-import { ThreadTodoFeed, type ThreadTodoFeedOwner } from "./thread-todo-feed.js";
+import { ThreadTodoFeed, type ThreadTodoFeedSource } from "./thread-todo-feed.js";
 import {
   getThreadReviewService,
   setThreadReviewBroadcast,
@@ -77,6 +78,20 @@ let feed: ThreadTodoFeed | null = null;
 let unsubscribeArchive: (() => void) | undefined;
 let readDefaultMergeMethod: (() => ThreadTodoMergeMethod) | undefined;
 let listProjectCandidates: (() => Promise<ThreadTodoProjectCandidate[]>) | undefined;
+/**
+ * Says why a thread may not offer a merge for a pull request yet, or nothing
+ * when it may. Set by the PR review-offer coordinator; see
+ * docs/pr-review-readiness.md.
+ */
+type MergeOfferGate = (
+  thread: { backend: AppServerBackendKind; threadId: string },
+  pullRequest: string,
+) => Promise<string | undefined>;
+let mergeOfferGate: MergeOfferGate | undefined;
+
+export function setThreadTodoMergeOfferGate(gate: MergeOfferGate | undefined): void {
+  mergeOfferGate = gate;
+}
 
 export function getThreadTodoService(): ThreadTodoService {
   if (!service) {
@@ -231,9 +246,7 @@ export function installThreadTodoRuntime(params: {
   /** Plan cards for threads started on a peer. */
   peerPlans?: ThreadTodoPeerPlans;
   /** What the live card feed reads besides the services, and where it publishes. */
-  feed: {
-    loadOwners: () => Promise<readonly ThreadTodoFeedOwner[]>;
-    managedThreadKeys: () => ReadonlySet<string>;
+  feed: Pick<ThreadTodoFeedSource, "loadOwners" | "managedThreadKeys"> & {
     onDelta: (delta: ThreadTodoFeedDelta) => void;
   };
 }): void {
@@ -322,6 +335,7 @@ export function installThreadTodoRuntime(params: {
     return {
       thread: { backend: thread.backend, model: settings.model, reasoningEffort: settings.reasoningEffort },
       ...(Object.keys(threadSpeed).length > 0 ? { threadSpeed } : {}),
+      ...(settings.parentThread ? { threadParent: settings.parentThread } : {}),
     };
   });
   // An archived thread's cards have nothing left to act on.
@@ -551,6 +565,14 @@ export function installThreadTodoRuntime(params: {
     },
     add: async (context, rawInput) => {
       const input = await settleAddInput(context, rawInput);
+      if (input.action?.type === "merge_pull_request" && mergeOfferGate) {
+        // A gate that cannot read the PR does not block the card.
+        const refusal = await mergeOfferGate(
+          { backend: context.backend, threadId: context.threadId },
+          input.action.pullRequest,
+        ).catch(() => undefined);
+        if (refusal) throw new ThreadTodoError("conflict", refusal);
+      }
       const [cwd, primaryDirectory, projects] = await Promise.all([
         registry.resolveThreadWorkspaceCwd(context.backend, context.threadId)
           .catch(() => undefined),
@@ -670,7 +692,7 @@ export function createThreadTodoRunners(params: {
       return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: assertNotHeld });
     },
     startThread: async ({
-      sourceBackend, sourceThreadId, cwd: requestedCwd, project, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
+      sourceBackend, sourceThreadId, cwd: requestedCwd, project, crossProject, placement, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
@@ -711,6 +733,15 @@ export function createThreadTodoRunners(params: {
         ...optional("inherited", inheritedSpeed),
       });
       const workMode = chosenWorkMode ?? action.workMode;
+      // A runner called without a placement nests, as every start did
+      // before placements existed; the service always names one.
+      const parent = crossProject
+        ? undefined
+        : threadTodoPlacementParent(
+            placement ?? "sub_thread",
+            { backend: sourceBackend, threadId: sourceThreadId },
+            source.parentThread,
+          );
       const cwd = await resolveThreadTodoStartCwd({ cwd: requestedCwd, project });
       const codexEnvironment = await resolveThreadTodoStartEnvironment({
         requested: environment,
@@ -743,14 +774,16 @@ export function createThreadTodoRunners(params: {
         ...(workMode === "worktree"
           ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
           : {}),
-        // Work for another project is not grouped under this thread, as
-        // handoff_task does not group it.
-        ...(crossProject
-          ? {}
-          : {
-              parentThreadId: sourceThreadId,
-              parentThreadBackend: sourceBackend,
-            }),
+        // A sub-thread is filed under the raising thread and a sibling under
+        // its parent. The service has already made work for another project
+        // top-level, as handoff_task does not group it either.
+        ...(parent
+          ? {
+              parentThreadId: parent.threadId,
+              parentThreadBackend: parent.backend,
+              ...(parent.instanceId ? { parentThreadInstanceId: parent.instanceId } : {}),
+            }
+          : {}),
       });
       if (action.title) {
         try {

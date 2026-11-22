@@ -147,6 +147,28 @@ describe("DesktopBackendRegistry", () => {
     });
   });
 
+  it("reads the source thread's parent, which a sibling handoff is filed under", async () => {
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:child": {
+        backend: "codex", threadId: "child", extraLinkedDirectories: [], executionMode: "default",
+        parentThreadId: "group-root",
+      },
+      "codex:remote-child": {
+        backend: "codex", threadId: "remote-child", extraLinkedDirectories: [], executionMode: "default",
+        parentThreadId: "peer-root", parentThreadBackend: "claude", parentThreadInstanceId: "peer",
+      },
+    } });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    onTestFinished(() => registry.close());
+    // The parent's provider defaults to the child's own.
+    await expect(registry.readThreadHandoffSettings({ backend: "codex", threadId: "child" })).resolves.toMatchObject({
+      parentThread: { backend: "codex", threadId: "group-root" },
+    });
+    await expect(registry.readThreadHandoffSettings({ backend: "codex", threadId: "remote-child" })).resolves.toMatchObject({
+      parentThread: { backend: "claude", threadId: "peer-root", instanceId: "peer" },
+    });
+  });
+
   it("reserves a handoff source against turn admission and releases on failure", async () => {
     const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());

@@ -1,4 +1,5 @@
 import {
+  Children,
   createContext,
   useCallback,
   useContext,
@@ -523,6 +524,7 @@ export function SettingsSection(props: {
  * their own pane so they keep full collapsible headers without registering
  * into — and polluting the "Collapse all / Expand all" controls and arrow-key
  * navigation of — the parent pane.
+ * An empty group is hidden until it has sections.
  *
  * Header chrome reuses the same class hierarchy as `SettingsSection` so the
  * eyebrow / title / chevron / chip read identically (see the chrome-reuse
@@ -536,7 +538,7 @@ export function SettingsSectionGroup(props: {
   title: string;
   eyebrow?: string;
   description?: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
   /** Optional right-side chip in the group header. */
   chip?: ReactNode;
   chipKind?: SettingsChipTone;
@@ -547,6 +549,7 @@ export function SettingsSectionGroup(props: {
   const [collapsed, setCollapsed] = useState<boolean>(
     () => savedGroupCollapsed.get(props.groupId) ?? props.defaultCollapsed ?? false,
   );
+  if (Children.toArray(props.children).length === 0) return null;
   const headingId = `settings-group-${props.groupId}-heading`;
   const bodyId = `settings-group-${props.groupId}-body`;
 

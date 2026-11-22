@@ -501,7 +501,7 @@ describe("DesktopFederationRuntime", () => {
     const registration = vi.spyOn(directoryRegistration, "registerDirectoryFromDisk").mockImplementation(async () => {
       fencedAtRegistration = fenced;
       await held;
-      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra",
+      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra", checkoutPath: "/owner/topic",
         launchpad: { directoryKey: "directory:/owner/extra", directoryKind: "directory", directoryLabel: "extra", directoryPath: "/owner/extra",
           backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
         defaults: { backend: "codex", executionMode: "default" } };
@@ -510,11 +510,15 @@ describe("DesktopFederationRuntime", () => {
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
       .mockReturnValue({ withThreadWorkspaceMutation, publishLocalEvent, withArchiveWorkspaceWrite: async (_paths: string[], work: () => Promise<unknown>) => await work() } as never);
     try {
-      const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/extra" });
+      const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/topic" });
       expect(fencedAtRegistration).toBe(true);
       release();
-      await expect(attaching).resolves.toMatchObject({ ok: true });
-      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function), ["/owner/extra"]);
+      const attached = await attaching;
+      expect(attached).toMatchObject({ ok: true, directory: { kind: "worktree", path: expect.stringMatching(/\/owner\/extra$/),
+        id: expect.stringMatching(/\/owner\/topic$/), worktreePath: expect.stringMatching(/\/owner\/topic$/) } });
+      expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "owner" }))
+        .toMatchObject({ extraLinkedDirectories: [attached.ok ? attached.directory : null] });
+      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function), ["/owner/topic"]);
       expect(fenced).toBe(false);
     } finally {
       release();
@@ -2445,6 +2449,39 @@ describe("DesktopFederationRuntime", () => {
         id: "card", messageTarget: { backend: "codex", threadId: "existing-owner" },
       })).rejects.toThrow("Update the card's PwrAgent owner");
       expect(sent).toEqual([]);
+    });
+
+    it("never sends a placement pick to an older owner that would nest the thread anyway", async () => {
+      const older = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_dispatch_target"]);
+      await expect(older.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }))
+        .rejects.toThrow("choose where the new thread is filed");
+      expect(older.sent).toEqual([]);
+      // The same owner still starts a card that carries no pick.
+      void older.runtime.requestThreadTodoOperation(target, "runAction", { id: "card" }).catch(() => undefined);
+      await vi.waitFor(() => expect(older.sent).toHaveLength(1));
+
+      const current = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement"]);
+      void current.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }).catch(() => undefined);
+      await vi.waitFor(() => expect(current.sent).toHaveLength(1));
+      expect(current.sent[0]).toMatchObject({ method: "threadTodos.runAction", params: { id: "card", placement: "top_level" } });
+
+      // An owner without siblings would drop a sibling pick and nest the thread.
+      await expect(current.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "sibling" }))
+        .rejects.toThrow("start a sibling thread");
+      expect(current.sent).toHaveLength(1);
+      const siblings = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement", "thread_todo_placement_sibling"]);
+      void siblings.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "sibling" }).catch(() => undefined);
+      await vi.waitFor(() => expect(siblings.sent).toHaveLength(1));
+      expect(siblings.sent[0]).toMatchObject({ params: { id: "card", placement: "sibling" } });
+
+      // A disconnected owner is reported as disconnected, not as outdated.
+      const offline = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement"], "remembered");
+      await expect(offline.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }))
+        .rejects.toThrow("is disconnected");
+      await expect(offline.runtime.requestThreadTodoOperation(target, "runAction", {
+        id: "card", messageTarget: { backend: "codex", threadId: "existing-owner" },
+      })).rejects.toThrow("is disconnected");
+      expect(offline.sent).toEqual([]);
     });
 
     it("names To-dos when the owner lacks thread_todos", async () => {
@@ -5059,6 +5096,21 @@ describe("Cloudflare listener reachability", () => {
 });
 
 describe("federation short names", () => {
+  it("keeps the default target bare beside a same-label peer with an unknown profile", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      shortNames: { shortLabelFor: () => string | undefined };
+    };
+    const base = { label: "Host", status: "connected", capabilities: ["remote_window" as const] };
+    const peers = [{ ...base, id: "pwr_default", profileName: "default" }, { ...base, id: "pwr_legacy" }];
+    vi.spyOn(runtime, "visiblePeers").mockReturnValue(peers);
+    vi.spyOn(runtime.shortNames, "shortLabelFor").mockReturnValue("Mini");
+
+    expect(runtime.connectedPeerTargets()).toMatchObject([
+      { target: { instanceId: "pwr_default" }, label: "Host", shortLabel: "Mini" },
+      { target: { instanceId: "pwr_legacy" }, label: "Host (profile unknown)", shortLabel: "Mini (profile unknown)" },
+    ]);
+  });
+
   it("merges the gateway's short-name map, re-sends it onward only, and tells renderers", async () => {
     const meta = new Map<string, string>([["federation_gateway_instance_id", "gateway_one"]]);
     const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);

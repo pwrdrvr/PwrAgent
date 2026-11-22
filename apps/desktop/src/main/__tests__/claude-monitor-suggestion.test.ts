@@ -59,11 +59,11 @@ describe("PwrAgent MCP instructions", () => {
     const text = buildPwrAgentMcpInstructions([
       "read_tool_guide", "watch_thread_pull_request", "manage_thread_dependencies", "create_monitor_delegation",
     ]);
-    expect(text).toContain("Read read_tool_guide for the short tool guide.");
-    expect(text).toContain("use watch_thread_pull_request and end the turn");
-    expect(text).toContain("manage_thread_dependencies (Continue After), mode all for multiple PRs");
-    expect(text).toContain("Other long jobs: create_monitor_delegation.");
-    expect(text).toContain("do not poll PRs in monitors, shells, or sleep loops");
+    expect(text).toContain("Read read_tool_guide");
+    expect(text).toContain("follow prAutomation.guidance and use watch_thread_pull_request");
+    expect(text).toContain("Use manage_thread_dependencies for prerequisites, ci_run for standalone CI");
+    expect(text).toContain("Explicit Job Monitor or no built-in wait: create_monitor_delegation.");
+    expect(text).toContain("Register the wait and end the turn.");
   });
 
   it("does not name a tool the catalog lacks", () => {

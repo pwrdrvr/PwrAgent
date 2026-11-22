@@ -3501,9 +3501,14 @@ describe("DesktopBackendRegistry", () => {
     }
     expect(monitorIds.size).toBe(outcomes.length);
     expect(assess).toHaveBeenCalledTimes(loop ? 1 : 2);
-    const evidence = JSON.parse(assess.mock.calls.at(-1)![0].prompt) as Array<{ monitorId: string; outcome: string }>;
+    const { wakingMonitorIds, attempts: evidence } = JSON.parse(assess.mock.calls.at(-1)![0].prompt) as {
+      wakingMonitorIds: string[];
+      attempts: Array<{ monitorId: string; outcome: string; elapsedMs: number }>;
+    };
+    expect(wakingMonitorIds).toEqual([Array.from(monitorIds).at(-1)]);
     expect(evidence).toHaveLength(loop ? 4 : 5);
     expect(new Set(evidence.map((attempt) => attempt.monitorId)).size).toBe(evidence.length);
+    expect(evidence.every((attempt) => attempt.elapsedMs >= 0)).toBe(true);
     expect(evidence.map((attempt) => attempt.outcome)).toEqual(expect.arrayContaining(loop ? ["failure", "cancelled", "success"] : ["success"]));
     expect(assess).toHaveBeenCalledWith(expect.objectContaining({ disableExecution: true, model: "gpt-5.6-luna", reasoningEffort: "low" }));
     expect(codexClient.startTurnCalls.filter((call) => call.threadId === parent)).toHaveLength(loop ? 3 : 7);

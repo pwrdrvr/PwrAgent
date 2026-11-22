@@ -3333,6 +3333,74 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("keeps an announced turn's Inbox ordering in sync with the provider's activity timestamps", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const client = new CodexAppServerClient({ command: "codex" });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const request = { backend: "codex", filter: "turn-echo", callerReason: "renderer-navigation-query",
+      enrichDirectories: false, skipArchivedMetadataRefresh: true } as const;
+    await registry["subAgentStartupReconciliation"];
+    await client.listThreads({ maxPages: 1, enrichDirectories: false, skipArchivedMetadataRefresh: true });
+    const transport = MockTransport.instances.at(-1)!;
+    const send = transport.send.bind(transport);
+    let pages = 0;
+    const pageSize = 100;
+    const pageCount = 8;
+    const primary = "turn-echo-0";
+    let updatedAt = 1_777_400_001;
+    const siblingUpdatedAt = 1_777_400_002;
+    const metadata = vi.spyOn(store, "getThreadListingOverlayStates");
+    const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+      const request = JSON.parse(message);
+      if (request.method !== "thread/list" || request.params.searchTerm !== "turn-echo") { send(message); return; }
+      pages++;
+      const page = Number(request.params.cursor ?? 0);
+      MockTransport.threadListResultBySearchTerm.set("turn-echo", Array.from({ length: pageSize }, (_, index) => ({
+        id: `turn-echo-${page * pageSize + index}`, name: "Fixture turn", source: "vscode",
+        status: { type: "idle" }, updatedAt: page === 0 && index === 0 ? updatedAt : siblingUpdatedAt,
+      })));
+      const cursor = MockTransport.threadListNextCursor;
+      MockTransport.threadListNextCursor = page + 1 < pageCount ? String(page + 1) : undefined;
+      try { send(message); } finally { MockTransport.threadListNextCursor = cursor; }
+    });
+    try {
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: primary, turnId: "active-turn", turn: { id: "active-turn", status: "inProgress" },
+      } } });
+      const beforeEcho = await registry.listThreads(request);
+      expect(beforeEcho).toHaveLength(pageSize * pageCount);
+      expect(beforeEcho.find(({ id }) => id === primary)?.threadStatus).toBe("active");
+      expect(beforeEcho[0]?.id).not.toBe(primary);
+      updatedAt = siblingUpdatedAt + 1;
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: primary, status: { type: "active" },
+      } } });
+      // Refreshes of the same generation share one provider observation.
+      const refreshed = await Promise.all(Array.from({ length: 3 }, () => registry.listThreads(request)));
+      for (const rows of refreshed) {
+        expect(rows[0]).toMatchObject({ id: primary, updatedAt: updatedAt * 1_000, threadStatus: "active" });
+      }
+      expect({ pages, listingOverlayReads: metadata.mock.calls.length }).toEqual({ pages: 16, listingOverlayReads: 4 });
+
+      // A status without a matching announced turn still owns discovery.
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: "turn-echo-1", status: { type: "active" },
+      } } });
+      const changed = await registry.listThreads(request);
+      expect(changed.find(({ id }) => id === "turn-echo-1")?.threadStatus).toBe("active");
+      expect(pages).toBe(pageCount * 3);
+    } finally {
+      rpc.mockRestore();
+      metadata.mockRestore();
+      await registry.close();
+      db.close();
+    }
+  });
+
   it("budgets physical pages across a create, pin, name and turn burst with mixed enrichment", async () => {
     const budget = navigationListingBudgets["codex-create-pin-name-turn-burst"];
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
@@ -13676,7 +13744,7 @@ describe("CodexAppServerClient", () => {
               onToolCall: async () => ({ success: true, contentItems: [] }),
             })
           : client.generateStructuredObject({
-              ...common, helper: "diff_condensation", disableExecution: kind === "data-only",
+              ...common, helper: "automation_prompts", disableExecution: kind === "data-only",
               isMatch: (record) => typeof record.title === "string",
             });
       if (kind === "tool") {
@@ -13773,7 +13841,7 @@ describe("CodexAppServerClient", () => {
         output: [
           {
             type: "text",
-            text: JSON.stringify({ decisions: [] }),
+            text: JSON.stringify({ prompt: "Run daily checks." }),
           },
         ],
       },
@@ -13784,21 +13852,21 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     await expect(client.generateStructuredObject({
-      helper: "diff_condensation",
+      helper: "automation_prompts",
       disableExecution,
-      system: "Keep behavioral and uncertain changes visible.",
-      prompt: "Classify these serialized diff hunks.",
+      system: "Return a prompt for this automation.",
+      prompt: "Draft an automation prompt from this request.",
       model: "gpt-5.6-luna",
       schema: {
         type: "object",
-        required: ["decisions"],
-        properties: { decisions: { type: "array" } },
+        required: ["prompt"],
+        properties: { prompt: { type: "string" } },
       },
-      isMatch: (record) => Array.isArray(record.decisions),
+      isMatch: (record) => typeof record.prompt === "string",
       timeoutMs: 5_000,
     })).resolves.toMatchObject({
       status: "ok",
-      object: { decisions: [] },
+      object: { prompt: "Run daily checks." },
       model: "gpt-5.6-luna",
     });
 
@@ -13813,7 +13881,7 @@ describe("CodexAppServerClient", () => {
       expect.objectContaining({
         method: "thread/start",
         params: expect.objectContaining({
-          baseInstructions: "Keep behavioral and uncertain changes visible.",
+          baseInstructions: "Return a prompt for this automation.",
           environments: [],
           model: "gpt-5.6-luna",
           runtimeWorkspaceRoots: [
@@ -13858,7 +13926,7 @@ describe("CodexAppServerClient", () => {
           input: [
             {
               type: "text",
-              text: "Classify these serialized diff hunks.",
+              text: "Draft an automation prompt from this request.",
               text_elements: [],
             },
           ],
@@ -14315,15 +14383,15 @@ describe("CodexAppServerClient", () => {
       status: "ok",
       model: "gpt-5.6-luna",
     });
-    await expect(run("diff_condensation")).resolves.toMatchObject({
+    await expect(run("automation_prompts")).resolves.toMatchObject({
       status: "ok",
       model: "gpt-5.5",
     });
     settings = {
       defaultModel: "gpt-6.1-luna",
-      helpers: { diff_condensation: { model: "gpt-5.6-luna-preview" } },
+      helpers: { automation_prompts: { model: "gpt-5.6-luna-preview" } },
     };
-    await expect(run("diff_condensation")).resolves.toMatchObject({
+    await expect(run("automation_prompts")).resolves.toMatchObject({
       status: "ok",
       model: "gpt-6-luna",
     });
@@ -14404,7 +14472,7 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({ command: "codex" });
     MockTransport.modelListResult = createModelListResponse([]);
     const run = async () => await client.generateStructuredObject({
-      helper: "diff_condensation",
+      helper: "automation_prompts",
       prompt: "Summarize",
       schema: { type: "object", properties: { summary: { type: "string" } } },
       isMatch: (record) => typeof record.summary === "string",

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   SettingsPanelHead,
   SettingsSection,
+  SettingsSectionGroup,
   SettingsSectionStack,
 } from "../SettingsLayout";
 
@@ -38,6 +39,25 @@ function renderSectionStack(paneId = `test-pane-${paneIndex++}`) {
 }
 
 describe("SettingsLayout", () => {
+  it("shows a section group exactly when it has sections", () => {
+    const group = (showSection: boolean) => (
+      <SettingsSectionGroup groupId="test-empty-group" title="Deprecated features">
+        {showSection && (
+          <SettingsSection title="Deprecated feature">
+            A setting being phased out.
+          </SettingsSection>
+        )}
+        {null}
+      </SettingsSectionGroup>
+    );
+    const { rerender } = render(group(false));
+    expect(screen.queryByRole("heading", { name: "Deprecated features" })).not.toBeInTheDocument();
+    rerender(group(true));
+    expect(screen.getByRole("heading", { name: "Deprecated features" })).toBeInTheDocument();
+    rerender(group(false));
+    expect(screen.queryByRole("heading", { name: "Deprecated features" })).not.toBeInTheDocument();
+  });
+
   it("collapses and expands sections from the header", async () => {
     renderSectionStack("collapse-pane");
 

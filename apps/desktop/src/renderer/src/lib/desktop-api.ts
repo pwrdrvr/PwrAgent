@@ -91,6 +91,13 @@ import type {
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared/contracts/operator-requests";
 import type {
+  ResourceCheckoutActionRequest,
+  ResourceCheckoutActionResult,
+  ResourceCheckoutsChangedEvent,
+  ResourceCheckoutsSnapshot,
+  ResourceThreadRef,
+} from "@pwragent/shared/contracts/resource-checkouts";
+import type {
   ReadUsageActivityRequest,
   ReadUsageActivityResponse,
   AnalyzeUsageActivityRequest,
@@ -316,6 +323,8 @@ import type {
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
+  ReadMcpIpcBearerTokenStateRequest,
+  ReadMcpIpcBearerTokenStateResponse,
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   ListMcpConnectionsRequest,
@@ -327,6 +336,9 @@ import type {
   OpenSandboxerLinkResponse,
   BoatLinkTarget,
   BoatSignInMethod,
+  ChangeThreadBoatSandboxRequest,
+  ListThreadBoatSandboxesRequest,
+  ListThreadBoatSandboxesResponse,
   ConnectBoatRequest,
   OpenBoatLinkResponse,
   SetBoatCleanupOnPrCloseRequest,
@@ -518,10 +530,6 @@ import type {
   UpdateSubthreadOrderResponse,
 } from "@pwragent/shared/contracts/navigation";
 import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
-import type {
-  FocusedDiffAnalysisRequest,
-  FocusedDiffAnalysisResponse,
-} from "@pwragent/shared/contracts/diff-focus";
 import type {
   InspectTokenMiserOutputRequest,
   InspectTokenMiserOutputResponse,
@@ -874,6 +882,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   cancelBoatSignIn?: () => Promise<MutateMcpConnectionResponse>;
   /** Opens Boat's page for the sign-in in flight, once the code is copied. */
   openBoatSignInPage?: () => Promise<MutateMcpConnectionResponse>;
+  /** A thread's Boat sandboxes with what each has cost. This machine only. */
+  listThreadBoatSandboxes?: (
+    request: ListThreadBoatSandboxesRequest,
+  ) => Promise<ListThreadBoatSandboxesResponse>;
+  /** Stops or deletes one, or closes a tunnel into one; answers the list as it then stands. */
+  changeThreadBoatSandbox?: (
+    request: ChangeThreadBoatSandboxRequest,
+  ) => Promise<ListThreadBoatSandboxesResponse>;
   setBoatSandboxPolicy?: (
     request: SetBoatSandboxPolicyRequest,
   ) => Promise<MutateMcpConnectionResponse>;
@@ -889,6 +905,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
   ) => Promise<ListMcpConnectionToolsResponse>;
+  /** Whether a local IPC connection has a session bearer token stored. */
+  readMcpIpcBearerTokenState?: (
+    request: ReadMcpIpcBearerTokenStateRequest,
+  ) => Promise<ReadMcpIpcBearerTokenStateResponse>;
   setThreadMcpConnections?: (
     request: SetThreadMcpConnectionsRequest,
   ) => Promise<SetThreadMcpConnectionsResponse>;
@@ -1262,9 +1282,6 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getThreadMaintenanceRun?: () => Promise<ThreadMaintenanceRun | null>;
   /** Stops after the item in progress. Nothing already done is undone. */
   stopThreadMaintenance?: () => Promise<void>;
-  analyzeFocusedDiff?: (
-    request: FocusedDiffAnalysisRequest
-  ) => Promise<FocusedDiffAnalysisResponse>;
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
@@ -1438,6 +1455,21 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onOperatorRequestsChanged?: (
     callback: (event: OperatorRequestsChangedEvent) => void,
   ) => () => void;
+  /**
+   * Resource checkouts. Not served yet: the Resources screen and its entry
+   * points stay hidden until all three exist. See
+   * apps/desktop/docs/resource-checkouts-ui.md for the contract.
+   */
+  openResourceCheckoutsWindow?: () => Promise<void>;
+  openResourceCheckoutThread?: (thread: ResourceThreadRef) => Promise<void>;
+  readResourceCheckouts?: () => Promise<ResourceCheckoutsSnapshot>;
+  /** Marker event; re-read with `readResourceCheckouts`. */
+  onResourceCheckoutsChanged?: (
+    callback: (event: ResourceCheckoutsChangedEvent) => void,
+  ) => () => void;
+  performResourceCheckoutAction?: (
+    request: ResourceCheckoutActionRequest,
+  ) => Promise<ResourceCheckoutActionResult>;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
     consumerId?: string,

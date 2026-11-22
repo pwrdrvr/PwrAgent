@@ -91,13 +91,27 @@ export function observeTooltipAnchor(
   observePath(parents);
   // Native box sizes and viewport-edge subtraction can differ by roundoff.
   const coordinateRoundoff = anchorCoordinateRoundoff(baseline);
+  let initialSize = true;
   const resize = typeof ResizeObserver === "undefined"
     ? undefined
     : new ResizeObserver((entries) => {
-        const size = entries.find((entry) => entry.target === target)?.borderBoxSize[0];
+        // Every later notification is a real size change: the observer only
+        // reports a box that differs from the one it last reported.
+        if (!initialSize) {
+          schedule();
+          return;
+        }
         // The native observer always sends an initial notification. The
         // rectangle measured on entry already covers an unchanged box; do not
         // turn that notification into a later, unrelated geometry read.
+        initialSize = false;
+        // The intersection observer's own initial notification compares the
+        // box with the baseline in the baseline's coordinates. `borderBoxSize`
+        // cannot: it is whole layout units (1/64 px), while
+        // `getBoundingClientRect` on a 2x display lands on 1/128 px, so an
+        // unchanged anchor 93.5390625px wide reports 93.53125px here.
+        if (intersection) return;
+        const size = entries.find((entry) => entry.target === target)?.borderBoxSize[0];
         if (size
           && Math.abs(size.inlineSize - (baseline.right - baseline.left)) <= coordinateRoundoff
           && Math.abs(size.blockSize - (baseline.bottom - baseline.top)) <= coordinateRoundoff) return;
