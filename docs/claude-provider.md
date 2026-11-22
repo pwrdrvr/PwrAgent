@@ -29,8 +29,8 @@ it never gives the SDK a `.cmd`, `.bat`, or `.ps1` launcher.
 
 The SDK's pinned platform package provides an unmodified native Claude Code
 binary as a fallback. Discovery probes both candidates with `--version` and
-compares the CLI versions, not the npm SDK version. For example, SDK `0.3.296`
-contains Claude Code `2.1.296`. A system binary at least as new as the bundle
+compares the CLI versions, not the npm SDK version. SDK `0.3.330` bundles
+Claude Code `2.1.330`. A system binary at least as new as the bundle
 wins, including on equal versions. A missing, older, or unprobeable system
 binary falls back to the bundled binary after its version probe succeeds.
 If the bundle is unavailable, the system installation remains usable.
@@ -55,11 +55,12 @@ thread instructions when present. `settingSources` includes `user`, `project`,
 and `local`, preserving the CLI's settings, CLAUDE.md, and skills. PwrAgent does
 not pass `--bare`. CLI-managed configuration remains under the CLI's control.
 
-The declared SDK version is `0.3.296`, published October 9, 2026, and satisfies
-the repository's seven-day dependency maturity rule. The license gate has an
-explicit package-name exception for the SDK and its eight platform packages
-under Anthropic Commercial Terms. It does not add their non-SPDX license
-declarations to the general license allowlist. First-party code remains MIT.
+The operator approved a version-specific exception to the seven-day dependency
+maturity rule for SDK `0.3.330` and its eight matching platform packages on
+November 22, 2026. The license gate has an explicit package-name exception
+for these packages under Anthropic Commercial Terms. It does not add their
+non-SPDX license declarations to the general license allowlist. First-party
+code remains MIT.
 
 ## Sessions and permissions
 
