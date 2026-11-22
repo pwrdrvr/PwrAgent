@@ -5465,7 +5465,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const nextState: ThreadOverlayState = {
       ...current,
       agent: params.agent
-        ? normalizeThreadAgent({ ...params.agent, capabilityPolicy: requestedPolicy ?? existingPolicy }, params.now)
+        ? {
+            ...current.agent,
+            ...normalizeThreadAgent({ ...params.agent, capabilityPolicy: requestedPolicy ?? existingPolicy }, params.now),
+          }
         : undefined,
       queuedAgentChange: undefined,
     };
@@ -11612,9 +11615,7 @@ function normalizeThreadAgent(
   return {
     name,
     instructions: instructions || undefined,
-    ...(input.instructionsDelivery === "workspace-file"
-      ? { instructionsDelivery: "workspace-file" as const }
-      : {}),
+    instructionsDelivery: input.instructionsDelivery === "workspace-file" ? "workspace-file" : undefined,
     ...(input.capabilityPolicy !== undefined ? { capabilityPolicy: input.capabilityPolicy } : {}),
     instructionLineCount,
     instructionsTooLong:
