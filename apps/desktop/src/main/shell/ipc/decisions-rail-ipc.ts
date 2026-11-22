@@ -1,4 +1,5 @@
-import { ipcMain, shell, type WebContents } from "electron";
+import path from "node:path";
+import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import {
   DECISIONS_RAIL_PAGE_MAX_ITEMS,
   type DecisionsProfileDeleteRequest,
@@ -26,6 +27,7 @@ import {
 } from "../../../shared/ipc";
 import { isDecisionBatchId } from "../../openai-decisions/decision-batch-files";
 import { getOpenAIDecisionsRail, type OpenAIDecisionsRail } from "../../openai-decisions/openai-decisions-runtime";
+import { showMarkdownFileViewerWindow } from "../markdown-files-window";
 import { isLocalMainWindowWebContents } from "../window-channels";
 
 const CHANNELS = [
@@ -79,8 +81,13 @@ export function registerDecisionsRailIpcHandlers(): void {
     const rail = localRail(event.sender);
     const file = await rail.railResultsFile(threadCaller(request), validBatchId(request.batchId));
     if (!file) return { opened: false, error: "This batch has no results file." };
-    // A .jsonl file often has no app registered for it; show it in its folder instead.
-    if (await shell.openPath(file)) shell.showItemInFolder(file);
+    showMarkdownFileViewerWindow({
+      context: {
+        key: `decision-results:${path.dirname(file)}`,
+        title: "Decision batch results",
+      },
+      file: { path: file, label: path.basename(file) },
+    }, { sourceWindow: BrowserWindow.fromWebContents(event.sender) });
     return { opened: true };
   });
   ipcMain.handle(DECISIONS_PROFILE_LIST_CHANNEL, (event): DecisionsProfileList => {
