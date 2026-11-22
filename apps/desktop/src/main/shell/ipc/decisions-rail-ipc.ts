@@ -1,4 +1,6 @@
-import { ipcMain, shell, type WebContents } from "electron";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { BrowserWindow, ipcMain, shell, type WebContents } from "electron";
 import {
   DECISIONS_RAIL_PAGE_MAX_ITEMS,
   type DecisionsProfileDeleteRequest,
@@ -15,6 +17,7 @@ import {
   type DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { MAX_TEXT_FILE_PREVIEW_BYTES } from "@pwragent/shared/file-preview";
 import {
   DECISIONS_PROFILE_DELETE_CHANNEL,
   DECISIONS_PROFILE_LIST_CHANNEL,
@@ -26,6 +29,7 @@ import {
 } from "../../../shared/ipc";
 import { isDecisionBatchId } from "../../openai-decisions/decision-batch-files";
 import { getOpenAIDecisionsRail, type OpenAIDecisionsRail } from "../../openai-decisions/openai-decisions-runtime";
+import { showMarkdownFileViewerWindow } from "../markdown-files-window";
 import { isLocalMainWindowWebContents } from "../window-channels";
 
 const CHANNELS = [
@@ -78,9 +82,19 @@ export function registerDecisionsRailIpcHandlers(): void {
   ipcMain.handle(DECISIONS_RAIL_OPEN_RESULTS_CHANNEL, async (event, request: DecisionsRailOpenResultsRequest): Promise<DecisionsRailOpenResultsResult> => {
     const rail = localRail(event.sender);
     const file = await rail.railResultsFile(threadCaller(request), validBatchId(request.batchId));
-    if (!file) return { opened: false, error: "This batch has no results file." };
-    // A .jsonl file often has no app registered for it; show it in its folder instead.
-    if (await shell.openPath(file)) shell.showItemInFolder(file);
+    const resultStat = file ? await stat(file).catch(() => undefined) : undefined;
+    if (!file || !resultStat?.isFile()) return { opened: false, error: "This batch has no results file." };
+    if (resultStat.size > MAX_TEXT_FILE_PREVIEW_BYTES) {
+      shell.showItemInFolder(file);
+      return { opened: true };
+    }
+    showMarkdownFileViewerWindow({
+      context: {
+        key: `decision-results:${path.dirname(file)}`,
+        title: "Decision batch results",
+      },
+      file: { path: file, label: path.basename(file) },
+    }, { sourceWindow: BrowserWindow.fromWebContents(event.sender) });
     return { opened: true };
   });
   ipcMain.handle(DECISIONS_PROFILE_LIST_CHANNEL, (event): DecisionsProfileList => {

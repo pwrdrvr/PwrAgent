@@ -148,6 +148,7 @@ import {
   toDirectoryId,
   toForwardSlashes,
 } from "./linked-directory-identity";
+import { resolveDirectoryRegistrationKey } from "./directory-registration-service";
 import {
   buildHandoffTaskPrompt,
   buildWorkspaceMoveFailurePrompt,
@@ -1139,8 +1140,11 @@ export class ThreadWorkspaceService {
     const directoryPath = toDirectoryId(
       await realpath(params.cwd).catch(() => path.resolve(params.cwd)),
     );
+    const directoryKey = await resolveDirectoryRegistrationKey(
+      directoryPath, () => this.context.stores.workspaces.listDirectoryLaunchpads(),
+    );
     await this.host().ensureDirectoryLaunchpad({
-      directoryKey: `directory:${directoryPath}`,
+      directoryKey,
       directoryKind: "directory",
       directoryLabel: path.basename(directoryPath) || directoryPath,
       directoryPath,

@@ -56,6 +56,7 @@ export class ProjectForgeAutomationIndex {
   private readonly automations = new Map<string, ProjectForgeAutomation>();
   private readonly directoryKeyByThreadKey = new Map<string, string>();
   private readonly labelByDirectoryKey = new Map<string, string>();
+  private readonly directoryKeyByCaseAlias = new Map<string, string>();
   /** Label → key for the scan's stable project rows; null when ambiguous. */
   private readonly directoryKeyByLabel = new Map<string, string | null>();
   private hydrated = false;
@@ -108,11 +109,13 @@ export class ProjectForgeAutomationIndex {
     if (options.replace) {
       this.directoryKeyByThreadKey.clear();
       this.directoryKeyByLabel.clear();
+      this.directoryKeyByCaseAlias.clear();
     }
     const labelPaths = new Map<string, Set<string>>();
     for (const directory of directories) {
       if (!isLocalProjectRow(directory)) continue;
       this.labelByDirectoryKey.set(directory.key, directory.label);
+      for (const alias of directory.caseAliasKeys ?? []) this.directoryKeyByCaseAlias.set(alias, directory.key);
       for (const threadKey of directory.threadKeys) {
         this.directoryKeyByThreadKey.set(threadKey, directory.key);
       }
@@ -173,6 +176,8 @@ export class ProjectForgeAutomationIndex {
         && descriptor.key.startsWith(DIRECTORY_KEY_PREFIX)
       )
       .map((descriptor) => {
+        const alias = this.directoryKeyByCaseAlias.get(descriptor.key);
+        if (alias) return { ...descriptor, key: alias };
         // A tool-managed worktree folds onto the one project row with its
         // name, as the Directories lens folds it by label.
         if (!descriptor.path || !isToolManagedWorktreePath(descriptor.path)) {

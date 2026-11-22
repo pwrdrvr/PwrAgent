@@ -1,4 +1,3 @@
-import { realpath } from "node:fs/promises";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DiscoverRecentProjectsResponse,
@@ -6,7 +5,7 @@ import type {
   RecentProjectObservation,
   RecentProjectSourceReport,
 } from "@pwragent/shared/contracts/settings";
-import { canonicalizeNavigationPath, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
+import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { macDirectorySpelling } from "../mac-path-spelling";
 
 /** Codex is read newest first, one page at a time, up to this budget. */
@@ -30,8 +29,7 @@ export type RecentProjectDiscoveryDeps = {
   /** False when the profile being set up has its own Codex login. */
   includeCodex: boolean;
   platform: NodeJS.Platform;
-  /** Test seams for the on-disk spelling of a resolved project root. */
-  realpath?: (path: string) => Promise<string>;
+  /** Test seam for the on-disk spelling of a macOS project root. */
   macDirectorySpelling?: (path: string) => Promise<string | undefined>;
   /** Aborted when a newer discovery replaces this one; no more folders are checked. */
   signal?: AbortSignal;
@@ -127,19 +125,6 @@ export class RecentProjectDiscoveryRuns {
 }
 
 /**
- * On Windows, `folder` as the disk spells it, whichever case an agent used.
- * Only letter case is taken from the disk: a mapped drive, junction or link
- * to another path keeps the reported path.
- */
-export async function folderInRealCase(
-  folder: string,
-  realpath: (path: string) => Promise<string>,
-): Promise<string> {
-  const real = await realpath(folder).then(canonicalizeNavigationPath, () => undefined);
-  return real && navigationPathIdentity(real, true) === navigationPathIdentity(folder, true) ? real : folder;
-}
-
-/**
  * Recent project folders for Get started, with how each agent's read went.
  * Nothing here reads an agent's own storage: Codex answers through its
  * protocol, and Claude Code and ACP agents through PwrAgent's thread lists.
@@ -217,9 +202,8 @@ export async function discoverRecentProjects(
     identity: (path) => navigationPathIdentity(path, platform === "win32"),
     resolveProjectRoot: async (folder) => {
       const root = await deps.resolveProjectRoot(folder);
-      if (!root) return root;
-      if (platform === "darwin") return (await (deps.macDirectorySpelling ?? macDirectorySpelling)(root)) ?? root;
-      return platform === "win32" ? await folderInRealCase(root, deps.realpath ?? realpath) : root;
+      if (!root || platform !== "darwin") return root;
+      return (await (deps.macDirectorySpelling ?? macDirectorySpelling)(root)) ?? root;
     },
     signal: deps.signal,
   });

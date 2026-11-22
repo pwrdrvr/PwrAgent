@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
 import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
+import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import type {
@@ -421,8 +422,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           // Background convergence: the next snapshot reads whatever landed.
         });
     }
+    const { directories } = await reconcileWindowsDirectoryAliases(snapshot.directories, threads);
     const hydratedSnapshot = {
       ...snapshot,
+      directories,
       threads,
     };
     if (

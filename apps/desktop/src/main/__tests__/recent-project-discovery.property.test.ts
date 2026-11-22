@@ -104,7 +104,6 @@ async function discover(
   return await discoverRecentProjects({
     includeCodex: true,
     platform,
-    realpath: async (folder) => folder,
     macDirectorySpelling: async (folder) => {
       if (folder.startsWith(`${MAC_SENSITIVE_ROOT}/`)) return folder;
       return `${MAC_INSENSITIVE_ROOT}/${folder.slice(MAC_INSENSITIVE_ROOT.length + 1).toLowerCase()}`;

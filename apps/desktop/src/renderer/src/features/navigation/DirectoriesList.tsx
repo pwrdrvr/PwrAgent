@@ -106,7 +106,18 @@ import {
 import { startingThreadHomeDirectoryKey, withStartingPlaceholderDirectories } from "./starting-thread-home";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
-import { jumpScrollPlan, jumpTailIsOffscreen, splitProjectTurnCounts } from "./project-index";
+import {
+  jumpRelanding,
+  jumpScrollPlan,
+  jumpTailIsOffscreen,
+  splitProjectTurnCounts,
+  type JumpLanding,
+} from "./project-index";
+import {
+  TOP_DOCK_RESERVE_CHANGE_EVENT,
+  topDockRegionOf,
+  topDockReserve,
+} from "./selected-thread-dock-reserve";
 
 /**
  * Scroll a project's section to the top of the lens, expanding it first.
@@ -629,7 +640,9 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     divider.style.position = "static";
     const restingTop = divider.getBoundingClientRect().top;
     divider.style.position = position;
-    const stuckTop = list.getBoundingClientRect().top + header.getBoundingClientRect().height;
+    const stuckTop = list.getBoundingClientRect().top
+      + topDockReserve(list)
+      + header.getBoundingClientRect().height;
     list.scrollTo({ top: list.scrollTop + restingTop - stuckTop, behavior: "smooth" });
   };
   // A pointer press on the Directory threads bar beside its label. Only a
@@ -668,6 +681,66 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     if (jumpTailFrame.current !== undefined) cancelAnimationFrame(jumpTailFrame.current);
     jumpTailFrame.current = undefined;
   }, []);
+  // Where the last jump put its project, held until the operator scrolls.
+  // The project lands under the selected thread's dock, where its header
+  // sticks, and the jump itself can bring that dock or send it away.
+  const jumpLandingRef = useRef<
+    (JumpLanding & { key: string; scrollTop: number }) | undefined
+  >(undefined);
+  const landJump = useCallback((key: string, lowered: boolean): boolean => {
+    const list = directoryListRef.current;
+    const tail = jumpTailRef.current;
+    const section = projectHeaders.current.get(key)?.closest(".directory-row");
+    if (!list || !tail || !section) return false;
+    // A jump lands the section at the top even near the end of the list,
+    // growing the tail by what the list is short.
+    const tailHeight = tail.offsetHeight;
+    const reserve = topDockReserve(list);
+    const plan = jumpScrollPlan({
+      scrollTop: list.scrollTop,
+      blockTop: section.getBoundingClientRect().top - list.getBoundingClientRect().top,
+      scrollHeight: list.scrollHeight,
+      clientHeight: list.clientHeight,
+      tailHeight,
+      topInset: reserve,
+    });
+    if (plan.tailHeight !== tailHeight) tail.style.height = `${plan.tailHeight}px`;
+    list.scrollTop = plan.scrollTop;
+    jumpLandingRef.current = { key, reserve, lowered, scrollTop: list.scrollTop };
+    return true;
+  }, []);
+  useEffect(() => {
+    const list = directoryListRef.current;
+    const region = list ? topDockRegionOf(list) : null;
+    if (!list || !region) return;
+    const release = (): void => {
+      jumpLandingRef.current = undefined;
+    };
+    const reland = (): void => {
+      const landing = jumpLandingRef.current;
+      if (!landing) return;
+      // Moved since: the operator, or another reveal, has the list now.
+      if (Math.abs(list.scrollTop - landing.scrollTop) > 1) {
+        release();
+        return;
+      }
+      const next = jumpRelanding(landing, topDockReserve(list));
+      if (next && !landJump(landing.key, next.lowered)) release();
+    };
+    const intents = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    region.addEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, reland);
+    for (const type of intents) list.addEventListener(type, release, { passive: true });
+    return () => {
+      region.removeEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, reland);
+      for (const type of intents) list.removeEventListener(type, release);
+    };
+  }, [landJump]);
+  // A selection made after the jump is the operator moving on: the dock
+  // leaving for it must not scroll the list under the row just opened.
+  // A layout effect, so it runs before the dock's, which announces that.
+  useLayoutEffect(() => {
+    jumpLandingRef.current = undefined;
+  }, [props.selectedItemKey]);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -762,22 +835,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       // edge while the project's threads are scrolled out above it. Reveal the
       // section's normal-flow start.
       const section = header.closest(".directory-row");
-      const list = directoryListRef.current;
-      const tail = jumpTailRef.current;
-      if (request.jump && section && list && tail) {
-        // A jump lands the section at the top even near the end of the list,
-        // growing the tail by what the list is short.
-        const tailHeight = tail.offsetHeight;
-        const plan = jumpScrollPlan({
-          scrollTop: list.scrollTop,
-          blockTop: section.getBoundingClientRect().top - list.getBoundingClientRect().top,
-          scrollHeight: list.scrollHeight,
-          clientHeight: list.clientHeight,
-          tailHeight,
-        });
-        if (plan.tailHeight !== tailHeight) tail.style.height = `${plan.tailHeight}px`;
-        list.scrollTop = plan.scrollTop;
-      } else {
+      jumpLandingRef.current = undefined;
+      if (!(request.jump && landJump(request.key, false))) {
         section?.scrollIntoView?.({ block: "start" });
       }
       if (request.selectedThreadKey) {
@@ -796,7 +855,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       props.onProjectRevealComplete?.();
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey, revealPagesInFlight]);
+  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey, revealPagesInFlight, landJump]);
 
   // Released monotonically: once the rows have been handed a request it is
   // never taken back. ThreadRow re-runs its scroll on EVERY change of the

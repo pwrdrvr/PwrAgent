@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   THREAD_TODO_MAX_OPEN_PER_THREAD,
+  THREAD_TODO_SETUP_FAILURE_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
   type ThreadTodoProject,
   type ThreadTodosChangedEvent,
@@ -615,6 +616,28 @@ describe("ThreadTodoService", () => {
     });
     expect(new ThreadTodoStore(db).get(todo.id)?.startedThread)
       .toEqual({ backend: "codex", threadId: "child" });
+  });
+
+  it("records a started thread whose environment setup failed, capped", async () => {
+    const service = createService({
+      mergePullRequest: vi.fn(),
+      startThread: vi.fn(async () => ({
+        backend: "codex" as const, threadId: "child", setupFailure: `  setup exited 1 ${"x".repeat(600)}`,
+      })),
+    });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+
+    const ended = await service.runAction(todo.id);
+    expect(ended).toMatchObject({
+      status: "done",
+      result: "Started thread. Its environment setup failed",
+    });
+    const stored = new ThreadTodoStore(db).get(todo.id)?.startedThread;
+    expect(stored?.setupFailure?.startsWith("setup exited 1")).toBe(true);
+    expect(stored?.setupFailure).toHaveLength(THREAD_TODO_SETUP_FAILURE_MAX_LENGTH);
   });
 
   it("refuses to run a review card, which runs in the composer", async () => {

@@ -1422,6 +1422,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   mcpProviderServersEnabled?: boolean;
   prompt: string;
   registeredAt?: number;
+  /** A removed directory may retain its draft for recovery without advertising a project. */
+  hiddenFromDirectoryList?: true;
   settingsTouchedAt?: number;
   /** Explicit messaging `/new` override for this project. */
   messagingToolUpdateMode?: MessagingToolUpdateMode;
@@ -1586,6 +1588,8 @@ export type NavigationDirectorySummary = {
   path?: string;
   /** Explicitly grouped checkout roots. The row path is the preferred checkout. */
   checkoutPaths?: string[];
+  /** Local filesystem-verified spellings folded into this owner project. */
+  caseAliasKeys?: string[];
   /**
    * The row was derived from a mounted remote thread, but this viewer has not
    * registered a matching local checkout yet. The Directories lens keeps the

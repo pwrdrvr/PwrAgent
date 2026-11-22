@@ -334,7 +334,15 @@ export type ThreadTodoStartedThread = {
   /** Set when the thread was started on a federation peer. */
   instanceId?: string;
   instanceLabel?: string;
+  /**
+   * The environment's setup failed, but the thread started and shows the
+   * setup's output. The operator should look at the thread.
+   */
+  setupFailure?: string;
 };
+
+/** Longest setup failure a started thread records; the thread holds the rest. */
+export const THREAD_TODO_SETUP_FAILURE_MAX_LENGTH = 500;
 
 export const THREAD_TODO_ACTION_TYPES = [
   "start_review",
