@@ -451,7 +451,9 @@ function AcpAgentSection(props: {
       chip={enabled ? acpStatusLabel(entry) : "Disabled"}
       chipKind={
         enabled
-          ? (signInRequired ? "warn" : entry.installed ? "ok" : "muted")
+          ? (signInRequired || (entry.installed && entry.unavailableReason)
+              ? "warn"
+              : entry.installed ? "ok" : "muted")
           : "muted"
       }
     >

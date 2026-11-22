@@ -1002,7 +1002,7 @@ export function ModelsSettings(props: {
                   chipKind={
                     enabled
                       ? entry.installed
-                        ? "ok"
+                        ? (entry.unavailableReason ? "warn" : "ok")
                         : legacyOnly
                           ? "warn"
                           : "muted"

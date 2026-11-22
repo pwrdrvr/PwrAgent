@@ -1,3 +1,4 @@
+import { geminiConsumerDeprecationMessage } from "./acp-discovery-error.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 /**
@@ -21,6 +22,8 @@ export const ACP_CAPABILITY_MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
  *  - a prior probe completed but produced no capabilities — treated as a
  *    degraded/transient result on purpose, so the agent self-heals on the next
  *    refresh instead of caching an empty capability set for `maxAgeMs`, OR
+ *  - Gemini CLI rejected consumer sign-in after an earlier successful probe
+ *    (including records cached before that error cleared stale capabilities), OR
  *  - the installed CLI version changed since the last probe (capabilities may
  *    have changed), OR
  *  - the persisted probe is older than `maxAgeMs`.
@@ -45,7 +48,8 @@ export function shouldReprobeAcpCapabilities(
   if (
     cached === undefined ||
     cached.runtimeCapabilities === undefined ||
-    cached.lastDiscoveredAt === undefined
+    cached.lastDiscoveredAt === undefined ||
+    geminiConsumerDeprecationMessage(cached.registryId, cached.lastDiscoveryError)
   ) {
     return true;
   }

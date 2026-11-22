@@ -122,6 +122,7 @@ import {
   ensureAcpRuntimeDiscoveryWorkspace,
   refreshAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
+import { geminiConsumerDeprecationMessage } from "../acp/acp-discovery-error";
 import {
   checkGrokCliUpdate,
   grokUpdateChecksDisabled,
@@ -494,13 +495,15 @@ export function describeInstalledAcpBackend(
   agent: AcpInstalledAgentRecord,
 ): BackendSummary {
   const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
+  const deprecation = geminiConsumerDeprecationMessage(agent.registryId, agent.lastDiscoveryError);
   const available =
-    agent.installStatus === "installed" &&
-    (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
+    agent.installStatus === "installed"
+    && (agent.authStatus === "not-required" || agent.authStatus === "authenticated")
+    && deprecation === undefined;
   const unavailableReason =
     available
       ? undefined
-      : agent.lastError ??
+      : deprecation ?? agent.lastError ??
         (agent.authStatus === "required"
           ? "ACP agent authentication required"
           : "ACP agent unavailable");

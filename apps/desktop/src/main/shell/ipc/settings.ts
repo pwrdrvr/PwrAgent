@@ -190,6 +190,7 @@ import {
   probeAcpRuntimeCapabilities,
 } from "../../acp/acp-capability-probe";
 import { shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
+import { geminiConsumerDeprecationMessage } from "../../acp/acp-discovery-error";
 import { describeDistributionSource } from "../../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../../acp/grok-cli-update";
 import {
@@ -1076,6 +1077,9 @@ export function installedAcpAgentSettingsEntry(
   // would still reach the renderer after the PwrAgent build became the runtime.
   // Drop it at the boundary: the runtime in effect owns the update story.
   const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
+  const deprecation = record.installStatus === "installed"
+    ? geminiConsumerDeprecationMessage(record.registryId, record.lastDiscoveryError)
+    : undefined;
   return {
     backendId: record.backendId,
     registryId: record.registryId,
@@ -1098,7 +1102,8 @@ export function installedAcpAgentSettingsEntry(
     updatedAt: record.updatedAt,
     lastError: record.lastError,
     lastDiscoveredAt: record.lastDiscoveredAt,
-    lastDiscoveryError: record.lastDiscoveryError,
+    lastDiscoveryError: deprecation ?? record.lastDiscoveryError,
+    ...(deprecation ? { unavailableReason: deprecation } : {}),
     runtime: record.runtimeCapabilities,
     update: pwrAgentOwnedGrok ? undefined : record.update,
     ...(pwrAgentOwnedGrok ? { pwrAgentManagedRuntime: true } : {}),

@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { resolveActiveProfileDir, resolveBootstrapProfileDir } from "../profile";
 import { getAppStateMode } from "../storage/desktop-runtime-storage";
+import { geminiConsumerDeprecationMessage } from "./acp-discovery-error.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 import { discoverAcpRuntimeCapabilities } from "./acp-runtime-discovery.js";
 
@@ -58,6 +59,10 @@ export async function probeAcpRuntimeCapabilities(
             }
           : {
               lastDiscoveredAt: now,
+              // A session opened successfully even if it supplied no models.
+              ...(geminiConsumerDeprecationMessage(record.registryId, record.lastDiscoveryError)
+                ? { lastDiscoveryError: undefined }
+                : {}),
             }),
         updatedAt: Math.max(record.updatedAt, now),
       },
@@ -67,13 +72,15 @@ export async function probeAcpRuntimeCapabilities(
     // caller keeps the previous record instead of stamping it as failed.
     options?.signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
+    const deprecation = geminiConsumerDeprecationMessage(record.registryId, message);
     return {
       record: {
         ...record,
+        ...(deprecation ? { runtimeCapabilities: undefined } : {}),
         lastDiscoveryError: message,
         updatedAt: Math.max(record.updatedAt, now),
       },
-      error: message,
+      error: deprecation ?? message,
     };
   }
 }

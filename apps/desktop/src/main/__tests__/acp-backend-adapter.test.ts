@@ -25,6 +25,7 @@ import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { threadAssetRoot } from "../app-server/thread-assets";
+import { installedAcpAgentSettingsEntry } from "../shell/ipc/settings";
 
 const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -119,6 +120,43 @@ describe("inputToAcpPrompt local image replay", () => {
 });
 
 describe("describeInstalledAcpBackend", () => {
+  it("reports consumer deprecation only for Gemini CLI with the explicit account rejection", () => {
+    // An installed binary remains selectable for supported accounts. Both
+    // consumers of the discovery result must recognize the same rejection.
+    fc.assert(fc.property(
+      fc.constantFrom("gemini", "kimi", "grok"),
+      fc.constantFrom(undefined, "Authentication required", "Gemini request timed out"),
+      fc.constantFrom("", "json-rpc error (-32000): "),
+      fc.constantFrom("", "\nTo continue using Gemini, please migrate to the Antigravity suite of products."),
+      (registryId, unrelatedError, prefix, suffix) => {
+        const rejection = prefix
+          + "This client is no longer supported for Gemini Code Assist for individuals."
+          + suffix;
+        for (const lastDiscoveryError of [rejection, unrelatedError]) {
+          const record: AcpInstalledAgentRecord = {
+            ...buildInstalledAgent(),
+            backendId: `acp:${registryId}`,
+            registryId,
+            lastDiscoveryError,
+          };
+          const deprecated = registryId === "gemini" && lastDiscoveryError === rejection;
+          const summary = describeInstalledAcpBackend(record);
+          const settings = installedAcpAgentSettingsEntry(record);
+          expect(summary.kind).toBe(record.backendId);
+          expect(summary.available).toBe(!deprecated);
+          expect(settings.installed).toBe(true);
+          expect(settings.unavailableReason).toBe(summary.unavailableReason);
+          if (deprecated) {
+            expect(settings.lastDiscoveryError).toContain("Antigravity CLI");
+            expect(settings.lastDiscoveryError).toContain("Re-probe");
+          } else {
+            expect(settings.lastDiscoveryError).toBe(lastDiscoveryError);
+          }
+        }
+      },
+    ));
+  });
+
   it("does not advertise session/load when the agent reports it is unsupported", () => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),

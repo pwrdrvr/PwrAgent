@@ -22,6 +22,9 @@ export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
   if (grokSignInRequired(entry)) {
     return "Sign in required";
   }
+  if (entry.installed && entry.unavailableReason) {
+    return "Action required";
+  }
   if (entry.installed && entry.authStatus === "required") {
     return "Discovered - setup required";
   }
