@@ -6,6 +6,7 @@ import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normaliz
 import {
   discoverRecentProjects,
   RECENT_PROJECT_MAX_FOLDERS,
+  RECENT_PROJECT_MAX_PROJECTS,
   type RecentProjectDiscoveryDeps,
 } from "../onboarding/recent-project-discovery";
 import {
@@ -98,9 +99,9 @@ describe("discoverRecentProjects", () => {
     expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "codex", lastActiveAt: 7 }]);
   });
 
-  it("checks only the newest folders and says the read was partial", async () => {
+  it("lists only the newest projects and says the read was partial", async () => {
     const resolveProjectRoot = vi.fn(async (folder: string) => folder);
-    const total = RECENT_PROJECT_MAX_FOLDERS + 5;
+    const total = RECENT_PROJECT_MAX_PROJECTS + 5;
     const result = await discoverRecentProjects(deps({
       readCodexDirectories: async () => ({
         complete: true,
@@ -108,10 +109,56 @@ describe("discoverRecentProjects", () => {
       }),
       resolveProjectRoot,
     }));
-    expect(resolveProjectRoot).toHaveBeenCalledTimes(RECENT_PROJECT_MAX_FOLDERS);
+    expect(result.observations).toHaveLength(RECENT_PROJECT_MAX_PROJECTS);
+    expect(resolveProjectRoot).toHaveBeenCalledTimes(RECENT_PROJECT_MAX_PROJECTS);
     expect(result.observations.some((observation) => observation.path === "/home/dev/p0")).toBe(false);
     expect(result.observations.some((observation) => observation.path === `/home/dev/p${total - 1}`)).toBe(true);
     expect(result.sources).toEqual([expect.objectContaining({ agent: "codex", status: "partial" })]);
+  });
+
+  it("does not spend the project budget on deleted folders or extra worktrees", async () => {
+    // The newest 80 folders: deleted checkouts, and worktrees of one repository.
+    const directories = Array.from({ length: 80 }, (_, index) => ({
+      cwd: index % 2 === 0 ? `/home/dev/.worktrees/gone-${index}` : `/home/dev/.worktrees/shop-${index}`,
+      updatedAt: 1_000 + index,
+    }));
+    for (let index = 0; index < 10; index += 1) directories.push({ cwd: `/home/dev/repo-${index}`, updatedAt: index });
+    const result = await discoverRecentProjects(deps({
+      readCodexDirectories: async () => ({ complete: true, directories }),
+      resolveProjectRoot: async (folder) => folder.includes("gone-")
+        ? undefined
+        : folder.includes("shop-") ? "/home/dev/shop" : folder,
+    }));
+    expect(result.observations.map((observation) => observation.path).sort()).toEqual([
+      "/home/dev/repo-0", "/home/dev/repo-1", "/home/dev/repo-2", "/home/dev/repo-3", "/home/dev/repo-4",
+      "/home/dev/repo-5", "/home/dev/repo-6", "/home/dev/repo-7", "/home/dev/repo-8", "/home/dev/repo-9",
+      "/home/dev/shop",
+    ]);
+    expect(result.sources).toEqual([{ agent: "codex", label: "Codex", status: "complete" }]);
+  });
+
+  it("stops after checking the folder budget, and says so", async () => {
+    const resolveProjectRoot = vi.fn(async () => undefined);
+    const result = await discoverRecentProjects(deps({
+      readCodexDirectories: async () => ({
+        complete: true,
+        directories: Array.from({ length: RECENT_PROJECT_MAX_FOLDERS + 3 }, (_, index) => ({ cwd: `/gone/${index}`, updatedAt: index })),
+      }),
+      resolveProjectRoot,
+    }));
+    expect(resolveProjectRoot).toHaveBeenCalledTimes(RECENT_PROJECT_MAX_FOLDERS);
+    expect(result.sources).toEqual([expect.objectContaining({ agent: "codex", status: "partial" })]);
+  });
+
+  it("does not call a read partial for a thread started at the filesystem root", async () => {
+    const result = await discoverRecentProjects(deps({
+      readCodexDirectories: async () => ({
+        complete: true,
+        directories: [{ cwd: "/", updatedAt: 2 }, { cwd: "/home/dev/shop", updatedAt: 1 }],
+      }),
+    }));
+    expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "codex", lastActiveAt: 1 }]);
+    expect(result.sources).toEqual([{ agent: "codex", label: "Codex", status: "complete" }]);
   });
 });
 

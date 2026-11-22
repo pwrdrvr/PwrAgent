@@ -8,6 +8,7 @@ import {
   checkedProjectPaths,
   isProjectChecked,
   PRECHECKED_PROJECT_COUNT,
+  projectRecencyLabel,
   rankProjectCandidates,
   splitProjectCandidates,
   type ProjectCandidate,
@@ -154,5 +155,13 @@ describe("Get started project rules", () => {
     ]);
     expect(candidates.map((candidate) => [candidate.label, candidate.agents, candidate.lastActiveAt]))
       .toEqual([["shop", ["codex", "claude"], 40], ["blog", ["codex"], 30]]);
+  });
+
+  it("names recency by the local calendar day, not by 24-hour spans", () => {
+    const now = new Date(2026, 10, 22, 9, 0).getTime();
+    expect(projectRecencyLabel(new Date(2026, 10, 22, 0, 30).getTime(), now)).toBe("Today");
+    expect(projectRecencyLabel(new Date(2026, 10, 21, 22, 0).getTime(), now)).toBe("Yesterday");
+    expect(projectRecencyLabel(new Date(2026, 10, 20, 23, 59).getTime(), now)).toBe("2 days ago");
+    expect(projectRecencyLabel(undefined, now)).toBeUndefined();
   });
 });

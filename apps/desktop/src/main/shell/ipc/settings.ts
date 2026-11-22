@@ -1189,7 +1189,8 @@ async function discoverRecentProjectsForOnboarding(
     listPwrAgentThreads: registry
       ? async () => {
         const [threads, backends] = await Promise.all([
-          registry.listThreads({ callerReason: "ipc-list-threads", enrichDirectories: false }),
+          // The read-only projection: no navigation or list maintenance.
+          registry.listThreadSearchCandidates({ deadlineAt }),
           registry.listBackends({ includeUnavailable: true }).catch(() => undefined),
         ]);
         for (const backend of backends?.backends ?? []) acpLabels.set(backend.kind, backend.label);

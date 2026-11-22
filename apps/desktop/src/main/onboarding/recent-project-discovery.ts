@@ -10,8 +10,13 @@ import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigatio
 /** Codex is read newest first, one page at a time, up to this budget. */
 export const RECENT_PROJECT_CODEX_PAGE_SIZE = 100;
 export const RECENT_PROJECT_CODEX_MAX_PAGES = 3;
-/** Distinct folders checked against the disk and Git, newest first. */
-export const RECENT_PROJECT_MAX_FOLDERS = 60;
+/**
+ * Folders are resolved newest first until this many distinct projects are
+ * found. Deleted folders and extra worktrees of one repository do not count.
+ */
+export const RECENT_PROJECT_MAX_PROJECTS = 60;
+/** At most this many folders are checked against the disk and Git. */
+export const RECENT_PROJECT_MAX_FOLDERS = 200;
 const RESOLVE_CONCURRENCY = 6;
 
 export type RecentCodexDirectories = {
@@ -108,12 +113,12 @@ export async function discoverRecentProjects(
     }
   }
 
-  const { observations, droppedAgents } = await resolveObservations(raw, deps.resolveProjectRoot);
+  const { observations, droppedAgents, probed } = await resolveObservations(raw, deps.resolveProjectRoot);
   for (const agent of droppedAgents) {
     const existing = sources.find((source) => source.agent === agent);
     if (existing && existing.status === "complete") {
       existing.status = "partial";
-      existing.detail = `Checked the ${RECENT_PROJECT_MAX_FOLDERS} most recent folders. Older projects may be missing.`;
+      existing.detail = `Checked the ${probed} most recent folders. Older projects may be missing.`;
     }
   }
   return { sources, observations };
@@ -126,14 +131,20 @@ function threadFolder(thread: AppServerThreadSummary): string | undefined {
 }
 
 /**
- * Resolves the newest distinct folders to project roots, at most
- * `RECENT_PROJECT_MAX_FOLDERS` of them. A folder that no longer exists is
- * left out. Returns one observation per (root, agent) at its newest time.
+ * Resolves distinct folders to project roots, newest first, until
+ * `RECENT_PROJECT_MAX_PROJECTS` roots are found or `RECENT_PROJECT_MAX_FOLDERS`
+ * folders are checked. A folder that no longer exists is left out. Returns
+ * one observation per (root, agent) at its newest time, and the agents with
+ * a folder that was never checked.
  */
 async function resolveObservations(
   raw: readonly RawObservation[],
   resolveProjectRoot: (path: string) => Promise<string | undefined>,
-): Promise<{ observations: RecentProjectObservation[]; droppedAgents: Set<RecentProjectAgent> }> {
+): Promise<{
+  observations: RecentProjectObservation[];
+  droppedAgents: Set<RecentProjectAgent>;
+  probed: number;
+}> {
   const newestByFolder = new Map<string, { cwd: string; newest: number }>();
   for (const observation of raw) {
     const key = canonicalizeNavigationPath(observation.cwd);
@@ -144,27 +155,42 @@ async function resolveObservations(
   }
   const ordered = [...newestByFolder.entries()]
     .sort(([leftKey, left], [rightKey, right]) => right.newest - left.newest || leftKey.localeCompare(rightKey));
-  const kept = ordered.slice(0, RECENT_PROJECT_MAX_FOLDERS);
-  const keptKeys = new Set(kept.map(([key]) => key));
-  const droppedAgents = new Set<RecentProjectAgent>();
-  for (const observation of raw) {
-    if (!keptKeys.has(canonicalizeNavigationPath(observation.cwd))) droppedAgents.add(observation.agent);
-  }
 
   const roots = new Map<string, string | undefined>();
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < kept.length) {
-      const [key, { cwd }] = kept[next]!;
-      next += 1;
-      roots.set(key, await resolveProjectRoot(cwd).catch(() => undefined));
+  const distinctRoots = new Set<string>();
+  /** Folders whose project was never listed: unchecked, or past the cap. */
+  const droppedKeys = new Set<string>();
+  let probed = 0;
+  // Batches keep the newest-first order: a later batch starts only while
+  // fewer than the cap of projects has been found.
+  while (probed < ordered.length && probed < RECENT_PROJECT_MAX_FOLDERS && distinctRoots.size < RECENT_PROJECT_MAX_PROJECTS) {
+    const batch = ordered.slice(probed, Math.min(probed + RESOLVE_CONCURRENCY, RECENT_PROJECT_MAX_FOLDERS));
+    probed += batch.length;
+    const resolved = await Promise.all(batch.map(async ([, { cwd }]) => await resolveProjectRoot(cwd).catch(() => undefined)));
+    for (const [index, [key]] of batch.entries()) {
+      const root = resolved[index];
+      // A batch can cross the cap; the newest roots in it are kept.
+      if (root && !distinctRoots.has(root) && distinctRoots.size >= RECENT_PROJECT_MAX_PROJECTS) {
+        droppedKeys.add(key);
+        continue;
+      }
+      roots.set(key, root);
+      if (root) distinctRoots.add(root);
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(RESOLVE_CONCURRENCY, kept.length) }, worker));
+  }
 
+  for (const [key] of ordered.slice(probed)) droppedKeys.add(key);
+
+  const droppedAgents = new Set<RecentProjectAgent>();
   const byRootAndAgent = new Map<string, RecentProjectObservation>();
   for (const observation of raw) {
-    const root = roots.get(canonicalizeNavigationPath(observation.cwd));
+    const key = canonicalizeNavigationPath(observation.cwd);
+    if (!key) continue;
+    if (droppedKeys.has(key)) {
+      droppedAgents.add(observation.agent);
+      continue;
+    }
+    const root = roots.get(key);
     if (!root) continue;
     const id = JSON.stringify([observation.agent, root]);
     const existing = byRootAndAgent.get(id);
@@ -179,7 +205,7 @@ async function resolveObservations(
       });
     }
   }
-  return { observations: [...byRootAndAgent.values()], droppedAgents };
+  return { observations: [...byRootAndAgent.values()], droppedAgents, probed };
 }
 
 function errorText(reason: unknown): string {

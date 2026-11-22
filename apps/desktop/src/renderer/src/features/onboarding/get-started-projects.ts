@@ -142,16 +142,23 @@ export function projectScanNotices(
   });
 }
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
+const DAY = 24 * 60 * 60 * 1000;
 
-/** "Today", "Yesterday", "4 days ago", "3 weeks ago", "5 months ago". */
+function startOfLocalDay(time: number): number {
+  const date = new Date(time);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+/**
+ * "Today", "Yesterday", "4 days ago", "3 weeks ago", "5 months ago", by the
+ * local calendar day, not by 24-hour spans.
+ */
 export function projectRecencyLabel(lastActiveAt: number | undefined, now: number): string | undefined {
   if (lastActiveAt === undefined) return undefined;
-  const age = Math.max(0, now - lastActiveAt);
-  if (age < DAY) return "Today";
-  const days = Math.floor(age / DAY);
+  // Rounding absorbs the 23- and 25-hour days of a daylight-saving change.
+  const days = Math.max(0, Math.round((startOfLocalDay(now) - startOfLocalDay(lastActiveAt)) / DAY));
+  if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
   if (days < 14) return `${days} days ago`;
   if (days < 60) return `${Math.floor(days / 7)} weeks ago`;

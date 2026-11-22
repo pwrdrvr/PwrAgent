@@ -104,11 +104,19 @@ export function GetStarted(props: {
     separateLogin,
   });
 
-  // A replay never imports projects again, so it does not look for them.
+  // Codex projects are read with the Codex this page finds, so the first
+  // look waits for the first agent check, and looks again once a Codex
+  // turns up. A replay never imports projects again, so it does not look.
+  const [agentsChecked, setAgentsChecked] = useState(false);
+  useEffect(() => {
+    if (!agents.refreshing) setAgentsChecked(true);
+  }, [agents.refreshing]);
   const projects = useGetStartedProjects({
     desktopApi: props.desktopApi,
     enabled: !props.isReplay,
+    ready: agentsChecked,
     includeCodex: !separateLogin,
+    codexInstalled: Boolean(selectedCodexCandidate(props.settings.snapshot)),
   });
   const checkedPathsRef = useRef<string[]>([]);
   checkedPathsRef.current = projects.checkedPaths;
@@ -1113,11 +1121,6 @@ function AgentMark(props: { mark: AgentDefinition["mark"] }) {
    Projects
    ---------------------------------------------------------------- */
 
-const PROJECT_AGENT_LABELS: Partial<Record<RecentProjectAgent, string>> = {
-  codex: "Codex",
-  claude: "Claude Code",
-};
-
 type ProjectsModel = {
   /** `off` in a replay, or on a bridge that cannot look. */
   status: "off" | "loading" | "ready";
@@ -1134,14 +1137,19 @@ type ProjectsModel = {
 /**
  * Recent project folders from every agent PwrAgent may read, newest first.
  * The most recent start checked. Looks again when the Codex login choice
- * changes, since a separate login's projects are not this computer's.
+ * changes, since a separate login's projects are not this computer's, and
+ * when a Codex is found, since none could be read before.
  */
 function useGetStartedProjects(params: {
   desktopApi?: DesktopApi;
+  /** False in a replay, which never looks. */
   enabled: boolean;
+  /** False until the first agent check ends. */
+  ready: boolean;
   includeCodex: boolean;
+  codexInstalled: boolean;
 }): ProjectsModel {
-  const { desktopApi, enabled, includeCodex } = params;
+  const { desktopApi, enabled, ready, includeCodex, codexInstalled } = params;
   const available = enabled && Boolean(desktopApi?.discoverRecentProjects);
   const [result, setResult] = useState<{
     candidates: ProjectCandidate[];
@@ -1154,7 +1162,7 @@ function useGetStartedProjects(params: {
 
   useEffect(() => {
     const discover = desktopApi?.discoverRecentProjects;
-    if (!enabled || !discover) return;
+    if (!enabled || !ready || !discover) return;
     const request = ++requestRef.current;
     setResult(undefined);
     discover({ includeCodex }).then((response) => {
@@ -1180,7 +1188,7 @@ function useGetStartedProjects(params: {
         readAt: Date.now(),
       });
     });
-  }, [desktopApi, enabled, includeCodex]);
+  }, [codexInstalled, desktopApi, enabled, includeCodex, ready]);
 
   const toggle = useCallback((candidate: ProjectCandidate): void => {
     setChoices((current) => {
@@ -1289,7 +1297,7 @@ function ProjectRow(props: {
 }) {
   const { candidate } = props;
   const agents = candidate.agents
-    .map((agent) => props.agentLabels.get(agent) ?? PROJECT_AGENT_LABELS[agent] ?? agent)
+    .map((agent) => props.agentLabels.get(agent) ?? agent)
     .join(", ");
   const recency = projectRecencyLabel(candidate.lastActiveAt, props.readAt);
   return (

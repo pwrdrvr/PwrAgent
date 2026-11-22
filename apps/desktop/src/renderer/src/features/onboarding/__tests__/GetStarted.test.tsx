@@ -455,7 +455,12 @@ describe("Get started projects", () => {
     );
     if (count > 0) observations.push({ path: "/home/sam/code/demo-1/", agent: "claude", lastActiveAt: now - DAY });
     return vi.fn(async (): Promise<DiscoverRecentProjectsResponse> => ({
-      sources: [{ agent: "codex", label: "Codex", status: "complete" }, ...sources],
+      // Main reports a source for every agent it has an observation from.
+      sources: [
+        { agent: "codex", label: "Codex", status: "complete" },
+        ...(count > 0 ? [{ agent: "claude" as const, label: "Claude Code", status: "complete" as const }] : []),
+        ...sources,
+      ],
       observations,
     }));
   }
@@ -549,6 +554,26 @@ describe("Get started projects", () => {
     await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenLastCalledWith({ includeCodex: false }));
     fireEvent.click(screen.getByRole("radio", { name: /This computer's Codex login/ }));
     await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenLastCalledWith({ includeCodex: true }));
+  });
+
+  it("looks for projects after the first agent check, and again once a Codex turns up", async () => {
+    let finishAcpCheck: (value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void = () => undefined;
+    const settings = settingsState(false);
+    const desktopApi = api({
+      discoverRecentProjects: discovery(1),
+      listAcpAgents: vi.fn(async () => await new Promise((resolve) => { finishAcpCheck = resolve; })),
+    } as Partial<DesktopApi>);
+    const { setClaudeSignIn } = renderGetStarted({ desktopApi, settings });
+    // Codex discovery is still running, so no Codex could be asked yet.
+    await waitFor(() => expect(desktopApi.listAcpAgents).toHaveBeenCalled());
+    expect(desktopApi.discoverRecentProjects).not.toHaveBeenCalled();
+    await act(async () => { finishAcpCheck({ fetchedAt: 1, entries: [] }); });
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledOnce());
+    // A Codex installed from this page: the next check finds it, and the
+    // projects are read again with it.
+    settings.snapshot = snapshot(true);
+    setClaudeSignIn(undefined);
+    await waitFor(() => expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2));
   });
 
   it("neither looks for nor imports projects in a replay", async () => {
