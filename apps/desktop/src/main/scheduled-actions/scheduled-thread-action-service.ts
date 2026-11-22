@@ -6,6 +6,8 @@ import type {
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
+  ScheduledThreadTurnPayload,
+  SteerFallbackInputSource,
   ScheduledThreadActionHoldCause,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -284,8 +286,9 @@ export class ScheduledThreadActionService {
 
   async create(
     request: CreateScheduledThreadActionRequest,
-    options?: { id?: string },
+    options?: { id?: string; steerFallbackInputSource?: SteerFallbackInputSource },
   ): Promise<ScheduledThreadActionMutationResponse> {
+    if (request.turn) request = { ...request, turn: withSteerFallbackSource(request.turn, options?.steerFallbackInputSource) };
     validateScheduledActionRequest(request);
     // The desktop, messaging and peer surfaces share this path. Only
     // createAgentFollowUp, which applies the agent limits, writes this origin.
@@ -331,6 +334,7 @@ export class ScheduledThreadActionService {
     request: UpdateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     const current = this.requireAction(request.id);
+    if (request.turn) request = { ...request, turn: withSteerFallbackSource(request.turn, current.turn?.steerFallbackInputSource) };
     const candidate = {
       ...current,
       ...request,
@@ -584,8 +588,10 @@ export class ScheduledThreadActionService {
       }
       const queueEntryId =
         action.queueEntryId ?? scheduledTurnQueueEntryId(action.id);
+      const { steerFallbackInputSource, ...payload } = action.turn;
+      const sourceArgs: [] | [SteerFallbackInputSource] = steerFallbackInputSource ? [steerFallbackInputSource] : [];
       const turn = {
-        ...action.turn,
+        ...payload,
         backend: action.backend,
         threadId: action.threadId,
         origin: "scheduled" as const,
@@ -598,7 +604,7 @@ export class ScheduledThreadActionService {
           ...turn,
           holdReason:
             "This steering message was held after its target turn ended. Retry it when the provider is ready.",
-        });
+        }, ...sourceArgs);
         const queued = this.options.store.markQueued(
           action.id,
           queueEntryId,
@@ -607,7 +613,7 @@ export class ScheduledThreadActionService {
         );
         if (queued) await this.publish(queued);
         const released = await this.options.registry
-          .releaseQueuedTurnWithDisposition(queueEntryId, turn);
+          .releaseQueuedTurnWithDisposition(queueEntryId, { ...turn, ...(steerFallbackInputSource ? { turnInputSource: steerFallbackInputSource } : {}) });
         if (released.disposition === "started") {
           const started = this.options.store.markStarted(
             action.id,
@@ -638,13 +644,13 @@ export class ScheduledThreadActionService {
         }
         return;
       }
-      const response = await this.options.registry.submitTurn(turn)
+      const response = await this.options.registry.submitTurn(turn, ...sourceArgs)
         .catch(async (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           if (!isThreadLockRefusal(message)) throw error;
           // A lock pauses the message rather than failing it: held in the
           // thread's queue, it starts when the thread is unlocked.
-          return await this.options.registry.submitHeldTurn({ ...turn, holdReason: message });
+          return await this.options.registry.submitHeldTurn({ ...turn, holdReason: message }, ...sourceArgs);
         });
       const updated = response.status === "queued" && response.entry.holdReason
         ? this.options.store.markHeld(
@@ -1077,6 +1083,11 @@ export function readSchedulerOwnerLiveness(
 
 function holdVersion(hold: ScheduledThreadActionHold): string {
   return `${hold.id}@${hold.updatedAt}`;
+}
+
+function withSteerFallbackSource(turn: ScheduledThreadTurnPayload, source?: SteerFallbackInputSource): ScheduledThreadTurnPayload {
+  const { steerFallbackInputSource: _claimedSource, ...payload } = turn;
+  return source ? { ...payload, steerFallbackInputSource: source } : payload;
 }
 
 function matchesCreateRequest(

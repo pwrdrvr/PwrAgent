@@ -629,7 +629,7 @@ export function registerAgentIpcHandlers(): void {
         const submitted = await registry.submitTurn({
           ...request,
           origin: "manual",
-        });
+        }, "desktop");
         const response: StartTurnResponse =
           submitted.status === "started"
             ? {
@@ -686,7 +686,7 @@ export function registerAgentIpcHandlers(): void {
           backend: request.backend,
           threadId: request.threadId,
           input: request.input,
-        });
+        }, "desktop");
         return {
           backend: submitted.entry.backend,
           threadId: submitted.entry.threadId,
@@ -1115,6 +1115,7 @@ export function registerAgentIpcHandlers(): void {
           registry,
           getScheduledThreadActionService(),
           request,
+          "desktop",
         );
       } catch (error) {
         appServerLog.error("steerTurn failed", {
@@ -1478,6 +1479,7 @@ export function registerAgentIpcHandlers(): void {
           .materializeDirectoryLaunchpad(stripFederationTarget(request));
       }
       return await registry.materializeDirectoryLaunchpad(request, {
+        turnInputSource: "desktop",
         onCodexEnvironmentSetupProgress: (progress) => {
           event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
         },

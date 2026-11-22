@@ -40,6 +40,7 @@ export function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry, position: 
     createdAt: entry.createdAt,
     queued: {
       origin: entry.origin,
+      ...(entry.turnInputSource ? { turnInputSource: entry.turnInputSource } : {}),
       ...(entry.delivery ? { delivery: entry.delivery } : {}),
       ...(entry.agentMessages ? { agentMessages: entry.agentMessages } : {}),
       ...(entry.agentMessageOrigins ? { agentMessageOrigins: entry.agentMessageOrigins } : {}),

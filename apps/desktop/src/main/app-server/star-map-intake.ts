@@ -459,6 +459,7 @@ export async function ensureStarMapIntakeLaunchpad(
  */
 export async function dispatchStarMapIntake(
   request: StarMapIntakeRequest,
+  turnInputSource?: "desktop" | "federation",
 ): Promise<StarMapIntakeResponse> {
   const requestId = request.requestId;
   const text = request.request.trim();
@@ -652,7 +653,7 @@ export async function dispatchStarMapIntake(
           ...(request.attachments ?? []),
         ],
       },
-      { messageOrigin: { kind: "pwragent" } },
+      { messageOrigin: { kind: "pwragent" }, ...(turnInputSource ? { turnInputSource } : {}) },
     );
     publishIntakeStatus({
       requestId,

@@ -261,7 +261,7 @@ describe("star map window IPC", () => {
       requestId: "request-1",
       request: "Fix the screenshot issue",
       attachments: [attachment],
-    });
+    }, "desktop");
   });
 
   it("sends only staged attachment inputs to remote Star Map intake", async () => {
@@ -324,7 +324,7 @@ describe("star map window IPC", () => {
     expect(dispatchStarMapIntake).toHaveBeenCalledWith({
       requestId: "request-forged",
       request: "Use this path",
-    });
+    }, "desktop");
   });
 
   it("rejects image batches that bypass the renderer cap", async () => {

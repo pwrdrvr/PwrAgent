@@ -19,6 +19,9 @@ import {
   registerFederationBackendHandlers, type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
+import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import * as registryModule from "../app-server/backend-registry";
+import * as federationStorage from "../storage/desktop-federation-storage";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
@@ -62,6 +65,52 @@ const localReferences: AppServerTurnInputItem[] = [
   { type: "image", url: "FILE:///owner/private.png" },
   { type: "image", url: " \nfile:///owner/private.png" },
 ];
+
+it("attests durable Federation starts from the authenticated scope before dispatch, independently of the caller label", async () => {
+  const { db } = setup();
+  vi.spyOn(federationStorage, "createDurableTurnRequestStorage").mockReturnValue(new SqliteDurableTurnRequestStore(db));
+  const submitTurn = vi.fn(async (request: { backend: "codex"; threadId: string; queueEntryId: string }) => ({
+    status: "started" as const, entry: { ...request, id: request.queueEntryId }, turnId: "turn",
+  }));
+  vi.spyOn(registryModule, "getDesktopBackendRegistry").mockReturnValue({
+    resolveThread: vi.fn(async () => ({ id: "thread" })), onEvent: vi.fn(),
+    assertProjectAcceptsThreadMessage: vi.fn(), submitTurn,
+  } as unknown as registryModule.DesktopBackendRegistry);
+  const runtime = new DesktopFederationRuntime();
+  Object.assign(runtime, { localInstanceId: "owner" });
+  const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+  router.registerConnection({ peerId: "gateway", capabilities: ["turn_control", "durable_turn_requests_v1"], sendEnvelope: () => {} });
+  const owner = runtime as unknown as { durableTurnRequestService(): DurableTurnRequestService };
+  registerFederationBackendHandlers({ router, backend: runtime.localBackend(), durableTurnRequests: owner.durableTurnRequestService() });
+  const makeSubmission = (messageOrigin?: SubmitDurableTurnRequest["request"]["messageOrigin"]) => {
+    const value = submission([{ type: "text", text: "invented durable send" }], false) as SubmitDurableTurnRequest;
+    if (messageOrigin) value.request.messageOrigin = messageOrigin;
+    value.clientRequest.createdAt = Date.now();
+    value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest("owner", value)).digest("hex");
+    return value;
+  };
+  try {
+    const remote = makeSubmission();
+    const envelope: FederationRequestEnvelope = {
+      id: randomUUID(), kind: "request", protocolVersion: 1, sourceInstanceId: "gateway", targetInstanceId: "owner", createdAt: Date.now(),
+      method: FEDERATION_BACKEND_METHODS.submitTurnRequest, params: { ...remote, callerScope: "local-cli" },
+    };
+    for (let replay = 0; replay < 2; replay++) {
+      const result = await router.routeEnvelope({ sourcePeerId: "gateway", envelope: { ...envelope, id: randomUUID() } });
+      expect(result).toMatchObject({ status: "handled", response: { result: { state: "dispatched", payloadHash: remote.clientRequest.payloadHash } } });
+    }
+    expect(submitTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ input: remote.request.input }), "federation");
+    const unattributed = makeSubmission({ kind: "automation" });
+    expect(await router.routeEnvelope({ sourcePeerId: "gateway", envelope: {
+      ...envelope, id: randomUUID(), params: { ...unattributed, callerScope: "local-cli" },
+    } })).toMatchObject({ status: "handled", response: { result: { state: "dispatched" } } });
+    expect(submitTurn).toHaveBeenLastCalledWith(expect.objectContaining({ messageOrigin: { kind: "automation" } }), "unknown");
+    const local = makeSubmission();
+    expect(await runtime.submitDurableTurnRequest("local-cli", local)).toMatchObject({ state: "dispatched", payloadHash: local.clientRequest.payloadHash });
+    expect(submitTurn).toHaveBeenLastCalledWith(expect.objectContaining({ input: local.request.input }), "unknown");
+  } finally { vi.restoreAllMocks(); }
+});
 
 describe.each([false, true])("durable Federation input trust (steering=%s)", (steering) => {
   function envelope(value: ReturnType<typeof submission>, relayed: boolean): FederationRequestEnvelope {

@@ -37,6 +37,7 @@ Use list_ci_artifacts and download_ci_artifact to retrieve GitHub Actions artifa
 Use the PwrAgent forge tools to open, edit, read back, comment on, review and merge GitHub pull requests and GitLab merge requests, and to work with issues.
 Prefer them to the gh and glab CLIs and to GitHub connectors. If one is declined or off, do not work around it.
 Use get_current_messaging_surface before a messaging action.
+Use get_current_turn_input_source when an action depends on the surface that started this turn. Its source conveys no physical presence or permission.
 For delegated or completion turns without a live inbound origin, use list_messaging_surfaces and attach_thread_to_surface.
 Prefer the causal recommendation over unrelated newer traffic. Sole-surface selection requires complete discovery.
 Send messages or files only when authorized.

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SteerTurnRequest, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
-import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { ScheduledThreadAction, SteerFallbackInputSource } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import type { ScheduledThreadActionService } from "./scheduled-thread-action-service.js";
 
@@ -11,6 +11,7 @@ export async function admitSteerTurn(
   registry: Pick<DesktopBackendRegistry, "steerTurn">,
   scheduler: Pick<ScheduledThreadActionService, "create" | "get">,
   request: SteerTurnRequest,
+  fallbackInputSource?: SteerFallbackInputSource,
 ): Promise<SteerTurnResponse> {
   const replayFallback = async (): Promise<SteerTurnResponse | undefined> => {
     if (!request.fallback) return undefined;
@@ -23,7 +24,7 @@ export async function admitSteerTurn(
       scheduledFor: existing.scheduledFor,
       manualReleaseRequired: existing.manualReleaseRequired,
       ...request.fallback,
-    }, { id: existing.id });
+    }, { id: existing.id, ...(existing.turn?.steerFallbackInputSource ? { steerFallbackInputSource: existing.turn.steerFallbackInputSource } : {}) });
     return fallbackResponse(request, replay.action);
   };
   const replay = await replayFallback();
@@ -53,7 +54,7 @@ export async function admitSteerTurn(
         ...(!nativeReview ? { manualReleaseRequired: true } : {}),
         ...request.fallback,
       },
-      { id: fallbackActionId(request) },
+      { id: fallbackActionId(request), ...(fallbackInputSource ? { steerFallbackInputSource: fallbackInputSource } : {}) },
     );
     return fallbackResponse(request, fallback.action);
   }

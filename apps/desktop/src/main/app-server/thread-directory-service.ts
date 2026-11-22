@@ -7,6 +7,7 @@ import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import { logDebug } from "./registry-debug-log";
 import { extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { delegatedTurnAttribution } from "./delegated-turn-attribution";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -1458,6 +1459,7 @@ export class ThreadDirectoryService {
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions & {
       sourceInstanceId?: FederationInstanceId;
+      turnInputSource?: TurnInputSource;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const policy = getOwnerHostServices().runtimePolicy;
@@ -1517,7 +1519,7 @@ export class ThreadDirectoryService {
 
   private async runMaterializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
+    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId; turnInputSource?: TurnInputSource },
     operation?: LaunchpadCreationOperation,
     proxyLaunchpad?: NavigationLaunchpadDraft,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
@@ -1615,7 +1617,7 @@ export class ThreadDirectoryService {
 
   private async materializeLaunchpadDraftPrepared(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
+    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId; turnInputSource?: TurnInputSource },
     operation?: LaunchpadCreationOperation,
     proxyLaunchpad?: NavigationLaunchpadDraft,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
@@ -1900,6 +1902,7 @@ export class ThreadDirectoryService {
       request,
       launchpad,
       messageOrigin: options?.messageOrigin,
+      turnInputSource: options?.turnInputSource,
     };
     let continuation: ContinueThreadEnvironmentStartupResponse = {
       backend: startThreadResponse.backend,
@@ -2094,7 +2097,7 @@ export class ThreadDirectoryService {
           serviceTier: launchpad.serviceTier,
           fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
           collaborationMode: request.collaborationMode,
-        });
+        }, pending.turnInputSource);
         turnId = turnResponse.turnId;
       } catch (error) {
         turnStartFailure = {
@@ -2131,11 +2134,12 @@ export class ThreadDirectoryService {
 
   async continueThreadEnvironmentStartup(
     request: ContinueThreadEnvironmentStartupRequest,
+    fallbackInputSource?: TurnInputSource,
   ): Promise<ContinueThreadEnvironmentStartupResponse> {
     const key = buildThreadIdentityKey(request.backend, request.threadId);
     const existing = this.environmentLaunchContinuations.get(key);
     if (existing) return await existing;
-    const continuation = this.resumeEnvironmentLaunch(request);
+    const continuation = this.resumeEnvironmentLaunch(request, fallbackInputSource);
     this.environmentLaunchContinuations.set(key, continuation);
     try { return await continuation; }
     finally { this.environmentLaunchContinuations.delete(key); }
@@ -2143,6 +2147,7 @@ export class ThreadDirectoryService {
 
   private async resumeEnvironmentLaunch(
     request: ContinueThreadEnvironmentStartupRequest,
+    fallbackInputSource?: TurnInputSource,
   ): Promise<ContinueThreadEnvironmentStartupResponse> {
     if (this.host().threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error("This thread already has an active turn. Refresh it to view the conversation.");
@@ -2162,7 +2167,7 @@ export class ThreadDirectoryService {
       if (overlay?.scheduledStart || typeof overlay?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt === "number") {
         throw new Error("This thread's environment startup has already been continued. Refresh it to view its state.");
       }
-      result = await this.host().startTurn({ ...request.fallbackTurn, backend: request.backend, threadId: request.threadId });
+      result = await this.host().startTurn({ ...request.fallbackTurn, backend: request.backend, threadId: request.threadId }, fallbackInputSource);
     } else {
       throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
     }

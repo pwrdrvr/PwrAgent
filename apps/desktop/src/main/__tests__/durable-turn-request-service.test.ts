@@ -41,10 +41,12 @@ function submission(options: { id?: string; text?: string; createdAt?: number; o
   value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(options.owner ?? OWNER, value)).digest("hex");
   return value;
 }
-function setup(options: { now?: () => number; dispatch?: FederationBackendOperations["startTurn"]; maxPerCaller?: number; maxTotal?: number } = {}) {
+type Dispatch = ConstructorParameters<typeof DurableTurnRequestService>[0]["dispatch"];
+
+function setup(options: { now?: () => number; dispatch?: Dispatch; maxPerCaller?: number; maxTotal?: number } = {}) {
   const file = database();
   const authorize = vi.fn(async () => {});
-  const dispatch = vi.fn(options.dispatch ?? (async (request) => ({ backend: request.backend, threadId: request.threadId, turnId: "turn", queueStatus: "started" as const, queueEntryId: request.queueEntryId })));
+  const dispatch = vi.fn<Dispatch>(options.dispatch ?? (async (request) => ({ backend: request.backend, threadId: request.threadId, turnId: "turn", queueStatus: "started", queueEntryId: request.queueEntryId })));
   const make = () => new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(file.db), ownerInstanceId: OWNER, now: options.now ?? (() => NOW), authorize, dispatch, maxPerCaller: options.maxPerCaller, maxTotal: options.maxTotal });
   return { file, service: make(), make, authorize, dispatch };
 }

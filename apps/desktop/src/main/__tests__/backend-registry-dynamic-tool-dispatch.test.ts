@@ -140,6 +140,33 @@ describe("Codex catalog dynamic tool dispatch", () => {
     expect(checkDynamicToolPermission).not.toHaveBeenCalled();
   });
 
+  it("reports unknown when the current provider turn has no admitted input source", async () => {
+    const result = await internals.performServerRequest("codex", request("pwragent", "get_current_turn_input_source"));
+    expect(result.success).toBe(true);
+    expect(JSON.parse((result.contentItems[0] as { text: string }).text)).toEqual({ source: "unknown" });
+    const spoofed = await internals.performServerRequest("codex", request("pwragent", "get_current_turn_input_source", { source: "desktop" }));
+    expect(spoofed.success).toBe(false);
+    expect(JSON.parse((spoofed.contentItems[0] as { text: string }).text)).toMatchObject({ code: "invalid_arguments" });
+  });
+
+  it("reads the provisional source only for the provider turn announced at ingress", async () => {
+    const turnState = registryModules(registry).turnState;
+    turnState.unregisterTurn("codex:thread-1:turn-1");
+    const origin = { backend: "codex" as const, threadId: "thread-1", turnInputSource: "desktop" as const };
+    turnState.addStartingOrigin(origin);
+    const ingress = turnState.beginStartDelivery("thread-1", "turn-1");
+    try {
+      const toolCall = request("pwragent", "get_current_turn_input_source");
+      const result = await internals.performServerRequest("codex", toolCall);
+      expect(JSON.parse((result.contentItems[0] as { text: string }).text)).toEqual({ source: "desktop" });
+      turnState.observeTurnTerminal("thread-1", "turn-1");
+      expect((await internals.performServerRequest("codex", toolCall)).success).toBe(false);
+    } finally {
+      turnState.endStartDelivery(ingress);
+      turnState.removeStartingOrigin(origin);
+    }
+  });
+
   it.each(["get_messaging_working_updates_default", "set_messaging_working_updates_default"])(
     "fails closed when %s comes from a live turn without a verified origin",
     async (tool) => {

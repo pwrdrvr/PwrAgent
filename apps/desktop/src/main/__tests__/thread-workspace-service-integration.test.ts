@@ -223,7 +223,7 @@ describe("DesktopBackendRegistry", () => {
           expect(codexTools).toHaveLength(enabled && discovery ? 5 : 0);
 
           await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
-          const turn = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Coordinate research" }] });
+          const turn = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Coordinate research" }] }, "federation");
           // An ACP turn keeps its `pending:<session>:<time>` ID for its whole life.
           expect(turn.turnId).toMatch(/^pending:kimi-session-1:/);
           const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
@@ -231,6 +231,8 @@ describe("DesktopBackendRegistry", () => {
           await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
             requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
           }));
+          const source = await client.callTool({ name: "get_current_turn_input_source", arguments: {} });
+          expect(source.structuredContent).toEqual({ source: "federation" });
           const listed = (await client.listTools()).tools.map(({ name }) => name).filter((name) => name.startsWith("research_"));
           expect(listed).toHaveLength(enabled ? 5 : 0);
           expect(registry.researchContextIsLive({ backend, threadId, turnId: turn.turnId, callId: "live", transport: "mcp" })).toBe(enabled);

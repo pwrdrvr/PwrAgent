@@ -1,4 +1,5 @@
 import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import type {
   AcpBackendId,
   AppServerBackendKind,
@@ -244,7 +245,7 @@ export interface RegistryHostPorts {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
+  }, turnInputSource?: TurnInputSource): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   submitTurn(params: {
     queueEntryId?: string;
     backend: AppServerBackendKind;
@@ -262,7 +263,7 @@ export interface RegistryHostPorts {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
-  }): Promise<ThreadTurnQueueSubmissionResult>;
+  }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult>;
   taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined;
   threadHasActiveTurn(
     threadId: string,

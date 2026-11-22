@@ -42,6 +42,8 @@ import { ThreadOwnerUnavailableError, type ThreadOwnerAdmission } from "@pwragen
 
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
+import { resolveTurnInputSource, type TurnInputSource } from "@pwragent/owner-core/turn-input-source";
+import { GET_CURRENT_TURN_INPUT_SOURCE, type CurrentTurnInputSourceHandler } from "../agent-tools/current-turn-input-source-tool";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
@@ -1426,6 +1428,23 @@ export class DesktopBackendRegistry {
     return unbound;
   }
 
+  private readonly currentTurnInputSource: CurrentTurnInputSourceHandler = (context) => {
+    if (!context.turnId) return "unknown";
+    const turn = { ...context, turnId: context.turnId };
+    const exact = this.context.turnState.readTurnInputSource(turn);
+    if (exact !== undefined) return exact;
+    const observedSequence = turn.backend === "codex"
+      ? this.codexMessageContextTurnObservations.get(turn.threadId)?.get(turn.turnId) : undefined;
+    if (turn.backend === "codex" && this.context.turnState.pendingStartedTurnId(turn.threadId) === turn.turnId) {
+      const pending = this.context.turnState.readPendingCodexTurnInputSource(turn.threadId, observedSequence);
+      if (pending !== undefined) return pending;
+    }
+    const starting = this.findStartingTurnOrigin(turn);
+    if (starting?.turnId === undefined && observedSequence !== undefined
+      && observedSequence <= (starting?.admittedCodexTurnSequence ?? -1)) return "unknown";
+    return starting?.turnInputSource ?? "unknown";
+  };
+
   /**
    * Call before the provider starts the turn. Every path must end in
    * `persistStartingTurnOrigin` or `dropStartingTurnOrigin`.
@@ -1434,9 +1453,14 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     origin?: AppServerThreadMessageOrigin;
+    turnInputSource?: TurnInputSource;
   }): StartingTurnOrigin | undefined {
-    if (!params.origin) return undefined;
-    const entry: StartingTurnOrigin = { backend: params.backend, threadId: params.threadId, origin: params.origin };
+    if (!params.origin && params.turnInputSource === undefined) return undefined;
+    const entry: StartingTurnOrigin = {
+      backend: params.backend, threadId: params.threadId, origin: params.origin,
+      ...(params.backend === "codex" ? { admittedCodexTurnSequence: this.codexMessageContextTurnSequence } : {}),
+      turnInputSource: resolveTurnInputSource({ turnInputSource: params.turnInputSource, messageOrigin: params.origin }),
+    };
     this.context.turnState.addStartingOrigin(entry);
     return entry;
   }
@@ -1445,9 +1469,15 @@ export class DesktopBackendRegistry {
   private bindStartingTurnOrigin(
     entry: StartingTurnOrigin | undefined,
     turn: { threadId: string; turnId: string },
+    terminalObserved = false,
   ): void {
     if (!entry) return;
     this.context.turnState.bindStartingOrigin(entry, turn);
+    const identity = { ...turn, backend: entry.backend };
+    if (entry.turnInputSource !== undefined && !terminalObserved
+      && (entry.backend === "codex" || this.context.turnState.hasRegisteredTurn(identity))) {
+      this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource, entry.admittedCodexTurnSequence);
+    }
   }
 
   private dropStartingTurnOrigin(entry: StartingTurnOrigin | undefined): void {
@@ -1457,7 +1487,7 @@ export class DesktopBackendRegistry {
   /** Writes the bound origin as the turn's `user:<turnId>` row, then forgets it. */
   private async persistStartingTurnOrigin(entry: StartingTurnOrigin | undefined): Promise<void> {
     const bound = entry ? this.context.turnState.startingOrigin(entry) : undefined;
-    if (!bound?.turnId) {
+    if (!bound?.turnId || !bound.origin) {
       this.dropStartingTurnOrigin(entry);
       return;
     }
@@ -1978,6 +2008,7 @@ export class DesktopBackendRegistry {
       admitNewThreadModelSettings: (...args: Parameters<typeof this.admitNewThreadModelSettings>) => this.admitNewThreadModelSettings(...args),
       get agentThreadActions() { return current().agentThreadActions; },
       get appManagementHandler() { return current().appManagementHandler; },
+      get currentTurnInputSource() { return current().currentTurnInputSource; },
       get messagingWorkingUpdatesHandler() { return current().messagingWorkingUpdatesHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
@@ -8312,6 +8343,7 @@ export class DesktopBackendRegistry {
     const runtimePreparation = resources.track(tokenMiserEnabled ? this.prepareTokenMiserRuntime() : Promise.resolve());
     const agentToolCatalogs = resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
+      currentTurnInputSource: this.currentTurnInputSource,
       automationInspectionHandler: this.automationInspectionHandler,
       federationHandler: this.federationHandler,
       mcpGatewayTools: this.mcpGatewayTools,
@@ -9045,7 +9077,7 @@ export class DesktopBackendRegistry {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
-  }): Promise<ThreadTurnQueueSubmissionResult> {
+  }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertThreadCodexInferenceAvailable(params);
     await this.assertAgentMessageWithinThreadAccess(params);
@@ -9066,7 +9098,7 @@ export class DesktopBackendRegistry {
       entry.fastMode,
     ].some((value) => value !== undefined);
     return await this.admitThreadAttachments(entry, (input, onAdmission) => {
-      const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
+      const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin, turnInputSource };
       // Agent messages, monitor results and PwrAgent's own wakes join the
       // running turn, or start one when the thread is idle, and share that
       // delivery with whatever waits beside them. An operator's or a
@@ -9087,13 +9119,13 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
-  }): Promise<ThreadTurnQueueSubmissionResult> {
+  }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertThreadCodexInferenceAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     return await this.admitThreadAttachments(params, (input, onAdmission) =>
-      this.threadTurnQueue.submitSteer({ ...params, input, origin: "manual" }, { onAdmission }));
+      this.threadTurnQueue.submitSteer({ ...params, input, origin: "manual", turnInputSource }, { onAdmission }));
   }
 
   async submitHeldTurn(params: {
@@ -9114,7 +9146,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     /** Names the entry in the queue and Waiting for, in place of its text. */
     title?: string;
-  }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+  }, turnInputSource?: TurnInputSource): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertThreadCodexInferenceAvailable(params);
     await this.assertAgentMessageWithinThreadAccess(params);
@@ -9133,6 +9165,7 @@ export class DesktopBackendRegistry {
       input,
       id: queueEntryId,
       origin,
+      turnInputSource,
     }, holdReason, { onAdmission }));
   }
 
@@ -10840,11 +10873,11 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  }, turnInputSource?: TurnInputSource): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
     await this.assertThreadCodexInferenceAvailable(params);
     await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
-    const result = await this.startTurnNow(params);
+    const result = await this.startTurnNow({ ...params, turnInputSource });
     await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
     return result;
   }
@@ -10878,6 +10911,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     input: AppServerTurnInputItem[];
     origin?: ThreadTurnQueueOrigin;
+    turnInputSource?: TurnInputSource;
     executionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;
@@ -10910,6 +10944,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     input: AppServerTurnInputItem[];
     origin?: ThreadTurnQueueOrigin;
+    turnInputSource?: TurnInputSource;
     executionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;
@@ -10991,7 +11026,10 @@ export class DesktopBackendRegistry {
             ),
           };
         },
-        beginOrigin: () => this.beginStartingTurnOrigin({ ...params, origin: prepared.messageOrigin }),
+        beginOrigin: () => this.beginStartingTurnOrigin({
+          backend: params.backend, threadId: params.threadId,
+          origin: prepared.messageOrigin, turnInputSource: resolveTurnInputSource(params),
+        }),
         submit: async (onSessionClosed) => {
           try { return await this.claudeBackend.startTurn({ ...prepared, onSessionClosed }); }
           catch (error) {
@@ -11103,7 +11141,9 @@ export class DesktopBackendRegistry {
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
         }),
-        beginOrigin: () => this.beginStartingTurnOrigin({ ...identity, origin: resolveThreadMessageOrigin(params) }),
+        beginOrigin: () => this.beginStartingTurnOrigin({
+          ...identity, origin: resolveThreadMessageOrigin(params), turnInputSource: resolveTurnInputSource(params),
+        }),
         submit: () => this.startAcpTurn({
           ...identity, input,
           model: modelSettings.model,
@@ -11285,6 +11325,7 @@ export class DesktopBackendRegistry {
               threadId: params.threadId,
               input: params.input,
               origin: params.origin,
+              turnInputSource: params.turnInputSource,
               executionMode: params.executionMode,
               approvalPolicy: params.approvalPolicy,
               sandbox: params.sandbox,
@@ -11309,6 +11350,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       origin: resolveThreadMessageOrigin(params),
+      turnInputSource: resolveTurnInputSource(params),
     });
     const submitted = await this.threadStarts.submitCodex({
       identity: params,
@@ -11414,7 +11456,7 @@ export class DesktopBackendRegistry {
       ? this.context.turnState.retryReceipt(retryableCodexTurnStart).terminalObserved ?? false : false;
     return await this.threadStarts.finalizeCodex({
       identity: params, turn: result, settings: turnParams, executionMode: params.executionMode,
-      bindOrigin: () => this.bindStartingTurnOrigin(startingOrigin, result),
+      bindOrigin: () => this.bindStartingTurnOrigin(startingOrigin, result, retryTerminalObserved()),
       bindRetry: () => { if (retryableCodexTurnStart) this.context.turnState.updateRetry(retryableCodexTurnStart, { turnId: result.turnId }); },
       bindPdf: () => this.pdfAttachmentStore.bindTurn(
         { backend: params.backend, threadId: result.threadId, turnId: result.turnId }, pdfAttachments,
@@ -14868,6 +14910,7 @@ export class DesktopBackendRegistry {
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions & {
       sourceInstanceId?: FederationInstanceId;
+      turnInputSource?: TurnInputSource;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     return this.threadDirectoryService.materializeDirectoryLaunchpad(request, options);
@@ -14888,8 +14931,9 @@ export class DesktopBackendRegistry {
 
   continueThreadEnvironmentStartup(
     request: ContinueThreadEnvironmentStartupRequest,
+    fallbackInputSource?: TurnInputSource,
   ): Promise<ContinueThreadEnvironmentStartupResponse> {
-    return this.threadDirectoryService.continueThreadEnvironmentStartup(request);
+    return this.threadDirectoryService.continueThreadEnvironmentStartup(request, fallbackInputSource);
   }
 
   async markScheduledThreadBorn(params: {
@@ -15592,6 +15636,7 @@ export class DesktopBackendRegistry {
   ): Promise<CodexDynamicToolSpec[]> {
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
+        currentTurnInputSource: this.currentTurnInputSource,
         appManagementAllowed: caller ? await this.canManagePwrAgent(caller, true) : false,
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
@@ -18554,6 +18599,7 @@ export class DesktopBackendRegistry {
       // and completion calls from monitor threads.
       const catalogs = resolveAgentToolCatalogs({
         appManagementHandler: this.appManagementHandler,
+        currentTurnInputSource: this.currentTurnInputSource,
         automationInspectionHandler: this.automationInspectionHandler,
         federationHandler: this.federationHandler,
         mcpGatewayTools: this.mcpGatewayTools,
@@ -18615,7 +18661,13 @@ export class DesktopBackendRegistry {
         dispatch: async () => await catalog.router.handleDynamicToolCall({ backend, call: hostToolCall, signal, responseFlushed: request.responseFlushed }),
       } : legacyRoutes.find(({ accepts }) => accepts(hostToolCall));
       if (route) {
-        if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        const isTurnInputSourceTool = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+          && hostToolCall.tool === GET_CURRENT_TURN_INPUT_SOURCE;
+        // The provider can ask while its turn/started notification is still
+        // going through owner observers. Its exact in-flight ID is available at ingress.
+        const pendingTurnStart = isTurnInputSourceTool && backend === "codex" && hostToolCall.turnId
+          && this.context.turnState.pendingStartedTurnId(hostToolCall.threadId) === hostToolCall.turnId;
+        if (!pendingTurnStart && !this.isLiveDynamicToolCall(backend, hostToolCall)) {
           const messages: Partial<Record<AgentToolCatalogId, string>> = {
             automation_inspection: "Automation inspection tool calls must originate from an active turn on the same thread.",
             thread_inspection: "Thread inspection tool calls must originate from an active turn on the same thread.",
@@ -18632,10 +18684,9 @@ export class DesktopBackendRegistry {
             message: messages[route.id] ?? "PwrAgent tool calls must originate from an active turn on the owning thread.",
           });
         }
-        // The static guide requires a live turn but no instance-management permission.
-        const isStaticToolGuide = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
-          && hostToolCall.tool === "read_tool_guide";
-        const category = isStaticToolGuide ? undefined : messagingDynamicToolCategoryForCatalog(route.id);
+        const isHostContextTool = isTurnInputSourceTool || (hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+          && hostToolCall.tool === "read_tool_guide");
+        const category = isHostContextTool ? undefined : messagingDynamicToolCategoryForCatalog(route.id);
         const denied = category && await this.dynamicToolPermissionDenied(backend, category, hostToolCall);
         if (denied) {
           return toDynamicToolResponse({
@@ -19022,6 +19073,7 @@ export class DesktopBackendRegistry {
   }): Promise<string | null> {
     const refusal = localAgentToolRefusal(params.tool);
     if (refusal) return refusal;
+    if (params.tool === GET_CURRENT_TURN_INPUT_SOURCE) return null;
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
@@ -21159,12 +21211,13 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex" && commitCodexStart) {
-        const pendingTurnId = buildPendingTurnId(notification.params.threadId);
-        const pendingActiveKey = buildActiveTurnKey("codex", notification.params.threadId, pendingTurnId);
-        const pendingModeKey = buildActiveTurnModeKey(notification.params.threadId, pendingTurnId);
-        const collaborationMode = this.context.turnState.collaborationMode(
-          pendingActiveKey,
-        );
+        const { threadId } = notification.params;
+        const pendingTurnId = buildPendingTurnId(threadId);
+        const pendingActiveKey = buildActiveTurnKey("codex", threadId, pendingTurnId);
+        const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
+        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
+          this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
+        const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {
           this.context.turnState.setCollaboration(

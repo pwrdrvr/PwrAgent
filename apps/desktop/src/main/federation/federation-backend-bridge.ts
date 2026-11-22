@@ -7,6 +7,7 @@ import type {
   ManageThreadDependenciesResponse,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
+import { resolveTurnInputSource, type TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -199,6 +200,7 @@ import type {
   ListScheduledThreadActionsResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
+  SteerFallbackInputSource,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type {
@@ -377,6 +379,22 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
   delivery?: "new_turn";
 };
+
+/** The caller supplies the receiver's authenticated peer and messaging-route admission. */
+export function federationTurnInputSource(
+  sourceInstanceId: string,
+  messageOrigin: AppServerThreadMessageOrigin | undefined,
+  messagingRouteAuthorized = false,
+): TurnInputSource {
+  if (messageOrigin === undefined) return "federation";
+  if (messageOrigin?.kind === "messaging") return messagingRouteAuthorized ? "messaging" : "unknown";
+  // The authenticated peer attests to an attributed sender on its instance.
+  // A kind without a usable sender reference has no such evidence.
+  const sender = messageOrigin?.sourceThread;
+  if (!sender || sender.instanceId !== sourceInstanceId || !isAppServerBackendKind(sender.backend)
+    || typeof sender.threadId !== "string" || !sender.threadId.trim()) return "unknown";
+  return resolveTurnInputSource({ messageOrigin });
+}
 
 export type FederationReplaceQueuedMessageRequest = {
   backend: StartTurnRequest["backend"];
@@ -768,7 +786,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   markThreadSeen(request: MarkThreadSeenRequest): Promise<MarkThreadSeenResponse>;
-  continueThreadEnvironmentStartup?(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse>;
+  continueThreadEnvironmentStartup?(request: ContinueThreadEnvironmentStartupRequest, fallbackInputSource?: TurnInputSource): Promise<ContinueThreadEnvironmentStartupResponse>;
   acknowledgeThreadEnvironmentFailure?(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse>;
   setThreadReaction(
     request: SetThreadReactionRequest,
@@ -851,7 +869,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
       "onCodexEnvironmentSetupProgress"
     >,
   ): Promise<ForkThreadResponse>;
-  startTurn(request: FederationStartTurnRequest): Promise<StartTurnResponse>;
+  startTurn(request: FederationStartTurnRequest, turnInputSource?: TurnInputSource): Promise<StartTurnResponse>;
   replaceQueuedMessage?(request: FederationReplaceQueuedMessageRequest): Promise<StartTurnResponse>;
   readQueuedTurn(
     request: ReadQueuedTurnRequest,
@@ -919,7 +937,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   dismissFailedSubAgents(request: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse>;
   stopSubAgent(request: StopSubAgentRequest): Promise<StopSubAgentResponse>;
-  steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
+  steerTurn(request: SteerTurnRequest, fallbackInputSource?: SteerFallbackInputSource): Promise<SteerTurnResponse>;
   setThreadExecutionMode(
     request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse>;
@@ -1004,6 +1022,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions & {
       sourceInstanceId?: FederationInstanceId;
+      turnInputSource?: TurnInputSource;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse>;
   manageLaunchpadCreation?(
@@ -1049,6 +1068,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   ): Promise<SetFederationShortNameResponse>;
   starMapIntake(
     request: FederationStarMapIntakeRequest,
+    turnInputSource: "federation",
   ): Promise<StarMapIntakeResponse>;
 };
 
@@ -1380,7 +1400,9 @@ export function registerFederationBackendHandlers(params: {
             }),
           }
         : undefined;
-      return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn });
+      if (!fallbackTurn) return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn });
+      const source = federationTurnInputSource(envelope.sourceInstanceId, fallbackTurn.messageOrigin);
+      return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn }, source);
     },
   );
   params.router.registerHandler(
@@ -1600,10 +1622,10 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) => {
-      const request = envelope.params as Omit<
+      const { turnInputSource: _claimedSource, ...request } = envelope.params as Omit<
         FederationStartTurnRequest,
         "input"
-      > & { input: FederationWireTurnInputItem[] };
+      > & { input: FederationWireTurnInputItem[]; turnInputSource?: unknown };
       const messageOrigin = authenticateMessageOrigin({
         messageOrigin: request.messageOrigin,
         resolveSourceInstance: params.resolveSourceInstance,
@@ -1618,7 +1640,7 @@ export function registerFederationBackendHandlers(params: {
         ...request,
         input,
         ...(messageOrigin ? { messageOrigin } : {}),
-      });
+      }, federationTurnInputSource(envelope.sourceInstanceId, messageOrigin, true));
       turnInputAccepted(envelope.sourceInstanceId, { backend: response.backend, threadId: response.threadId },
         startTurnInputOutcome(response));
       return response;
@@ -1921,9 +1943,10 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.steerTurn,
     async (envelope) => {
-      const response = await params.backend.steerTurn(
-        envelope.params as SteerTurnRequest,
-      );
+      const request = envelope.params as SteerTurnRequest;
+      const response = request.fallback
+        ? await params.backend.steerTurn(request, "federation")
+        : await params.backend.steerTurn(request);
       turnInputAccepted(envelope.sourceInstanceId, { backend: response.backend, threadId: response.threadId },
         steerInputOutcome(response));
       return response;
@@ -2163,6 +2186,7 @@ export function registerFederationBackendHandlers(params: {
           ) } : {}),
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
+          turnInputSource: federationTurnInputSource(envelope.sourceInstanceId, messageOrigin, true),
           onCodexEnvironmentSetupProgress: (event) => {
             forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
           },
@@ -2324,7 +2348,7 @@ export function registerFederationBackendHandlers(params: {
                 attachments as FederationStarMapIntakeAttachment[],
             }
           : {}),
-      });
+      }, "federation");
     },
   );
 }

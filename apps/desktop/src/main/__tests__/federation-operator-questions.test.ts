@@ -49,7 +49,7 @@ describe("owner question protocol", () => {
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.reply, { ...reply, federationTarget: { scope: "remote", instanceId: "other" } })).status).toBe("rejected");
     const accepted = await send(FEDERATION_OPERATOR_QUESTION_METHODS.reply, reply);
     expect(accepted.status === "handled" && accepted.response?.result).toMatchObject({ queueStatus: "queued", queueEntryId: "queue-1" });
-    expect(submitThreadReply).toHaveBeenCalledExactlyOnceWith(reply);
+    expect(submitThreadReply).toHaveBeenCalledExactlyOnceWith(reply, "federation");
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.dismiss, { ...question,
       federationTarget: { scope: "remote", instanceId: "other" },
     })).status).toBe("rejected");

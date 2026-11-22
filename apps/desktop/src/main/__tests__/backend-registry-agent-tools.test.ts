@@ -336,8 +336,8 @@ describe("DesktopBackendRegistry", () => {
       enabled = true;
       await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       const deferred = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools);
-      expect(deferred.find((tool) => tool.name === "tool_search")).toMatchObject({ deferLoading: false });
-      expect(deferred.filter((tool) => tool.name !== "tool_search").every((tool) => (tool as { deferLoading?: boolean }).deferLoading)).toBe(true);
+      expect(deferred.filter((tool) => !(tool as { deferLoading?: boolean }).deferLoading).map((tool) => tool.name).sort())
+        .toEqual(["get_current_turn_input_source", "tool_search"]);
       await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Continue." }] });
       expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).map((tool) => tool.name)).toEqual(deferred.map((tool) => tool.name));
       await emitCompletedTurn(registry, "codex", "thread-1");
@@ -390,9 +390,10 @@ describe("DesktopBackendRegistry", () => {
     try {
       // The 2026-10-01 Voice manager turn had only tool_search eager and
       // searched seven times before its first useful call.
-      expect(await eagerNames("voice-manager")).toEqual(["tool_search", ...VOICE_MANAGER_EAGER_TOOLS].sort());
-      expect(await eagerNames("bound-thread")).toEqual(["tool_search", ...MESSAGING_EAGER_TOOLS].sort());
-      expect(await eagerNames("thread-1")).toEqual(["tool_search"]);
+      const baseline = ["get_current_turn_input_source", "tool_search"];
+      expect(await eagerNames("voice-manager")).toEqual([...baseline, ...VOICE_MANAGER_EAGER_TOOLS].sort());
+      expect(await eagerNames("bound-thread")).toEqual([...baseline, ...MESSAGING_EAGER_TOOLS].sort());
+      expect(await eagerNames("thread-1")).toEqual(baseline);
       // Without discovery nothing is deferred, so the sets change nothing.
       discovery = false;
       expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).length).toBeGreaterThan(0);

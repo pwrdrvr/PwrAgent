@@ -566,14 +566,15 @@ describe("ScheduledThreadActionService", () => {
         scheduledFor: 5_000,
         manualReleaseRequired: true,
         displayText: "Follow up",
-        turn: { input: [{ type: "text", text: "Follow up" }] },
+        turn: { input: [{ type: "text", text: "Follow up" }], steerFallbackInputSource: "desktop" },
       },
-      { id: "stale-steer-1" },
+      { id: "stale-steer-1", steerFallbackInputSource: "federation" },
     );
 
     expect(created.action).toMatchObject({
       status: "held",
       manualReleaseRequired: true,
+      turn: { steerFallbackInputSource: "federation" },
     });
     expect(harness.submitTurn).not.toHaveBeenCalled();
     expect(harness.submitHeldTurn).not.toHaveBeenCalled();
@@ -588,10 +589,11 @@ describe("ScheduledThreadActionService", () => {
       backend: "codex",
       threadId: "thread-1",
       queueEntryId: `scheduled-turn:${created.action.id}`,
-    }));
+    }), "federation");
     expect(harness.releaseQueuedTurnWithDisposition)
       .toHaveBeenCalledWith(`scheduled-turn:${created.action.id}`, expect.objectContaining({
         backend: "codex", threadId: "thread-1", origin: "scheduled",
+        turnInputSource: "federation",
         input: [{ type: "text", text: "Follow up" }],
       }));
   });

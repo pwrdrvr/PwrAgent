@@ -30,6 +30,7 @@ export type ScheduledThreadActionStatus =
   | "failed";
 
 export type ScheduledThreadActionOrigin = "desktop" | "messaging" | "agent";
+export type SteerFallbackInputSource = "desktop" | "federation";
 
 /** Agent follow-ups a thread may hold that have not started or ended. */
 export const AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD = 8;
@@ -105,6 +106,8 @@ export type ScheduledThreadTurnPayload = {
   reasoningEffort?: string;
   fastMode?: boolean;
   messageOrigin?: AppServerThreadMessageOrigin;
+  /** Set by the owner when a live composer send has to wait for a new turn. */
+  steerFallbackInputSource?: SteerFallbackInputSource;
 };
 
 export type ScheduledThreadReviewPayload = {

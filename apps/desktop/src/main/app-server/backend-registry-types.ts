@@ -1,5 +1,6 @@
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { delegatedTurnAttribution } from "./delegated-turn-attribution";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { ArchiveWorkspaceAdmission } from "./archive-cleanup-workspace-scope";
 import {
@@ -1192,13 +1193,15 @@ export type ThreadMaintenanceToolHandler = {
 };
 
 /**
- * A turn's origin while its `user:<turnId>` row is not yet written. `turnId`
- * is unset until the provider's start call returns it.
+ * A turn's origin during provider admission, before its exact turn ID is
+ * available and any message origin row can be written.
  */
 export type StartingTurnOrigin = {
   backend: AppServerBackendKind;
   threadId: string;
-  origin: AppServerThreadMessageOrigin;
+  admittedCodexTurnSequence?: number;
+  origin?: AppServerThreadMessageOrigin;
+  turnInputSource?: TurnInputSource;
   turnId?: string;
 };
 
@@ -1239,6 +1242,7 @@ export type CodexRetryableTurnStart = {
     threadId: string;
     input: AppServerTurnInputItem[];
     origin?: ThreadTurnQueueOrigin;
+    turnInputSource?: TurnInputSource;
     executionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;

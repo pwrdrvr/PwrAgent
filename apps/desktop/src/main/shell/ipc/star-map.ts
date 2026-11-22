@@ -192,7 +192,7 @@ export function registerStarMapIpcHandlers(): void {
           .remoteBackend(federationTarget)
           .starMapIntake(intake);
       }
-      return await dispatchStarMapIntake(intake);
+      return await dispatchStarMapIntake(intake, "desktop");
     },
   );
   ipcMain.handle(

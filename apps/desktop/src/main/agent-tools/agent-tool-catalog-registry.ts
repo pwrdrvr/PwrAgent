@@ -52,6 +52,7 @@ import {
   type PwrAgentOpenAIDecisionsHandler,
 } from "./pwragent-openai-decisions-agent-tools.js";
 import { buildPwrAgentToolGuideDefinition } from "./pwragent-tool-guide.js";
+import { buildCurrentTurnInputSourceTool, type CurrentTurnInputSourceHandler } from "./current-turn-input-source-tool";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
@@ -68,6 +69,7 @@ export type ResolvedAgentToolCatalog = {
 
 export function resolveAgentToolCatalogs(params: {
   appManagementHandler?: PwrAgentAppManagementHandler;
+  currentTurnInputSource?: CurrentTurnInputSourceHandler;
   appManagementAllowed?: boolean;
   automationInspectionHandler?: AutomationInspectionHandler;
   federationHandler?: PwrAgentFederationHandler;
@@ -99,6 +101,7 @@ export function resolveAgentToolCatalogs(params: {
   const appRouter = new AgentToolRouter([
     ...buildPwrAgentAppToolDefinitions(params.appManagementHandler, { advertise: params.appManagementAllowed === true }),
     buildPwrAgentToolGuideDefinition(),
+    ...(params.currentTurnInputSource ? [buildCurrentTurnInputSourceTool(params.currentTurnInputSource)] : []),
   ]);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
   const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);

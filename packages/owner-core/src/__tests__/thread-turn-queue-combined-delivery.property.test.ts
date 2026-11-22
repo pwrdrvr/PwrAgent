@@ -8,6 +8,7 @@ import {
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
 } from "../thread-turn-queue";
+import { resolveTurnInputSource } from "../turn-input-source";
 
 /**
  * The rule (ARCHITECTURE.md, "Combined deliveries"): messages from agents,
@@ -183,7 +184,11 @@ describe("combined deliveries", () => {
         await flush();
         expect(starts.map(deliveredIds)).toEqual(expected);
         const textById = new Map(waiting.map((message) => [message.id, message.text]));
+        const sourceById = new Map(waiting.map(({ id, spec }) => [id, isHuman(spec) ? "unknown"
+          : spec.kind === "pwragent" ? "automation" : "agent"]));
         for (const start of starts) {
+          const source = deliveredIds(start).map((id) => sourceById.get(id));
+          expect(resolveTurnInputSource(start)).toBe(source.every((member) => member === source[0]) ? source[0] : "mixed");
           const text = deliveredText(start);
           let cursor = -1;
           for (const id of deliveredIds(start)) {

@@ -99,6 +99,17 @@ beforeEach(() => {
 });
 
 describe("dispatchStarMapIntake", () => {
+  it.each(["desktop", "federation"] as const)("preserves the %s source when the operator picks a project", async (source) => {
+    expect(await dispatchStarMapIntake({
+      requestId: "picked-project", request: "Make a thread and ask it to make the donuts",
+      directoryKey: "dir-agent", input: "Make the donuts",
+    }, source)).toMatchObject({ status: "created" });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ directoryKey: "dir-agent", input: [{ type: "text", text: "Make the donuts" }] }),
+      { messageOrigin: { kind: "pwragent" }, turnInputSource: source },
+    );
+  });
+
   it("creates a thread in the backend-resolved directory with the request as first turn", async () => {
     generateStructuredObject.mockResolvedValue(
       ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
