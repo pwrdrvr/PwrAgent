@@ -149,17 +149,19 @@ export type JumpLanding = { reserve: number; lowered: boolean };
  * The jump itself can move the dock: scrolling the open thread's row out of
  * view brings it to the top, scrolling it back in sends it away. A reserve
  * that grew always lands again, or the stuck header slides over the first
- * rows. A reserve that shrank leaves the header resting in its own place
- * with the strip above showing; landing again is tidier, but landing flush
- * can be what scrolls the open thread's row away and brings the dock back.
- * So a shrink moves the list once per landing, and the answer always settles.
+ * rows, and so does one that shrank while the dock stays (its card settling
+ * to its drawn height). The dock leaving leaves the header resting in its
+ * own place with the strip above showing; landing again is tidier, but
+ * landing flush can be what scrolls the open thread's row away and brings
+ * the dock back. So the dock's leaving moves the list once per landing, and
+ * the answer always settles.
  */
 export function jumpRelanding(
   landing: JumpLanding,
   reserve: number,
 ): JumpLanding | undefined {
   if (reserve === landing.reserve) return undefined;
-  if (reserve > landing.reserve) return { reserve, lowered: landing.lowered };
+  if (reserve > 0) return { reserve, lowered: landing.lowered };
   return landing.lowered ? undefined : { reserve, lowered: true };
 }
 

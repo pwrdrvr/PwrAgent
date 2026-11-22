@@ -259,7 +259,7 @@ function renderSidebar(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   const threads = [thread("t-quill", "quill"), thread("t-relay", "relay")];
   const onBrowseModeChange = vi.fn();
   const onProjectIndexHiddenChange = vi.fn();
-  const view = render(
+  const element = (more: Partial<Parameters<typeof Sidebar>[0]> = {}) => (
     <Sidebar
       backends={backends}
       browseMode="inbox"
@@ -277,9 +277,14 @@ function renderSidebar(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
       projectIndexWidth={null}
       onProjectIndexWidthChange={() => undefined}
       {...overrides}
-    />,
+      {...more}
+    />
   );
-  return { ...view, onBrowseModeChange, onProjectIndexHiddenChange };
+  const view = render(element());
+  const rerenderWith = (more: Partial<Parameters<typeof Sidebar>[0]>): void => {
+    view.rerender(element(more));
+  };
+  return { ...view, rerenderWith, onBrowseModeChange, onProjectIndexHiddenChange };
 }
 
 describe("Sidebar project index", () => {
@@ -384,7 +389,7 @@ describe("Sidebar project index", () => {
   // its reserve. A jump that landed the project at the list's own edge left
   // its header sliding down over the project's first card.
   it("lands a jump under the selected thread's dock, and follows the dock until the operator scrolls", async () => {
-    renderSidebar({ browseMode: "directories" });
+    const { rerenderWith } = renderSidebar({ browseMode: "directories" });
     const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
     const list = document.querySelector<HTMLElement>(".directory-list")!;
     const tail = list.querySelector<HTMLElement>(".directory-list__jump-tail")!;
@@ -436,11 +441,15 @@ describe("Sidebar project index", () => {
     // project stays where its header rests in its own place.
     dockTop(undefined);
     expect(scrollTop).toBe(1200 - 64);
+    // Back, its card shorter: a dock that stays never spends that one move.
+    dockTop(64);
+    dockTop(58);
+    expect(scrollTop).toBe(1200 - 58);
 
     // The operator scrolls: the list is theirs, whatever the dock does.
     fireEvent.wheel(list);
-    dockTop(58);
-    expect(scrollTop).toBe(1200 - 64);
+    dockTop(64);
+    expect(scrollTop).toBe(1200 - 58);
 
     // A new jump with no dock lands flush; the dock arriving then (the jump
     // scrolled the open row away) moves the project down under it.
@@ -454,6 +463,17 @@ describe("Sidebar project index", () => {
     scrollTop = 900;
     dockTop(64);
     expect(scrollTop).toBe(900);
+
+    // A thread opened after the jump, from outside the list: the dock
+    // leaving for it does not move the list under the row just opened.
+    dockTop(undefined);
+    scrollTop = 0;
+    await jumpToRelay();
+    dockTop(58);
+    expect(scrollTop).toBe(1200 - 58);
+    rerenderWith({ selectedItemKey: "codex:t-relay" });
+    dockTop(undefined);
+    expect(scrollTop).toBe(1200 - 58);
   });
 
   it("hides and shows from the view menu beside the lens switch", () => {

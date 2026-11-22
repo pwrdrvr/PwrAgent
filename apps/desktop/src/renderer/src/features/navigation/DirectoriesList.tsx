@@ -735,6 +735,12 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       for (const type of intents) list.removeEventListener(type, release);
     };
   }, [landJump]);
+  // A selection made after the jump is the operator moving on: the dock
+  // leaving for it must not scroll the list under the row just opened.
+  // A layout effect, so it runs before the dock's, which announces that.
+  useLayoutEffect(() => {
+    jumpLandingRef.current = undefined;
+  }, [props.selectedItemKey]);
 
   const pinnedDirectories = useMemo(
     () =>

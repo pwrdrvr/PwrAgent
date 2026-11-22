@@ -9,6 +9,8 @@
  * this module is how the rest of the sidebar reads it.
  */
 
+import { SIDEBAR_REGION } from "./reveal-selected-thread-row";
+
 /** On the lane region while the dock is at the top. */
 export const TOP_DOCK_CLASS = "has-selected-thread-dock-top";
 /** On the lane region: the card plus its plate, in px. */
@@ -21,11 +23,9 @@ export const TOP_DOCK_RESERVE_PROPERTY = "--selected-thread-dock-reserve";
  */
 export const TOP_DOCK_RESERVE_CHANGE_EVENT = "selected-thread-dock-reserve-change";
 
-const REGION = ".sidebar__scroll-region";
-
 /** The lane region `element` sits in, or is. */
 export function topDockRegionOf(element: Element): HTMLElement | null {
-  return element.closest<HTMLElement>(REGION);
+  return element.closest<HTMLElement>(SIDEBAR_REGION);
 }
 
 /** How far below the list's top edge the stuck headers start, in px. */
