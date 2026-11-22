@@ -28,7 +28,7 @@ const CONVERSATIONS = [
 const REQUIREMENTS = [
   { value: "actor-id", label: "Provider user ID" },
   { value: "rbac-role", label: "Access Control role ID" },
-  { value: "provider-property", label: "Slack workspace administrator" },
+  { value: "provider-property", label: "Slack workspace admin" },
 ] as const;
 const REJECTION_LABELS: Record<string, string> = {
   "invalid-policy": "Policy could not be read",
@@ -79,7 +79,7 @@ export function AgentMessagingTrust(props: {
     <div className="context-list__item">
       <div className="context-list__content">
         <p className="context-list__label">Messaging access</p>
-        <p className="context-list__meta" title={error}>{status}</p>
+        <p className="context-list__meta">{status}</p>
       </div>
       <button className="context-list__action" type="button" disabled={!snapshot || !!error} onClick={() => setOpen(true)}>Edit access</button>
       {open ? <TrustDialog agentName={props.agentName} policy={policy} listActivity={props.api.listMessagingActivity} target={props.target}
@@ -230,18 +230,20 @@ function RuleFields(props: {
   }
   return <fieldset className="agent-trust-rule" disabled={busy}>
     <legend>{props.index === 0 ? "Allow when" : "Or allow when"}</legend>
-    <Field label="Provider">
-      <Select value={rule.provider} options={PROVIDERS} disabled={busy || Boolean(rule.connectionId)} onChange={(provider) => change({
-        ...rule, provider, conversation: undefined,
-        allOf: rule.allOf.map((requirement) => requirement.kind === "rbac-role" ? { kind: "rbac-role", roleId: "" } : { kind: "actor-id", actorId: "" }),
-      })} />
-    </Field>
+    <div className="agent-trust-rule__references">
+      <Field label="Provider">
+        <Select value={rule.provider} options={PROVIDERS} disabled={busy || Boolean(rule.connectionId)} onChange={(provider) => change({
+          ...rule, provider, conversation: undefined,
+          allOf: rule.allOf.map((requirement) => requirement.kind === "rbac-role" ? { kind: "rbac-role", roleId: "" } : { kind: "actor-id", actorId: "" }),
+        })} />
+      </Field>
+      <Field label="Conversation">
+        <Select value={rule.conversation?.kind ?? "any"} options={CONVERSATIONS} disabled={busy} onChange={(kind) => change({
+          ...rule, conversation: kind === "any" ? undefined : { kind, id: "" },
+        })} />
+      </Field>
+    </div>
     {rule.connectionId ? <p>Connection {rule.connectionId}</p> : null}
-    <Field label="Conversation">
-      <Select value={rule.conversation?.kind ?? "any"} options={CONVERSATIONS} disabled={busy} onChange={(kind) => change({
-        ...rule, conversation: kind === "any" ? undefined : { kind, id: "" },
-      })} />
-    </Field>
     {rule.conversation ? <div className="agent-trust-rule__references">
       <Field label="Conversation ID"><input value={rule.conversation.id} onChange={(event) => editConversation({ id: event.target.value })} /></Field>
       <Field label="Parent ID, if present"><input value={rule.conversation.parentId ?? ""} onChange={(event) => editConversation({ parentId: event.target.value || undefined })} /></Field>

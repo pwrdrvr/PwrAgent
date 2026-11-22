@@ -5,8 +5,9 @@
 .agent-trust-dialog__body {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 10px;
   color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .agent-trust-dialog__body p,
