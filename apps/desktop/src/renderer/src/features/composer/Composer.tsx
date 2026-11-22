@@ -2455,10 +2455,10 @@ function ComposerThreadOptionsMenu(props: {
                 <span className="composer-thread-options__label">
                   Job Monitors
                   {!monitorCreationOff && runningMonitors > 0 && !props.runningMonitorCountIncomplete ? (
-                    <span className="composer-thread-options__note"> · {runningMonitors} running</span>
+                    <span className="composer-dropdown__option-description composer-thread-options__note"> · {runningMonitors} running</span>
                   ) : null}
                   {monitorDescription ? (
-                    <span className="composer-thread-options__note composer-thread-options__detail" id={`${menuId}-monitor-description`}>
+                    <span className="composer-dropdown__option-description composer-thread-options__note composer-thread-options__detail" id={`${menuId}-monitor-description`}>
                       {monitorDescription}
                     </span>
                   ) : null}
